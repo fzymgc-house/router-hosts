@@ -19,6 +19,11 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
+    - name: Install buf
+      uses: bufbuild/buf-setup-action@v1
+      with:
+        github_token: ${{ github.token }}
+
     - name: Cache cargo registry
       uses: actions/cache@v3
       with:
@@ -43,8 +48,11 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
 
-    - name: Check formatting
+    - name: Check Rust formatting
       run: cargo fmt -- --check
+
+    - name: Check protobuf formatting
+      run: buf format --diff --exit-code
 
     - name: Run clippy
       run: cargo clippy -- -D warnings

@@ -44,11 +44,17 @@ RUST_LOG=debug cargo test test_name -- --nocapture
 
 ### Linting and Formatting
 ```bash
-# Format code
+# Format Rust code
 cargo fmt
 
-# Check formatting without modifying
+# Check Rust formatting without modifying
 cargo fmt -- --check
+
+# Format protobuf files
+buf format -w
+
+# Check protobuf formatting without modifying
+buf format --diff --exit-code
 
 # Run clippy
 cargo clippy -- -D warnings
@@ -63,6 +69,12 @@ cargo clippy --fix
 # This happens automatically during build via tonic-build
 # Note: Uses bundled protoc from protobuf-src crate (no system installation required)
 cargo build -p router-hosts-common
+
+# Lint protobuf files
+buf lint
+
+# Format protobuf files
+buf format -w
 ```
 
 ### Running Locally

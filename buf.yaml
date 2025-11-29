@@ -1,0 +1,14 @@
+version: v2
+modules:
+  - path: proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Disable package versioning requirement (we use router_hosts instead of router_hosts.v1)
+    - PACKAGE_VERSION_SUFFIX
+    # Disable directory structure requirement (proto files at root of proto/ dir)
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE
