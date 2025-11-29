@@ -61,6 +61,7 @@ cargo clippy --fix
 ```bash
 # Regenerate protobuf code (after modifying proto/hosts.proto)
 # This happens automatically during build via tonic-build
+# Note: Uses bundled protoc from protobuf-src crate (no system installation required)
 cargo build -p router-hosts-common
 ```
 
@@ -179,12 +180,17 @@ Include detailed error context in response messages.
 
 Core dependencies (see Cargo.toml for versions):
 - `tonic` + `prost` - gRPC/protobuf
+- `tonic-build` + `protobuf-src` - protobuf code generation with bundled protoc
 - `duckdb` - embedded database
 - `tokio` - async runtime
 - `clap` - CLI parsing
 - `serde` + `toml` - config
 - `rustls` - TLS
 - `tracing` - logging
+
+**Note on Protocol Buffers:** The project uses `protobuf-src` to provide a bundled
+Protocol Buffers compiler (`protoc`), eliminating the need for system installation.
+This makes the build self-contained and portable across development environments.
 
 ## /etc/hosts Format
 
