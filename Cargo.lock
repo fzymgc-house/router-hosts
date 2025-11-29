@@ -479,6 +479,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c481bdbf0ed3b892f6f806287d72acd515b352a4ec27a208489b8c1bc839633a"
 dependencies = [
  "find-msvc-tools",
+ "jobserver",
+ "libc",
  "shlex",
 ]
 
@@ -983,6 +985,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4a5f13b858c8d314ee3e8f639011f7ccefe71f97f96e50151fb991f267928e2c"
 
 [[package]]
+name = "jobserver"
+version = "0.1.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9afb3de4395d6b3e67a780b6de64b51c978ecf11cb9a462c66be7d4ca9039d33"
+dependencies = [
+ "getrandom 0.3.4",
+ "libc",
+]
+
+[[package]]
 name = "js-sys"
 version = "0.3.83"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1067,6 +1079,7 @@ version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6650a7ea86fce24fe1fbf5b037671a8b77c59d135703fc6085b8a1827e66e977"
 dependencies = [
+ "cc",
  "flate2",
  "pkg-config",
  "serde",
@@ -1596,6 +1609,7 @@ dependencies = [
  "prost",
  "router-hosts-common",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "tokio",
