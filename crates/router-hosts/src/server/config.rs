@@ -70,6 +70,24 @@ fn default_timeout_minutes() -> u64 {
     15
 }
 
+/// Configuration for post-edit hook commands
+///
+/// # Security Warning
+///
+/// These hooks execute shell commands with elevated privileges. To prevent command injection:
+/// - NEVER interpolate user-controlled data into hook commands
+/// - Use environment variables to pass context (entry count, snapshot ID, etc.)
+/// - Implement 30-second timeout per CLAUDE.md
+/// - Use `std::process::Command` instead of `sh -c` for execution
+/// - Log all hook executions for audit trails
+/// - Consider running hooks in a restricted shell environment
+///
+/// Example safe usage:
+/// ```toml
+/// [hooks]
+/// on_success = ["systemctl reload dnsmasq"]
+/// on_failure = ["/usr/local/bin/alert-failure"]
+/// ```
 #[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct HooksConfig {
@@ -231,5 +249,42 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             }
             _ => panic!("Expected ConfigError::MissingBindAddress, got {:?}", result),
         }
+    }
+
+    #[test]
+    fn test_config_custom_retention_and_edit_session() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            path = "/var/lib/router-hosts/hosts.db"
+
+            [tls]
+            cert_path = "/etc/router-hosts/server.crt"
+            key_path = "/etc/router-hosts/server.key"
+            ca_cert_path = "/etc/router-hosts/ca.crt"
+
+            [retention]
+            max_snapshots = 100
+            max_age_days = 60
+
+            [edit_session]
+            timeout_minutes = 30
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+
+        // Verify custom retention values override defaults
+        assert_eq!(config.retention.max_snapshots, 100);
+        assert_eq!(config.retention.max_age_days, 60);
+
+        // Verify custom edit session timeout overrides default
+        assert_eq!(config.edit_session.timeout_minutes, 30);
+
+        // Verify required fields are still present
+        assert_eq!(config.server.bind_address, "0.0.0.0:50051");
+        assert_eq!(config.server.hosts_file_path, "/etc/hosts");
     }
 }

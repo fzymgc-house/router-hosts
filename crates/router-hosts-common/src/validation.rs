@@ -58,6 +58,14 @@ pub fn validate_hostname(hostname: &str) -> ValidationResult<String> {
     }
 
     for label in hostname.split('.') {
+        // Explicitly check for empty labels (consecutive dots like "example..com")
+        // Note: LABEL_REGEX would also reject this, but explicit check is clearer
+        if label.is_empty() {
+            return Err(ValidationError::InvalidHostname(
+                "hostname cannot contain consecutive dots".to_string(),
+            ));
+        }
+
         if !LABEL_REGEX.is_match(label) {
             return Err(ValidationError::InvalidHostname(format!(
                 "invalid label '{}' in hostname",
