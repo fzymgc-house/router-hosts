@@ -19,10 +19,11 @@ See [Design Document](docs/plans/2025-11-28-router-hosts-design.md) for detailed
 router-hosts/
 ├── crates/
 │   ├── router-hosts-common/   # Shared validation, types, protobuf
-│   ├── router-hosts-server/   # Server binary
-│   └── router-hosts-client/   # Client CLI
+│   └── router-hosts/          # Unified binary (client + server modes)
 └── proto/
-    └── hosts.proto            # gRPC service definitions
+    └── router_hosts/
+        └── v1/
+            └── hosts.proto    # gRPC service definitions
 ```
 
 ## Development
@@ -39,16 +40,17 @@ cargo build
 cargo test
 ```
 
-### Run Server (requires config)
+### Run in Client Mode (default)
 
 ```bash
-cargo run -p router-hosts-server -- --config server.toml
+cargo run -- --help
+cargo run -- add --ip 192.168.1.10 --hostname server.local
 ```
 
-### Run Client
+### Run in Server Mode
 
 ```bash
-cargo run -p router-hosts-client -- --help
+cargo run -- server --config server.toml
 ```
 
 ## Status

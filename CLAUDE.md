@@ -18,8 +18,8 @@ See `docs/plans/2025-11-28-router-hosts-design.md` for complete design specifica
 cargo build
 
 # Build specific crate
-cargo build -p router-hosts-server
-cargo build -p router-hosts-client
+cargo build -p router-hosts
+cargo build -p router-hosts-common
 
 # Release build
 cargo build --release
@@ -32,8 +32,7 @@ cargo test
 
 # Run tests for specific crate
 cargo test -p router-hosts-common
-cargo test -p router-hosts-server
-cargo test -p router-hosts-client
+cargo test -p router-hosts
 
 # Run specific test
 cargo test test_name
@@ -79,36 +78,33 @@ buf format -w
 
 ### Running Locally
 ```bash
-# Run server (requires config file)
-cargo run -p router-hosts-server -- --config server.toml
+# Run in client mode (default)
+cargo run -- --help
+cargo run -- --config client.toml add --ip 192.168.1.10 --hostname server.local
 
-# Run client
-cargo run -p router-hosts-client -- --help
-cargo run -p router-hosts-client -- --config client.toml add --ip 192.168.1.10 --hostname server.local
+# Run in server mode
+cargo run -- server --config server.toml
+
+# Or use the binary directly
+./target/debug/router-hosts --help        # Client mode
+./target/debug/router-hosts server --help  # Server mode
 ```
 
 ## Architecture Overview
 
 ### Workspace Structure
 
-Three crates in a Cargo workspace:
+Two crates in a Cargo workspace:
 
 1. **router-hosts-common** - Shared library
    - Protocol buffer definitions and generated code
    - Validation logic (IP addresses, hostnames)
    - Shared types and utilities
 
-2. **router-hosts-server** - Server binary
-   - gRPC service implementation
-   - DuckDB database operations
-   - /etc/hosts file generation with atomic writes
-   - Edit session management (single session, 15min timeout)
-   - Post-edit hook execution
-
-3. **router-hosts-client** - Client binary
-   - CLI interface using clap
-   - gRPC client wrapper
-   - Command handlers for all operations
+2. **router-hosts** - Unified binary (client and server modes)
+   - **Client mode (default):** CLI interface using clap, gRPC client wrapper, command handlers
+   - **Server mode:** gRPC service implementation, DuckDB database operations, /etc/hosts file generation with atomic writes, edit session management (single session, 15min timeout), post-edit hook execution
+   - Mode selection: runs in server mode when first argument is "server", otherwise client mode
 
 ### Key Design Decisions
 

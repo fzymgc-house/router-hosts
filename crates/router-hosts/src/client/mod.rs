@@ -59,11 +59,10 @@ enum Commands {
     },
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+pub async fn run() -> Result<()> {
     let cli = Cli::parse();
 
-    println!("router-hosts-client");
+    println!("router-hosts (client mode)");
     println!("Config: {:?}", cli.config);
     println!("Command: {:?}", std::mem::discriminant(&cli.command));
 

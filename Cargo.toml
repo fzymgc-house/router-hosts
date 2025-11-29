@@ -3,8 +3,7 @@ resolver = "2"
 
 members = [
     "crates/router-hosts-common",
-    "crates/router-hosts-server",
-    "crates/router-hosts-client",
+    "crates/router-hosts",
 ]
 
 [workspace.package]
