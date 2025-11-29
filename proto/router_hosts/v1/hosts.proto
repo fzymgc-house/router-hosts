@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-package router_hosts;
+package router_hosts.v1;
 
 // Host entry messages
 message HostEntry {
