@@ -1,0 +1,379 @@
+syntax = "proto3";
+
+package router_hosts.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// Host entry messages
+
+// Represents a single host entry in the /etc/hosts file
+message HostEntry {
+  // Unique identifier for this host entry (UUID format)
+  string id = 1;
+
+  // IP address (IPv4 or IPv6) for the host
+  string ip_address = 2;
+
+  // DNS hostname or FQDN for the host
+  string hostname = 3;
+
+  // Optional comment to appear in /etc/hosts (supports inline comments)
+  optional string comment = 4;
+
+  // Optional tags for categorization and filtering (e.g., "homelab", "production")
+  repeated string tags = 5;
+
+  // Timestamp when this entry was created
+  google.protobuf.Timestamp created_at = 6;
+
+  // Timestamp when this entry was last updated
+  google.protobuf.Timestamp updated_at = 7;
+
+  // Whether this entry is active (false = soft deleted, won't appear in /etc/hosts)
+  bool active = 8;
+}
+
+// Host management requests/responses
+
+// Request to add a new host entry
+message AddHostRequest {
+  // Optional edit session token. If provided, changes are staged; if omitted, entry is added immediately
+  optional string edit_token = 1;
+
+  // IP address (IPv4 or IPv6) for the new host (required)
+  string ip_address = 2;
+
+  // DNS hostname for the new host (required)
+  string hostname = 3;
+
+  // Optional comment for the host entry
+  optional string comment = 4;
+
+  // Optional tags for categorization
+  repeated string tags = 5;
+}
+
+// Response after adding a host entry
+message AddHostResponse {
+  // ID of the newly created host entry
+  string id = 1;
+
+  // The complete host entry that was created
+  HostEntry entry = 2;
+}
+
+// Request to retrieve a single host entry by ID
+message GetHostRequest {
+  // ID of the host entry to retrieve
+  string id = 1;
+}
+
+// Response containing the requested host entry
+message GetHostResponse {
+  // The requested host entry
+  HostEntry entry = 1;
+}
+
+// Request to update an existing host entry
+message UpdateHostRequest {
+  // Optional edit session token. If provided, changes are staged; if omitted, changes apply immediately
+  optional string edit_token = 1;
+
+  // ID of the host entry to update (required)
+  string id = 2;
+
+  // New IP address (optional, keeps existing if not provided)
+  optional string ip_address = 3;
+
+  // New hostname (optional, keeps existing if not provided)
+  optional string hostname = 4;
+
+  // New comment (optional, keeps existing if not provided, empty string to clear)
+  optional string comment = 5;
+
+  // New tags array (replaces all existing tags). Empty array = clear all tags.
+  // Not providing this field = keep existing tags unchanged.
+  repeated string tags = 6;
+}
+
+// Response after updating a host entry
+message UpdateHostResponse {
+  // The updated host entry with new values
+  HostEntry entry = 1;
+}
+
+// Request to delete a host entry (soft delete by setting active=false)
+message DeleteHostRequest {
+  // Optional edit session token. If provided, deletion is staged; if omitted, entry is deleted immediately
+  optional string edit_token = 1;
+
+  // ID of the host entry to delete
+  string id = 2;
+}
+
+// Response after deleting a host entry
+message DeleteHostResponse {
+  // Whether the deletion succeeded
+  bool success = 1;
+}
+
+// Request to list host entries with optional filtering and pagination
+message ListHostsRequest {
+  // Optional filter expression (e.g., by tag, active status)
+  optional string filter = 1;
+
+  // Maximum number of entries to return (pagination)
+  optional int32 limit = 2;
+
+  // Number of entries to skip (pagination)
+  optional int32 offset = 3;
+}
+
+// Response containing a single host entry (streamed)
+message ListHostsResponse {
+  // A host entry from the list
+  HostEntry entry = 1;
+}
+
+// Request to search for host entries by query
+message SearchHostsRequest {
+  // Search query (searches IP, hostname, comment, and tags)
+  string query = 1;
+}
+
+// Response containing a single matching host entry (streamed)
+message SearchHostsResponse {
+  // A host entry that matches the search query
+  HostEntry entry = 1;
+}
+
+// Edit session requests/responses
+// Only ONE edit session can be active at a time server-wide
+
+// Request to start a new edit session
+message StartEditRequest {}
+
+// Response containing the edit session token
+message StartEditResponse {
+  // Edit token to use with subsequent operations. Valid for 15 minutes (timeout resets on each operation)
+  string edit_token = 1;
+}
+
+// Request to commit all changes from an edit session
+message FinishEditRequest {
+  // Edit token from StartEditResponse
+  string edit_token = 1;
+}
+
+// Response after committing edit session changes
+message FinishEditResponse {
+  // Whether the commit succeeded
+  bool success = 1;
+
+  // Number of host entries that were changed during this edit session
+  int32 entries_changed = 2;
+}
+
+// Request to cancel an edit session and discard all changes
+message CancelEditRequest {
+  // Edit token from StartEditResponse
+  string edit_token = 1;
+}
+
+// Response after canceling edit session
+message CancelEditResponse {
+  // Whether the cancellation succeeded
+  bool success = 1;
+}
+
+// Bulk operations
+
+// Request message for bulk adding multiple hosts via streaming (one per message)
+message BulkAddHostsRequest {
+  // Optional edit session token for staging changes
+  optional string edit_token = 1;
+
+  // IP address for the host entry (required)
+  string ip_address = 2;
+
+  // Hostname for the host entry (required)
+  string hostname = 3;
+
+  // Optional comment for the host entry
+  optional string comment = 4;
+
+  // Optional tags for categorization
+  repeated string tags = 5;
+}
+
+// Response for each host in bulk add operation (streamed)
+message BulkAddHostsResponse {
+  // ID of successfully created host entry (empty if error occurred)
+  optional string id = 1;
+
+  // Error message if this particular host failed to add
+  optional string error = 2;
+}
+
+// Request to import hosts from a file format via streaming chunks
+message ImportHostsRequest {
+  // Optional edit session token for staging imported entries
+  optional string edit_token = 1;
+
+  // Chunk of file data being uploaded
+  bytes chunk = 2;
+
+  // Whether this is the final chunk of the import
+  bool last_chunk = 3;
+}
+
+// Response for host import operation (streamed progress updates)
+message ImportHostsResponse {
+  // Number of host entries successfully imported so far
+  int32 imported = 1;
+
+  // Number of host entries that failed to import
+  int32 failed = 2;
+
+  // Error message if import operation encountered an issue
+  optional string error = 3;
+}
+
+// Request to export all hosts in a specified format
+message ExportHostsRequest {
+  // Export format: "hosts" (standard /etc/hosts), "json", or "csv"
+  string format = 1;
+}
+
+// Response containing exported host data (streamed in chunks)
+message ExportHostsResponse {
+  // Chunk of exported data in the requested format
+  bytes chunk = 1;
+}
+
+// Snapshot requests/responses
+
+// Request to create a snapshot of the current hosts database state
+message CreateSnapshotRequest {
+  // Optional human-readable name for this snapshot
+  optional string name = 1;
+}
+
+// Response after creating a snapshot
+message CreateSnapshotResponse {
+  // Unique identifier for the newly created snapshot
+  string snapshot_id = 1;
+}
+
+// Represents a saved snapshot of the hosts database at a point in time
+message Snapshot {
+  // Unique identifier for this snapshot
+  string snapshot_id = 1;
+
+  // Timestamp when this snapshot was created
+  google.protobuf.Timestamp created_at = 2;
+
+  // Number of host entries captured in this snapshot
+  int32 entry_count = 3;
+
+  // What triggered this snapshot (e.g., "manual", "pre-rollback", "scheduled")
+  string trigger = 4;
+
+  // Optional human-readable name for this snapshot
+  optional string name = 5;
+}
+
+// Request to list all available snapshots
+message ListSnapshotsRequest {}
+
+// Response containing a single snapshot (streamed)
+message ListSnapshotsResponse {
+  // A snapshot from the list
+  Snapshot snapshot = 1;
+}
+
+// Request to restore the hosts database to a previous snapshot state
+message RollbackToSnapshotRequest {
+  // ID of the snapshot to restore
+  string snapshot_id = 1;
+}
+
+// Response after rolling back to a snapshot
+message RollbackToSnapshotResponse {
+  // Whether the rollback succeeded
+  bool success = 1;
+
+  // ID of the auto-created snapshot taken before rollback (for undo capability)
+  string new_snapshot_id = 2;
+}
+
+// Request to delete a snapshot
+message DeleteSnapshotRequest {
+  // ID of the snapshot to delete
+  string snapshot_id = 1;
+}
+
+// Response after deleting a snapshot
+message DeleteSnapshotResponse {
+  // Whether the deletion succeeded
+  bool success = 1;
+}
+
+// Service definition for managing /etc/hosts entries via gRPC
+service HostsService {
+  // Host management
+
+  // Add a new host entry to the hosts file
+  rpc AddHost(AddHostRequest) returns (AddHostResponse);
+
+  // Retrieve a single host entry by its ID
+  rpc GetHost(GetHostRequest) returns (GetHostResponse);
+
+  // Update an existing host entry
+  rpc UpdateHost(UpdateHostRequest) returns (UpdateHostResponse);
+
+  // Delete a host entry (soft delete by setting active=false)
+  rpc DeleteHost(DeleteHostRequest) returns (DeleteHostResponse);
+
+  // List all host entries with optional filtering and pagination (server streaming)
+  rpc ListHosts(ListHostsRequest) returns (stream ListHostsResponse);
+
+  // Search for host entries by query string (server streaming)
+  rpc SearchHosts(SearchHostsRequest) returns (stream SearchHostsResponse);
+
+  // Edit sessions
+
+  // Start a new edit session to stage multiple changes atomically
+  rpc StartEdit(StartEditRequest) returns (StartEditResponse);
+
+  // Commit all staged changes from an edit session to the hosts file
+  rpc FinishEdit(FinishEditRequest) returns (FinishEditResponse);
+
+  // Cancel an edit session and discard all staged changes
+  rpc CancelEdit(CancelEditRequest) returns (CancelEditResponse);
+
+  // Bulk operations
+
+  // Add multiple hosts via bidirectional streaming (client sends hosts, server responds per-host)
+  rpc BulkAddHosts(stream BulkAddHostsRequest) returns (stream BulkAddHostsResponse);
+
+  // Import hosts from a file format via client streaming with server progress updates
+  rpc ImportHosts(stream ImportHostsRequest) returns (stream ImportHostsResponse);
+
+  // Export all hosts in a specified format via server streaming
+  rpc ExportHosts(ExportHostsRequest) returns (stream ExportHostsResponse);
+
+  // Snapshots
+
+  // Create a snapshot of the current hosts database state
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+
+  // List all available snapshots (server streaming)
+  rpc ListSnapshots(ListSnapshotsRequest) returns (stream ListSnapshotsResponse);
+
+  // Restore the hosts database to a previous snapshot (creates backup snapshot first)
+  rpc RollbackToSnapshot(RollbackToSnapshotRequest) returns (RollbackToSnapshotResponse);
+
+  // Delete a snapshot by its ID
+  rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
+}

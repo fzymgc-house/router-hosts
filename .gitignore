@@ -1,0 +1,17 @@
+.worktrees/
+
+# Rust
+target/
+# Note: Cargo.lock IS committed for binary projects (see CLAUDE.md)
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Build artifacts
+*.pdb

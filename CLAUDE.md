@@ -2,6 +2,152 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Development Workflow
+
+### Trunk-Based Development
+
+This project follows **trunk-based development** practices:
+
+**Core Principles:**
+- `main` branch is always deployable and protected
+- All development happens in short-lived feature branches
+- Feature branches live for **hours to days, not weeks**
+- Merge to `main` frequently (at least daily for active features)
+- No long-lived development branches
+- Use feature flags for incomplete features if needed
+
+**Branch Naming:**
+- `feat/short-description` - new features
+- `fix/short-description` - bug fixes
+- `refactor/short-description` - refactoring
+- `docs/short-description` - documentation
+
+**Workflow:**
+1. Create feature branch from latest `main`
+2. Make small, focused commits with conventional commit messages
+3. Open PR early (can be draft) for visibility
+4. Keep PRs small (< 400 lines changed when possible)
+5. Merge to `main` as soon as tests pass and code review approves
+6. Delete feature branch immediately after merge
+
+**PR Guidelines:**
+- PRs should be reviewable in < 30 minutes
+- Each PR should have a single, clear purpose
+- Break large features into multiple sequential PRs
+- CI must pass before merge (all tests, lints, formatting)
+- Squash merge is preferred to keep `main` history clean
+
+**Release Strategy:**
+- Tag releases from `main`: `v0.1.0`, `v0.2.0`, etc.
+- Use semantic versioning
+- Releases are created from tested, stable `main` commits
+
+### Commit Message Convention
+
+Follow **Conventional Commits** specification:
+
+```
+<type>(<scope>): <subject>
+
+<body>
+
+<footer>
+```
+
+**Types:**
+- `feat`: New feature
+- `fix`: Bug fix
+- `refactor`: Code change that neither fixes a bug nor adds a feature
+- `perf`: Performance improvement
+- `test`: Adding or updating tests
+- `docs`: Documentation changes
+- `build`: Build system or dependency changes
+- `ci`: CI/CD configuration changes
+- `chore`: Other changes that don't modify src or test files
+
+**Scopes (optional but recommended):**
+- `proto`: Protobuf definitions
+- `server`: Server-specific code
+- `client`: Client-specific code
+- `db`: Database layer
+- `validation`: Validation logic
+- `config`: Configuration handling
+
+**Examples:**
+```
+feat(server): implement gRPC ListHosts endpoint
+
+Add server streaming implementation for listing all host entries
+with support for pagination via limit/offset parameters.
+
+Closes #42
+```
+
+```
+fix(validation): reject hostnames with consecutive dots
+
+The hostname validator was incorrectly accepting "example..com"
+due to not checking for empty labels after splitting.
+
+Fixes #58
+```
+
+```
+test(db): add integration tests for snapshot rollback
+
+Verify rollback creates backup snapshot and restores state correctly.
+```
+
+**Rules:**
+- Subject line: ≤50 characters, imperative mood, no period
+- Body: Wrap at 72 characters, explain what and why (not how)
+- Reference issues in footer: `Fixes #123`, `Closes #456`, `Refs #789`
+- Breaking changes: Use `BREAKING CHANGE:` in footer or `!` after type
+
+### Test Coverage Requirements
+
+**MANDATORY: Maintain ≥80% test coverage at all times**
+
+**Coverage Rules:**
+- All new code must include tests
+- PRs that decrease coverage below 80% will be rejected
+- Use `cargo tarpaulin` or `cargo llvm-cov` to measure coverage
+- Coverage is measured per-crate and workspace-wide
+
+**Testing Strategy:**
+- **Unit tests:** Every public function, method, and module
+- **Integration tests:** End-to-end gRPC workflows, database operations
+- **Property-based tests:** Use `proptest` for validation logic
+- **Regression tests:** Add test for every bug fix
+
+**Test Quality Standards:**
+- Tests must be deterministic (no flakiness)
+- Use descriptive test names: `test_validate_hostname_rejects_consecutive_dots`
+- Arrange-Act-Assert pattern
+- One logical assertion per test (multiple `assert!` calls OK if testing same thing)
+- Mock external dependencies (filesystem, network, time)
+
+**Coverage Checking:**
+```bash
+# Install coverage tool
+cargo install cargo-tarpaulin
+
+# Run coverage check
+cargo tarpaulin --workspace --out Html --output-dir coverage
+
+# View coverage report
+open coverage/index.html
+
+# Fail if coverage < 80%
+cargo tarpaulin --workspace --fail-under 80
+```
+
+**Exemptions:**
+- Generated protobuf code (in `target/`)
+- `main.rs` entry points (minimal logic only)
+- Trivial getters/setters (if any exist)
+- Mark untestable code with `#[cfg(not(tarpaulin_include))]`
+
 ## Project Overview
 
 **router-hosts** is a Rust CLI tool for managing DNS host entries on routers. It uses a client-server architecture where:
@@ -18,8 +164,8 @@ See `docs/plans/2025-11-28-router-hosts-design.md` for complete design specifica
 cargo build
 
 # Build specific crate
-cargo build -p router-hosts-server
-cargo build -p router-hosts-client
+cargo build -p router-hosts
+cargo build -p router-hosts-common
 
 # Release build
 cargo build --release
@@ -32,23 +178,37 @@ cargo test
 
 # Run tests for specific crate
 cargo test -p router-hosts-common
-cargo test -p router-hosts-server
-cargo test -p router-hosts-client
+cargo test -p router-hosts
 
 # Run specific test
 cargo test test_name
 
 # Run with logging
 RUST_LOG=debug cargo test test_name -- --nocapture
+
+# Run tests with coverage (requires cargo-tarpaulin)
+cargo tarpaulin --workspace --out Html --output-dir coverage
+
+# Fail if coverage drops below 80%
+cargo tarpaulin --workspace --fail-under 80
+
+# Run tests in release mode (for performance testing)
+cargo test --release
 ```
 
 ### Linting and Formatting
 ```bash
-# Format code
+# Format Rust code
 cargo fmt
 
-# Check formatting without modifying
+# Check Rust formatting without modifying
 cargo fmt -- --check
+
+# Format protobuf files
+buf format -w
+
+# Check protobuf formatting without modifying
+buf format --diff --exit-code
 
 # Run clippy
 cargo clippy -- -D warnings
@@ -61,41 +221,96 @@ cargo clippy --fix
 ```bash
 # Regenerate protobuf code (after modifying proto/hosts.proto)
 # This happens automatically during build via tonic-build
+# Note: Uses bundled protoc from protobuf-src crate (no system installation required)
 cargo build -p router-hosts-common
+
+# Lint protobuf files
+buf lint
+
+# Format protobuf files
+buf format -w
 ```
 
 ### Running Locally
 ```bash
-# Run server (requires config file)
-cargo run -p router-hosts-server -- --config server.toml
+# Run in client mode (default)
+cargo run -- --help
+cargo run -- --config client.toml add --ip 192.168.1.10 --hostname server.local
 
-# Run client
-cargo run -p router-hosts-client -- --help
-cargo run -p router-hosts-client -- --config client.toml add --ip 192.168.1.10 --hostname server.local
+# Run in server mode
+cargo run -- server --config server.toml
+
+# Or use the binary directly
+./target/debug/router-hosts --help        # Client mode
+./target/debug/router-hosts server --help  # Server mode
 ```
+
+### Pre-Commit Verification
+
+**Before pushing code, run this checklist:**
+
+```bash
+# 1. Format code
+cargo fmt
+
+# 2. Run all tests
+cargo test --workspace
+
+# 3. Run clippy with strict settings
+cargo clippy --workspace -- -D warnings
+
+# 4. Check test coverage
+cargo tarpaulin --workspace --fail-under 80
+
+# 5. Lint and format protobuf
+buf lint && buf format --diff --exit-code
+
+# 6. Run security audit
+cargo audit
+```
+
+**Or use this one-liner:**
+```bash
+cargo fmt && \
+cargo test --workspace && \
+cargo clippy --workspace -- -D warnings && \
+buf lint && \
+buf format --diff --exit-code
+```
+
+### CI/CD Integration
+
+**GitHub Actions runs on every PR:**
+- Build check (debug and release)
+- All tests (with coverage reporting)
+- Clippy with `-D warnings`
+- rustfmt check
+- buf lint and format check
+- Automated code review via Claude
+
+**Coverage is reported but not yet enforced in CI** (TODO: add after initial implementation)
+
+**Branch Protection Rules:**
+- All CI checks must pass before merge
+- At least one approving review required
+- No force pushes to `main`
+- Branches must be up to date before merge
 
 ## Architecture Overview
 
 ### Workspace Structure
 
-Three crates in a Cargo workspace:
+Two crates in a Cargo workspace:
 
 1. **router-hosts-common** - Shared library
    - Protocol buffer definitions and generated code
    - Validation logic (IP addresses, hostnames)
    - Shared types and utilities
 
-2. **router-hosts-server** - Server binary
-   - gRPC service implementation
-   - DuckDB database operations
-   - /etc/hosts file generation with atomic writes
-   - Edit session management (single session, 15min timeout)
-   - Post-edit hook execution
-
-3. **router-hosts-client** - Client binary
-   - CLI interface using clap
-   - gRPC client wrapper
-   - Command handlers for all operations
+2. **router-hosts** - Unified binary (client and server modes)
+   - **Client mode (default):** CLI interface using clap, gRPC client wrapper, command handlers
+   - **Server mode:** gRPC service implementation, DuckDB database operations, /etc/hosts file generation with atomic writes, edit session management (single session, 15min timeout), post-edit hook execution
+   - Mode selection: runs in server mode when first argument is "server", otherwise client mode
 
 ### Key Design Decisions
 
@@ -175,16 +390,121 @@ Include detailed error context in response messages.
 - **Integration tests:** Use in-memory DuckDB, self-signed certs
 - **No real file system writes** in tests (use tempfiles or mocks)
 
+## Rust Best Practices
+
+### Code Quality Standards
+
+**Error Handling:**
+- Use `Result<T, E>` for fallible operations (never `panic!` in library code)
+- Use `thiserror` for custom error types with good error messages
+- Use `anyhow` for application-level error handling
+- Propagate errors with `?` operator, not `.unwrap()` or `.expect()`
+- Only use `.expect()` in tests or when invariant is guaranteed by type system
+
+**Type Safety:**
+- Use newtypes for domain concepts: `struct HostId(String)` not bare `String`
+- Use builder pattern for complex constructors
+- Leverage Rust's type system to make invalid states unrepresentable
+- Use `#[non_exhaustive]` for public enums that might grow
+
+**Async Patterns:**
+- Prefer `tokio::spawn` for CPU-bound work in separate tasks
+- Use `tokio::select!` carefully (ensure all branches are cancel-safe)
+- Avoid holding locks across `.await` points
+- Use `#[tokio::test]` for async tests
+
+**Performance:**
+- Use `&str` for read-only string data, `String` for owned
+- Prefer `&[T]` over `&Vec<T>` in function parameters
+- Use `Cow<'_, str>` when you might need to own or borrow
+- Avoid unnecessary clones - use references when possible
+- Use `Arc<T>` for shared ownership across threads
+
+**Memory Safety:**
+- Minimize `unsafe` code (justify each use with SAFETY comment)
+- Use `#[must_use]` for types/functions where ignoring return is likely a bug
+- Prefer stack allocation over heap when possible
+
+**Code Organization:**
+- Keep functions small (< 50 lines)
+- Maximum cyclomatic complexity of 10 per function
+- Use modules to organize related functionality
+- Public APIs should be minimal and well-documented
+
+**Documentation:**
+- All public items must have doc comments (`///`)
+- Include examples in doc comments for non-trivial APIs
+- Use `//!` module-level docs to explain module purpose
+- Document panics, errors, and safety requirements
+
+**Clippy:**
+```bash
+# Enable all clippy lints by default
+cargo clippy -- -D warnings
+
+# Deny common mistakes
+-D clippy::unwrap_used
+-D clippy::expect_used
+-D clippy::panic
+-D clippy::todo
+-D clippy::unimplemented
+```
+
+### Modern Rust Features (Edition 2021+)
+
+**Use these patterns:**
+- `if let` chains: `if let Some(x) = opt && x > 5 { }`
+- `let else`: `let Some(x) = opt else { return }`
+- `impl Trait` in function signatures for clarity
+- `async fn` in traits (requires `async-trait` or nightly)
+- Const generics where applicable
+
+**Avoid:**
+- `.clone()` on `Arc<T>` without understanding ref counting
+- `Rc<RefCell<T>>` in async code (not `Send`)
+- String allocations in hot paths
+- Excessive trait bounds (use `where` clauses for readability)
+
+### Dependency Management
+
+**Philosophy:**
+- Minimize dependencies (each dependency is a liability)
+- Prefer well-maintained crates with recent updates
+- Check `cargo-audit` regularly for security issues
+- Pin versions in `Cargo.lock` (committed for binaries)
+
+**Workspace Dependencies:**
+- All dependency versions defined in workspace `Cargo.toml`
+- Individual crates use `workspace = true` references
+- Keep dependencies up-to-date (check monthly)
+
+**Security:**
+```bash
+# Install audit tool
+cargo install cargo-audit
+
+# Check for vulnerabilities
+cargo audit
+
+# Check for outdated dependencies
+cargo outdated --workspace
+```
+
 ### Dependencies
 
 Core dependencies (see Cargo.toml for versions):
 - `tonic` + `prost` - gRPC/protobuf
+- `tonic-build` + `protobuf-src` - protobuf code generation with bundled protoc
 - `duckdb` - embedded database
 - `tokio` - async runtime
 - `clap` - CLI parsing
 - `serde` + `toml` - config
 - `rustls` - TLS
 - `tracing` - logging
+
+**Note on Protocol Buffers:** The project uses `protobuf-src` to provide a bundled
+Protocol Buffers compiler (`protoc`), eliminating the need for system installation.
+This makes the build self-contained and portable across development environments.
 
 ## /etc/hosts Format
 

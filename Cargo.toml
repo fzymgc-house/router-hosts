@@ -1,0 +1,63 @@
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/router-hosts-common",
+    "crates/router-hosts",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["fzymgc-house"]
+license = "MIT"
+repository = "https://github.com/fzymgc-house/router-hosts"
+
+[workspace.dependencies]
+# gRPC and protobuf
+tonic = "0.11"
+prost = "0.12"
+prost-types = "0.12"
+tonic-build = "0.11"
+
+# Bundled protoc for build (eliminates system protoc requirement)
+protobuf-src = "1.1"
+
+# Async runtime
+tokio = { version = "1.35", features = ["full"] }
+
+# Database
+duckdb = "1.1"
+
+# CLI
+clap = { version = "4.4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+# TLS
+rustls = "0.23"
+tokio-rustls = "0.26"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Utilities
+uuid = { version = "1.6", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+[workspace.lints.clippy]
+# Deny common mistakes per CLAUDE.md best practices
+# Note: Some lints relaxed during initial setup (dead_code, todo, unimplemented)
+# These will be enforced once implementation is complete
+unwrap_used = "warn"        # Will be "deny" after skeleton phase
+expect_used = "warn"        # Will be "deny" after skeleton phase
+panic = "deny"
+todo = "warn"               # Will be "deny" after skeleton phase
+unimplemented = "warn"      # Will be "deny" after skeleton phase
