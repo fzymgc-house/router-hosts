@@ -18,6 +18,7 @@ repository = "https://github.com/fzymgc-house/router-hosts"
 # gRPC and protobuf
 tonic = "0.11"
 prost = "0.12"
+prost-types = "0.12"
 tonic-build = "0.11"
 
 # Bundled protoc for build (eliminates system protoc requirement)

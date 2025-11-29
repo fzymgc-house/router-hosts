@@ -13,6 +13,9 @@ pub enum ConfigError {
 
     #[error("hosts_file_path is required but not provided")]
     MissingHostsFilePath,
+
+    #[error("bind_address is required but not provided")]
+    MissingBindAddress,
 }
 
 #[allow(dead_code)]
@@ -118,6 +121,10 @@ impl Config {
         let config: Config = toml::from_str(&content)?;
 
         // Validate required fields
+        if config.server.bind_address.is_empty() {
+            return Err(ConfigError::MissingBindAddress);
+        }
+
         if config.server.hosts_file_path.is_empty() {
             return Err(ConfigError::MissingHostsFilePath);
         }
@@ -188,6 +195,41 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
                 "Expected ConfigError::MissingHostsFilePath, got {:?}",
                 result
             ),
+        }
+    }
+
+    #[test]
+    fn test_config_missing_bind_address() {
+        use std::io::Write;
+
+        let toml_str = r#"
+[server]
+bind_address = ""
+hosts_file_path = "/etc/hosts"
+
+[database]
+path = "/var/lib/router-hosts/hosts.db"
+
+[tls]
+cert_path = "/etc/router-hosts/server.crt"
+key_path = "/etc/router-hosts/server.key"
+ca_cert_path = "/etc/router-hosts/ca.crt"
+"#;
+
+        // Create a temp file with the config
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_str.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        // Call Config::from_file() and verify it returns MissingBindAddress error
+        let result = Config::from_file(temp_file.path().to_str().unwrap());
+
+        assert!(result.is_err());
+        match result {
+            Err(ConfigError::MissingBindAddress) => {
+                // Expected error
+            }
+            _ => panic!("Expected ConfigError::MissingBindAddress, got {:?}", result),
         }
     }
 }

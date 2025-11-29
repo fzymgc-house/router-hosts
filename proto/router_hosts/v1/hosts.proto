@@ -2,29 +2,63 @@ syntax = "proto3";
 
 package router_hosts.v1;
 
+import "google/protobuf/timestamp.proto";
+
 // Host entry messages
+
+// Represents a single host entry in the /etc/hosts file
 message HostEntry {
+  // Unique identifier for this host entry (UUID format)
   string id = 1;
+
+  // IP address (IPv4 or IPv6) for the host
   string ip_address = 2;
+
+  // DNS hostname or FQDN for the host
   string hostname = 3;
+
+  // Optional comment to appear in /etc/hosts (supports inline comments)
   optional string comment = 4;
+
+  // Optional tags for categorization and filtering (e.g., "homelab", "production")
   repeated string tags = 5;
-  string created_at = 6;
-  string updated_at = 7;
+
+  // Timestamp when this entry was created
+  google.protobuf.Timestamp created_at = 6;
+
+  // Timestamp when this entry was last updated
+  google.protobuf.Timestamp updated_at = 7;
+
+  // Whether this entry is active (false = soft deleted, won't appear in /etc/hosts)
   bool active = 8;
 }
 
 // Host management requests/responses
+
+// Request to add a new host entry
 message AddHostRequest {
+  // Optional edit session token. If provided, changes are staged; if omitted, entry is added immediately
   optional string edit_token = 1;
+
+  // IP address (IPv4 or IPv6) for the new host (required)
   string ip_address = 2;
+
+  // DNS hostname for the new host (required)
   string hostname = 3;
+
+  // Optional comment for the host entry
   optional string comment = 4;
+
+  // Optional tags for categorization
   repeated string tags = 5;
 }
 
+// Response after adding a host entry
 message AddHostResponse {
+  // ID of the newly created host entry
   string id = 1;
+
+  // The complete host entry that was created
   HostEntry entry = 2;
 }
 
@@ -36,12 +70,25 @@ message GetHostResponse {
   HostEntry entry = 1;
 }
 
+// Request to update an existing host entry
 message UpdateHostRequest {
+  // Optional edit session token. If provided, changes are staged; if omitted, changes apply immediately
   optional string edit_token = 1;
+
+  // ID of the host entry to update (required)
   string id = 2;
+
+  // New IP address (optional, keeps existing if not provided)
   optional string ip_address = 3;
+
+  // New hostname (optional, keeps existing if not provided)
   optional string hostname = 4;
+
+  // New comment (optional, keeps existing if not provided, empty string to clear)
   optional string comment = 5;
+
+  // New tags array (replaces all existing tags). Empty array = clear all tags.
+  // Not providing this field = keep existing tags unchanged.
   repeated string tags = 6;
 }
 
@@ -77,26 +124,41 @@ message SearchHostsResponse {
 }
 
 // Edit session requests/responses
+// Only ONE edit session can be active at a time server-wide
+
+// Request to start a new edit session
 message StartEditRequest {}
 
+// Response containing the edit session token
 message StartEditResponse {
+  // Edit token to use with subsequent operations. Valid for 15 minutes (timeout resets on each operation)
   string edit_token = 1;
 }
 
+// Request to commit all changes from an edit session
 message FinishEditRequest {
+  // Edit token from StartEditResponse
   string edit_token = 1;
 }
 
+// Response after committing edit session changes
 message FinishEditResponse {
+  // Whether the commit succeeded
   bool success = 1;
+
+  // Number of host entries that were changed during this edit session
   int32 entries_changed = 2;
 }
 
+// Request to cancel an edit session and discard all changes
 message CancelEditRequest {
+  // Edit token from StartEditResponse
   string edit_token = 1;
 }
 
+// Response after canceling edit session
 message CancelEditResponse {
+  // Whether the cancellation succeeded
   bool success = 1;
 }
 
@@ -145,9 +207,10 @@ message CreateSnapshotResponse {
 
 message Snapshot {
   string snapshot_id = 1;
-  string created_at = 2;
+  google.protobuf.Timestamp created_at = 2;
   int32 entry_count = 3;
   string trigger = 4;
+  optional string name = 5;
 }
 
 message ListSnapshotsRequest {}

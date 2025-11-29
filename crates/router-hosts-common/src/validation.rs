@@ -1,5 +1,6 @@
 use regex::Regex;
 use std::net::IpAddr;
+use std::sync::LazyLock;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -13,6 +14,10 @@ pub enum ValidationError {
 
 pub type ValidationResult<T> = Result<T, ValidationError>;
 
+// DNS label regex: alphanumeric and hyphens, 1-63 chars, no leading/trailing hyphen
+static LABEL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$").unwrap());
+
 /// Validates an IP address (IPv4 or IPv6)
 pub fn validate_ip_address(ip: &str) -> ValidationResult<IpAddr> {
     ip.parse::<IpAddr>()
@@ -21,6 +26,7 @@ pub fn validate_ip_address(ip: &str) -> ValidationResult<IpAddr> {
 
 /// Validates a DNS hostname (with or without domain)
 /// Rules:
+/// - Total length: 1-253 characters (RFC 1035)
 /// - Labels separated by dots
 /// - Each label: 1-63 chars, alphanumeric and hyphens
 /// - Cannot start or end with hyphen
@@ -29,6 +35,13 @@ pub fn validate_hostname(hostname: &str) -> ValidationResult<String> {
     if hostname.is_empty() {
         return Err(ValidationError::InvalidHostname(
             "hostname cannot be empty".to_string(),
+        ));
+    }
+
+    // RFC 1035: Maximum hostname length is 253 characters
+    if hostname.len() > 253 {
+        return Err(ValidationError::InvalidHostname(
+            "hostname exceeds maximum length of 253 characters".to_string(),
         ));
     }
 
@@ -44,11 +57,8 @@ pub fn validate_hostname(hostname: &str) -> ValidationResult<String> {
         ));
     }
 
-    // DNS label regex: alphanumeric and hyphens, 1-63 chars, no leading/trailing hyphen
-    let label_regex = Regex::new(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$").unwrap();
-
     for label in hostname.split('.') {
-        if !label_regex.is_match(label) {
+        if !LABEL_REGEX.is_match(label) {
             return Err(ValidationError::InvalidHostname(format!(
                 "invalid label '{}' in hostname",
                 label
@@ -112,5 +122,36 @@ mod tests {
         assert!(validate_hostname("invalid_host").is_err()); // underscores not allowed
         assert!(validate_hostname(".invalid").is_err());
         assert!(validate_hostname("invalid.").is_err());
+    }
+
+    #[test]
+    fn test_hostname_edge_cases() {
+        // Single character hostname
+        assert!(validate_hostname("a").is_ok());
+        assert!(validate_hostname("1").is_ok());
+
+        // Numeric-only hostname (valid but worth testing)
+        assert!(validate_hostname("123").is_ok());
+        assert!(validate_hostname("123.456").is_ok());
+
+        // Maximum label length (63 characters)
+        let max_label = "a".repeat(63);
+        assert!(validate_hostname(&max_label).is_ok());
+
+        // Exceeds maximum label length (64 characters)
+        let too_long_label = "a".repeat(64);
+        assert!(validate_hostname(&too_long_label).is_err());
+
+        // Maximum hostname length (253 characters)
+        // Create a hostname with multiple labels totaling 253 chars
+        let label = "a".repeat(63);
+        let max_hostname = format!("{}.{}.{}.{}", label, label, label, &label[..61]); // 63+1+63+1+63+1+61 = 253
+        assert_eq!(max_hostname.len(), 253);
+        assert!(validate_hostname(&max_hostname).is_ok());
+
+        // Exceeds maximum hostname length (254 characters)
+        let too_long_hostname = format!("{}.{}.{}.{}", label, label, label, &label[..62]); // 254 chars
+        assert_eq!(too_long_hostname.len(), 254);
+        assert!(validate_hostname(&too_long_hostname).is_err());
     }
 }
