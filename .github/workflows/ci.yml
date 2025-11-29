@@ -48,11 +48,14 @@ jobs:
     - name: Run tests
       run: cargo test --verbose
 
-    - name: Check Rust formatting
+    - name: Lint Rust (clippy)
+      run: cargo clippy -- -D warnings
+
+    - name: Format Rust (check)
       run: cargo fmt -- --check
 
-    - name: Check protobuf formatting
-      run: buf format --diff --exit-code
+    - name: Lint protobuf
+      run: buf lint
 
-    - name: Run clippy
-      run: cargo clippy -- -D warnings
+    - name: Format protobuf (check)
+      run: buf format --diff --exit-code
