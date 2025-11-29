@@ -16,3 +16,6 @@ prost.workspace = true
 
 # IP address validation
 regex = "1.10"
+
+[build-dependencies]
+tonic-build.workspace = true

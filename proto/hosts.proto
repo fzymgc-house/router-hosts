@@ -1,0 +1,201 @@
+syntax = "proto3";
+
+package router_hosts;
+
+// Host entry messages
+message HostEntry {
+  string id = 1;
+  string ip_address = 2;
+  string hostname = 3;
+  optional string comment = 4;
+  repeated string tags = 5;
+  string created_at = 6;
+  string updated_at = 7;
+  bool active = 8;
+}
+
+// Host management requests/responses
+message AddHostRequest {
+  optional string edit_token = 1;
+  string ip_address = 2;
+  string hostname = 3;
+  optional string comment = 4;
+  repeated string tags = 5;
+}
+
+message AddHostResponse {
+  string id = 1;
+  HostEntry entry = 2;
+}
+
+message GetHostRequest {
+  string id = 1;
+}
+
+message GetHostResponse {
+  HostEntry entry = 1;
+}
+
+message UpdateHostRequest {
+  optional string edit_token = 1;
+  string id = 2;
+  optional string ip_address = 3;
+  optional string hostname = 4;
+  optional string comment = 5;
+  repeated string tags = 6;
+}
+
+message UpdateHostResponse {
+  HostEntry entry = 1;
+}
+
+message DeleteHostRequest {
+  optional string edit_token = 1;
+  string id = 2;
+}
+
+message DeleteHostResponse {
+  bool success = 1;
+}
+
+message ListHostsRequest {
+  optional string filter = 1;
+  optional int32 limit = 2;
+  optional int32 offset = 3;
+}
+
+message ListHostsResponse {
+  HostEntry entry = 1;
+}
+
+message SearchHostsRequest {
+  string query = 1;
+}
+
+message SearchHostsResponse {
+  HostEntry entry = 1;
+}
+
+// Edit session requests/responses
+message StartEditRequest {}
+
+message StartEditResponse {
+  string edit_token = 1;
+}
+
+message FinishEditRequest {
+  string edit_token = 1;
+}
+
+message FinishEditResponse {
+  bool success = 1;
+  int32 entries_changed = 2;
+}
+
+message CancelEditRequest {
+  string edit_token = 1;
+}
+
+message CancelEditResponse {
+  bool success = 1;
+}
+
+// Bulk operations
+message BulkAddHostsRequest {
+  optional string edit_token = 1;
+  string ip_address = 2;
+  string hostname = 3;
+  optional string comment = 4;
+  repeated string tags = 5;
+}
+
+message BulkAddHostsResponse {
+  optional string id = 1;
+  optional string error = 2;
+}
+
+message ImportHostsRequest {
+  optional string edit_token = 1;
+  bytes chunk = 2;
+  bool last_chunk = 3;
+}
+
+message ImportHostsResponse {
+  int32 imported = 1;
+  int32 failed = 2;
+  optional string error = 3;
+}
+
+message ExportHostsRequest {
+  string format = 1; // "hosts", "json", "csv"
+}
+
+message ExportHostsResponse {
+  bytes chunk = 1;
+}
+
+// Snapshot requests/responses
+message CreateSnapshotRequest {
+  optional string name = 1;
+}
+
+message CreateSnapshotResponse {
+  string snapshot_id = 1;
+}
+
+message Snapshot {
+  string snapshot_id = 1;
+  string created_at = 2;
+  int32 entry_count = 3;
+  string trigger = 4;
+}
+
+message ListSnapshotsRequest {}
+
+message ListSnapshotsResponse {
+  Snapshot snapshot = 1;
+}
+
+message RollbackToSnapshotRequest {
+  string snapshot_id = 1;
+}
+
+message RollbackToSnapshotResponse {
+  bool success = 1;
+  string new_snapshot_id = 2;
+}
+
+message DeleteSnapshotRequest {
+  string snapshot_id = 1;
+}
+
+message DeleteSnapshotResponse {
+  bool success = 1;
+}
+
+// Service definition
+service HostsService {
+  // Host management
+  rpc AddHost(AddHostRequest) returns (AddHostResponse);
+  rpc GetHost(GetHostRequest) returns (GetHostResponse);
+  rpc UpdateHost(UpdateHostRequest) returns (UpdateHostResponse);
+  rpc DeleteHost(DeleteHostRequest) returns (DeleteHostResponse);
+  rpc ListHosts(ListHostsRequest) returns (stream ListHostsResponse);
+  rpc SearchHosts(SearchHostsRequest) returns (stream SearchHostsResponse);
+
+  // Edit sessions
+  rpc StartEdit(StartEditRequest) returns (StartEditResponse);
+  rpc FinishEdit(FinishEditRequest) returns (FinishEditResponse);
+  rpc CancelEdit(CancelEditRequest) returns (CancelEditResponse);
+
+  // Bulk operations
+  rpc BulkAddHosts(stream BulkAddHostsRequest) returns (stream BulkAddHostsResponse);
+  rpc ImportHosts(stream ImportHostsRequest) returns (stream ImportHostsResponse);
+  rpc ExportHosts(ExportHostsRequest) returns (stream ExportHostsResponse);
+
+  // Snapshots
+  rpc CreateSnapshot(CreateSnapshotRequest) returns (CreateSnapshotResponse);
+  rpc ListSnapshots(ListSnapshotsRequest) returns (stream ListSnapshotsResponse);
+  rpc RollbackToSnapshot(RollbackToSnapshotRequest) returns (RollbackToSnapshotResponse);
+  rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
+}
