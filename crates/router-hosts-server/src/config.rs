@@ -2,6 +2,7 @@ use serde::Deserialize;
 use std::path::PathBuf;
 use thiserror::Error;
 
+#[allow(dead_code)]
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("Failed to read config file: {0}")]
@@ -14,17 +15,20 @@ pub enum ConfigError {
     MissingHostsFilePath,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
     pub bind_address: String,
     pub hosts_file_path: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
     pub path: PathBuf,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct TlsConfig {
     pub cert_path: PathBuf,
@@ -32,6 +36,7 @@ pub struct TlsConfig {
     pub ca_cert_path: PathBuf,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct RetentionConfig {
     #[serde(default = "default_max_snapshots")]
@@ -41,18 +46,29 @@ pub struct RetentionConfig {
     pub max_age_days: u32,
 }
 
-fn default_max_snapshots() -> usize { 50 }
-fn default_max_age_days() -> u32 { 30 }
+#[allow(dead_code)]
+fn default_max_snapshots() -> usize {
+    50
+}
+#[allow(dead_code)]
+fn default_max_age_days() -> u32 {
+    30
+}
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct EditSessionConfig {
     #[serde(default = "default_timeout_minutes")]
     pub timeout_minutes: u64,
 }
 
-fn default_timeout_minutes() -> u64 { 15 }
+#[allow(dead_code)]
+fn default_timeout_minutes() -> u64 {
+    15
+}
 
-#[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub struct HooksConfig {
     #[serde(default)]
     pub on_success: Vec<String>,
@@ -61,6 +77,7 @@ pub struct HooksConfig {
     pub on_failure: Vec<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub server: ServerConfig,
@@ -94,15 +111,7 @@ impl Default for EditSessionConfig {
     }
 }
 
-impl Default for HooksConfig {
-    fn default() -> Self {
-        Self {
-            on_success: vec![],
-            on_failure: vec![],
-        }
-    }
-}
-
+#[allow(dead_code)]
 impl Config {
     pub fn from_file(path: &str) -> Result<Self, ConfigError> {
         let content = std::fs::read_to_string(path)?;
@@ -175,7 +184,10 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             Err(ConfigError::MissingHostsFilePath) => {
                 // Expected error
             }
-            _ => panic!("Expected ConfigError::MissingHostsFilePath, got {:?}", result),
+            _ => panic!(
+                "Expected ConfigError::MissingHostsFilePath, got {:?}",
+                result
+            ),
         }
     }
 }
