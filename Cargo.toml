@@ -51,3 +51,13 @@ thiserror = "1.0"
 # Utilities
 uuid = { version = "1.6", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+
+[workspace.lints.clippy]
+# Deny common mistakes per CLAUDE.md best practices
+# Note: Some lints relaxed during initial setup (dead_code, todo, unimplemented)
+# These will be enforced once implementation is complete
+unwrap_used = "warn"        # Will be "deny" after skeleton phase
+expect_used = "warn"        # Will be "deny" after skeleton phase
+panic = "deny"
+todo = "warn"               # Will be "deny" after skeleton phase
+unimplemented = "warn"      # Will be "deny" after skeleton phase
