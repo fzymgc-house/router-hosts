@@ -25,11 +25,11 @@ impl SnapshotsRepository {
             "#,
             [
                 &snapshot_id.to_string() as &dyn duckdb::ToSql,
-                &created_at.to_rfc3339(),
-                &hosts_content.to_string(),
-                &entry_count,
-                &trigger.to_string(),
-                &name.unwrap_or("").to_string(),
+                &created_at.to_rfc3339() as &dyn duckdb::ToSql,
+                &hosts_content as &dyn duckdb::ToSql,
+                &entry_count as &dyn duckdb::ToSql,
+                &trigger.to_string() as &dyn duckdb::ToSql,
+                &name.unwrap_or("") as &dyn duckdb::ToSql,
             ],
         )
         .map_err(|e| DatabaseError::QueryFailed(format!("Failed to create snapshot: {}", e)))?;
@@ -141,7 +141,12 @@ impl SnapshotsRepository {
                 "manual" => SnapshotTrigger::Manual,
                 "auto_before_change" => SnapshotTrigger::AutoBeforeChange,
                 "scheduled" => SnapshotTrigger::Scheduled,
-                _ => continue, // Skip invalid triggers
+                _ => {
+                    return Err(DatabaseError::InvalidData(format!(
+                        "Invalid trigger type: {}",
+                        snapshot.4
+                    )))
+                }
             };
 
             snapshots.push(Snapshot {

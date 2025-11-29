@@ -1,6 +1,7 @@
 use super::schema::{Database, DatabaseError, DatabaseResult};
 use super::HostEntry;
 use chrono::Utc;
+use router_hosts_common::validation::{validate_hostname, validate_ip_address};
 use uuid::Uuid;
 
 /// Repository for host entry operations
@@ -15,6 +16,12 @@ impl HostsRepository {
         comment: Option<&str>,
         tags: &[String],
     ) -> DatabaseResult<HostEntry> {
+        // Validate inputs
+        validate_ip_address(ip_address)
+            .map_err(|e| DatabaseError::InvalidData(format!("Invalid IP address: {}", e)))?;
+        validate_hostname(hostname)
+            .map_err(|e| DatabaseError::InvalidData(format!("Invalid hostname: {}", e)))?;
+
         let id = Uuid::new_v4();
         let now = Utc::now();
         let tags_json =
@@ -27,12 +34,12 @@ impl HostsRepository {
             "#,
             [
                 &id.to_string() as &dyn duckdb::ToSql,
-                &ip_address.to_string(),
-                &hostname.to_string(),
-                &comment.unwrap_or("").to_string(),
-                &tags_json,
-                &now.to_rfc3339(),
-                &now.to_rfc3339(),
+                &ip_address as &dyn duckdb::ToSql,
+                &hostname as &dyn duckdb::ToSql,
+                &comment.unwrap_or("") as &dyn duckdb::ToSql,
+                &tags_json as &dyn duckdb::ToSql,
+                &now.to_rfc3339() as &dyn duckdb::ToSql,
+                &now.to_rfc3339() as &dyn duckdb::ToSql,
             ],
         )
         .map_err(|e| {
@@ -190,6 +197,13 @@ impl HostsRepository {
 
         let new_ip = ip_address.unwrap_or(&existing.ip_address);
         let new_hostname = hostname.unwrap_or(&existing.hostname);
+
+        // Validate new values
+        validate_ip_address(new_ip)
+            .map_err(|e| DatabaseError::InvalidData(format!("Invalid IP address: {}", e)))?;
+        validate_hostname(new_hostname)
+            .map_err(|e| DatabaseError::InvalidData(format!("Invalid hostname: {}", e)))?;
+
         let new_comment = comment
             .map(|c| c.map(String::from))
             .unwrap_or(existing.comment.clone());
@@ -207,12 +221,12 @@ impl HostsRepository {
             WHERE id = ?
             "#,
                 [
-                    &new_ip.to_string() as &dyn duckdb::ToSql,
-                    &new_hostname.to_string(),
-                    &new_comment.as_deref().unwrap_or("").to_string(),
-                    &tags_json,
-                    &now.to_rfc3339(),
-                    &id.to_string(),
+                    &new_ip as &dyn duckdb::ToSql,
+                    &new_hostname as &dyn duckdb::ToSql,
+                    &new_comment.as_deref().unwrap_or("") as &dyn duckdb::ToSql,
+                    &tags_json as &dyn duckdb::ToSql,
+                    &now.to_rfc3339() as &dyn duckdb::ToSql,
+                    &id.to_string() as &dyn duckdb::ToSql,
                 ],
             )
             .map_err(|e| {
