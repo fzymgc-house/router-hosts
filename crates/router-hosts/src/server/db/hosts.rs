@@ -296,7 +296,7 @@ mod tests {
             "192.168.1.10",
             "server.local",
             Some("Test server"),
-            &vec!["test".to_string()],
+            &["test".to_string()],
         );
 
         assert!(entry.is_ok());
@@ -331,7 +331,7 @@ mod tests {
             "192.168.1.10",
             "server.local",
             Some("Test"),
-            &vec!["tag1".to_string()],
+            &["tag1".to_string()],
         )
         .unwrap();
 
