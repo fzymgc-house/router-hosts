@@ -74,22 +74,37 @@ impl Database {
     /// Initialize CQRS event-sourced schema
     fn initialize_schema(&mut self) -> DatabaseResult<()> {
         // Install and load JSON extension
-        self.conn.execute("INSTALL json", []).map_err(|e| {
-            DatabaseError::SchemaInitFailed(format!("Failed to install json extension: {}", e))
-        })?;
-
-        self.conn.execute("LOAD json", []).map_err(|e| {
-            DatabaseError::SchemaInitFailed(format!("Failed to load json extension: {}", e))
-        })?;
+        // Use INSTALL with FORCE to download if needed, or just load if already installed
+        if let Err(e) = self.conn.execute("INSTALL json", []) {
+            // If install fails, try to load anyway (might already be installed)
+            if let Err(load_err) = self.conn.execute("LOAD json", []) {
+                return Err(DatabaseError::SchemaInitFailed(format!(
+                    "Failed to setup json extension. Install error: {}. Load error: {}",
+                    e, load_err
+                )));
+            }
+        } else {
+            // Install succeeded, now load
+            self.conn.execute("LOAD json", []).map_err(|e| {
+                DatabaseError::SchemaInitFailed(format!("Failed to load json extension: {}", e))
+            })?;
+        }
 
         // Install and load INET extension for IP address types
-        self.conn.execute("INSTALL inet", []).map_err(|e| {
-            DatabaseError::SchemaInitFailed(format!("Failed to install inet extension: {}", e))
-        })?;
-
-        self.conn.execute("LOAD inet", []).map_err(|e| {
-            DatabaseError::SchemaInitFailed(format!("Failed to load inet extension: {}", e))
-        })?;
+        if let Err(e) = self.conn.execute("INSTALL inet", []) {
+            // If install fails, try to load anyway (might already be installed)
+            if let Err(load_err) = self.conn.execute("LOAD inet", []) {
+                return Err(DatabaseError::SchemaInitFailed(format!(
+                    "Failed to setup inet extension. Install error: {}. Load error: {}",
+                    e, load_err
+                )));
+            }
+        } else {
+            // Install succeeded, now load
+            self.conn.execute("LOAD inet", []).map_err(|e| {
+                DatabaseError::SchemaInitFailed(format!("Failed to load inet extension: {}", e))
+            })?;
+        }
 
         // Event store - append-only immutable log of all domain events
         // This is the source of truth for all state changes
