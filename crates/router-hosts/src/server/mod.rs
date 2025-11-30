@@ -1,3 +1,4 @@
+pub mod commands;
 mod config;
 pub mod db;
 
