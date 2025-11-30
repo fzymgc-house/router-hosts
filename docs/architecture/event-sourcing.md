@@ -34,39 +34,26 @@ The append-only log of all domain events.
 **Schema:**
 ```sql
 CREATE TABLE host_events (
-    event_id VARCHAR PRIMARY KEY,         -- ULID for lexicographic ordering
-    aggregate_id VARCHAR NOT NULL,        -- ULID of the host entry
-    event_type VARCHAR NOT NULL,          -- HostCreated, IpAddressChanged, etc.
-    event_version INTEGER NOT NULL,       -- Sequential version per aggregate
-    -- Current state columns for queryability
-    ip_address INET,                      -- Current IP (for HostCreated, IpAddressChanged, HostDeleted)
-    hostname VARCHAR,                     -- Current hostname (for HostCreated, HostnameChanged, HostDeleted)
-    event_timestamp TIMESTAMP NOT NULL,   -- When the domain event occurred
-    -- Event data: tags, comments, previous values consolidated into JSON
-    metadata JSON NOT NULL,               -- Contains EventData struct (see below)
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    event_id VARCHAR PRIMARY KEY,
+    aggregate_id VARCHAR NOT NULL,
+    event_type VARCHAR NOT NULL,
+    event_version INTEGER NOT NULL,
+    -- Event-specific typed columns (only JSON for tags array)
+    ip_address INET,
+    hostname VARCHAR,
+    comment VARCHAR,
+    tags JSON,
+    deleted_reason VARCHAR,
+    event_timestamp TIMESTAMP NOT NULL,
+    -- Event metadata
+    event_metadata JSON,
+    created_at TIMESTAMP NOT NULL,
     created_by VARCHAR,
     -- Optimistic concurrency control
     expected_version INTEGER,
     UNIQUE(aggregate_id, event_version)
 )
 ```
-
-**Metadata JSON Structure (EventData):**
-```json
-{
-  "comment": "optional comment string",
-  "tags": ["tag1", "tag2"],
-  "previous_ip": "old IP for IpAddressChanged",
-  "previous_hostname": "old hostname for HostnameChanged",
-  "previous_comment": "old comment for CommentUpdated",
-  "previous_tags": ["old", "tags"],
-  "deleted_reason": "reason for HostDeleted"
-}
-```
-
-> **Note:** The `EventMetadata` struct (correlation_id, causation_id, user_agent, source_ip)
-> is accepted by the API but **not currently persisted**. Only domain event data is stored.
 
 ### 2. Domain Events (`events.rs`)
 
@@ -94,7 +81,7 @@ CREATE VIEW host_entries_current AS
 WITH latest_events AS (
     SELECT
         aggregate_id, event_type, event_version,
-        ip_address, hostname, metadata,
+        ip_address, hostname, comment, tags,
         event_timestamp, created_at,
         ROW_NUMBER() OVER (PARTITION BY aggregate_id ORDER BY event_version DESC) as rn
     FROM host_events
@@ -103,8 +90,8 @@ SELECT
     aggregate_id as id,
     CAST(ip_address AS VARCHAR) as ip_address,
     hostname,
-    json_extract_string(metadata, '$.comment') as comment,
-    COALESCE(json_extract_string(metadata, '$.tags'), '[]') as tags,
+    comment,
+    COALESCE(CAST(tags AS VARCHAR), '[]') as tags,
     event_timestamp as created_at,
     created_at as updated_at,
     event_version,
@@ -113,42 +100,28 @@ FROM latest_events
 WHERE rn = 1 AND event_type != 'HostDeleted'
 ```
 
-> **Note:** Tags and comment are extracted from the `metadata` JSON column using
-> DuckDB's `json_extract_string()` function.
-
 **Query methods:**
 - `get_by_id()` - Reconstruct aggregate state from events
 - `list_all()` - Query current active hosts view
-- `list_paginated(limit, offset)` - Paginated listing for large datasets
 - `search()` - Search by IP or hostname pattern
 - `find_by_ip_and_hostname()` - Exact match lookup
 - `get_at_time()` - Time-travel query (rebuild state at timestamp)
 
-### 4. Database Schema (`schema.rs`)
+### 4. Database Schema (`schema_v2.rs`)
 
 DuckDB schema with event sourcing support:
 
-**Extensions (auto-loaded during initialization):**
-- **JSON** - Extract tags/comments from metadata column
-- **INET** - Proper IP address type with validation
+**Extensions:**
+- **JSON** - Store events as JSON documents
+- **INET** - Proper IP address validation and queries
 
 **Indexes:**
-- `idx_events_aggregate` - Fast event replay by aggregate (aggregate_id, event_version)
-- `idx_events_time` - Temporal queries (created_at)
-- `idx_events_type_hostname` - Optimize view queries (event_type, hostname)
+- `idx_events_aggregate` - Fast event replay by aggregate
+- `idx_events_time` - Temporal queries
 
 **Views:**
-- `host_entries_current` - Active hosts projection (excludes HostDeleted)
+- `host_entries_current` - Active hosts projection
 - `host_entries_history` - Complete history including deleted
-
-**Thread Safety:**
-The `Database` struct wraps a single DuckDB connection. For concurrent access:
-- Use `db.try_clone()` to create additional connections sharing the same database
-- DuckDB handles synchronization internally for cloned connections
-
-**Transaction Support:**
-Use `db.transaction(|conn| { ... })` for atomic multi-statement operations with
-automatic commit on success or rollback on error.
 
 ## Event Flow
 
@@ -324,24 +297,24 @@ let historical_state = HostProjections::get_at_time(&db, &aggregate_id, midnight
 ## DuckDB-Specific Features
 
 **JSON Extension:**
-- Stores consolidated event data (tags, comments, previous values) in `metadata` column
-- Uses `json_extract_string()` in views for field extraction
-- Enables flexible schema evolution without column migrations
+- Used only for tags array storage
+- First-class typed columns for all other fields
+- More efficient than storing everything in JSON
 
 **INET Extension:**
-- Proper IP address type with validation
+- Proper IP address type
+- Built-in validation
 - Efficient storage and queries
-- Cannot be indexed directly (use VARCHAR cast for indexes)
 
-**Views (not materialized):**
-- DuckDB views are computed on query, not pre-materialized
-- Fast due to efficient columnar storage
-- SQL-based projections from event log
+**Materialized Views:**
+- Fast queries without event replay
+- Automatically updated
+- SQL-based projections
 
 **TIMESTAMP:**
-- Microsecond precision stored as i64
-- Use `make_timestamp(micros)` to convert from Rust `timestamp_micros()`
-- Native temporal comparisons in WHERE clauses
+- Microsecond precision
+- Native temporal queries
+- Time-travel support
 
 ## Future Enhancements
 
@@ -353,11 +326,10 @@ let historical_state = HostProjections::get_at_time(&db, &aggregate_id, midnight
 
 ## Related Files
 
-- `crates/router-hosts/src/server/db/schema.rs` - Database schema and initialization
-- `crates/router-hosts/src/server/db/events.rs` - Domain events and EventData struct
-- `crates/router-hosts/src/server/db/event_store.rs` - Event persistence and loading
-- `crates/router-hosts/src/server/db/projections.rs` - Read models and queries
-- `crates/router-hosts/src/server/db/mod.rs` - Module exports
+- `crates/router-hosts/src/server/db/schema_v2.rs` - Database schema
+- `crates/router-hosts/src/server/db/events.rs` - Domain events
+- `crates/router-hosts/src/server/db/event_store.rs` - Event persistence
+- `crates/router-hosts/src/server/db/projections.rs` - Read models
 
 ## References
 

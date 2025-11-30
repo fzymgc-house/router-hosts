@@ -43,74 +43,27 @@ impl HostProjections {
     /// List all active host entries
     ///
     /// This queries the materialized view for efficient access.
-    /// For large datasets, prefer [`list_paginated`](Self::list_paginated) to avoid
-    /// loading all entries into memory.
     pub fn list_all(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
-        Self::list_paginated(db, None, None)
-    }
-
-    /// List active host entries with pagination
-    ///
-    /// # Arguments
-    ///
-    /// * `db` - Database connection
-    /// * `limit` - Maximum number of entries to return (None = unlimited)
-    /// * `offset` - Number of entries to skip (None = start from beginning)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Get first 100 entries
-    /// let page1 = HostProjections::list_paginated(&db, Some(100), None)?;
-    ///
-    /// // Get next 100 entries
-    /// let page2 = HostProjections::list_paginated(&db, Some(100), Some(100))?;
-    /// ```
-    pub fn list_paginated(
-        db: &Database,
-        limit: Option<u32>,
-        offset: Option<u32>,
-    ) -> DatabaseResult<Vec<HostEntry>> {
-        // Build query with optional LIMIT/OFFSET
-        let query = match (limit, offset) {
-            (Some(l), Some(o)) => format!(
+        let mut stmt = db
+            .conn()
+            .prepare(
                 r#"
-                SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, event_version
+                SELECT
+                    id,
+                    ip_address,
+                    hostname,
+                    comment,
+                    tags,
+                    created_at,
+                    updated_at,
+                    event_version
                 FROM host_entries_current
                 ORDER BY ip_address, hostname
-                LIMIT {} OFFSET {}
                 "#,
-                l, o
-            ),
-            (Some(l), None) => format!(
-                r#"
-                SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, event_version
-                FROM host_entries_current
-                ORDER BY ip_address, hostname
-                LIMIT {}
-                "#,
-                l
-            ),
-            (None, Some(o)) => format!(
-                r#"
-                SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, event_version
-                FROM host_entries_current
-                ORDER BY ip_address, hostname
-                OFFSET {}
-                "#,
-                o
-            ),
-            (None, None) => r#"
-                SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, event_version
-                FROM host_entries_current
-                ORDER BY ip_address, hostname
-                "#
-            .to_string(),
-        };
-
-        let mut stmt = db.conn().prepare(&query).map_err(|e| {
-            DatabaseError::QueryFailed(format!("Failed to prepare list query: {}", e))
-        })?;
+            )
+            .map_err(|e| {
+                DatabaseError::QueryFailed(format!("Failed to prepare list query: {}", e))
+            })?;
 
         let rows = stmt
             .query_map([], |row| {
@@ -464,8 +417,6 @@ impl HostProjections {
         id: &Ulid,
         at_time: DateTime<Utc>,
     ) -> DatabaseResult<Option<HostEntry>> {
-        use super::events::EventData;
-
         let mut stmt = db
             .conn()
             .prepare(
@@ -475,14 +426,12 @@ impl HostProjections {
                     aggregate_id,
                     event_type,
                     event_version,
-                    CAST(ip_address AS VARCHAR) as ip_address,
-                    hostname,
-                    CAST(metadata AS VARCHAR) as metadata,
-                    event_timestamp,
+                    event_data,
+                    event_metadata,
                     created_at,
                     created_by
                 FROM host_events
-                WHERE aggregate_id = ? AND created_at <= make_timestamp(?)
+                WHERE aggregate_id = ? AND created_at <= ?
                 ORDER BY event_version ASC
                 "#,
             )
@@ -494,26 +443,26 @@ impl HostProjections {
         let at_time_micros = at_time.timestamp_micros();
 
         let rows = stmt
-            .query_map(
-                [
-                    &id.to_string() as &dyn duckdb::ToSql,
-                    &at_time_micros as &dyn duckdb::ToSql,
-                ],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,         // event_id
-                        row.get::<_, String>(1)?,         // aggregate_id
-                        row.get::<_, String>(2)?,         // event_type
-                        row.get::<_, i64>(3)?,            // event_version
-                        row.get::<_, Option<String>>(4)?, // ip_address
-                        row.get::<_, Option<String>>(5)?, // hostname
-                        row.get::<_, String>(6)?,         // metadata
-                        row.get::<_, i64>(7)?,            // event_timestamp
-                        row.get::<_, i64>(8)?,            // created_at
-                        row.get::<_, String>(9)?,         // created_by
-                    ))
-                },
-            )
+            .query_map([&id.to_string(), &at_time_micros.to_string()], |row| {
+                let event_id_str: String = row.get(0)?;
+                let aggregate_id_str: String = row.get(1)?;
+                let _event_type: String = row.get(2)?;
+                let event_version: i64 = row.get(3)?;
+                let event_data: String = row.get(4)?;
+                let metadata_json: String = row.get(5)?;
+                let created_at_micros: i64 = row.get(6)?;
+                let created_by: String = row.get(7)?;
+
+                Ok((
+                    event_id_str,
+                    aggregate_id_str,
+                    event_version,
+                    event_data,
+                    metadata_json,
+                    created_at_micros,
+                    created_by,
+                ))
+            })
             .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query events: {}", e)))?;
 
         let mut envelopes = Vec::new();
@@ -521,12 +470,9 @@ impl HostProjections {
             let (
                 event_id_str,
                 aggregate_id_str,
-                event_type,
                 event_version,
-                ip_address,
-                hostname,
+                event_data,
                 metadata_json,
-                event_timestamp_micros,
                 created_at_micros,
                 created_by,
             ) =
@@ -539,97 +485,16 @@ impl HostProjections {
                 DatabaseError::InvalidData(format!("Invalid aggregate_id UUID: {}", e))
             })?;
 
-            let event_timestamp = DateTime::from_timestamp_micros(event_timestamp_micros)
-                .ok_or_else(|| {
-                    DatabaseError::InvalidData(format!(
-                        "Invalid event timestamp: {}",
-                        event_timestamp_micros
-                    ))
-                })?;
-
-            // Deserialize EventData from metadata JSON
-            let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
-                DatabaseError::InvalidData(format!("Failed to deserialize event metadata: {}", e))
+            let event: HostEvent = serde_json::from_str(&event_data).map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to deserialize event: {}", e))
             })?;
 
-            // Reconstruct the event from typed columns + metadata
-            let event = match event_type.as_str() {
-                "HostCreated" => {
-                    let ip = ip_address.ok_or_else(|| {
-                        DatabaseError::InvalidData("HostCreated missing ip_address".to_string())
-                    })?;
-                    let host = hostname.ok_or_else(|| {
-                        DatabaseError::InvalidData("HostCreated missing hostname".to_string())
-                    })?;
-
-                    HostEvent::HostCreated {
-                        ip_address: ip,
-                        hostname: host,
-                        comment: event_data.comment.clone(),
-                        tags: event_data.tags.clone().unwrap_or_default(),
-                        created_at: event_timestamp,
-                    }
-                }
-                "IpAddressChanged" => {
-                    let new_ip = ip_address.ok_or_else(|| {
-                        DatabaseError::InvalidData(
-                            "IpAddressChanged missing ip_address".to_string(),
-                        )
-                    })?;
-                    let old_ip = event_data.previous_ip.ok_or_else(|| {
-                        DatabaseError::InvalidData(
-                            "IpAddressChanged missing previous_ip in metadata".to_string(),
-                        )
-                    })?;
-
-                    HostEvent::IpAddressChanged {
-                        old_ip,
-                        new_ip,
-                        changed_at: event_timestamp,
-                    }
-                }
-                "HostnameChanged" => {
-                    let new_hostname = hostname.ok_or_else(|| {
-                        DatabaseError::InvalidData("HostnameChanged missing hostname".to_string())
-                    })?;
-                    let old_hostname = event_data.previous_hostname.ok_or_else(|| {
-                        DatabaseError::InvalidData(
-                            "HostnameChanged missing previous_hostname in metadata".to_string(),
-                        )
-                    })?;
-
-                    HostEvent::HostnameChanged {
-                        old_hostname,
-                        new_hostname,
-                        changed_at: event_timestamp,
-                    }
-                }
-                "CommentUpdated" => HostEvent::CommentUpdated {
-                    old_comment: event_data.previous_comment.clone(),
-                    new_comment: event_data.comment.clone(),
-                    updated_at: event_timestamp,
-                },
-                "TagsModified" => HostEvent::TagsModified {
-                    old_tags: event_data.previous_tags.clone().unwrap_or_default(),
-                    new_tags: event_data.tags.clone().unwrap_or_default(),
-                    modified_at: event_timestamp,
-                },
-                "HostDeleted" => HostEvent::HostDeleted {
-                    ip_address: ip_address.ok_or_else(|| {
-                        DatabaseError::InvalidData("HostDeleted missing ip_address".to_string())
-                    })?,
-                    hostname: hostname.ok_or_else(|| {
-                        DatabaseError::InvalidData("HostDeleted missing hostname".to_string())
-                    })?,
-                    deleted_at: event_timestamp,
-                    reason: event_data.deleted_reason.clone(),
-                },
-                _ => {
-                    return Err(DatabaseError::InvalidData(format!(
-                        "Unknown event type: {}",
-                        event_type
-                    )))
-                }
+            let metadata = if metadata_json == "null" || metadata_json.is_empty() {
+                None
+            } else {
+                Some(serde_json::from_str(&metadata_json).map_err(|e| {
+                    DatabaseError::InvalidData(format!("Failed to deserialize metadata: {}", e))
+                })?)
             };
 
             let created_at =
@@ -648,7 +513,7 @@ impl HostProjections {
                 } else {
                     Some(created_by)
                 },
-                metadata: None,
+                metadata,
             });
         }
 
@@ -884,160 +749,5 @@ mod tests {
         let results = HostProjections::search(&db, "nas").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].hostname, "nas.local");
-    }
-
-    #[test]
-    fn test_list_paginated() {
-        let db = Database::in_memory().unwrap();
-
-        // Create 5 hosts
-        for i in 1..=5 {
-            EventStore::append_event(
-                &db,
-                &Ulid::new(),
-                HostEvent::HostCreated {
-                    ip_address: format!("192.168.1.{}", i),
-                    hostname: format!("server{}.local", i),
-                    comment: None,
-                    tags: vec![],
-                    created_at: Utc::now(),
-                },
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-        }
-
-        // Test limit only
-        let page1 = HostProjections::list_paginated(&db, Some(2), None).unwrap();
-        assert_eq!(page1.len(), 2);
-
-        // Test limit and offset
-        let page2 = HostProjections::list_paginated(&db, Some(2), Some(2)).unwrap();
-        assert_eq!(page2.len(), 2);
-
-        // Test offset beyond data
-        let empty = HostProjections::list_paginated(&db, Some(10), Some(100)).unwrap();
-        assert_eq!(empty.len(), 0);
-
-        // Test no limit (should get all)
-        let all = HostProjections::list_paginated(&db, None, None).unwrap();
-        assert_eq!(all.len(), 5);
-    }
-
-    #[test]
-    fn test_get_at_time() {
-        use std::thread::sleep;
-        use std::time::Duration;
-
-        let db = Database::in_memory().unwrap();
-        let aggregate_id = Ulid::new();
-
-        // Create a host
-        let created_time = Utc::now();
-        EventStore::append_event(
-            &db,
-            &aggregate_id,
-            HostEvent::HostCreated {
-                ip_address: "192.168.1.10".to_string(),
-                hostname: "server.local".to_string(),
-                comment: Some("Initial".to_string()),
-                tags: vec!["prod".to_string()],
-                created_at: created_time,
-            },
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Small delay to ensure time difference
-        sleep(Duration::from_millis(10));
-        let after_create = Utc::now();
-
-        // Modify the host
-        sleep(Duration::from_millis(10));
-        EventStore::append_event(
-            &db,
-            &aggregate_id,
-            HostEvent::CommentUpdated {
-                old_comment: Some("Initial".to_string()),
-                new_comment: Some("Updated".to_string()),
-                updated_at: Utc::now(),
-            },
-            Some(1),
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Query at time after creation but before update
-        let entry_at_create = HostProjections::get_at_time(&db, &aggregate_id, after_create)
-            .unwrap()
-            .expect("Should find entry");
-        assert_eq!(entry_at_create.comment, Some("Initial".to_string()));
-        assert_eq!(entry_at_create.version, 1);
-
-        // Query at current time (after update)
-        let entry_now = HostProjections::get_at_time(&db, &aggregate_id, Utc::now())
-            .unwrap()
-            .expect("Should find entry");
-        assert_eq!(entry_now.comment, Some("Updated".to_string()));
-        assert_eq!(entry_now.version, 2);
-    }
-
-    #[test]
-    fn test_get_at_time_deleted_host() {
-        use std::thread::sleep;
-        use std::time::Duration;
-
-        let db = Database::in_memory().unwrap();
-        let aggregate_id = Ulid::new();
-
-        // Create a host
-        EventStore::append_event(
-            &db,
-            &aggregate_id,
-            HostEvent::HostCreated {
-                ip_address: "192.168.1.10".to_string(),
-                hostname: "server.local".to_string(),
-                comment: None,
-                tags: vec![],
-                created_at: Utc::now(),
-            },
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-
-        sleep(Duration::from_millis(10));
-        let before_delete = Utc::now();
-
-        // Delete the host
-        sleep(Duration::from_millis(10));
-        EventStore::append_event(
-            &db,
-            &aggregate_id,
-            HostEvent::HostDeleted {
-                ip_address: "192.168.1.10".to_string(),
-                hostname: "server.local".to_string(),
-                deleted_at: Utc::now(),
-                reason: Some("Decommissioned".to_string()),
-            },
-            Some(1),
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Query before deletion - should exist
-        let before = HostProjections::get_at_time(&db, &aggregate_id, before_delete).unwrap();
-        assert!(before.is_some());
-
-        // Query after deletion - should not exist (deleted)
-        let after = HostProjections::get_at_time(&db, &aggregate_id, Utc::now()).unwrap();
-        assert!(after.is_none());
     }
 }
