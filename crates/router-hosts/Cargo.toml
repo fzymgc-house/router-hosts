@@ -25,6 +25,7 @@ toml.workspace = true
 
 # Server-specific dependencies
 uuid.workspace = true
+ulid.workspace = true
 chrono.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

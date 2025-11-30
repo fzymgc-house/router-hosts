@@ -27,6 +27,9 @@ pub enum DatabaseError {
 
     #[error("Invalid data: {0}")]
     InvalidData(String),
+
+    #[error("Concurrent modification detected: {0}")]
+    ConcurrentModification(String),
 }
 
 pub type DatabaseResult<T> = Result<T, DatabaseError>;
@@ -74,6 +77,7 @@ impl Database {
                     created_at VARCHAR NOT NULL,
                     updated_at VARCHAR NOT NULL,
                     active BOOLEAN NOT NULL DEFAULT true,
+                    version_tag VARCHAR NOT NULL,
                     UNIQUE(ip_address, hostname)
                 )
                 "#,
@@ -183,6 +187,6 @@ mod tests {
             )
             .unwrap();
 
-        assert_eq!(column_count, 8, "host_entries should have 8 columns");
+        assert_eq!(column_count, 9, "host_entries should have 9 columns");
     }
 }

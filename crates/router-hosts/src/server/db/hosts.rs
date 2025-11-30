@@ -3,6 +3,7 @@ use super::HostEntry;
 use chrono::Utc;
 use duckdb::OptionalExt;
 use router_hosts_common::validation::{validate_hostname, validate_ip_address};
+use ulid::Ulid;
 use uuid::Uuid;
 
 /// Repository for host entry operations
@@ -53,20 +54,22 @@ impl HostsRepository {
                     .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
                 let now = Utc::now();
+                let new_version = Ulid::new();
                 let tags_json = serde_json::to_string(tags)
                     .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
 
                 // Get the created_at from the existing entry
                 let existing_entry = Self::get(db, &id)?;
 
-                // Reactivate and update the entry
+                // Reactivate and update the entry with new version tag
                 db.conn()
                     .execute(
-                        "UPDATE host_entries SET active = true, comment = ?, tags = ?, updated_at = ? WHERE id = ?",
+                        "UPDATE host_entries SET active = true, comment = ?, tags = ?, updated_at = ?, version_tag = ? WHERE id = ?",
                         [
                             &comment.unwrap_or("") as &dyn duckdb::ToSql,
                             &tags_json as &dyn duckdb::ToSql,
                             &now.to_rfc3339() as &dyn duckdb::ToSql,
+                            &new_version.to_string() as &dyn duckdb::ToSql,
                             &id.to_string() as &dyn duckdb::ToSql,
                         ],
                     )
@@ -83,20 +86,22 @@ impl HostsRepository {
                     created_at: existing_entry.created_at,
                     updated_at: now,
                     active: true,
+                    version_tag: new_version,
                 })
             }
             None => {
                 // Entry doesn't exist - insert new
                 let id = Uuid::new_v4();
                 let now = Utc::now();
+                let version = Ulid::new();
                 let tags_json = serde_json::to_string(tags)
                     .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
 
                 db.conn()
                     .execute(
                         r#"
-                        INSERT INTO host_entries (id, ip_address, hostname, comment, tags, created_at, updated_at, active)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, true)
+                        INSERT INTO host_entries (id, ip_address, hostname, comment, tags, created_at, updated_at, active, version_tag)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, true, ?)
                         "#,
                         [
                             &id.to_string() as &dyn duckdb::ToSql,
@@ -106,6 +111,7 @@ impl HostsRepository {
                             &tags_json as &dyn duckdb::ToSql,
                             &now.to_rfc3339() as &dyn duckdb::ToSql,
                             &now.to_rfc3339() as &dyn duckdb::ToSql,
+                            &version.to_string() as &dyn duckdb::ToSql,
                         ],
                     )
                     .map_err(|e| DatabaseError::QueryFailed(format!("Failed to insert host entry: {}", e)))?;
@@ -119,6 +125,7 @@ impl HostsRepository {
                     created_at: now,
                     updated_at: now,
                     active: true,
+                    version_tag: version,
                 })
             }
         }
@@ -128,7 +135,7 @@ impl HostsRepository {
     pub fn get(db: &Database, id: &Uuid) -> DatabaseResult<HostEntry> {
         let mut stmt = db
             .conn()
-            .prepare("SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, active FROM host_entries WHERE id = ?")
+            .prepare("SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, active, version_tag FROM host_entries WHERE id = ?")
             .map_err(|e| DatabaseError::QueryFailed(format!("Failed to prepare query: {}", e)))?;
 
         let entry = stmt
@@ -141,6 +148,7 @@ impl HostsRepository {
                 let created_at_str: String = row.get(5)?;
                 let updated_at_str: String = row.get(6)?;
                 let active: bool = row.get(7)?;
+                let version_tag_str: String = row.get(8)?;
 
                 Ok((
                     id_str,
@@ -151,6 +159,7 @@ impl HostsRepository {
                     created_at_str,
                     updated_at_str,
                     active,
+                    version_tag_str,
                 ))
             })
             .map_err(|e| {
@@ -177,6 +186,8 @@ impl HostsRepository {
                 .map_err(|e| DatabaseError::InvalidData(e.to_string()))?
                 .with_timezone(&Utc),
             active: entry.7,
+            version_tag: Ulid::from_string(&entry.8)
+                .map_err(|e| DatabaseError::InvalidData(format!("Invalid ULID: {}", e)))?,
         })
     }
 
@@ -184,7 +195,7 @@ impl HostsRepository {
     pub fn list_active(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
         let mut stmt = db
             .conn()
-            .prepare("SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, active FROM host_entries WHERE active = true ORDER BY ip_address, hostname")
+            .prepare("SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, active, version_tag FROM host_entries WHERE active = true ORDER BY ip_address, hostname")
             .map_err(|e| DatabaseError::QueryFailed(format!("Failed to prepare query: {}", e)))?;
 
         let rows = stmt
@@ -197,6 +208,7 @@ impl HostsRepository {
                 let created_at_str: String = row.get(5)?;
                 let updated_at_str: String = row.get(6)?;
                 let active: bool = row.get(7)?;
+                let version_tag_str: String = row.get(8)?;
 
                 Ok((
                     id_str,
@@ -207,6 +219,7 @@ impl HostsRepository {
                     created_at_str,
                     updated_at_str,
                     active,
+                    version_tag_str,
                 ))
             })
             .map_err(|e| {
@@ -238,6 +251,8 @@ impl HostsRepository {
                     .map_err(|e| DatabaseError::InvalidData(e.to_string()))?
                     .with_timezone(&Utc),
                 active: entry.7,
+                version_tag: Ulid::from_string(&entry.8)
+                    .map_err(|e| DatabaseError::InvalidData(format!("Invalid ULID: {}", e)))?,
             });
         }
 
@@ -270,6 +285,7 @@ impl HostsRepository {
             .unwrap_or(existing.comment.clone());
         let new_tags = tags.map(|t| t.to_vec()).unwrap_or(existing.tags.clone());
         let now = Utc::now();
+        let new_version = Ulid::new();
 
         let tags_json = serde_json::to_string(&new_tags)
             .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
@@ -278,7 +294,7 @@ impl HostsRepository {
             .execute(
                 r#"
             UPDATE host_entries
-            SET ip_address = ?, hostname = ?, comment = ?, tags = ?, updated_at = ?
+            SET ip_address = ?, hostname = ?, comment = ?, tags = ?, updated_at = ?, version_tag = ?
             WHERE id = ?
             "#,
                 [
@@ -287,6 +303,7 @@ impl HostsRepository {
                     &new_comment.as_deref().unwrap_or("") as &dyn duckdb::ToSql,
                     &tags_json as &dyn duckdb::ToSql,
                     &now.to_rfc3339() as &dyn duckdb::ToSql,
+                    &new_version.to_string() as &dyn duckdb::ToSql,
                     &id.to_string() as &dyn duckdb::ToSql,
                 ],
             )
@@ -303,16 +320,18 @@ impl HostsRepository {
             created_at: existing.created_at,
             updated_at: now,
             active: existing.active,
+            version_tag: new_version,
         })
     }
 
     /// Delete a host entry (soft delete)
     pub fn delete(db: &Database, id: &Uuid) -> DatabaseResult<()> {
+        let new_version = Ulid::new();
         let rows_affected = db
             .conn()
             .execute(
-                "UPDATE host_entries SET active = false WHERE id = ?",
-                [&id.to_string()],
+                "UPDATE host_entries SET active = false, version_tag = ? WHERE id = ?",
+                [&new_version.to_string(), &id.to_string()],
             )
             .map_err(|e| {
                 DatabaseError::QueryFailed(format!("Failed to delete host entry: {}", e))

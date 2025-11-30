@@ -18,6 +18,7 @@ pub use schema::{Database, DatabaseError, DatabaseResult};
 pub use snapshots::SnapshotsRepository;
 
 use chrono::{DateTime, Utc};
+use ulid::Ulid;
 use uuid::Uuid;
 
 /// Represents a host entry in the database
@@ -31,6 +32,7 @@ pub struct HostEntry {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub active: bool,
+    pub version_tag: Ulid,
 }
 
 /// Represents a version snapshot
