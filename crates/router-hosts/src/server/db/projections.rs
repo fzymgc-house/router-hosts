@@ -426,12 +426,14 @@ impl HostProjections {
                     aggregate_id,
                     event_type,
                     event_version,
-                    event_data,
-                    event_metadata,
+                    CAST(ip_address AS VARCHAR) as ip_address,
+                    hostname,
+                    CAST(metadata AS VARCHAR) as metadata,
+                    event_timestamp,
                     created_at,
                     created_by
                 FROM host_events
-                WHERE aggregate_id = ? AND created_at <= ?
+                WHERE aggregate_id = ? AND CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) <= ?
                 ORDER BY event_version ASC
                 "#,
             )
@@ -439,68 +441,139 @@ impl HostProjections {
                 DatabaseError::QueryFailed(format!("Failed to prepare time travel query: {}", e))
             })?;
 
-        // Convert timestamp to microseconds for DuckDB comparison
         let at_time_micros = at_time.timestamp_micros();
 
         let rows = stmt
-            .query_map([&id.to_string(), &at_time_micros.to_string()], |row| {
-                let event_id_str: String = row.get(0)?;
-                let aggregate_id_str: String = row.get(1)?;
-                let _event_type: String = row.get(2)?;
-                let event_version: i64 = row.get(3)?;
-                let event_data: String = row.get(4)?;
-                let metadata_json: String = row.get(5)?;
-                let created_at_micros: i64 = row.get(6)?;
-                let created_by: String = row.get(7)?;
-
-                Ok((
-                    event_id_str,
-                    aggregate_id_str,
-                    event_version,
-                    event_data,
-                    metadata_json,
-                    created_at_micros,
-                    created_by,
-                ))
-            })
+            .query_map(
+                [
+                    &id.to_string() as &dyn duckdb::ToSql,
+                    &at_time_micros as &dyn duckdb::ToSql,
+                ],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,         // event_id
+                        row.get::<_, String>(1)?,         // aggregate_id
+                        row.get::<_, String>(2)?,         // event_type
+                        row.get::<_, i64>(3)?,            // event_version
+                        row.get::<_, Option<String>>(4)?, // ip_address
+                        row.get::<_, Option<String>>(5)?, // hostname
+                        row.get::<_, String>(6)?,         // metadata
+                        row.get::<_, i64>(7)?,            // event_timestamp
+                        row.get::<_, i64>(8)?,            // created_at
+                        row.get::<_, String>(9)?,         // created_by
+                    ))
+                },
+            )
             .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query events: {}", e)))?;
 
+        // Reuse the same event reconstruction logic as load_events
         let mut envelopes = Vec::new();
         for row in rows {
             let (
                 event_id_str,
                 aggregate_id_str,
+                event_type,
                 event_version,
-                event_data,
+                ip_address,
+                hostname,
                 metadata_json,
+                event_timestamp_micros,
                 created_at_micros,
                 created_by,
-            ) =
-                row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
+            ) = row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
             let event_id = Ulid::from_string(&event_id_str)
-                .map_err(|e| DatabaseError::InvalidData(format!("Invalid event_id UUID: {}", e)))?;
+                .map_err(|e| DatabaseError::InvalidData(format!("Invalid event_id ULID: {}", e)))?;
 
-            let agg_id = Ulid::from_string(&aggregate_id_str).map_err(|e| {
-                DatabaseError::InvalidData(format!("Invalid aggregate_id UUID: {}", e))
+            let agg_id = Ulid::from_string(&aggregate_id_str)
+                .map_err(|e| DatabaseError::InvalidData(format!("Invalid aggregate_id ULID: {}", e)))?;
+
+            let event_timestamp = DateTime::from_timestamp_micros(event_timestamp_micros)
+                .ok_or_else(|| {
+                    DatabaseError::InvalidData(format!(
+                        "Invalid event timestamp: {}",
+                        event_timestamp_micros
+                    ))
+                })?;
+
+            use super::events::EventData;
+            let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to deserialize event metadata: {}", e))
             })?;
 
-            let event: HostEvent = serde_json::from_str(&event_data).map_err(|e| {
-                DatabaseError::InvalidData(format!("Failed to deserialize event: {}", e))
-            })?;
-
-            let metadata = if metadata_json == "null" || metadata_json.is_empty() {
-                None
-            } else {
-                Some(serde_json::from_str(&metadata_json).map_err(|e| {
-                    DatabaseError::InvalidData(format!("Failed to deserialize metadata: {}", e))
-                })?)
+            let event = match event_type.as_str() {
+                "HostCreated" => {
+                    let ip = ip_address.ok_or_else(|| {
+                        DatabaseError::InvalidData("HostCreated missing ip_address".to_string())
+                    })?;
+                    let host = hostname.ok_or_else(|| {
+                        DatabaseError::InvalidData("HostCreated missing hostname".to_string())
+                    })?;
+                    HostEvent::HostCreated {
+                        ip_address: ip,
+                        hostname: host,
+                        comment: event_data.comment.clone(),
+                        tags: event_data.tags.clone().unwrap_or_default(),
+                        created_at: event_timestamp,
+                    }
+                }
+                "IpAddressChanged" => {
+                    let new_ip = ip_address.ok_or_else(|| {
+                        DatabaseError::InvalidData("IpAddressChanged missing ip_address".to_string())
+                    })?;
+                    let old_ip = event_data.previous_ip.clone().ok_or_else(|| {
+                        DatabaseError::InvalidData("IpAddressChanged missing previous_ip".to_string())
+                    })?;
+                    HostEvent::IpAddressChanged {
+                        old_ip,
+                        new_ip,
+                        changed_at: event_timestamp,
+                    }
+                }
+                "HostnameChanged" => {
+                    let new_hostname = hostname.ok_or_else(|| {
+                        DatabaseError::InvalidData("HostnameChanged missing hostname".to_string())
+                    })?;
+                    let old_hostname = event_data.previous_hostname.clone().ok_or_else(|| {
+                        DatabaseError::InvalidData("HostnameChanged missing previous_hostname".to_string())
+                    })?;
+                    HostEvent::HostnameChanged {
+                        old_hostname,
+                        new_hostname,
+                        changed_at: event_timestamp,
+                    }
+                }
+                "CommentUpdated" => HostEvent::CommentUpdated {
+                    old_comment: event_data.previous_comment.clone(),
+                    new_comment: event_data.comment.clone(),
+                    updated_at: event_timestamp,
+                },
+                "TagsModified" => HostEvent::TagsModified {
+                    old_tags: event_data.previous_tags.clone().unwrap_or_default(),
+                    new_tags: event_data.tags.clone().unwrap_or_default(),
+                    modified_at: event_timestamp,
+                },
+                "HostDeleted" => HostEvent::HostDeleted {
+                    ip_address: ip_address.ok_or_else(|| {
+                        DatabaseError::InvalidData("HostDeleted missing ip_address".to_string())
+                    })?,
+                    hostname: hostname.ok_or_else(|| {
+                        DatabaseError::InvalidData("HostDeleted missing hostname".to_string())
+                    })?,
+                    deleted_at: event_timestamp,
+                    reason: event_data.deleted_reason.clone(),
+                },
+                _ => {
+                    return Err(DatabaseError::InvalidData(format!(
+                        "Unknown event type: {}",
+                        event_type
+                    )))
+                }
             };
 
-            let created_at =
-                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                    DatabaseError::InvalidData(format!("Invalid timestamp: {}", created_at_micros))
-                })?;
+            let created_at = DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
+                DatabaseError::InvalidData(format!("Invalid timestamp: {}", created_at_micros))
+            })?;
 
             envelopes.push(EventEnvelope {
                 event_id,
@@ -513,7 +586,7 @@ impl HostProjections {
                 } else {
                     Some(created_by)
                 },
-                metadata,
+                metadata: None,
             });
         }
 
@@ -749,5 +822,64 @@ mod tests {
         let results = HostProjections::search(&db, "nas").unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].hostname, "nas.local");
+    }
+
+    #[test]
+    fn test_get_at_time() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+        let t0 = Utc::now();
+
+        // Create host
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "original.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: t0,
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Capture time after first event but before second event
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let between_time = Utc::now();
+
+        // Small delay before second event
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Update hostname
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostnameChanged {
+                old_hostname: "original.local".to_string(),
+                new_hostname: "updated.local".to_string(),
+                changed_at: Utc::now(),
+            },
+            Some(1),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Query at time between the two events - should see original hostname
+        let state_at_t0 = HostProjections::get_at_time(&db, &aggregate_id, between_time).unwrap();
+        assert!(
+            state_at_t0.is_some(),
+            "Expected to find host state at time between creation and update"
+        );
+        assert_eq!(state_at_t0.unwrap().hostname, "original.local");
+
+        // Query at current time - should see updated hostname
+        let state_now = HostProjections::get_at_time(&db, &aggregate_id, Utc::now()).unwrap();
+        assert!(state_now.is_some());
+        assert_eq!(state_now.unwrap().hostname, "updated.local");
     }
 }
