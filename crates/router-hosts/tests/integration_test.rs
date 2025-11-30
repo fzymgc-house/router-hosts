@@ -1,4 +1,25 @@
 //! Integration tests for the router-hosts gRPC server
+//!
+//! # Security Note
+//!
+//! These integration tests use plain HTTP instead of mTLS for the following reasons:
+//!
+//! 1. **Certificate Generation**: mTLS testing requires generating CA certificates,
+//!    server certificates, and client certificates at test runtime. This adds
+//!    significant complexity and external dependencies (openssl or similar).
+//!
+//! 2. **Test Isolation**: Each test would need unique certificates to avoid
+//!    port/certificate conflicts when running tests in parallel.
+//!
+//! 3. **Scope**: The TLS implementation uses well-tested libraries (rustls, webpki).
+//!    The value of integration testing is primarily in the gRPC service logic,
+//!    not in re-testing the TLS stack.
+//!
+//! For production deployment, mTLS is mandatory and configured via the server config.
+//! Manual testing with real certificates should be performed before release.
+//!
+//! TODO: Add mTLS integration tests with runtime certificate generation using rcgen
+//! or similar library for comprehensive E2E security testing.
 
 use router_hosts::server::commands::CommandHandler;
 use router_hosts::server::db::Database;
@@ -93,7 +114,7 @@ async fn create_client(addr: SocketAddr) -> HostsServiceClient<Channel> {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix hanging issue - server starts but gRPC calls hang
+#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_add_and_get_host() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -143,7 +164,7 @@ async fn test_server_starts() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix hanging issue - server starts but gRPC calls hang
+#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_update_host() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -184,7 +205,7 @@ async fn test_update_host() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix hanging issue - server starts but gRPC calls hang
+#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_delete_host() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -223,7 +244,7 @@ async fn test_delete_host() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix hanging issue - server starts but gRPC calls hang
+#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_list_hosts() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -263,7 +284,7 @@ async fn test_list_hosts() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix hanging issue - server starts but gRPC calls hang
+#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_search_hosts() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -310,7 +331,7 @@ async fn test_search_hosts() {
 }
 
 #[tokio::test]
-#[ignore] // TODO: Fix hanging issue - server starts but gRPC calls hang
+#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_edit_session() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;

@@ -55,6 +55,7 @@ impl From<SessionError> for CommandError {
             SessionError::InvalidToken => CommandError::InvalidToken,
             SessionError::Expired => CommandError::SessionExpired,
             SessionError::NoActiveSession => CommandError::NoActiveSession,
+            SessionError::DuplicateEntry(msg) => CommandError::DuplicateEntry(msg),
         }
     }
 }
@@ -189,12 +190,26 @@ impl CommandHandler {
 
         // Check for duplicate IP+hostname (if either changed)
         if final_ip != current.ip_address || final_hostname != current.hostname {
+            // Check database for existing entries
             if let Some(existing) =
                 HostProjections::find_by_ip_and_hostname(&self.db, &final_ip, &final_hostname)?
             {
                 if existing.id != id {
                     return Err(CommandError::DuplicateEntry(format!(
                         "Host with IP {} and hostname {} already exists",
+                        final_ip, final_hostname
+                    )));
+                }
+            }
+
+            // If in a session, also check staged events for duplicates
+            if let Some(ref token) = edit_token {
+                if !self
+                    .session_mgr
+                    .check_staged_duplicate(token, &final_ip, &final_hostname)?
+                {
+                    return Err(CommandError::DuplicateEntry(format!(
+                        "Host with IP {} and hostname {} already staged in this session",
                         final_ip, final_hostname
                     )));
                 }
@@ -229,6 +244,11 @@ impl CommandHandler {
             // Stage all events
             for event in events {
                 self.session_mgr.stage_event(token, id, event)?;
+            }
+            // Register the final IP+hostname if changed, for future duplicate checks
+            if final_ip != current.ip_address || final_hostname != current.hostname {
+                self.session_mgr
+                    .register_staged_ip_hostname(token, &final_ip, &final_hostname)?;
             }
             return Ok(current);
         }
@@ -743,5 +763,113 @@ mod tests {
         // Try to start second session
         let result = handler.start_edit();
         assert!(matches!(result, Err(CommandError::SessionConflict)));
+    }
+
+    #[tokio::test]
+    async fn test_session_duplicate_detection_on_updates() {
+        // Regression test for duplicate detection race condition in edit sessions
+        // Scenario: Two existing hosts, update both to same IP+hostname in one session
+        let handler = setup();
+
+        // Create two hosts with different IPs
+        let entry_a = handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "host-a.local".to_string(),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap();
+
+        let entry_b = handler
+            .add_host(
+                "192.168.1.2".to_string(),
+                "host-b.local".to_string(),
+                None,
+                vec![],
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Start edit session
+        let token = handler.start_edit().unwrap();
+
+        // Update host A to 192.168.1.100:target.local
+        handler
+            .update_host(
+                entry_a.id,
+                Some("192.168.1.100".to_string()),
+                Some("target.local".to_string()),
+                None,
+                None,
+                Some(token.clone()),
+            )
+            .await
+            .unwrap();
+
+        // Try to update host B to same IP+hostname - should fail
+        let result = handler
+            .update_host(
+                entry_b.id,
+                Some("192.168.1.100".to_string()),
+                Some("target.local".to_string()),
+                None,
+                None,
+                Some(token.clone()),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(CommandError::DuplicateEntry(_))),
+            "Expected DuplicateEntry error, got {:?}",
+            result
+        );
+
+        // Cancel to clean up
+        handler.cancel_edit(&token).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_session_duplicate_detection_on_create() {
+        // Test that creating two hosts with same IP+hostname in one session fails
+        let handler = setup();
+
+        // Start edit session
+        let token = handler.start_edit().unwrap();
+
+        // Create first host
+        handler
+            .add_host(
+                "192.168.1.50".to_string(),
+                "duplicate.local".to_string(),
+                None,
+                vec![],
+                Some(token.clone()),
+            )
+            .await
+            .unwrap();
+
+        // Try to create second host with same IP+hostname - should fail
+        let result = handler
+            .add_host(
+                "192.168.1.50".to_string(),
+                "duplicate.local".to_string(),
+                None,
+                vec![],
+                Some(token.clone()),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(CommandError::DuplicateEntry(_))),
+            "Expected DuplicateEntry error, got {:?}",
+            result
+        );
+
+        // Cancel to clean up
+        handler.cancel_edit(&token).unwrap();
     }
 }

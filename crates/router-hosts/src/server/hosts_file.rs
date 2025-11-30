@@ -87,17 +87,36 @@ impl HostsFileGenerator {
     }
 
     /// Write content atomically: tmp file -> fsync -> rename
+    ///
+    /// On error, attempts to clean up the temporary file to avoid leaving
+    /// stale .tmp files that could interfere with subsequent writes.
     async fn atomic_write(&self, content: &str) -> GenerateResult<()> {
         let tmp_path = self.path.with_extension("tmp");
 
         // Write to temp file
         let mut file = fs::File::create(&tmp_path).await?;
-        file.write_all(content.as_bytes()).await?;
-        file.sync_all().await?;
-        drop(file);
+
+        // Use a cleanup helper on error
+        let write_result = async {
+            file.write_all(content.as_bytes()).await?;
+            file.sync_all().await?;
+            drop(file);
+            Ok::<(), std::io::Error>(())
+        }
+        .await;
+
+        if let Err(e) = write_result {
+            // Best effort cleanup of temp file
+            let _ = fs::remove_file(&tmp_path).await;
+            return Err(e.into());
+        }
 
         // Atomic rename
-        fs::rename(&tmp_path, &self.path).await?;
+        if let Err(e) = fs::rename(&tmp_path, &self.path).await {
+            // Best effort cleanup of temp file
+            let _ = fs::remove_file(&tmp_path).await;
+            return Err(e.into());
+        }
 
         Ok(())
     }
