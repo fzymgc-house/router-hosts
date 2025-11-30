@@ -56,6 +56,13 @@ jobs:
     #     cargo install cargo-tarpaulin
     #     cargo tarpaulin --workspace --fail-under 80
 
+    # Free up disk space before clippy (DuckDB bundled build is large)
+    - name: Free disk space
+      run: |
+        df -h
+        cargo clean
+        df -h
+
     - name: Lint Rust (clippy)
       run: cargo clippy -- -D warnings
 
