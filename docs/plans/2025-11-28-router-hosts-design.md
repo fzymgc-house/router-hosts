@@ -37,20 +37,28 @@ router-hosts is a Rust CLI tool for managing DNS host entries on routers. It pro
 
 ## Data Model
 
-### Host Entry
+### Host Entry (Projection)
 
-Stored in DuckDB with the following schema:
+Host entries are stored using **event sourcing** - an append-only log of domain events.
+The current state is a projection built from replaying events. See
+[Event Sourcing Architecture](../architecture/event-sourcing.md) for details.
+
+**Projected HostEntry fields:**
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `id` | UUID | Yes | Primary key, system-generated |
+| `id` | ULID | Yes | Primary key (lexicographically sortable) |
 | `ip_address` | String | Yes | IPv4 or IPv6 address |
 | `hostname` | String | Yes | DNS hostname (with or without domain) |
 | `comment` | String | No | Description/notes |
 | `tags` | String[] | No | Categories (e.g., "iot", "homelab") |
-| `created_at` | Timestamp | Yes | System-generated |
-| `updated_at` | Timestamp | Yes | System-generated |
-| `active` | Boolean | Yes | Soft delete flag |
+| `created_at` | Timestamp | Yes | When the host was first created |
+| `updated_at` | Timestamp | Yes | When the last event occurred |
+| `version` | Integer | Yes | Event version for optimistic concurrency |
+
+> **Note:** There is no `active` field. Deletion is handled via `HostDeleted` tombstone
+> events in the event log. Deleted hosts are excluded from the current view but remain
+> in the event history for audit purposes.
 
 **Validation Rules:**
 - IP must be valid IPv4 (e.g., `192.168.1.10`) or IPv6 (e.g., `fe80::1`)
@@ -177,7 +185,7 @@ CLI arguments override config file values.
 
 ### Generation Logic
 
-1. Query all active entries from DuckDB (`active = true`)
+1. Query the `host_entries_current` view (excludes deleted entries)
 2. Sort by IP address, then hostname (deterministic output)
 3. Generate file with header and entries
 4. Write atomically: temp file → fsync → atomic rename
@@ -304,33 +312,38 @@ Responses include:
 router-hosts/
 ├── Cargo.toml                    # Workspace root
 ├── proto/
-│   └── hosts.proto              # gRPC service definitions
+│   └── router_hosts/v1/
+│       └── hosts.proto          # gRPC service definitions
 ├── crates/
-│   ├── router-hosts-server/     # Server binary
+│   ├── router-hosts/            # Unified binary (client + server)
 │   │   ├── src/
-│   │   │   ├── main.rs
-│   │   │   ├── config.rs        # Server config
-│   │   │   ├── db.rs            # DuckDB ops
-│   │   │   ├── service.rs       # gRPC service
-│   │   │   ├── hosts_gen.rs     # /etc/hosts generation
-│   │   │   ├── hooks.rs         # Post-edit hooks
-│   │   │   └── session.rs       # Edit session mgmt
-│   │   └── Cargo.toml
-│   ├── router-hosts-client/     # Client binary
-│   │   ├── src/
-│   │   │   ├── main.rs
-│   │   │   ├── config.rs        # Client config
-│   │   │   ├── commands/        # CLI commands
-│   │   │   └── grpc.rs          # gRPC client
+│   │   │   ├── main.rs          # Entry point (mode selection)
+│   │   │   ├── client/          # Client mode
+│   │   │   │   └── mod.rs
+│   │   │   └── server/          # Server mode
+│   │   │       ├── mod.rs
+│   │   │       ├── config.rs    # Server config
+│   │   │       └── db/          # Database layer (event sourcing)
+│   │   │           ├── mod.rs
+│   │   │           ├── schema.rs      # DuckDB schema
+│   │   │           ├── events.rs      # Domain events
+│   │   │           ├── event_store.rs # Event persistence
+│   │   │           └── projections.rs # Read models
 │   │   └── Cargo.toml
 │   └── router-hosts-common/     # Shared library
 │       ├── src/
 │       │   ├── lib.rs
-│       │   ├── validation.rs    # IP/hostname validation
-│       │   ├── types.rs         # Shared types
-│       │   └── proto.rs         # Generated protobuf
+│       │   └── validation.rs    # IP/hostname validation
 │       └── Cargo.toml
+├── docs/
+│   ├── architecture/
+│   │   └── event-sourcing.md    # Event sourcing documentation
+│   └── plans/
+│       └── 2025-11-28-router-hosts-design.md
 ```
+
+**Mode Selection:** The binary runs in server mode when the first argument is `server`,
+otherwise it runs in client mode.
 
 ### Key Dependencies
 
