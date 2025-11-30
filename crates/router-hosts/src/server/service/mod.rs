@@ -13,15 +13,14 @@ use crate::server::db::Database;
 use crate::server::session::SessionManager;
 use router_hosts_common::proto::hosts_service_server::HostsService;
 use router_hosts_common::proto::{
-    AddHostRequest, AddHostResponse, BulkAddHostsRequest, BulkAddHostsResponse,
-    CancelEditRequest, CancelEditResponse, CreateSnapshotRequest, CreateSnapshotResponse,
-    DeleteHostRequest, DeleteHostResponse, DeleteSnapshotRequest, DeleteSnapshotResponse,
-    ExportHostsRequest, ExportHostsResponse, FinishEditRequest, FinishEditResponse,
-    GetHostRequest, GetHostResponse, ImportHostsRequest, ImportHostsResponse,
-    ListHostsRequest, ListHostsResponse, ListSnapshotsRequest, ListSnapshotsResponse,
-    RollbackToSnapshotRequest, RollbackToSnapshotResponse, SearchHostsRequest,
-    SearchHostsResponse, StartEditRequest, StartEditResponse, UpdateHostRequest,
-    UpdateHostResponse,
+    AddHostRequest, AddHostResponse, BulkAddHostsRequest, BulkAddHostsResponse, CancelEditRequest,
+    CancelEditResponse, CreateSnapshotRequest, CreateSnapshotResponse, DeleteHostRequest,
+    DeleteHostResponse, DeleteSnapshotRequest, DeleteSnapshotResponse, ExportHostsRequest,
+    ExportHostsResponse, FinishEditRequest, FinishEditResponse, GetHostRequest, GetHostResponse,
+    ImportHostsRequest, ImportHostsResponse, ListHostsRequest, ListHostsResponse,
+    ListSnapshotsRequest, ListSnapshotsResponse, RollbackToSnapshotRequest,
+    RollbackToSnapshotResponse, SearchHostsRequest, SearchHostsResponse, StartEditRequest,
+    StartEditResponse, UpdateHostRequest, UpdateHostResponse,
 };
 use std::pin::Pin;
 use std::sync::Arc;
@@ -33,9 +32,11 @@ use tonic::{Request, Response, Status, Streaming};
 pub struct HostsServiceImpl {
     /// Command handler for business logic
     pub(crate) commands: Arc<CommandHandler>,
-    /// Session manager for edit sessions
+    /// Session manager for edit sessions (used by snapshot handlers)
+    #[allow(dead_code)]
     pub(crate) session_mgr: Arc<SessionManager>,
-    /// Database connection
+    /// Database connection (used by snapshot handlers)
+    #[allow(dead_code)]
     pub(crate) db: Arc<Database>,
 }
 

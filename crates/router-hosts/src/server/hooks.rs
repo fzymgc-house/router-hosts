@@ -46,7 +46,10 @@ impl HookExecutor {
     /// Run failure hooks after failed hosts file regeneration
     pub async fn run_failure(&self, entry_count: usize, error: &str) {
         for cmd in &self.on_failure {
-            if let Err(e) = self.run_hook_with_error(cmd, "failure", entry_count, error).await {
+            if let Err(e) = self
+                .run_hook_with_error(cmd, "failure", entry_count, error)
+                .await
+            {
                 warn!("Failure hook failed (continuing): {} - {}", cmd, e);
             }
         }

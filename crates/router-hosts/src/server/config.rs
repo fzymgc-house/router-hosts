@@ -36,6 +36,7 @@ pub struct TlsConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct RetentionConfig {
     #[serde(default = "default_max_snapshots")]
     pub max_snapshots: usize,
@@ -90,6 +91,7 @@ pub struct HooksConfig {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct Config {
     pub server: ServerConfig,
     pub database: DatabaseConfig,

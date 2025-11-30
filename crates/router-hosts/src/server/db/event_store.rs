@@ -42,12 +42,17 @@ impl EventStore {
         created_by: Option<String>,
     ) -> DatabaseResult<EventEnvelope> {
         // Begin transaction for atomic version check + insert
-        db.conn()
-            .execute("BEGIN TRANSACTION", [])
-            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to begin transaction: {}", e)))?;
+        db.conn().execute("BEGIN TRANSACTION", []).map_err(|e| {
+            DatabaseError::QueryFailed(format!("Failed to begin transaction: {}", e))
+        })?;
 
         // Check for duplicate IP+hostname on HostCreated events
-        if let HostEvent::HostCreated { ip_address, hostname, .. } = &event {
+        if let HostEvent::HostCreated {
+            ip_address,
+            hostname,
+            ..
+        } = &event
+        {
             if HostProjections::find_by_ip_and_hostname(db, ip_address, hostname)?.is_some() {
                 let _ = db.conn().execute("ROLLBACK", []);
                 return Err(DatabaseError::DuplicateEntry(format!(
@@ -58,9 +63,8 @@ impl EventStore {
         }
 
         // Get current version for this aggregate
-        let current_version = Self::get_current_version(db, aggregate_id).map_err(|e| {
+        let current_version = Self::get_current_version(db, aggregate_id).inspect_err(|_| {
             let _ = db.conn().execute("ROLLBACK", []);
-            e
         })?;
 
         // Verify expected version matches (optimistic concurrency control)
@@ -214,9 +218,9 @@ impl EventStore {
             })?;
 
         // Commit transaction
-        db.conn()
-            .execute("COMMIT", [])
-            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to commit transaction: {}", e)))?;
+        db.conn().execute("COMMIT", []).map_err(|e| {
+            DatabaseError::QueryFailed(format!("Failed to commit transaction: {}", e))
+        })?;
 
         Ok(EventEnvelope {
             event_id,
@@ -258,7 +262,8 @@ impl EventStore {
     /// The old value is reconstructed by replaying events in order.
     pub fn load_events(db: &Database, aggregate_id: &Ulid) -> DatabaseResult<Vec<EventEnvelope>> {
         let conn = db.conn();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn
+            .prepare(
                 r#"
                 SELECT
                     event_id,
@@ -544,8 +549,7 @@ mod tests {
             tags: vec![],
             created_at: Utc::now(),
         };
-        let envelope1 =
-            EventStore::append_event(&db, &aggregate_id, event1, None, None).unwrap();
+        let envelope1 = EventStore::append_event(&db, &aggregate_id, event1, None, None).unwrap();
         assert_eq!(envelope1.event_version, 1);
 
         // Second event
@@ -1239,6 +1243,9 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), DatabaseError::DuplicateEntry(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            DatabaseError::DuplicateEntry(_)
+        ));
     }
 }

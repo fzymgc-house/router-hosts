@@ -7,6 +7,7 @@ use router_hosts_common::proto::{
 };
 use tonic::{Request, Response, Status, Streaming};
 
+#[allow(dead_code)]
 impl HostsServiceImpl {
     /// Bulk add hosts via bidirectional streaming
     pub async fn handle_bulk_add_hosts(

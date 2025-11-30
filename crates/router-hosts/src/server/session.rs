@@ -27,6 +27,7 @@ pub type SessionResult<T> = Result<T, SessionError>;
 
 struct ActiveSession {
     token: String,
+    #[allow(dead_code)]
     started_at: DateTime<Utc>,
     last_activity: DateTime<Utc>,
     staged_events: Vec<(Ulid, HostEvent)>,
@@ -70,6 +71,7 @@ impl SessionManager {
     }
 
     /// Validate that a token is valid and not expired
+    #[allow(dead_code)]
     pub fn validate_token(&self, token: &str) -> SessionResult<()> {
         let guard = self.active.lock().unwrap();
         match &*guard {
@@ -86,6 +88,7 @@ impl SessionManager {
     }
 
     /// Reset the timeout for a session
+    #[allow(dead_code)]
     pub fn touch(&self, token: &str) -> SessionResult<()> {
         let mut guard = self.active.lock().unwrap();
         match &mut *guard {

@@ -43,9 +43,8 @@ impl HostsServiceImpl {
     ) -> Result<Response<GetHostResponse>, Status> {
         let req = request.into_inner();
 
-        let id = Ulid::from_string(&req.id).map_err(|e| {
-            Status::invalid_argument(format!("Invalid ID format: {}", e))
-        })?;
+        let id = Ulid::from_string(&req.id)
+            .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
 
         let entry = self
             .commands
@@ -66,13 +65,14 @@ impl HostsServiceImpl {
     ) -> Result<Response<UpdateHostResponse>, Status> {
         let req = request.into_inner();
 
-        let id = Ulid::from_string(&req.id).map_err(|e| {
-            Status::invalid_argument(format!("Invalid ID format: {}", e))
-        })?;
+        let id = Ulid::from_string(&req.id)
+            .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
 
         // Convert optional fields properly from proto optional fields
         // For comment: None = no change, Some(None) = clear, Some(Some(val)) = set value
-        let comment = req.comment.map(|c| if c.is_empty() { None } else { Some(c) });
+        let comment = req
+            .comment
+            .map(|c| if c.is_empty() { None } else { Some(c) });
 
         // For tags: if provided and empty, clear tags; if not provided, keep existing
         let tags = if req.tags.is_empty() {
@@ -85,8 +85,8 @@ impl HostsServiceImpl {
             .commands
             .update_host(
                 id,
-                req.ip_address,  // Already Option<String> from proto
-                req.hostname,    // Already Option<String> from proto
+                req.ip_address, // Already Option<String> from proto
+                req.hostname,   // Already Option<String> from proto
                 comment,
                 tags,
                 req.edit_token,
@@ -106,9 +106,8 @@ impl HostsServiceImpl {
     ) -> Result<Response<DeleteHostResponse>, Status> {
         let req = request.into_inner();
 
-        let id = Ulid::from_string(&req.id).map_err(|e| {
-            Status::invalid_argument(format!("Invalid ID format: {}", e))
-        })?;
+        let id = Ulid::from_string(&req.id)
+            .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
 
         self.commands
             .delete_host(id, None, req.edit_token)
@@ -176,7 +175,9 @@ pub fn command_error_to_status(err: CommandError) -> Status {
         CommandError::InvalidToken => Status::failed_precondition("Invalid token"),
         CommandError::NoActiveSession => Status::failed_precondition("No active session"),
         CommandError::Database(e) => Status::internal(format!("Database error: {}", e)),
-        CommandError::FileGeneration(msg) => Status::internal(format!("File generation error: {}", msg)),
+        CommandError::FileGeneration(msg) => {
+            Status::internal(format!("File generation error: {}", msg))
+        }
         CommandError::Internal(msg) => Status::internal(msg),
     }
 }

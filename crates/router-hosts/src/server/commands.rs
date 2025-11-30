@@ -2,7 +2,9 @@
 //!
 //! This module centralizes validation and event generation for all write operations.
 
-use crate::server::db::{Database, DatabaseError, EventStore, HostEntry, HostEvent, HostProjections};
+use crate::server::db::{
+    Database, DatabaseError, EventStore, HostEntry, HostEvent, HostProjections,
+};
 use crate::server::hooks::HookExecutor;
 use crate::server::hosts_file::HostsFileGenerator;
 use crate::server::session::{SessionError, SessionManager};
@@ -13,6 +15,7 @@ use thiserror::Error;
 use ulid::Ulid;
 
 #[derive(Debug, Error)]
+#[allow(dead_code)]
 pub enum CommandError {
     #[error("Validation failed: {0}")]
     ValidationFailed(String),
@@ -92,8 +95,7 @@ impl CommandHandler {
         // Validate inputs
         validate_ip_address(&ip_address)
             .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
-        validate_hostname(&hostname)
-            .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
+        validate_hostname(&hostname).map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
 
         let aggregate_id = Ulid::new();
         let event = HostEvent::HostCreated {

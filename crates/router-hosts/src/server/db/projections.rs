@@ -3,8 +3,8 @@ use super::events::{EventEnvelope, HostEvent};
 use super::schema::{Database, DatabaseError, DatabaseResult};
 use chrono::{DateTime, Utc};
 use duckdb::OptionalExt;
-use ulid::Ulid;
 use router_hosts_common::proto;
+use ulid::Ulid;
 
 /// Read model for current host entries (CQRS Query side)
 ///
@@ -47,7 +47,8 @@ impl HostProjections {
     pub fn list_all(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
         // Get all unique aggregate IDs
         let conn = db.conn();
-        let mut stmt = conn.prepare(
+        let mut stmt = conn
+            .prepare(
                 r#"
                 SELECT DISTINCT aggregate_id
                 FROM host_events
@@ -63,12 +64,15 @@ impl HostProjections {
                 let id_str: String = row.get(0)?;
                 Ok(id_str)
             })
-            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query aggregates: {}", e)))?;
+            .map_err(|e| {
+                DatabaseError::QueryFailed(format!("Failed to query aggregates: {}", e))
+            })?;
 
         let mut entries = Vec::new();
         for id_result in aggregate_ids {
-            let id_str =
-                id_result.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read aggregate ID: {}", e)))?;
+            let id_str = id_result.map_err(|e| {
+                DatabaseError::QueryFailed(format!("Failed to read aggregate ID: {}", e))
+            })?;
             let id = Ulid::from_string(&id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
@@ -342,13 +346,15 @@ impl HostProjections {
                 event_timestamp_micros,
                 created_at_micros,
                 created_by,
-            ) = row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
+            ) =
+                row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
             let event_id = Ulid::from_string(&event_id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid event_id ULID: {}", e)))?;
 
-            let agg_id = Ulid::from_string(&aggregate_id_str)
-                .map_err(|e| DatabaseError::InvalidData(format!("Invalid aggregate_id ULID: {}", e)))?;
+            let agg_id = Ulid::from_string(&aggregate_id_str).map_err(|e| {
+                DatabaseError::InvalidData(format!("Invalid aggregate_id ULID: {}", e))
+            })?;
 
             let event_timestamp = DateTime::from_timestamp_micros(event_timestamp_micros)
                 .ok_or_else(|| {
@@ -381,10 +387,14 @@ impl HostProjections {
                 }
                 "IpAddressChanged" => {
                     let new_ip = ip_address.ok_or_else(|| {
-                        DatabaseError::InvalidData("IpAddressChanged missing ip_address".to_string())
+                        DatabaseError::InvalidData(
+                            "IpAddressChanged missing ip_address".to_string(),
+                        )
                     })?;
                     let old_ip = event_data.previous_ip.clone().ok_or_else(|| {
-                        DatabaseError::InvalidData("IpAddressChanged missing previous_ip".to_string())
+                        DatabaseError::InvalidData(
+                            "IpAddressChanged missing previous_ip".to_string(),
+                        )
                     })?;
                     HostEvent::IpAddressChanged {
                         old_ip,
@@ -397,7 +407,9 @@ impl HostProjections {
                         DatabaseError::InvalidData("HostnameChanged missing hostname".to_string())
                     })?;
                     let old_hostname = event_data.previous_hostname.clone().ok_or_else(|| {
-                        DatabaseError::InvalidData("HostnameChanged missing previous_hostname".to_string())
+                        DatabaseError::InvalidData(
+                            "HostnameChanged missing previous_hostname".to_string(),
+                        )
                     })?;
                     HostEvent::HostnameChanged {
                         old_hostname,
@@ -433,9 +445,10 @@ impl HostProjections {
                 }
             };
 
-            let created_at = DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                DatabaseError::InvalidData(format!("Invalid timestamp: {}", created_at_micros))
-            })?;
+            let created_at =
+                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
+                    DatabaseError::InvalidData(format!("Invalid timestamp: {}", created_at_micros))
+                })?;
 
             envelopes.push(EventEnvelope {
                 event_id,

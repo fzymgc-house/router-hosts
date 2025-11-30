@@ -3,8 +3,8 @@
 use crate::server::service::hosts::command_error_to_status;
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
-    CancelEditRequest, CancelEditResponse, FinishEditRequest, FinishEditResponse,
-    StartEditRequest, StartEditResponse,
+    CancelEditRequest, CancelEditResponse, FinishEditRequest, FinishEditResponse, StartEditRequest,
+    StartEditResponse,
 };
 use tonic::{Request, Response, Status};
 

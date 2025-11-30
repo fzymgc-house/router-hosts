@@ -122,7 +122,9 @@ async fn test_add_and_get_host() {
 
     // Get the host
     let get_response = client
-        .get_host(GetHostRequest { id: host_id.clone() })
+        .get_host(GetHostRequest {
+            id: host_id.clone(),
+        })
         .await
         .unwrap()
         .into_inner();
@@ -337,9 +339,7 @@ async fn test_edit_session() {
 
     // Finish edit session
     let finish_response = client
-        .finish_edit(FinishEditRequest {
-            edit_token: token,
-        })
+        .finish_edit(FinishEditRequest { edit_token: token })
         .await
         .unwrap()
         .into_inner();
