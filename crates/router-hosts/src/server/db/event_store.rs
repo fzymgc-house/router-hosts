@@ -1,4 +1,5 @@
 use super::events::{EventData, EventEnvelope, EventMetadata, HostEvent};
+use super::projections::HostProjections;
 use super::schema::{Database, DatabaseError, DatabaseResult};
 use chrono::{DateTime, Utc};
 use duckdb::OptionalExt;
@@ -46,6 +47,17 @@ impl EventStore {
         db.conn()
             .execute("BEGIN TRANSACTION", [])
             .map_err(|e| DatabaseError::QueryFailed(format!("Failed to begin transaction: {}", e)))?;
+
+        // Check for duplicate IP+hostname on HostCreated events
+        if let HostEvent::HostCreated { ip_address, hostname, .. } = &event {
+            if HostProjections::find_by_ip_and_hostname(db, ip_address, hostname)?.is_some() {
+                let _ = db.conn().execute("ROLLBACK", []);
+                return Err(DatabaseError::DuplicateEntry(format!(
+                    "Host with IP {} and hostname {} already exists",
+                    ip_address, hostname
+                )));
+            }
+        }
 
         // Get current version for this aggregate
         let current_version = Self::get_current_version(db, aggregate_id).map_err(|e| {
@@ -1047,9 +1059,16 @@ mod tests {
             Some("admin@example.com".to_string())
         );
 
-        // Without created_by (defaults to None)
+        // Without created_by (defaults to None) - use different IP+hostname to avoid duplicate
         let agg2 = Ulid::new();
-        let result2 = EventStore::append_event(&db, &agg2, event, None, None, None);
+        let event2 = HostEvent::HostCreated {
+            ip_address: "192.168.1.2".to_string(),
+            hostname: "test2.local".to_string(),
+            comment: None,
+            tags: vec![],
+            created_at: Utc::now(),
+        };
+        let result2 = EventStore::append_event(&db, &agg2, event2, None, None, None);
         assert!(result2.is_ok());
         assert_eq!(result2.unwrap().created_by, None);
     }
@@ -1213,5 +1232,46 @@ mod tests {
             result2.unwrap_err(),
             DatabaseError::ConcurrentWriteConflict(_)
         ));
+    }
+
+    #[test]
+    fn test_reject_duplicate_ip_hostname() {
+        let db = Database::in_memory().unwrap();
+
+        // Create first host
+        EventStore::append_event(
+            &db,
+            &Ulid::new(),
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.100".to_string(),
+                hostname: "server.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Try to create duplicate
+        let result = EventStore::append_event(
+            &db,
+            &Ulid::new(),
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.100".to_string(),
+                hostname: "server.local".to_string(),
+                comment: Some("Different comment".to_string()),
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        );
+
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), DatabaseError::DuplicateEntry(_)));
     }
 }
