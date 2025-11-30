@@ -637,4 +637,565 @@ mod tests {
 
         assert_eq!(EventStore::count_events(&db, &aggregate_id).unwrap(), 1);
     }
+
+    // Boundary and edge case tests
+
+    #[test]
+    fn test_host_created_with_all_metadata() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        let event = HostEvent::HostCreated {
+            ip_address: "2001:0db8:85a3:0000:0000:8a2e:0370:7334".to_string(),
+            hostname: "very-long-hostname-with-many-parts.subdomain.example.com".to_string(),
+            comment: Some("This is a detailed comment with special chars: <>&\"'".to_string()),
+            tags: vec![
+                "production".to_string(),
+                "critical".to_string(),
+                "team-alpha".to_string(),
+            ],
+            created_at: Utc::now(),
+        };
+
+        let result = EventStore::append_event(&db, &aggregate_id, event.clone(), None, None, None);
+        assert!(result.is_ok());
+
+        // Verify the event can be loaded and metadata is preserved
+        let events = EventStore::load_events(&db, &aggregate_id).unwrap();
+        assert_eq!(events.len(), 1);
+
+        if let HostEvent::HostCreated {
+            ip_address,
+            hostname,
+            comment,
+            tags,
+            ..
+        } = &events[0].event
+        {
+            // DuckDB INET type normalizes IPv6 addresses (removes leading zeros, compresses)
+            assert_eq!(ip_address, "2001:db8:85a3::8a2e:370:7334");
+            assert_eq!(
+                hostname,
+                "very-long-hostname-with-many-parts.subdomain.example.com"
+            );
+            assert_eq!(
+                comment.as_deref(),
+                Some("This is a detailed comment with special chars: <>&\"'")
+            );
+            assert_eq!(tags.len(), 3);
+            assert_eq!(tags[0], "production");
+        } else {
+            panic!("Expected HostCreated event");
+        }
+    }
+
+    #[test]
+    fn test_all_event_types_roundtrip() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // HostCreated
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "10.0.0.1".to_string(),
+                hostname: "test.local".to_string(),
+                comment: Some("Initial".to_string()),
+                tags: vec!["dev".to_string()],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // IpAddressChanged
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::IpAddressChanged {
+                old_ip: "10.0.0.1".to_string(),
+                new_ip: "10.0.0.2".to_string(),
+                changed_at: Utc::now(),
+            },
+            Some(1),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // HostnameChanged
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostnameChanged {
+                old_hostname: "test.local".to_string(),
+                new_hostname: "test2.local".to_string(),
+                changed_at: Utc::now(),
+            },
+            Some(2),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // CommentUpdated
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::CommentUpdated {
+                old_comment: Some("Initial".to_string()),
+                new_comment: Some("Updated".to_string()),
+                updated_at: Utc::now(),
+            },
+            Some(3),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // TagsModified
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::TagsModified {
+                old_tags: vec!["dev".to_string()],
+                new_tags: vec!["dev".to_string(), "production".to_string()],
+                modified_at: Utc::now(),
+            },
+            Some(4),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // HostDeleted
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostDeleted {
+                ip_address: "10.0.0.2".to_string(),
+                hostname: "test2.local".to_string(),
+                deleted_at: Utc::now(),
+                reason: Some("Decommissioned".to_string()),
+            },
+            Some(5),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Verify all events
+        let events = EventStore::load_events(&db, &aggregate_id).unwrap();
+        assert_eq!(events.len(), 6);
+
+        // Verify event types and versions
+        assert!(matches!(events[0].event, HostEvent::HostCreated { .. }));
+        assert!(matches!(
+            events[1].event,
+            HostEvent::IpAddressChanged { .. }
+        ));
+        assert!(matches!(events[2].event, HostEvent::HostnameChanged { .. }));
+        assert!(matches!(events[3].event, HostEvent::CommentUpdated { .. }));
+        assert!(matches!(events[4].event, HostEvent::TagsModified { .. }));
+        assert!(matches!(events[5].event, HostEvent::HostDeleted { .. }));
+
+        for (i, event) in events.iter().enumerate() {
+            assert_eq!(event.event_version, (i + 1) as i64);
+        }
+    }
+
+    #[test]
+    fn test_empty_and_null_metadata() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // Empty comment and tags
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "minimal.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Comment cleared (Some -> None)
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::CommentUpdated {
+                old_comment: None,
+                new_comment: None,
+                updated_at: Utc::now(),
+            },
+            Some(1),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Tags cleared ([] -> [])
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::TagsModified {
+                old_tags: vec![],
+                new_tags: vec![],
+                modified_at: Utc::now(),
+            },
+            Some(2),
+            None,
+            None,
+        )
+        .unwrap();
+
+        let events = EventStore::load_events(&db, &aggregate_id).unwrap();
+        assert_eq!(events.len(), 3);
+
+        if let HostEvent::HostCreated { comment, tags, .. } = &events[0].event {
+            assert!(comment.is_none());
+            assert!(tags.is_empty());
+        } else {
+            panic!("Expected HostCreated");
+        }
+    }
+
+    #[test]
+    fn test_unicode_and_special_characters() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        let event = HostEvent::HostCreated {
+            ip_address: "192.168.1.100".to_string(),
+            hostname: "unicode-测试-тест.local".to_string(),
+            comment: Some("Emoji: 🚀🔥 Special: <>&\"'`".to_string()),
+            tags: vec![
+                "日本語".to_string(),
+                "Русский".to_string(),
+                "emoji-🎉".to_string(),
+            ],
+            created_at: Utc::now(),
+        };
+
+        let result = EventStore::append_event(&db, &aggregate_id, event, None, None, None);
+        assert!(result.is_ok());
+
+        let events = EventStore::load_events(&db, &aggregate_id).unwrap();
+        if let HostEvent::HostCreated {
+            hostname,
+            comment,
+            tags,
+            ..
+        } = &events[0].event
+        {
+            assert_eq!(hostname, "unicode-测试-тест.local");
+            assert!(comment.as_ref().unwrap().contains("🚀"));
+            assert_eq!(tags[0], "日本語");
+            assert_eq!(tags[2], "emoji-🎉");
+        } else {
+            panic!("Expected HostCreated");
+        }
+    }
+
+    #[test]
+    fn test_very_long_strings() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        let long_comment = "a".repeat(10000);
+        let many_tags: Vec<String> = (0..100).map(|i| format!("tag-{}", i)).collect();
+
+        let event = HostEvent::HostCreated {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "long-data.local".to_string(),
+            comment: Some(long_comment.clone()),
+            tags: many_tags.clone(),
+            created_at: Utc::now(),
+        };
+
+        let result = EventStore::append_event(&db, &aggregate_id, event, None, None, None);
+        assert!(result.is_ok());
+
+        let events = EventStore::load_events(&db, &aggregate_id).unwrap();
+        if let HostEvent::HostCreated { comment, tags, .. } = &events[0].event {
+            assert_eq!(comment.as_ref().unwrap().len(), 10000);
+            assert_eq!(tags.len(), 100);
+            assert_eq!(tags[99], "tag-99");
+        } else {
+            panic!("Expected HostCreated");
+        }
+    }
+
+    #[test]
+    fn test_ipv4_and_ipv6_addresses() {
+        let db = Database::in_memory().unwrap();
+
+        // IPv4
+        let agg1 = Ulid::new();
+        EventStore::append_event(
+            &db,
+            &agg1,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "ipv4.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // IPv6
+        let agg2 = Ulid::new();
+        EventStore::append_event(
+            &db,
+            &agg2,
+            HostEvent::HostCreated {
+                ip_address: "2001:db8::1".to_string(),
+                hostname: "ipv6.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // IPv6 with IPv4 mapping
+        let agg3 = Ulid::new();
+        EventStore::append_event(
+            &db,
+            &agg3,
+            HostEvent::HostCreated {
+                ip_address: "::ffff:192.0.2.1".to_string(),
+                hostname: "mapped.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let events1 = EventStore::load_events(&db, &agg1).unwrap();
+        let events2 = EventStore::load_events(&db, &agg2).unwrap();
+        let events3 = EventStore::load_events(&db, &agg3).unwrap();
+
+        assert_eq!(events1.len(), 1);
+        assert_eq!(events2.len(), 1);
+        assert_eq!(events3.len(), 1);
+    }
+
+    #[test]
+    fn test_created_by_field() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        let event = HostEvent::HostCreated {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "test.local".to_string(),
+            comment: None,
+            tags: vec![],
+            created_at: Utc::now(),
+        };
+
+        // With created_by
+        let result = EventStore::append_event(
+            &db,
+            &aggregate_id,
+            event.clone(),
+            None,
+            Some("admin@example.com".to_string()),
+            None,
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap().created_by,
+            Some("admin@example.com".to_string())
+        );
+
+        // Without created_by (defaults to None)
+        let agg2 = Ulid::new();
+        let result2 = EventStore::append_event(&db, &agg2, event, None, None, None);
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap().created_by, None);
+    }
+
+    #[test]
+    fn test_multiple_aggregates_isolation() {
+        let db = Database::in_memory().unwrap();
+        let agg1 = Ulid::new();
+        let agg2 = Ulid::new();
+
+        // Add events to first aggregate
+        EventStore::append_event(
+            &db,
+            &agg1,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "host1.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        EventStore::append_event(
+            &db,
+            &agg1,
+            HostEvent::CommentUpdated {
+                old_comment: None,
+                new_comment: Some("Updated".to_string()),
+                updated_at: Utc::now(),
+            },
+            Some(1),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Add events to second aggregate
+        EventStore::append_event(
+            &db,
+            &agg2,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.2".to_string(),
+                hostname: "host2.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Verify isolation
+        let events1 = EventStore::load_events(&db, &agg1).unwrap();
+        let events2 = EventStore::load_events(&db, &agg2).unwrap();
+
+        assert_eq!(events1.len(), 2);
+        assert_eq!(events2.len(), 1);
+        assert_eq!(EventStore::count_events(&db, &agg1).unwrap(), 2);
+        assert_eq!(EventStore::count_events(&db, &agg2).unwrap(), 1);
+    }
+
+    #[test]
+    fn test_load_events_empty_aggregate() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        let events = EventStore::load_events(&db, &aggregate_id).unwrap();
+        assert_eq!(events.len(), 0);
+    }
+
+    #[test]
+    fn test_event_versioning_sequence() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // Add 10 events
+        for i in 0..10 {
+            let expected_version = if i == 0 { None } else { Some(i) };
+            EventStore::append_event(
+                &db,
+                &aggregate_id,
+                HostEvent::CommentUpdated {
+                    old_comment: None,
+                    new_comment: Some(format!("Version {}", i + 1)),
+                    updated_at: Utc::now(),
+                },
+                expected_version,
+                None,
+                None,
+            )
+            .unwrap();
+        }
+
+        let events = EventStore::load_events(&db, &aggregate_id).unwrap();
+        assert_eq!(events.len(), 10);
+
+        for (i, event) in events.iter().enumerate() {
+            assert_eq!(event.event_version, (i + 1) as i64);
+        }
+    }
+
+    #[test]
+    fn test_concurrent_write_with_same_expected_version() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // First event
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "test.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Second event with correct version
+        let result = EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::CommentUpdated {
+                old_comment: None,
+                new_comment: Some("First".to_string()),
+                updated_at: Utc::now(),
+            },
+            Some(1),
+            None,
+            None,
+        );
+        assert!(result.is_ok());
+
+        // Try to append another event with the same expected version (should fail)
+        let result2 = EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::CommentUpdated {
+                old_comment: None,
+                new_comment: Some("Second".to_string()),
+                updated_at: Utc::now(),
+            },
+            Some(1), // Same expected version - conflict!
+            None,
+            None,
+        );
+        assert!(result2.is_err());
+        assert!(matches!(
+            result2.unwrap_err(),
+            DatabaseError::ConcurrentWriteConflict(_)
+        ));
+    }
 }
