@@ -134,6 +134,17 @@ impl Database {
                 DatabaseError::SchemaInitFailed(format!("Failed to create index: {}", e))
             })?;
 
+        // Create composite index on (ip_address, hostname) for lookups and duplicate detection
+        // This index supports queries in add() and update() that check for existing entries
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_ip_hostname ON host_entries(ip_address, hostname)",
+                [],
+            )
+            .map_err(|e| {
+                DatabaseError::SchemaInitFailed(format!("Failed to create composite index: {}", e))
+            })?;
+
         Ok(())
     }
 

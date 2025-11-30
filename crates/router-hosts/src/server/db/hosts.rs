@@ -233,7 +233,7 @@ impl HostsRepository {
             })?;
 
         let tags: Vec<String> = serde_json::from_str(&entry.4)
-            .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
+            .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags JSON for entry {}: {}", id, e)))?;
 
         Ok(HostEntry {
             id: Uuid::parse_str(&entry.0).map_err(|e| DatabaseError::InvalidData(e.to_string()))?,
@@ -320,7 +320,7 @@ impl HostsRepository {
             let entry =
                 row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
             let tags: Vec<String> = serde_json::from_str(&entry.4)
-                .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
+                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags JSON in list_active: {}", e)))?;
 
             entries.push(HostEntry {
                 id: Uuid::parse_str(&entry.0)
@@ -415,6 +415,14 @@ impl HostsRepository {
         // First, get the existing entry
         let existing = Self::get(db, id)?;
 
+        // Early version check for faster failure detection
+        if &existing.version_tag != expected_version {
+            return Err(DatabaseError::ConcurrentModification(format!(
+                "Host entry {} was modified by another process (expected version: {}, current version: {})",
+                id, expected_version, existing.version_tag
+            )));
+        }
+
         let new_ip = ip_address.unwrap_or(&existing.ip_address);
         let new_hostname = hostname.unwrap_or(&existing.hostname);
 
@@ -423,6 +431,36 @@ impl HostsRepository {
             .map_err(|e| DatabaseError::InvalidData(format!("Invalid IP address: {}", e)))?;
         validate_hostname(new_hostname)
             .map_err(|e| DatabaseError::InvalidData(format!("Invalid hostname: {}", e)))?;
+
+        // Check for duplicate (ip_address, hostname) if either changed
+        let ip_or_hostname_changed = new_ip != existing.ip_address.as_str()
+            || new_hostname != existing.hostname.as_str();
+
+        if ip_or_hostname_changed {
+            // Check if another active entry exists with the new (ip, hostname) combination
+            let mut stmt = db
+                .conn()
+                .prepare("SELECT id, active FROM host_entries WHERE ip_address = ? AND hostname = ? AND id != ?")
+                .map_err(|e| DatabaseError::QueryFailed(format!("Failed to check for duplicates: {}", e)))?;
+
+            let duplicate = stmt
+                .query_row(
+                    [&new_ip as &dyn duckdb::ToSql, &new_hostname as &dyn duckdb::ToSql, &id.to_string() as &dyn duckdb::ToSql],
+                    |row| {
+                        let active: bool = row.get(1)?;
+                        Ok(active)
+                    },
+                )
+                .optional()
+                .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query for duplicates: {}", e)))?;
+
+            if let Some(true) = duplicate {
+                return Err(DatabaseError::DuplicateEntry(format!(
+                    "An active entry with IP {} and hostname {} already exists",
+                    new_ip, new_hostname
+                )));
+            }
+        }
 
         let new_comment = comment
             .map(|c| c.map(String::from))
@@ -434,6 +472,8 @@ impl HostsRepository {
         let tags_json = serde_json::to_string(&new_tags)
             .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
 
+        // Perform the update with version check in WHERE clause for additional safety
+        // The early version check above catches most cases, but this provides defense-in-depth
         let rows_affected = db.conn()
             .execute(
                 r#"
@@ -456,10 +496,12 @@ impl HostsRepository {
                 DatabaseError::QueryFailed(format!("Failed to update host entry: {}", e))
             })?;
 
+        // Defense-in-depth: Check if update actually happened
+        // This should never fail if the early version check passed, but provides additional safety
         if rows_affected == 0 {
             return Err(DatabaseError::ConcurrentModification(format!(
-                "Host entry {} was modified by another process (expected version: {})",
-                id, expected_version
+                "Host entry {} was modified during update operation",
+                id
             )));
         }
 
@@ -858,5 +900,65 @@ mod tests {
             matches!(result.unwrap_err(), DatabaseError::HostNotFound(_)),
             "Expected HostNotFound for non-existent entry"
         );
+    }
+
+    #[test]
+    fn test_update_duplicate_detection() {
+        let db = Database::in_memory().unwrap();
+
+        // Create two entries
+        let _entry1 = HostsRepository::add(&db, "192.168.1.10", "server1.local", None, &[]).unwrap();
+        let entry2 = HostsRepository::add(&db, "192.168.1.20", "server2.local", None, &[]).unwrap();
+
+        // Try to update entry2 to have the same ip/hostname as entry1
+        let result = HostsRepository::update(
+            &db,
+            &entry2.id,
+            &entry2.version_tag,
+            Some("192.168.1.10"),  // Conflicts with entry1
+            Some("server1.local"), // Conflicts with entry1
+            None,
+            None,
+        );
+
+        // Should fail with DuplicateEntry error
+        assert!(result.is_err(), "Update to duplicate ip/hostname should fail");
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, DatabaseError::DuplicateEntry(_)),
+            "Expected DuplicateEntry error, got: {:?}",
+            err
+        );
+
+        // Verify entry2 was not modified
+        let entry2_current = HostsRepository::get(&db, &entry2.id).unwrap();
+        assert_eq!(entry2_current.ip_address, "192.168.1.20");
+        assert_eq!(entry2_current.hostname, "server2.local");
+        assert_eq!(entry2_current.version_tag, entry2.version_tag, "Version should be unchanged");
+    }
+
+    #[test]
+    fn test_update_allows_same_ip_different_hostname() {
+        let db = Database::in_memory().unwrap();
+
+        // Create two entries with different hostnames
+        let _entry1 = HostsRepository::add(&db, "192.168.1.10", "server1.local", None, &[]).unwrap();
+        let entry2 = HostsRepository::add(&db, "192.168.1.20", "server2.local", None, &[]).unwrap();
+
+        // Update entry2 to have same IP but different hostname - should succeed
+        let result = HostsRepository::update(
+            &db,
+            &entry2.id,
+            &entry2.version_tag,
+            Some("192.168.1.10"),  // Same IP as entry1
+            Some("server2.local"), // Different hostname
+            None,
+            None,
+        );
+
+        assert!(result.is_ok(), "Update with same IP but different hostname should succeed");
+        let updated = result.unwrap();
+        assert_eq!(updated.ip_address, "192.168.1.10");
+        assert_eq!(updated.hostname, "server2.local");
     }
 }
