@@ -1,6 +1,6 @@
 //! Edit session handlers
 
-use crate::server::commands::CommandError;
+use crate::server::service::hosts::command_error_to_status;
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
     CancelEditRequest, CancelEditResponse, FinishEditRequest, FinishEditResponse,
@@ -53,23 +53,5 @@ impl HostsServiceImpl {
             .map_err(command_error_to_status)?;
 
         Ok(Response::new(CancelEditResponse { success: true }))
-    }
-}
-
-/// Convert CommandError to gRPC Status
-fn command_error_to_status(err: CommandError) -> Status {
-    match err {
-        CommandError::ValidationFailed(msg) => Status::invalid_argument(msg),
-        CommandError::DuplicateEntry(msg) => Status::already_exists(msg),
-        CommandError::NotFound(msg) => Status::not_found(msg),
-        CommandError::SessionConflict => {
-            Status::failed_precondition("Session conflict: another edit session is active")
-        }
-        CommandError::SessionExpired => Status::failed_precondition("Session expired"),
-        CommandError::InvalidToken => Status::failed_precondition("Invalid token"),
-        CommandError::NoActiveSession => Status::failed_precondition("No active session"),
-        CommandError::Database(e) => Status::internal(format!("Database error: {}", e)),
-        CommandError::FileGeneration(msg) => Status::internal(format!("File generation error: {}", msg)),
-        CommandError::Internal(msg) => Status::internal(msg),
     }
 }

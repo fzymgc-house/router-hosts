@@ -12,6 +12,8 @@ router-hosts-common = { path = "../router-hosts-common" }
 # CLI and async runtime
 clap.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
 anyhow.workspace = true
 
 # gRPC

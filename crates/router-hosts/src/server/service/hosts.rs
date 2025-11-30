@@ -164,7 +164,7 @@ impl HostsServiceImpl {
 }
 
 /// Convert CommandError to gRPC Status
-fn command_error_to_status(err: CommandError) -> Status {
+pub fn command_error_to_status(err: CommandError) -> Status {
     match err {
         CommandError::ValidationFailed(msg) => Status::invalid_argument(msg),
         CommandError::DuplicateEntry(msg) => Status::already_exists(msg),

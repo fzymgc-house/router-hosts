@@ -1,5 +1,6 @@
 use duckdb::Connection;
 use std::path::Path;
+use std::sync::Mutex;
 use thiserror::Error;
 
 #[cfg(test)]
@@ -44,8 +45,11 @@ pub type DatabaseResult<T> = Result<T, DatabaseError>;
 /// - Read models are projections built from events using DuckDB views
 /// - No soft deletes - event log captures complete history
 /// - Time travel queries supported via event replay
+///
+/// The connection is wrapped in a Mutex to allow safe concurrent access
+/// from multiple async tasks in the gRPC server.
 pub struct Database {
-    conn: Connection,
+    conn: Mutex<Connection>,
 }
 
 impl Database {
@@ -55,7 +59,9 @@ impl Database {
             DatabaseError::ConnectionFailed(format!("Failed to open database at {:?}: {}", path, e))
         })?;
 
-        let mut db = Self { conn };
+        let mut db = Self {
+            conn: Mutex::new(conn),
+        };
         db.initialize_schema()?;
         Ok(db)
     }
@@ -66,18 +72,22 @@ impl Database {
             DatabaseError::ConnectionFailed(format!("Failed to open in-memory database: {}", e))
         })?;
 
-        let mut db = Self { conn };
+        let mut db = Self {
+            conn: Mutex::new(conn),
+        };
         db.initialize_schema()?;
         Ok(db)
     }
 
     /// Initialize CQRS event-sourced schema
     fn initialize_schema(&mut self) -> DatabaseResult<()> {
+        let conn = self.conn.get_mut().expect("Mutex poisoned");
+
         // Install and load JSON extension
         // Use INSTALL with FORCE to download if needed, or just load if already installed
-        if let Err(e) = self.conn.execute("INSTALL json", []) {
+        if let Err(e) = conn.execute("INSTALL json", []) {
             // If install fails, try to load anyway (might already be installed)
-            if let Err(load_err) = self.conn.execute("LOAD json", []) {
+            if let Err(load_err) = conn.execute("LOAD json", []) {
                 return Err(DatabaseError::SchemaInitFailed(format!(
                     "Failed to setup json extension. Install error: {}. Load error: {}",
                     e, load_err
@@ -85,15 +95,15 @@ impl Database {
             }
         } else {
             // Install succeeded, now load
-            self.conn.execute("LOAD json", []).map_err(|e| {
+            conn.execute("LOAD json", []).map_err(|e| {
                 DatabaseError::SchemaInitFailed(format!("Failed to load json extension: {}", e))
             })?;
         }
 
         // Install and load INET extension for IP address types
-        if let Err(e) = self.conn.execute("INSTALL inet", []) {
+        if let Err(e) = conn.execute("INSTALL inet", []) {
             // If install fails, try to load anyway (might already be installed)
-            if let Err(load_err) = self.conn.execute("LOAD inet", []) {
+            if let Err(load_err) = conn.execute("LOAD inet", []) {
                 return Err(DatabaseError::SchemaInitFailed(format!(
                     "Failed to setup inet extension. Install error: {}. Load error: {}",
                     e, load_err
@@ -101,7 +111,7 @@ impl Database {
             }
         } else {
             // Install succeeded, now load
-            self.conn.execute("LOAD inet", []).map_err(|e| {
+            conn.execute("LOAD inet", []).map_err(|e| {
                 DatabaseError::SchemaInitFailed(format!("Failed to load inet extension: {}", e))
             })?;
         }
@@ -111,8 +121,7 @@ impl Database {
         //
         // Design: First-class typed columns for current state (ip_address, hostname)
         // JSON metadata column for tags, comments, and previous values
-        self.conn
-            .execute(
+        conn.execute(
                 r#"
                 CREATE TABLE IF NOT EXISTS host_events (
                     event_id VARCHAR PRIMARY KEY,
@@ -143,8 +152,7 @@ impl Database {
             })?;
 
         // Index for fast event replay by aggregate
-        self.conn
-            .execute(
+        conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_aggregate ON host_events(aggregate_id, event_version)",
                 [],
             )
@@ -153,8 +161,7 @@ impl Database {
             })?;
 
         // Index for temporal queries
-        self.conn
-            .execute(
+        conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_time ON host_events(created_at)",
                 [],
             )
@@ -165,8 +172,7 @@ impl Database {
         // Read model: Current active hosts projection
         // This materialized view is built from events and optimized for queries
         // Uses first-class typed columns plus JSON metadata
-        self.conn
-            .execute(
+        conn.execute(
                 r#"
                 CREATE VIEW IF NOT EXISTS host_entries_current AS
                 WITH latest_events AS (
@@ -204,8 +210,7 @@ impl Database {
             })?;
 
         // Read model: Complete history including deleted entries
-        self.conn
-            .execute(
+        conn.execute(
                 r#"
                 CREATE VIEW IF NOT EXISTS host_entries_history AS
                 SELECT
@@ -228,8 +233,7 @@ impl Database {
             })?;
 
         // Snapshots table for /etc/hosts versioning
-        self.conn
-            .execute(
+        conn.execute(
                 r#"
                 CREATE TABLE IF NOT EXISTS snapshots (
                     snapshot_id VARCHAR PRIMARY KEY,
@@ -252,8 +256,11 @@ impl Database {
     }
 
     /// Get a reference to the underlying connection
-    pub(crate) fn conn(&self) -> &Connection {
-        &self.conn
+    ///
+    /// This locks the mutex and returns a guard. The lock is released when
+    /// the guard is dropped.
+    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
+        self.conn.lock().expect("Mutex poisoned")
     }
 }
 

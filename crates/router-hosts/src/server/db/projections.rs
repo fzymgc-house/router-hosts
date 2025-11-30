@@ -46,9 +46,8 @@ impl HostProjections {
     /// This rebuilds state from events to ensure consistency.
     pub fn list_all(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
         // Get all unique aggregate IDs
-        let mut stmt = db
-            .conn()
-            .prepare(
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
                 r#"
                 SELECT DISTINCT aggregate_id
                 FROM host_events
@@ -281,9 +280,8 @@ impl HostProjections {
         id: &Ulid,
         at_time: DateTime<Utc>,
     ) -> DatabaseResult<Option<HostEntry>> {
-        let mut stmt = db
-            .conn()
-            .prepare(
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
                 r#"
                 SELECT
                     event_id,

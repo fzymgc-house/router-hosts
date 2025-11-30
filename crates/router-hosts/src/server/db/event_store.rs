@@ -257,9 +257,8 @@ impl EventStore {
     /// Note: For change events (IpAddressChanged, etc.), we only store the new value.
     /// The old value is reconstructed by replaying events in order.
     pub fn load_events(db: &Database, aggregate_id: &Ulid) -> DatabaseResult<Vec<EventEnvelope>> {
-        let mut stmt = db
-            .conn()
-            .prepare(
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
                 r#"
                 SELECT
                     event_id,
