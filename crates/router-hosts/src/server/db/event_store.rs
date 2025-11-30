@@ -42,11 +42,20 @@ impl EventStore {
         created_by: Option<String>,
         metadata: Option<EventMetadata>,
     ) -> DatabaseResult<EventEnvelope> {
+        // Begin transaction for atomic version check + insert
+        db.conn()
+            .execute("BEGIN TRANSACTION", [])
+            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to begin transaction: {}", e)))?;
+
         // Get current version for this aggregate
-        let current_version = Self::get_current_version(db, aggregate_id)?;
+        let current_version = Self::get_current_version(db, aggregate_id).map_err(|e| {
+            let _ = db.conn().execute("ROLLBACK", []);
+            e
+        })?;
 
         // Verify expected version matches (optimistic concurrency control)
         if expected_version != current_version {
+            let _ = db.conn().execute("ROLLBACK", []);
             return Err(DatabaseError::ConcurrentWriteConflict(format!(
                 "Expected version {:?} but current version is {:?} for aggregate {}",
                 expected_version, current_version, aggregate_id
@@ -157,6 +166,7 @@ impl EventStore {
 
         // Serialize EventData to JSON
         let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
+            let _ = db.conn().execute("ROLLBACK", []);
             DatabaseError::InvalidData(format!("Failed to serialize event data: {}", e))
         })?;
 
@@ -185,6 +195,7 @@ impl EventStore {
                 ],
             )
             .map_err(|e: duckdb::Error| {
+                let _ = db.conn().execute("ROLLBACK", []);
                 // Check if this was a uniqueness violation (concurrent write)
                 let error_str = e.to_string();
                 if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
@@ -196,6 +207,11 @@ impl EventStore {
                     DatabaseError::QueryFailed(format!("Failed to insert event: {}", e))
                 }
             })?;
+
+        // Commit transaction
+        db.conn()
+            .execute("COMMIT", [])
+            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to commit transaction: {}", e)))?;
 
         Ok(EventEnvelope {
             event_id,
