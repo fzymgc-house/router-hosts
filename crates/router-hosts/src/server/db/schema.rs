@@ -65,6 +65,20 @@ impl Database {
     /// Initialize database schema
     fn initialize_schema(&mut self) -> DatabaseResult<()> {
         // Create host_entries table
+        //
+        // UNIQUE CONSTRAINT EXPLANATION:
+        // The UNIQUE(ip_address, hostname) constraint prevents duplicate (ip, hostname) pairs
+        // across BOTH active and inactive entries. This is intentional and works with the
+        // soft-delete pattern as follows:
+        //
+        // 1. When adding an entry, if an inactive entry with the same (ip, hostname) exists,
+        //    the HostsRepository::add() method reactivates it instead of inserting a new row.
+        // 2. This ensures exactly ONE record per (ip, hostname) pair in the database at all times.
+        // 3. The active flag determines visibility, not uniqueness.
+        // 4. This design prevents accumulation of duplicate historical records.
+        //
+        // Alternative approach (not used): UNIQUE(ip_address, hostname, active) would allow
+        // multiple inactive duplicates, which is not desirable for data integrity.
         self.conn
             .execute(
                 r#"

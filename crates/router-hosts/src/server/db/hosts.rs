@@ -6,12 +6,55 @@ use router_hosts_common::validation::{validate_hostname, validate_ip_address};
 use ulid::Ulid;
 use uuid::Uuid;
 
-/// Repository for host entry operations
+/// Repository for host entry operations using a zero-sized type pattern.
+///
+/// All methods are static and take a `Database` reference as their first parameter.
+/// This provides a clean namespace for host entry CRUD operations while maintaining
+/// compile-time guarantees about method organization.
 pub struct HostsRepository;
 
 impl HostsRepository {
-    /// Add a new host entry
-    /// If an inactive entry with the same ip/hostname exists, it will be reactivated
+    /// Adds a new host entry to the database.
+    ///
+    /// If an inactive entry with the same IP address and hostname already exists,
+    /// it will be reactivated with updated metadata instead of creating a duplicate.
+    /// This implements a soft-delete pattern where deleted entries can be reused.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection
+    /// * `ip_address` - IP address (IPv4 or IPv6), validated before insertion
+    /// * `hostname` - Fully qualified domain name, validated for DNS compliance
+    /// * `comment` - Optional comment for documentation
+    /// * `tags` - List of tags for categorization
+    ///
+    /// # Returns
+    ///
+    /// Returns the created or reactivated `HostEntry` with a new version tag.
+    ///
+    /// # Errors
+    ///
+    /// * `DatabaseError::InvalidData` - Invalid IP address or hostname format
+    /// * `DatabaseError::DuplicateEntry` - An active entry with the same IP/hostname exists
+    /// * `DatabaseError::QueryFailed` - Database operation failed
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use router_hosts::server::db::{Database, HostsRepository};
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let db = Database::open("hosts.db")?;
+    /// let entry = HostsRepository::add(
+    ///     &db,
+    ///     "192.168.1.10",
+    ///     "server.local",
+    ///     Some("Production server"),
+    ///     &["production".to_string(), "web".to_string()],
+    /// )?;
+    /// println!("Added entry with ID: {}", entry.id);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn add(
         db: &Database,
         ip_address: &str,
@@ -63,6 +106,10 @@ impl HostsRepository {
                     .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
 
                 // Reactivate and update the entry with new version tag
+                // Note: Store empty string for None comments to maintain consistency with schema.
+                // The comment column is VARCHAR (not NULL-able by default), and we convert
+                // empty strings back to None when reading. This simplifies queries and avoids
+                // NULL handling complexity at the SQL level.
                 db.conn()
                     .execute(
                         "UPDATE host_entries SET active = true, comment = ?, tags = ?, updated_at = ?, version_tag = ? WHERE id = ?",
@@ -132,7 +179,25 @@ impl HostsRepository {
         }
     }
 
-    /// Get a host entry by ID
+    /// Retrieves a host entry by its unique ID.
+    ///
+    /// Returns both active and inactive entries. Use `list_active()` to retrieve
+    /// only active entries.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection
+    /// * `id` - Unique identifier of the host entry
+    ///
+    /// # Returns
+    ///
+    /// Returns the `HostEntry` if found, including its current version tag.
+    ///
+    /// # Errors
+    ///
+    /// * `DatabaseError::HostNotFound` - No entry exists with the given ID
+    /// * `DatabaseError::QueryFailed` - Database query failed
+    /// * `DatabaseError::InvalidData` - Corrupted data in database (invalid UUID, timestamp, etc.)
     pub fn get(db: &Database, id: &Uuid) -> DatabaseResult<HostEntry> {
         let mut stmt = db
             .conn()
@@ -192,7 +257,30 @@ impl HostsRepository {
         })
     }
 
-    /// List all active host entries
+    /// Lists all active host entries sorted by IP address and hostname.
+    ///
+    /// Only returns entries where `active = true`. Soft-deleted entries are excluded.
+    /// Results are deterministically ordered by IP address first, then hostname,
+    /// suitable for generating consistent `/etc/hosts` files.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection
+    ///
+    /// # Returns
+    ///
+    /// Returns a vector of active `HostEntry` records, sorted by (ip_address, hostname).
+    /// Returns an empty vector if no active entries exist.
+    ///
+    /// # Errors
+    ///
+    /// * `DatabaseError::QueryFailed` - Database query failed
+    /// * `DatabaseError::InvalidData` - Corrupted data in database
+    ///
+    /// # Performance
+    ///
+    /// This method loads all active entries into memory. For large datasets,
+    /// consider adding pagination in a future version.
     pub fn list_active(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
         let mut stmt = db
             .conn()
@@ -260,8 +348,61 @@ impl HostsRepository {
         Ok(entries)
     }
 
-    /// Update a host entry with optimistic locking
-    /// Returns ConcurrentModification error if expected_version doesn't match current version
+    /// Updates a host entry with optimistic locking for concurrency control.
+    ///
+    /// All parameters except `db`, `id`, and `expected_version` are optional.
+    /// Omitted parameters preserve their current values. This implements a partial
+    /// update pattern.
+    ///
+    /// # Optimistic Locking
+    ///
+    /// This method requires the caller to provide the expected version tag. If another
+    /// process modified the entry since it was read, the update will fail with
+    /// `DatabaseError::ConcurrentModification`. This prevents lost updates in
+    /// concurrent scenarios.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection
+    /// * `id` - Unique identifier of the host entry to update
+    /// * `expected_version` - Version tag from the entry when it was last read
+    /// * `ip_address` - Optional new IP address (validated if provided)
+    /// * `hostname` - Optional new hostname (validated if provided)
+    /// * `comment` - Optional comment update (use `Some(None)` to clear, `None` to preserve)
+    /// * `tags` - Optional tags update (use `Some(&[])` to clear, `None` to preserve)
+    ///
+    /// # Returns
+    ///
+    /// Returns the updated `HostEntry` with a new version tag and updated timestamp.
+    ///
+    /// # Errors
+    ///
+    /// * `DatabaseError::HostNotFound` - No entry exists with the given ID
+    /// * `DatabaseError::ConcurrentModification` - Version mismatch, entry was modified
+    /// * `DatabaseError::InvalidData` - Invalid IP address or hostname format
+    /// * `DatabaseError::QueryFailed` - Database operation failed
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use router_hosts::server::db::{Database, HostsRepository};
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let db = Database::open("hosts.db")?;
+    /// let entry = HostsRepository::get(&db, &some_id)?;
+    ///
+    /// // Update only the IP address, preserving other fields
+    /// let updated = HostsRepository::update(
+    ///     &db,
+    ///     &entry.id,
+    ///     &entry.version_tag,  // Use current version
+    ///     Some("192.168.1.11"), // New IP
+    ///     None,                 // Keep hostname
+    ///     None,                 // Keep comment
+    ///     None,                 // Keep tags
+    /// )?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn update(
         db: &Database,
         id: &Uuid,
@@ -335,8 +476,47 @@ impl HostsRepository {
         })
     }
 
-    /// Delete a host entry (soft delete) with optimistic locking
-    /// Returns ConcurrentModification error if expected_version doesn't match current version
+    /// Soft-deletes a host entry with optimistic locking.
+    ///
+    /// Sets the `active` flag to `false` and updates the version tag. The entry
+    /// remains in the database and can be reactivated by calling `add()` with the
+    /// same IP address and hostname.
+    ///
+    /// # Optimistic Locking
+    ///
+    /// Requires the expected version tag to prevent concurrent modifications.
+    /// If the entry was modified since it was last read, returns
+    /// `DatabaseError::ConcurrentModification`.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection
+    /// * `id` - Unique identifier of the host entry to delete
+    /// * `expected_version` - Version tag from when the entry was last read
+    ///
+    /// # Errors
+    ///
+    /// * `DatabaseError::HostNotFound` - No entry exists with the given ID
+    /// * `DatabaseError::ConcurrentModification` - Version mismatch, entry was modified
+    /// * `DatabaseError::QueryFailed` - Database operation failed
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use router_hosts::server::db::{Database, HostsRepository};
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let db = Database::open("hosts.db")?;
+    /// let entry = HostsRepository::get(&db, &some_id)?;
+    ///
+    /// // Soft delete the entry
+    /// HostsRepository::delete(&db, &entry.id, &entry.version_tag)?;
+    ///
+    /// // Entry still exists in database but is inactive
+    /// let deleted = HostsRepository::get(&db, &entry.id)?;
+    /// assert!(!deleted.active);
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn delete(db: &Database, id: &Uuid, expected_version: &Ulid) -> DatabaseResult<()> {
         let new_version = Ulid::new();
         let rows_affected = db
@@ -382,7 +562,21 @@ impl HostsRepository {
         Ok(())
     }
 
-    /// Count active host entries
+    /// Counts the number of active host entries in the database.
+    ///
+    /// Only counts entries where `active = true`. Soft-deleted entries are excluded.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection
+    ///
+    /// # Returns
+    ///
+    /// Returns the count of active entries as an `i32`.
+    ///
+    /// # Errors
+    ///
+    /// * `DatabaseError::QueryFailed` - Database query failed
     pub fn count_active(db: &Database) -> DatabaseResult<i32> {
         let count: i32 = db
             .conn()
