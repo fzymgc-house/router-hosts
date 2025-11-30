@@ -168,7 +168,7 @@ impl EventStore {
                     event_id, aggregate_id, event_type, event_version,
                     ip_address, hostname, event_timestamp, metadata,
                     created_at, created_by, expected_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
                 "#,
                 [
                     &event_id.to_string() as &dyn duckdb::ToSql,
@@ -177,9 +177,9 @@ impl EventStore {
                     &new_version,
                     &ip_address_opt as &dyn duckdb::ToSql,
                     &hostname_opt as &dyn duckdb::ToSql,
-                    &event_timestamp.to_rfc3339(),
+                    &event_timestamp.timestamp_micros(),
                     &event_data_json as &dyn duckdb::ToSql,
-                    &now.to_rfc3339(),
+                    &now.timestamp_micros(),
                     &created_by.as_deref().unwrap_or("system"),
                     &expected_version,
                 ],
