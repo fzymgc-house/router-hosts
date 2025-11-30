@@ -36,4 +36,4 @@ tracing-subscriber.workspace = true
 duckdb.workspace = true
 
 [dev-dependencies]
-tempfile = "3.8"
+tempfile.workspace = true
