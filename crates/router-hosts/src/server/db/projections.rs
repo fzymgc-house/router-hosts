@@ -42,205 +42,68 @@ impl HostProjections {
 
     /// List all active host entries
     ///
-    /// This queries the materialized view for efficient access.
+    /// This rebuilds state from events to ensure consistency.
     pub fn list_all(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
+        // Get all unique aggregate IDs
         let mut stmt = db
             .conn()
             .prepare(
                 r#"
-                SELECT
-                    id,
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags,
-                    created_at,
-                    updated_at,
-                    event_version
-                FROM host_entries_current
-                ORDER BY ip_address, hostname
+                SELECT DISTINCT aggregate_id
+                FROM host_events
+                ORDER BY aggregate_id
                 "#,
             )
             .map_err(|e| {
-                DatabaseError::QueryFailed(format!("Failed to prepare list query: {}", e))
+                DatabaseError::QueryFailed(format!("Failed to prepare aggregate query: {}", e))
             })?;
 
-        let rows = stmt
+        let aggregate_ids = stmt
             .query_map([], |row| {
                 let id_str: String = row.get(0)?;
-                let ip_address: String = row.get(1)?;
-                let hostname: String = row.get(2)?;
-                let comment: Option<String> = row.get(3)?;
-                let tags_json: String = row.get(4)?;
-                // DuckDB returns TIMESTAMP as i64 microseconds since epoch
-                let created_at_micros: i64 = row.get(5)?;
-                let updated_at_micros: i64 = row.get(6)?;
-                let version: i64 = row.get(7)?;
-
-                Ok((
-                    id_str,
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags_json,
-                    created_at_micros,
-                    updated_at_micros,
-                    version,
-                ))
+                Ok(id_str)
             })
-            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query hosts: {}", e)))?;
+            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query aggregates: {}", e)))?;
 
         let mut entries = Vec::new();
-        for row in rows {
-            let (
-                id_str,
-                ip_address,
-                hostname,
-                comment,
-                tags_json,
-                created_at_micros,
-                updated_at_micros,
-                version,
-            ) =
-                row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
-
+        for id_result in aggregate_ids {
+            let id_str =
+                id_result.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read aggregate ID: {}", e)))?;
             let id = Ulid::from_string(&id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
-            let tags: Vec<String> = serde_json::from_str(&tags_json)
-                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags: {}", e)))?;
-
-            // Convert DuckDB timestamp (microseconds since epoch) to DateTime<Utc>
-            let created_at =
-                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                    DatabaseError::InvalidData(format!(
-                        "Invalid created_at timestamp: {}",
-                        created_at_micros
-                    ))
-                })?;
-
-            let updated_at =
-                DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                    DatabaseError::InvalidData(format!(
-                        "Invalid updated_at timestamp: {}",
-                        updated_at_micros
-                    ))
-                })?;
-
-            entries.push(HostEntry {
-                id,
-                ip_address,
-                hostname,
-                comment,
-                tags,
-                created_at,
-                updated_at,
-                version,
-            });
+            // Rebuild state from events for this aggregate
+            if let Some(entry) = Self::get_by_id(db, &id)? {
+                entries.push(entry);
+            }
         }
+
+        // Sort by IP and hostname
+        entries.sort_by(|a, b| {
+            a.ip_address
+                .cmp(&b.ip_address)
+                .then_with(|| a.hostname.cmp(&b.hostname))
+        });
 
         Ok(entries)
     }
 
     /// Search hosts by IP address or hostname pattern
+    ///
+    /// This rebuilds state from events and filters in memory.
     pub fn search(db: &Database, pattern: &str) -> DatabaseResult<Vec<HostEntry>> {
-        let search_pattern = format!("%{}%", pattern);
+        let all_entries = Self::list_all(db)?;
+        let pattern_lower = pattern.to_lowercase();
 
-        let mut stmt = db
-            .conn()
-            .prepare(
-                r#"
-                SELECT
-                    id,
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags,
-                    created_at,
-                    updated_at,
-                    event_version
-                FROM host_entries_current
-                WHERE ip_address LIKE ? OR hostname LIKE ?
-                ORDER BY ip_address, hostname
-                "#,
-            )
-            .map_err(|e| {
-                DatabaseError::QueryFailed(format!("Failed to prepare search query: {}", e))
-            })?;
-
-        let rows = stmt
-            .query_map([&search_pattern, &search_pattern], |row| {
-                let id_str: String = row.get(0)?;
-                let ip_address: String = row.get(1)?;
-                let hostname: String = row.get(2)?;
-                let comment: Option<String> = row.get(3)?;
-                let tags_json: String = row.get(4)?;
-                let created_at_micros: i64 = row.get(5)?;
-                let updated_at_micros: i64 = row.get(6)?;
-                let version: i64 = row.get(7)?;
-
-                Ok((
-                    id_str,
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags_json,
-                    created_at_micros,
-                    updated_at_micros,
-                    version,
-                ))
+        let filtered: Vec<HostEntry> = all_entries
+            .into_iter()
+            .filter(|entry| {
+                entry.ip_address.to_lowercase().contains(&pattern_lower)
+                    || entry.hostname.to_lowercase().contains(&pattern_lower)
             })
-            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to execute search: {}", e)))?;
+            .collect();
 
-        let mut entries = Vec::new();
-        for row in rows {
-            let (
-                id_str,
-                ip_address,
-                hostname,
-                comment,
-                tags_json,
-                created_at_micros,
-                updated_at_micros,
-                version,
-            ) =
-                row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
-
-            let id = Ulid::from_string(&id_str)
-                .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
-
-            let tags: Vec<String> = serde_json::from_str(&tags_json)
-                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags: {}", e)))?;
-
-            let created_at =
-                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                    DatabaseError::InvalidData(format!(
-                        "Invalid created_at timestamp: {}",
-                        created_at_micros
-                    ))
-                })?;
-
-            let updated_at =
-                DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                    DatabaseError::InvalidData(format!(
-                        "Invalid updated_at timestamp: {}",
-                        updated_at_micros
-                    ))
-                })?;
-
-            entries.push(HostEntry {
-                id,
-                ip_address,
-                hostname,
-                comment,
-                tags,
-                created_at,
-                updated_at,
-                version,
-            });
-        }
-
-        Ok(entries)
+        Ok(filtered)
     }
 
     /// Find host by exact IP and hostname match
