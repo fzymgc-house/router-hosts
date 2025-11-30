@@ -1,6 +1,7 @@
 use super::schema::{Database, DatabaseError, DatabaseResult};
 use super::HostEntry;
 use chrono::Utc;
+use duckdb::OptionalExt;
 use router_hosts_common::validation::{validate_hostname, validate_ip_address};
 use uuid::Uuid;
 
@@ -9,6 +10,7 @@ pub struct HostsRepository;
 
 impl HostsRepository {
     /// Add a new host entry
+    /// If an inactive entry with the same ip/hostname exists, it will be reactivated
     pub fn add(
         db: &Database,
         ip_address: &str,
@@ -22,45 +24,104 @@ impl HostsRepository {
         validate_hostname(hostname)
             .map_err(|e| DatabaseError::InvalidData(format!("Invalid hostname: {}", e)))?;
 
-        let id = Uuid::new_v4();
-        let now = Utc::now();
-        let tags_json =
-            serde_json::to_string(tags).map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
+        // Check if an entry with this ip/hostname already exists
+        let mut stmt = db
+            .conn()
+            .prepare("SELECT id, active FROM host_entries WHERE ip_address = ? AND hostname = ?")
+            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to check existing entry: {}", e)))?;
 
-        db.conn().execute(
-            r#"
-            INSERT INTO host_entries (id, ip_address, hostname, comment, tags, created_at, updated_at, active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, true)
-            "#,
-            [
-                &id.to_string() as &dyn duckdb::ToSql,
-                &ip_address as &dyn duckdb::ToSql,
-                &hostname as &dyn duckdb::ToSql,
-                &comment.unwrap_or("") as &dyn duckdb::ToSql,
-                &tags_json as &dyn duckdb::ToSql,
-                &now.to_rfc3339() as &dyn duckdb::ToSql,
-                &now.to_rfc3339() as &dyn duckdb::ToSql,
-            ],
-        )
-        .map_err(|e| {
-            let error_str = e.to_string();
-            if error_str.contains("Duplicate key") || error_str.contains("unique constraint") {
-                DatabaseError::DuplicateEntry(format!("Host entry {}@{} already exists", hostname, ip_address))
-            } else {
-                DatabaseError::QueryFailed(format!("Failed to insert host entry: {}", e))
+        let existing = stmt
+            .query_row([&ip_address as &dyn duckdb::ToSql, &hostname as &dyn duckdb::ToSql], |row| {
+                let id_str: String = row.get(0)?;
+                let active: bool = row.get(1)?;
+                Ok((id_str, active))
+            })
+            .optional()
+            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query existing entry: {}", e)))?;
+
+        match existing {
+            Some((_id_str, true)) => {
+                // Entry exists and is active - return error
+                Err(DatabaseError::DuplicateEntry(format!(
+                    "Host entry {}@{} already exists",
+                    hostname, ip_address
+                )))
             }
-        })?;
+            Some((id_str, false)) => {
+                // Entry exists but is inactive - reactivate it
+                let id = Uuid::parse_str(&id_str)
+                    .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
-        Ok(HostEntry {
-            id,
-            ip_address: ip_address.to_string(),
-            hostname: hostname.to_string(),
-            comment: comment.map(String::from),
-            tags: tags.to_vec(),
-            created_at: now,
-            updated_at: now,
-            active: true,
-        })
+                let now = Utc::now();
+                let tags_json = serde_json::to_string(tags)
+                    .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
+
+                // Get the created_at from the existing entry
+                let existing_entry = Self::get(db, &id)?;
+
+                // Reactivate and update the entry
+                db.conn()
+                    .execute(
+                        "UPDATE host_entries SET active = true, comment = ?, tags = ?, updated_at = ? WHERE id = ?",
+                        [
+                            &comment.unwrap_or("") as &dyn duckdb::ToSql,
+                            &tags_json as &dyn duckdb::ToSql,
+                            &now.to_rfc3339() as &dyn duckdb::ToSql,
+                            &id.to_string() as &dyn duckdb::ToSql,
+                        ],
+                    )
+                    .map_err(|e| {
+                        DatabaseError::QueryFailed(format!("Failed to reactivate entry: {}", e))
+                    })?;
+
+                Ok(HostEntry {
+                    id,
+                    ip_address: ip_address.to_string(),
+                    hostname: hostname.to_string(),
+                    comment: comment.map(String::from),
+                    tags: tags.to_vec(),
+                    created_at: existing_entry.created_at,
+                    updated_at: now,
+                    active: true,
+                })
+            }
+            None => {
+                // Entry doesn't exist - insert new
+                let id = Uuid::new_v4();
+                let now = Utc::now();
+                let tags_json = serde_json::to_string(tags)
+                    .map_err(|e| DatabaseError::InvalidData(e.to_string()))?;
+
+                db.conn()
+                    .execute(
+                        r#"
+                        INSERT INTO host_entries (id, ip_address, hostname, comment, tags, created_at, updated_at, active)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, true)
+                        "#,
+                        [
+                            &id.to_string() as &dyn duckdb::ToSql,
+                            &ip_address as &dyn duckdb::ToSql,
+                            &hostname as &dyn duckdb::ToSql,
+                            &comment.unwrap_or("") as &dyn duckdb::ToSql,
+                            &tags_json as &dyn duckdb::ToSql,
+                            &now.to_rfc3339() as &dyn duckdb::ToSql,
+                            &now.to_rfc3339() as &dyn duckdb::ToSql,
+                        ],
+                    )
+                    .map_err(|e| DatabaseError::QueryFailed(format!("Failed to insert host entry: {}", e)))?;
+
+                Ok(HostEntry {
+                    id,
+                    ip_address: ip_address.to_string(),
+                    hostname: hostname.to_string(),
+                    comment: comment.map(String::from),
+                    tags: tags.to_vec(),
+                    created_at: now,
+                    updated_at: now,
+                    active: true,
+                })
+            }
+        }
     }
 
     /// Get a host entry by ID
@@ -408,18 +469,33 @@ mod tests {
 
         // Add an entry
         let first = HostsRepository::add(&db, "192.168.1.10", "server.local", Some("First"), &[]).unwrap();
+        let first_id = first.id;
+        let first_created_at = first.created_at;
 
-        // Delete it
+        // Delete it (soft delete)
         HostsRepository::delete(&db, &first.id).unwrap();
 
-        // Re-add the same ip/hostname combination - should succeed due to UNIQUE(ip, hostname, active)
+        // Re-add the same ip/hostname combination - should reactivate the SAME entry
         let second = HostsRepository::add(&db, "192.168.1.10", "server.local", Some("Second"), &[]);
         assert!(second.is_ok(), "Should be able to re-add deleted entry");
 
-        // Verify the new entry is active
+        // Verify it reactivated the SAME entry (same ID), not created a new one
         let second = second.unwrap();
+        assert_eq!(second.id, first_id, "Should reactivate same entry, not create new one");
         assert!(second.active);
-        assert_eq!(second.comment, Some("Second".to_string()));
+        assert_eq!(second.comment, Some("Second".to_string()), "Comment should be updated");
+        assert_eq!(second.created_at, first_created_at, "created_at should be preserved");
+
+        // Verify only ONE record exists in database (no duplicate inactive records)
+        let total_count: i32 = db
+            .conn()
+            .query_row(
+                "SELECT COUNT(*) FROM host_entries WHERE ip_address = ? AND hostname = ?",
+                [&"192.168.1.10", &"server.local"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(total_count, 1, "Should have exactly one record, not duplicates");
 
         // Verify only one active entry
         let active_entries = HostsRepository::list_active(&db).unwrap();
