@@ -30,7 +30,6 @@ impl EventStore {
     /// * `event` - Domain event to store
     /// * `expected_version` - Expected current version for optimistic locking
     /// * `created_by` - Optional user/system identifier
-    /// * `metadata` - Optional event metadata
     ///
     /// # Returns
     ///
@@ -41,7 +40,6 @@ impl EventStore {
         event: HostEvent,
         expected_version: Option<i64>,
         created_by: Option<String>,
-        metadata: Option<EventMetadata>,
     ) -> DatabaseResult<EventEnvelope> {
         // Begin transaction for atomic version check + insert
         db.conn()
@@ -80,11 +78,6 @@ impl EventStore {
         // Generate event ID
         let event_id = Ulid::new();
         let now = Utc::now();
-
-        // Note: EventMetadata (correlation/causation/user_agent/source_ip) parameter is accepted
-        // but not currently persisted to the database. Only EventData is stored in metadata column.
-        // To persist EventMetadata, we would need to add a separate column or extend the schema.
-        let _ = metadata; // Acknowledge unused parameter
 
         // Build event data and extract typed columns
         // EventData (JSON metadata): tags, comments, previous values
@@ -232,7 +225,7 @@ impl EventStore {
             event_version: new_version,
             created_at: now,
             created_by,
-            metadata,
+            metadata: None,
         })
     }
 
@@ -531,7 +524,7 @@ mod tests {
             created_at: Utc::now(),
         };
 
-        let result = EventStore::append_event(&db, &aggregate_id, event, None, None, None);
+        let result = EventStore::append_event(&db, &aggregate_id, event, None, None);
         assert!(result.is_ok());
 
         let envelope = result.unwrap();
@@ -553,7 +546,7 @@ mod tests {
             created_at: Utc::now(),
         };
         let envelope1 =
-            EventStore::append_event(&db, &aggregate_id, event1, None, None, None).unwrap();
+            EventStore::append_event(&db, &aggregate_id, event1, None, None).unwrap();
         assert_eq!(envelope1.event_version, 1);
 
         // Second event
@@ -563,7 +556,7 @@ mod tests {
             changed_at: Utc::now(),
         };
         let envelope2 =
-            EventStore::append_event(&db, &aggregate_id, event2, Some(1), None, None).unwrap();
+            EventStore::append_event(&db, &aggregate_id, event2, Some(1), None).unwrap();
         assert_eq!(envelope2.event_version, 2);
     }
 
@@ -580,7 +573,7 @@ mod tests {
             tags: vec![],
             created_at: Utc::now(),
         };
-        EventStore::append_event(&db, &aggregate_id, event1, None, None, None).unwrap();
+        EventStore::append_event(&db, &aggregate_id, event1, None, None).unwrap();
 
         // Try to append with wrong expected version
         let event2 = HostEvent::IpAddressChanged {
@@ -588,7 +581,7 @@ mod tests {
             new_ip: "192.168.1.11".to_string(),
             changed_at: Utc::now(),
         };
-        let result = EventStore::append_event(&db, &aggregate_id, event2, Some(5), None, None);
+        let result = EventStore::append_event(&db, &aggregate_id, event2, Some(5), None);
 
         assert!(result.is_err());
         assert!(matches!(
@@ -615,7 +608,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -628,7 +620,6 @@ mod tests {
                 updated_at: Utc::now(),
             },
             Some(1),
-            None,
             None,
         )
         .unwrap();
@@ -659,7 +650,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -685,7 +675,7 @@ mod tests {
             created_at: Utc::now(),
         };
 
-        let result = EventStore::append_event(&db, &aggregate_id, event.clone(), None, None, None);
+        let result = EventStore::append_event(&db, &aggregate_id, event.clone(), None, None);
         assert!(result.is_ok());
 
         // Verify the event can be loaded and metadata is preserved
@@ -735,7 +725,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -749,7 +738,6 @@ mod tests {
                 changed_at: Utc::now(),
             },
             Some(1),
-            None,
             None,
         )
         .unwrap();
@@ -765,7 +753,6 @@ mod tests {
             },
             Some(2),
             None,
-            None,
         )
         .unwrap();
 
@@ -779,7 +766,6 @@ mod tests {
                 updated_at: Utc::now(),
             },
             Some(3),
-            None,
             None,
         )
         .unwrap();
@@ -795,7 +781,6 @@ mod tests {
             },
             Some(4),
             None,
-            None,
         )
         .unwrap();
 
@@ -810,7 +795,6 @@ mod tests {
                 reason: Some("Decommissioned".to_string()),
             },
             Some(5),
-            None,
             None,
         )
         .unwrap();
@@ -853,7 +837,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -868,7 +851,6 @@ mod tests {
             },
             Some(1),
             None,
-            None,
         )
         .unwrap();
 
@@ -882,7 +864,6 @@ mod tests {
                 modified_at: Utc::now(),
             },
             Some(2),
-            None,
             None,
         )
         .unwrap();
@@ -915,7 +896,7 @@ mod tests {
             created_at: Utc::now(),
         };
 
-        let result = EventStore::append_event(&db, &aggregate_id, event, None, None, None);
+        let result = EventStore::append_event(&db, &aggregate_id, event, None, None);
         assert!(result.is_ok());
 
         let events = EventStore::load_events(&db, &aggregate_id).unwrap();
@@ -951,7 +932,7 @@ mod tests {
             created_at: Utc::now(),
         };
 
-        let result = EventStore::append_event(&db, &aggregate_id, event, None, None, None);
+        let result = EventStore::append_event(&db, &aggregate_id, event, None, None);
         assert!(result.is_ok());
 
         let events = EventStore::load_events(&db, &aggregate_id).unwrap();
@@ -982,7 +963,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -1000,7 +980,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -1016,7 +995,6 @@ mod tests {
                 tags: vec![],
                 created_at: Utc::now(),
             },
-            None,
             None,
             None,
         )
@@ -1051,7 +1029,6 @@ mod tests {
             event.clone(),
             None,
             Some("admin@example.com".to_string()),
-            None,
         );
         assert!(result.is_ok());
         assert_eq!(
@@ -1068,7 +1045,7 @@ mod tests {
             tags: vec![],
             created_at: Utc::now(),
         };
-        let result2 = EventStore::append_event(&db, &agg2, event2, None, None, None);
+        let result2 = EventStore::append_event(&db, &agg2, event2, None, None);
         assert!(result2.is_ok());
         assert_eq!(result2.unwrap().created_by, None);
     }
@@ -1092,7 +1069,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -1105,7 +1081,6 @@ mod tests {
                 updated_at: Utc::now(),
             },
             Some(1),
-            None,
             None,
         )
         .unwrap();
@@ -1121,7 +1096,6 @@ mod tests {
                 tags: vec![],
                 created_at: Utc::now(),
             },
-            None,
             None,
             None,
         )
@@ -1164,7 +1138,6 @@ mod tests {
                 },
                 expected_version,
                 None,
-                None,
             )
             .unwrap();
         }
@@ -1195,7 +1168,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -1210,7 +1182,6 @@ mod tests {
             },
             Some(1),
             None,
-            None,
         );
         assert!(result.is_ok());
 
@@ -1224,7 +1195,6 @@ mod tests {
                 updated_at: Utc::now(),
             },
             Some(1), // Same expected version - conflict!
-            None,
             None,
         );
         assert!(result2.is_err());
@@ -1251,7 +1221,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -1266,7 +1235,6 @@ mod tests {
                 tags: vec![],
                 created_at: Utc::now(),
             },
-            None,
             None,
             None,
         );

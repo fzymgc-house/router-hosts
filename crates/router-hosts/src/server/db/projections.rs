@@ -706,7 +706,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -735,7 +734,6 @@ mod tests {
                 tags: vec![],
                 created_at: Utc::now(),
             },
-            None,
             None,
             None,
         )
@@ -768,7 +766,6 @@ mod tests {
                 },
                 None,
                 None,
-                None,
             )
             .unwrap();
         }
@@ -793,7 +790,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -807,7 +803,6 @@ mod tests {
                 tags: vec![],
                 created_at: Utc::now(),
             },
-            None,
             None,
             None,
         )
@@ -843,7 +838,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -864,7 +858,6 @@ mod tests {
                 changed_at: Utc::now(),
             },
             Some(1),
-            None,
             None,
         )
         .unwrap();
