@@ -1,6 +1,7 @@
 pub mod commands;
 mod config;
 pub mod db;
+pub mod hooks;
 pub mod hosts_file;
 pub mod session;
 
