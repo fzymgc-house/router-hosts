@@ -4,6 +4,7 @@ use super::schema::{Database, DatabaseError, DatabaseResult};
 use chrono::{DateTime, Utc};
 use duckdb::OptionalExt;
 use ulid::Ulid;
+use router_hosts_common::proto;
 
 /// Read model for current host entries (CQRS Query side)
 ///
@@ -454,6 +455,28 @@ impl HostProjections {
         }
 
         Self::rebuild_from_events(&envelopes)
+    }
+}
+
+/// Convert database HostEntry to protobuf HostEntry
+impl From<HostEntry> for proto::HostEntry {
+    fn from(entry: HostEntry) -> Self {
+        proto::HostEntry {
+            id: entry.id.to_string(),
+            ip_address: entry.ip_address,
+            hostname: entry.hostname,
+            comment: entry.comment,
+            tags: entry.tags,
+            created_at: Some(prost_types::Timestamp {
+                seconds: entry.created_at.timestamp(),
+                nanos: entry.created_at.timestamp_subsec_nanos() as i32,
+            }),
+            updated_at: Some(prost_types::Timestamp {
+                seconds: entry.updated_at.timestamp(),
+                nanos: entry.updated_at.timestamp_subsec_nanos() as i32,
+            }),
+            active: true, // All entries from db are active (deleted ones don't exist)
+        }
     }
 }
 

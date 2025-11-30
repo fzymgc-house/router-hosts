@@ -1636,6 +1636,7 @@ dependencies = [
  "clap",
  "duckdb",
  "prost",
+ "prost-types",
  "router-hosts-common",
  "serde",
  "serde_json",

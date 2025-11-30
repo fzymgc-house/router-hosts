@@ -3,6 +3,7 @@ mod config;
 pub mod db;
 pub mod hooks;
 pub mod hosts_file;
+pub mod service;
 pub mod session;
 
 use anyhow::Result;
