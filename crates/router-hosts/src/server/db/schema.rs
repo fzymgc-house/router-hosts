@@ -1,6 +1,6 @@
 use duckdb::Connection;
+use parking_lot::ReentrantMutex;
 use std::path::Path;
-use std::sync::Mutex;
 use thiserror::Error;
 
 #[cfg(test)]
@@ -46,10 +46,12 @@ pub type DatabaseResult<T> = Result<T, DatabaseError>;
 /// - No soft deletes - event log captures complete history
 /// - Time travel queries supported via event replay
 ///
-/// The connection is wrapped in a Mutex to allow safe concurrent access
-/// from multiple async tasks in the gRPC server.
+/// The connection is wrapped in a ReentrantMutex to allow safe concurrent access
+/// from multiple async tasks in the gRPC server. ReentrantMutex is used instead
+/// of std::sync::Mutex to support reentrant locking patterns where methods like
+/// list_all() call get_by_id(), both of which need to acquire the connection lock.
 pub struct Database {
-    conn: Mutex<Connection>,
+    conn: ReentrantMutex<Connection>,
 }
 
 impl Database {
@@ -60,7 +62,7 @@ impl Database {
         })?;
 
         let mut db = Self {
-            conn: Mutex::new(conn),
+            conn: ReentrantMutex::new(conn),
         };
         db.initialize_schema()?;
         Ok(db)
@@ -73,7 +75,7 @@ impl Database {
         })?;
 
         let mut db = Self {
-            conn: Mutex::new(conn),
+            conn: ReentrantMutex::new(conn),
         };
         db.initialize_schema()?;
         Ok(db)
@@ -81,7 +83,7 @@ impl Database {
 
     /// Initialize CQRS event-sourced schema
     fn initialize_schema(&mut self) -> DatabaseResult<()> {
-        let conn = self.conn.get_mut().expect("Mutex poisoned");
+        let conn = self.conn.lock();
 
         // Install and load JSON extension
         // Use INSTALL with FORCE to download if needed, or just load if already installed
@@ -122,7 +124,7 @@ impl Database {
         // Design: First-class typed columns for current state (ip_address, hostname)
         // JSON metadata column for tags, comments, and previous values
         conn.execute(
-                r#"
+            r#"
                 CREATE TABLE IF NOT EXISTS host_events (
                     event_id VARCHAR PRIMARY KEY,
                     aggregate_id VARCHAR NOT NULL,
@@ -142,14 +144,11 @@ impl Database {
                     UNIQUE(aggregate_id, event_version)
                 )
                 "#,
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!(
-                    "Failed to create host_events table: {}",
-                    e
-                ))
-            })?;
+            [],
+        )
+        .map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to create host_events table: {}", e))
+        })?;
 
         // Index for fast event replay by aggregate
         conn.execute(
@@ -162,12 +161,12 @@ impl Database {
 
         // Index for temporal queries
         conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_events_time ON host_events(created_at)",
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to create temporal index: {}", e))
-            })?;
+            "CREATE INDEX IF NOT EXISTS idx_events_time ON host_events(created_at)",
+            [],
+        )
+        .map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to create temporal index: {}", e))
+        })?;
 
         // Read model: Current active hosts projection
         // This materialized view is built from events and optimized for queries
@@ -211,7 +210,7 @@ impl Database {
 
         // Read model: Complete history including deleted entries
         conn.execute(
-                r#"
+            r#"
                 CREATE VIEW IF NOT EXISTS host_entries_history AS
                 SELECT
                     event_id,
@@ -226,15 +225,15 @@ impl Database {
                 FROM host_events
                 ORDER BY aggregate_id, event_version
                 "#,
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to create history view: {}", e))
-            })?;
+            [],
+        )
+        .map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to create history view: {}", e))
+        })?;
 
         // Snapshots table for /etc/hosts versioning
         conn.execute(
-                r#"
+            r#"
                 CREATE TABLE IF NOT EXISTS snapshots (
                     snapshot_id VARCHAR PRIMARY KEY,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -246,11 +245,11 @@ impl Database {
                     event_log_position INTEGER
                 )
                 "#,
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to create snapshots table: {}", e))
-            })?;
+            [],
+        )
+        .map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to create snapshots table: {}", e))
+        })?;
 
         Ok(())
     }
@@ -258,9 +257,10 @@ impl Database {
     /// Get a reference to the underlying connection
     ///
     /// This locks the mutex and returns a guard. The lock is released when
-    /// the guard is dropped.
-    pub(crate) fn conn(&self) -> std::sync::MutexGuard<'_, Connection> {
-        self.conn.lock().expect("Mutex poisoned")
+    /// the guard is dropped. Uses ReentrantMutex to support reentrant locking
+    /// from the same thread.
+    pub(crate) fn conn(&self) -> parking_lot::ReentrantMutexGuard<'_, Connection> {
+        self.conn.lock()
     }
 }
 

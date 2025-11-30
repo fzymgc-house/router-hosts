@@ -1700,6 +1700,7 @@ dependencies = [
  "clap",
  "duckdb",
  "futures",
+ "parking_lot",
  "prost",
  "prost-types",
  "router-hosts-common",
