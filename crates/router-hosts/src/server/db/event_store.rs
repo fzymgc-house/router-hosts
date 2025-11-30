@@ -1,8 +1,8 @@
-use super::events::{EventEnvelope, EventMetadata, HostEvent};
-use super::schema_v2::{Database, DatabaseError, DatabaseResult};
+use super::events::{EventData, EventEnvelope, EventMetadata, HostEvent};
+use super::schema::{Database, DatabaseError, DatabaseResult};
 use chrono::{DateTime, Utc};
 use duckdb::OptionalExt;
-use uuid::Uuid;
+use ulid::Ulid;
 
 /// Event store for persisting and retrieving domain events
 ///
@@ -36,7 +36,7 @@ impl EventStore {
     /// Returns the stored `EventEnvelope` with generated event_id and version
     pub fn append_event(
         db: &Database,
-        aggregate_id: &Uuid,
+        aggregate_id: &Ulid,
         event: HostEvent,
         expected_version: Option<i64>,
         created_by: Option<String>,
@@ -57,204 +57,145 @@ impl EventStore {
         let new_version = current_version.unwrap_or(0) + 1;
 
         // Generate event ID
-        let event_id = Uuid::new_v4();
+        let event_id = Ulid::new();
         let now = Utc::now();
 
-        // Serialize metadata to JSON
-        let metadata_json = metadata
-            .as_ref()
-            .map(|m| {
-                serde_json::to_string(m).map_err(|e| {
-                    DatabaseError::InvalidData(format!("Failed to serialize metadata: {}", e))
-                })
-            })
-            .transpose()?;
+        // Note: EventMetadata (correlation/causation/user_agent/source_ip) parameter is accepted
+        // but not currently persisted to the database. Only EventData is stored in metadata column.
+        // To persist EventMetadata, we would need to add a separate column or extend the schema.
+        let _ = metadata; // Acknowledge unused parameter
 
-        // Extract event fields into typed columns
-        // Only tags are stored as JSON, everything else is a first-class column
-        let result = match &event {
+        // Build event data and extract typed columns
+        // EventData (JSON metadata): tags, comments, previous values
+        // Typed columns: ip_address, hostname (for queryability)
+        let (ip_address_opt, hostname_opt, event_timestamp, event_data) = match &event {
             HostEvent::HostCreated {
                 ip_address,
                 hostname,
                 comment,
                 tags,
                 created_at,
-            } => {
-                let tags_json = serde_json::to_string(tags).map_err(|e| {
-                    DatabaseError::InvalidData(format!("Failed to serialize tags: {}", e))
-                })?;
-
-                db.conn().execute(
-                    r#"
-                    INSERT INTO host_events (
-                        event_id, aggregate_id, event_type, event_version,
-                        ip_address, hostname, comment, tags, event_timestamp,
-                        event_metadata, created_at, created_by, expected_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    "#,
-                    [
-                        &event_id.to_string() as &dyn duckdb::ToSql,
-                        &aggregate_id.to_string(),
-                        &event.event_type(),
-                        &new_version,
-                        &ip_address as &dyn duckdb::ToSql,
-                        &hostname as &dyn duckdb::ToSql,
-                        &comment as &dyn duckdb::ToSql,
-                        &tags_json as &dyn duckdb::ToSql,
-                        &created_at.to_rfc3339(),
-                        &metadata_json.as_deref().unwrap_or("null"),
-                        &now.to_rfc3339(),
-                        &created_by.as_deref().unwrap_or("system"),
-                        &expected_version,
-                    ],
-                )
-            }
+            } => (
+                Some(ip_address.clone()),
+                Some(hostname.clone()),
+                *created_at,
+                EventData {
+                    comment: comment.clone(),
+                    tags: Some(tags.clone()),
+                    ..Default::default()
+                },
+            ),
             HostEvent::IpAddressChanged {
-                new_ip, changed_at, ..
-            } => db.conn().execute(
-                r#"
-                    INSERT INTO host_events (
-                        event_id, aggregate_id, event_type, event_version,
-                        ip_address, event_timestamp,
-                        event_metadata, created_at, created_by, expected_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    "#,
-                [
-                    &event_id.to_string() as &dyn duckdb::ToSql,
-                    &aggregate_id.to_string(),
-                    &event.event_type(),
-                    &new_version,
-                    &new_ip as &dyn duckdb::ToSql,
-                    &changed_at.to_rfc3339(),
-                    &metadata_json.as_deref().unwrap_or("null"),
-                    &now.to_rfc3339(),
-                    &created_by.as_deref().unwrap_or("system"),
-                    &expected_version,
-                ],
+                old_ip,
+                new_ip,
+                changed_at,
+            } => (
+                Some(new_ip.clone()),
+                None,
+                *changed_at,
+                EventData {
+                    previous_ip: Some(old_ip.clone()),
+                    ..Default::default()
+                },
             ),
             HostEvent::HostnameChanged {
+                old_hostname,
                 new_hostname,
                 changed_at,
-                ..
-            } => db.conn().execute(
-                r#"
-                    INSERT INTO host_events (
-                        event_id, aggregate_id, event_type, event_version,
-                        hostname, event_timestamp,
-                        event_metadata, created_at, created_by, expected_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    "#,
-                [
-                    &event_id.to_string() as &dyn duckdb::ToSql,
-                    &aggregate_id.to_string(),
-                    &event.event_type(),
-                    &new_version,
-                    &new_hostname as &dyn duckdb::ToSql,
-                    &changed_at.to_rfc3339(),
-                    &metadata_json.as_deref().unwrap_or("null"),
-                    &now.to_rfc3339(),
-                    &created_by.as_deref().unwrap_or("system"),
-                    &expected_version,
-                ],
+            } => (
+                None,
+                Some(new_hostname.clone()),
+                *changed_at,
+                EventData {
+                    previous_hostname: Some(old_hostname.clone()),
+                    ..Default::default()
+                },
             ),
             HostEvent::CommentUpdated {
+                old_comment,
                 new_comment,
                 updated_at,
-                ..
-            } => db.conn().execute(
-                r#"
-                    INSERT INTO host_events (
-                        event_id, aggregate_id, event_type, event_version,
-                        comment, event_timestamp,
-                        event_metadata, created_at, created_by, expected_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    "#,
-                [
-                    &event_id.to_string() as &dyn duckdb::ToSql,
-                    &aggregate_id.to_string(),
-                    &event.event_type(),
-                    &new_version,
-                    &new_comment as &dyn duckdb::ToSql,
-                    &updated_at.to_rfc3339(),
-                    &metadata_json.as_deref().unwrap_or("null"),
-                    &now.to_rfc3339(),
-                    &created_by.as_deref().unwrap_or("system"),
-                    &expected_version,
-                ],
+            } => (
+                None,
+                None,
+                *updated_at,
+                EventData {
+                    comment: new_comment.clone(),
+                    previous_comment: old_comment.clone(),
+                    ..Default::default()
+                },
             ),
             HostEvent::TagsModified {
+                old_tags,
                 new_tags,
                 modified_at,
-                ..
-            } => {
-                let new_tags_json = serde_json::to_string(new_tags).map_err(|e| {
-                    DatabaseError::InvalidData(format!("Failed to serialize new_tags: {}", e))
-                })?;
-
-                db.conn().execute(
-                    r#"
-                    INSERT INTO host_events (
-                        event_id, aggregate_id, event_type, event_version,
-                        tags, event_timestamp,
-                        event_metadata, created_at, created_by, expected_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    "#,
-                    [
-                        &event_id.to_string() as &dyn duckdb::ToSql,
-                        &aggregate_id.to_string(),
-                        &event.event_type(),
-                        &new_version,
-                        &new_tags_json as &dyn duckdb::ToSql,
-                        &modified_at.to_rfc3339(),
-                        &metadata_json.as_deref().unwrap_or("null"),
-                        &now.to_rfc3339(),
-                        &created_by.as_deref().unwrap_or("system"),
-                        &expected_version,
-                    ],
-                )
-            }
+            } => (
+                None,
+                None,
+                *modified_at,
+                EventData {
+                    tags: Some(new_tags.clone()),
+                    previous_tags: Some(old_tags.clone()),
+                    ..Default::default()
+                },
+            ),
             HostEvent::HostDeleted {
                 ip_address,
                 hostname,
                 deleted_at,
                 reason,
-            } => db.conn().execute(
+            } => (
+                Some(ip_address.clone()),
+                Some(hostname.clone()),
+                *deleted_at,
+                EventData {
+                    deleted_reason: reason.clone(),
+                    ..Default::default()
+                },
+            ),
+        };
+
+        // Serialize EventData to JSON
+        let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
+            DatabaseError::InvalidData(format!("Failed to serialize event data: {}", e))
+        })?;
+
+        // Single INSERT statement for all event types
+        db.conn()
+            .execute(
                 r#"
-                    INSERT INTO host_events (
-                        event_id, aggregate_id, event_type, event_version,
-                        ip_address, hostname, deleted_reason, event_timestamp,
-                        event_metadata, created_at, created_by, expected_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    "#,
+                INSERT INTO host_events (
+                    event_id, aggregate_id, event_type, event_version,
+                    ip_address, hostname, event_timestamp, metadata,
+                    created_at, created_by, expected_version
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                "#,
                 [
                     &event_id.to_string() as &dyn duckdb::ToSql,
                     &aggregate_id.to_string(),
                     &event.event_type(),
                     &new_version,
-                    &ip_address as &dyn duckdb::ToSql,
-                    &hostname as &dyn duckdb::ToSql,
-                    &reason as &dyn duckdb::ToSql,
-                    &deleted_at.to_rfc3339(),
-                    &metadata_json.as_deref().unwrap_or("null"),
+                    &ip_address_opt as &dyn duckdb::ToSql,
+                    &hostname_opt as &dyn duckdb::ToSql,
+                    &event_timestamp.to_rfc3339(),
+                    &event_data_json as &dyn duckdb::ToSql,
                     &now.to_rfc3339(),
                     &created_by.as_deref().unwrap_or("system"),
                     &expected_version,
                 ],
-            ),
-        };
-
-        result.map_err(|e: duckdb::Error| {
-            // Check if this was a uniqueness violation (concurrent write)
-            let error_str = e.to_string();
-            if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
-                DatabaseError::ConcurrentWriteConflict(format!(
-                    "Concurrent write detected for aggregate {} at version {}",
-                    aggregate_id, new_version
-                ))
-            } else {
-                DatabaseError::QueryFailed(format!("Failed to insert event: {}", e))
-            }
-        })?;
+            )
+            .map_err(|e: duckdb::Error| {
+                // Check if this was a uniqueness violation (concurrent write)
+                let error_str = e.to_string();
+                if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
+                    DatabaseError::ConcurrentWriteConflict(format!(
+                        "Concurrent write detected for aggregate {} at version {}",
+                        aggregate_id, new_version
+                    ))
+                } else {
+                    DatabaseError::QueryFailed(format!("Failed to insert event: {}", e))
+                }
+            })?;
 
         Ok(EventEnvelope {
             event_id,
@@ -270,7 +211,7 @@ impl EventStore {
     /// Get the current version number for an aggregate
     ///
     /// Returns `None` if the aggregate doesn't exist yet (no events)
-    fn get_current_version(db: &Database, aggregate_id: &Uuid) -> DatabaseResult<Option<i64>> {
+    fn get_current_version(db: &Database, aggregate_id: &Ulid) -> DatabaseResult<Option<i64>> {
         let version = db
             .conn()
             .query_row(
@@ -294,7 +235,7 @@ impl EventStore {
     /// This is used to rebuild aggregate state from the event log.
     /// Note: For change events (IpAddressChanged, etc.), we only store the new value.
     /// The old value is reconstructed by replaying events in order.
-    pub fn load_events(db: &Database, aggregate_id: &Uuid) -> DatabaseResult<Vec<EventEnvelope>> {
+    pub fn load_events(db: &Database, aggregate_id: &Ulid) -> DatabaseResult<Vec<EventEnvelope>> {
         let mut stmt = db
             .conn()
             .prepare(
@@ -306,11 +247,8 @@ impl EventStore {
                     event_version,
                     CAST(ip_address AS VARCHAR) as ip_address,
                     hostname,
-                    comment,
-                    COALESCE(CAST(tags AS VARCHAR), '[]') as tags,
-                    deleted_reason,
+                    CAST(metadata AS VARCHAR) as metadata,
                     event_timestamp,
-                    event_metadata,
                     created_at,
                     created_by
                 FROM host_events
@@ -329,13 +267,10 @@ impl EventStore {
                     row.get::<_, i64>(3)?,            // event_version
                     row.get::<_, Option<String>>(4)?, // ip_address
                     row.get::<_, Option<String>>(5)?, // hostname
-                    row.get::<_, Option<String>>(6)?, // comment
-                    row.get::<_, Option<String>>(7)?, // tags
-                    row.get::<_, Option<String>>(8)?, // deleted_reason
-                    row.get::<_, i64>(9)?,            // event_timestamp
-                    row.get::<_, String>(10)?,        // event_metadata
-                    row.get::<_, i64>(11)?,           // created_at
-                    row.get::<_, String>(12)?,        // created_by
+                    row.get::<_, String>(6)?,         // metadata
+                    row.get::<_, i64>(7)?,            // event_timestamp
+                    row.get::<_, i64>(8)?,            // created_at
+                    row.get::<_, String>(9)?,         // created_by
                 ))
             })
             .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query events: {}", e)))?;
@@ -351,20 +286,17 @@ impl EventStore {
                 event_version,
                 ip_address,
                 hostname,
-                comment,
-                tags_json,
-                deleted_reason,
-                event_timestamp_micros,
                 metadata_json,
+                event_timestamp_micros,
                 created_at_micros,
                 created_by,
             ) =
                 row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
-            let event_id = Uuid::parse_str(&event_id_str)
+            let event_id = Ulid::from_string(&event_id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid event_id UUID: {}", e)))?;
 
-            let agg_id = Uuid::parse_str(&aggregate_id_str).map_err(|e| {
+            let agg_id = Ulid::from_string(&aggregate_id_str).map_err(|e| {
                 DatabaseError::InvalidData(format!("Invalid aggregate_id UUID: {}", e))
             })?;
 
@@ -376,25 +308,24 @@ impl EventStore {
                     ))
                 })?;
 
-            // Reconstruct the event from typed columns based on event_type
+            // Deserialize EventData from metadata JSON
+            let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to deserialize event metadata: {}", e))
+            })?;
+
+            // Reconstruct the event from typed columns + metadata based on event_type
             // For change events, we reconstruct old_* values from current_state
             let event = match event_type.as_str() {
                 "HostCreated" => {
-                    let tags: Vec<String> = tags_json
-                        .as_ref()
-                        .map(|j| serde_json::from_str(j))
-                        .transpose()
-                        .map_err(|e| {
-                            DatabaseError::InvalidData(format!("Failed to parse tags: {}", e))
-                        })?
-                        .unwrap_or_default();
-
                     let ip = ip_address.ok_or_else(|| {
                         DatabaseError::InvalidData("HostCreated missing ip_address".to_string())
                     })?;
                     let host = hostname.ok_or_else(|| {
                         DatabaseError::InvalidData("HostCreated missing hostname".to_string())
                     })?;
+
+                    let tags = event_data.tags.clone().unwrap_or_default();
+                    let comment = event_data.comment.clone();
 
                     // Update current state
                     current_state = Some((ip.clone(), host.clone(), comment.clone(), tags.clone()));
@@ -414,15 +345,12 @@ impl EventStore {
                         )
                     })?;
 
-                    // Get old_ip from current state
-                    let old_ip = current_state
-                        .as_ref()
-                        .map(|(ip, _, _, _)| ip.clone())
-                        .ok_or_else(|| {
-                            DatabaseError::InvalidEventSequence(
-                                "IpAddressChanged before HostCreated".to_string(),
-                            )
-                        })?;
+                    // Get old_ip from metadata
+                    let old_ip = event_data.previous_ip.ok_or_else(|| {
+                        DatabaseError::InvalidData(
+                            "IpAddressChanged missing previous_ip in metadata".to_string(),
+                        )
+                    })?;
 
                     // Update current state
                     if let Some((ref mut ip, _, _, _)) = current_state {
@@ -440,13 +368,10 @@ impl EventStore {
                         DatabaseError::InvalidData("HostnameChanged missing hostname".to_string())
                     })?;
 
-                    // Get old_hostname from current state
-                    let old_hostname = current_state
-                        .as_ref()
-                        .map(|(_, host, _, _)| host.clone())
-                        .ok_or_else(|| {
-                        DatabaseError::InvalidEventSequence(
-                            "HostnameChanged before HostCreated".to_string(),
+                    // Get old_hostname from metadata
+                    let old_hostname = event_data.previous_hostname.ok_or_else(|| {
+                        DatabaseError::InvalidData(
+                            "HostnameChanged missing previous_hostname in metadata".to_string(),
                         )
                     })?;
 
@@ -462,35 +387,25 @@ impl EventStore {
                     }
                 }
                 "CommentUpdated" => {
-                    // Get old_comment from current state
-                    let old_comment = current_state.as_ref().and_then(|(_, _, c, _)| c.clone());
+                    // Get old_comment and new_comment from metadata
+                    let old_comment = event_data.previous_comment.clone();
+                    let new_comment = event_data.comment.clone();
 
                     // Update current state
                     if let Some((_, _, ref mut c, _)) = current_state {
-                        *c = comment.clone();
+                        *c = new_comment.clone();
                     }
 
                     HostEvent::CommentUpdated {
                         old_comment,
-                        new_comment: comment,
+                        new_comment,
                         updated_at: event_timestamp,
                     }
                 }
                 "TagsModified" => {
-                    let new_tags: Vec<String> = tags_json
-                        .as_ref()
-                        .map(|j| serde_json::from_str(j))
-                        .transpose()
-                        .map_err(|e| {
-                            DatabaseError::InvalidData(format!("Failed to parse tags: {}", e))
-                        })?
-                        .unwrap_or_default();
-
-                    // Get old_tags from current state
-                    let old_tags = current_state
-                        .as_ref()
-                        .map(|(_, _, _, tags)| tags.clone())
-                        .unwrap_or_default();
+                    // Get old_tags and new_tags from metadata
+                    let old_tags = event_data.previous_tags.clone().unwrap_or_default();
+                    let new_tags = event_data.tags.clone().unwrap_or_default();
 
                     // Update current state
                     if let Some((_, _, _, ref mut tags)) = current_state {
@@ -512,7 +427,7 @@ impl EventStore {
                             DatabaseError::InvalidData("HostDeleted missing hostname".to_string())
                         })?,
                         deleted_at: event_timestamp,
-                        reason: deleted_reason,
+                        reason: event_data.deleted_reason.clone(),
                     };
 
                     // Clear current state
@@ -528,14 +443,10 @@ impl EventStore {
                 }
             };
 
-            let metadata: Option<EventMetadata> =
-                if metadata_json == "null" || metadata_json.is_empty() {
-                    None
-                } else {
-                    Some(serde_json::from_str(&metadata_json).map_err(|e| {
-                        DatabaseError::InvalidData(format!("Failed to deserialize metadata: {}", e))
-                    })?)
-                };
+            // Note: EventMetadata (correlation/causation/user_agent/source_ip) is not currently
+            // stored in the database. The metadata column contains EventData (domain event data).
+            // EventMetadata would need a separate column if we want to persist it.
+            let metadata: Option<EventMetadata> = None;
 
             let created_at =
                 DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
@@ -561,7 +472,7 @@ impl EventStore {
     }
 
     /// Count total events for an aggregate
-    pub fn count_events(db: &Database, aggregate_id: &Uuid) -> DatabaseResult<i64> {
+    pub fn count_events(db: &Database, aggregate_id: &Ulid) -> DatabaseResult<i64> {
         let count = db
             .conn()
             .query_row(
@@ -582,7 +493,7 @@ mod tests {
     #[test]
     fn test_append_first_event() {
         let db = Database::in_memory().unwrap();
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
 
         let event = HostEvent::HostCreated {
             ip_address: "192.168.1.10".to_string(),
@@ -603,7 +514,7 @@ mod tests {
     #[test]
     fn test_append_sequential_events() {
         let db = Database::in_memory().unwrap();
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
 
         // First event
         let event1 = HostEvent::HostCreated {
@@ -631,7 +542,7 @@ mod tests {
     #[test]
     fn test_optimistic_concurrency_conflict() {
         let db = Database::in_memory().unwrap();
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
 
         // First event
         let event1 = HostEvent::HostCreated {
@@ -661,7 +572,7 @@ mod tests {
     #[test]
     fn test_load_events() {
         let db = Database::in_memory().unwrap();
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
 
         // Add multiple events
         EventStore::append_event(
@@ -704,7 +615,7 @@ mod tests {
     #[test]
     fn test_count_events() {
         let db = Database::in_memory().unwrap();
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
 
         assert_eq!(EventStore::count_events(&db, &aggregate_id).unwrap(), 0);
 

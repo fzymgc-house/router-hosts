@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
+use ulid::Ulid;
 
 /// Domain events for host entries following event sourcing pattern
 ///
@@ -84,8 +84,10 @@ impl HostEvent {
 /// Envelope for storing events with metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope {
-    pub event_id: Uuid,
-    pub aggregate_id: Uuid,
+    /// K-sortable event identifier (ULID for chronological ordering)
+    pub event_id: Ulid,
+    /// Aggregate root identifier
+    pub aggregate_id: Ulid,
     pub event: HostEvent,
     pub event_version: i64,
     pub created_at: DateTime<Utc>,
@@ -93,11 +95,36 @@ pub struct EventEnvelope {
     pub metadata: Option<EventMetadata>,
 }
 
-/// Optional metadata attached to events
+/// Event-specific data stored as JSON metadata
+/// Contains tags, comments, and previous values (for change events)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct EventData {
+    // Common fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Vec<String>>,
+
+    // Previous values for change events
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_ip: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_hostname: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_tags: Option<Vec<String>>,
+
+    // For deleted events
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_reason: Option<String>,
+}
+
+/// Optional correlation metadata attached to events
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventMetadata {
-    pub correlation_id: Option<Uuid>,
-    pub causation_id: Option<Uuid>,
+    pub correlation_id: Option<Ulid>,
+    pub causation_id: Option<Ulid>,
     pub user_agent: Option<String>,
     pub source_ip: Option<String>,
 }

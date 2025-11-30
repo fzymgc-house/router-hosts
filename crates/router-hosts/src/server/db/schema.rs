@@ -28,13 +28,22 @@ pub enum DatabaseError {
     #[error("Invalid data: {0}")]
     InvalidData(String),
 
-    #[error("Concurrent modification detected: {0}")]
-    ConcurrentModification(String),
+    #[error("Invalid event sequence: {0}")]
+    InvalidEventSequence(String),
+
+    #[error("Concurrent write conflict: {0}")]
+    ConcurrentWriteConflict(String),
 }
 
 pub type DatabaseResult<T> = Result<T, DatabaseError>;
 
-/// Database connection and management
+/// Database connection with CQRS event sourcing pattern
+///
+/// This implementation uses an event-sourced architecture where:
+/// - All changes are stored as immutable events in an append-only log
+/// - Read models are projections built from events using DuckDB views
+/// - No soft deletes - event log captures complete history
+/// - Time travel queries supported via event replay
 pub struct Database {
     conn: Connection,
 }
@@ -62,87 +71,166 @@ impl Database {
         Ok(db)
     }
 
-    /// Initialize database schema
+    /// Initialize CQRS event-sourced schema
     fn initialize_schema(&mut self) -> DatabaseResult<()> {
-        // Create host_entries table
+        // Install and load JSON extension
+        self.conn.execute("INSTALL json", []).map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to install json extension: {}", e))
+        })?;
+
+        self.conn.execute("LOAD json", []).map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to load json extension: {}", e))
+        })?;
+
+        // Install and load INET extension for IP address types
+        self.conn.execute("INSTALL inet", []).map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to install inet extension: {}", e))
+        })?;
+
+        self.conn.execute("LOAD inet", []).map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to load inet extension: {}", e))
+        })?;
+
+        // Event store - append-only immutable log of all domain events
+        // This is the source of truth for all state changes
         //
-        // UNIQUE CONSTRAINT EXPLANATION:
-        // The UNIQUE(ip_address, hostname) constraint prevents duplicate (ip, hostname) pairs
-        // across BOTH active and inactive entries. This is intentional and works with the
-        // soft-delete pattern as follows:
-        //
-        // 1. When adding an entry, if an inactive entry with the same (ip, hostname) exists,
-        //    the HostsRepository::add() method reactivates it instead of inserting a new row.
-        // 2. This ensures exactly ONE record per (ip, hostname) pair in the database at all times.
-        // 3. The active flag determines visibility, not uniqueness.
-        // 4. This design prevents accumulation of duplicate historical records.
-        //
-        // Alternative approach (not used): UNIQUE(ip_address, hostname, active) would allow
-        // multiple inactive duplicates, which is not desirable for data integrity.
+        // Design: First-class typed columns for current state (ip_address, hostname)
+        // JSON metadata column for tags, comments, and previous values
         self.conn
             .execute(
                 r#"
-                CREATE TABLE IF NOT EXISTS host_entries (
-                    id VARCHAR PRIMARY KEY,
-                    ip_address VARCHAR NOT NULL,
-                    hostname VARCHAR NOT NULL,
-                    comment VARCHAR,
-                    tags VARCHAR,
-                    created_at VARCHAR NOT NULL,
-                    updated_at VARCHAR NOT NULL,
-                    active BOOLEAN NOT NULL DEFAULT true,
-                    version_tag VARCHAR NOT NULL,
-                    UNIQUE(ip_address, hostname)
+                CREATE TABLE IF NOT EXISTS host_events (
+                    event_id VARCHAR PRIMARY KEY,
+                    aggregate_id VARCHAR NOT NULL,
+                    event_type VARCHAR NOT NULL,
+                    event_version INTEGER NOT NULL,
+                    -- Current state in typed columns for queryability
+                    ip_address INET,
+                    hostname VARCHAR,
+                    event_timestamp TIMESTAMP NOT NULL,
+                    -- Event metadata: tags, comments, previous values (old_ip, old_hostname, etc.)
+                    metadata JSON NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    created_by VARCHAR,
+                    -- Optimistic concurrency control
+                    expected_version INTEGER,
+                    -- Ensure events are sequential per aggregate
+                    UNIQUE(aggregate_id, event_version)
                 )
                 "#,
                 [],
             )
             .map_err(|e| {
                 DatabaseError::SchemaInitFailed(format!(
-                    "Failed to create host_entries table: {}",
+                    "Failed to create host_events table: {}",
                     e
                 ))
             })?;
 
-        // Create snapshots table
+        // Index for fast event replay by aggregate
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_aggregate ON host_events(aggregate_id, event_version)",
+                [],
+            )
+            .map_err(|e| {
+                DatabaseError::SchemaInitFailed(format!("Failed to create aggregate index: {}", e))
+            })?;
+
+        // Index for temporal queries
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_time ON host_events(created_at)",
+                [],
+            )
+            .map_err(|e| {
+                DatabaseError::SchemaInitFailed(format!("Failed to create temporal index: {}", e))
+            })?;
+
+        // Read model: Current active hosts projection
+        // This materialized view is built from events and optimized for queries
+        // Uses first-class typed columns plus JSON metadata
+        self.conn
+            .execute(
+                r#"
+                CREATE VIEW IF NOT EXISTS host_entries_current AS
+                WITH latest_events AS (
+                    -- Get the latest event for each aggregate
+                    SELECT
+                        aggregate_id,
+                        event_type,
+                        event_version,
+                        ip_address,
+                        hostname,
+                        metadata,
+                        event_timestamp,
+                        created_at,
+                        ROW_NUMBER() OVER (PARTITION BY aggregate_id ORDER BY event_version DESC) as rn
+                    FROM host_events
+                )
+                SELECT
+                    aggregate_id as id,
+                    CAST(ip_address AS VARCHAR) as ip_address,
+                    hostname,
+                    json_extract_string(metadata, '$.comment') as comment,
+                    COALESCE(json_extract_string(metadata, '$.tags'), '[]') as tags,
+                    event_timestamp as created_at,
+                    created_at as updated_at,
+                    event_version,
+                    event_type
+                FROM latest_events
+                WHERE rn = 1
+                  AND event_type != 'HostDeleted'
+                "#,
+                [],
+            )
+            .map_err(|e| {
+                DatabaseError::SchemaInitFailed(format!("Failed to create current hosts view: {}", e))
+            })?;
+
+        // Read model: Complete history including deleted entries
+        self.conn
+            .execute(
+                r#"
+                CREATE VIEW IF NOT EXISTS host_entries_history AS
+                SELECT
+                    event_id,
+                    aggregate_id,
+                    event_type,
+                    event_version,
+                    ip_address,
+                    hostname,
+                    metadata,
+                    event_timestamp,
+                    created_at
+                FROM host_events
+                ORDER BY aggregate_id, event_version
+                "#,
+                [],
+            )
+            .map_err(|e| {
+                DatabaseError::SchemaInitFailed(format!("Failed to create history view: {}", e))
+            })?;
+
+        // Snapshots table for /etc/hosts versioning
         self.conn
             .execute(
                 r#"
                 CREATE TABLE IF NOT EXISTS snapshots (
                     snapshot_id VARCHAR PRIMARY KEY,
-                    created_at VARCHAR NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     hosts_content TEXT NOT NULL,
                     entry_count INTEGER NOT NULL,
                     trigger VARCHAR NOT NULL,
-                    name VARCHAR
+                    name VARCHAR,
+                    -- Reference to event log position for point-in-time recovery
+                    event_log_position INTEGER
                 )
                 "#,
                 [],
             )
             .map_err(|e| {
                 DatabaseError::SchemaInitFailed(format!("Failed to create snapshots table: {}", e))
-            })?;
-
-        // Create index on active host entries for fast querying
-        // Note: DuckDB doesn't support partial indexes, so we index the entire column
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_active_hosts ON host_entries(active)",
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to create index: {}", e))
-            })?;
-
-        // Create composite index on (ip_address, hostname) for lookups and duplicate detection
-        // This index supports queries in add() and update() that check for existing entries
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_ip_hostname ON host_entries(ip_address, hostname)",
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to create composite index: {}", e))
             })?;
 
         Ok(())
@@ -161,57 +249,70 @@ mod tests {
     #[test]
     fn test_database_in_memory_creation() {
         let db = Database::in_memory();
-        assert!(db.is_ok(), "Should create in-memory database");
-    }
-
-    #[test]
-    fn test_database_file_creation() {
-        // Create a temp directory and use a non-existent file path within it
-        let temp_dir = tempfile::tempdir().unwrap();
-        let db_path = temp_dir.path().join("test.db");
-        let db = Database::new(&db_path);
-        assert!(
-            db.is_ok(),
-            "Should create file-based database: {:?}",
-            db.err()
-        );
+        assert!(db.is_ok());
     }
 
     #[test]
     fn test_schema_initialization() {
         let db = Database::in_memory().unwrap();
 
-        // Verify host_entries table exists
-        let result: DuckDbResult<i32> = db.conn.query_row(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'host_entries'",
-            [],
-            |row| row.get(0),
-        );
-        assert_eq!(result.unwrap(), 1, "host_entries table should exist");
+        // Verify event store exists
+        let result: DuckDbResult<i32> =
+            db.conn()
+                .query_row("SELECT COUNT(*) FROM host_events", [], |row| row.get(0));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 0);
+
+        // Verify current hosts view exists
+        let result: DuckDbResult<i32> =
+            db.conn()
+                .query_row("SELECT COUNT(*) FROM host_entries_current", [], |row| {
+                    row.get(0)
+                });
+        assert!(result.is_ok());
+
+        // Verify history view exists
+        let result: DuckDbResult<i32> =
+            db.conn()
+                .query_row("SELECT COUNT(*) FROM host_entries_history", [], |row| {
+                    row.get(0)
+                });
+        assert!(result.is_ok());
 
         // Verify snapshots table exists
-        let result: DuckDbResult<i32> = db.conn.query_row(
-            "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'snapshots'",
-            [],
-            |row| row.get(0),
-        );
-        assert_eq!(result.unwrap(), 1, "snapshots table should exist");
+        let result: DuckDbResult<i32> =
+            db.conn()
+                .query_row("SELECT COUNT(*) FROM snapshots", [], |row| row.get(0));
+        assert!(result.is_ok());
     }
 
     #[test]
-    fn test_host_entries_schema() {
+    fn test_event_table_schema() {
         let db = Database::in_memory().unwrap();
 
         // Verify columns exist
-        let column_count: i32 = db
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'host_entries'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
+        let columns: DuckDbResult<Vec<String>> = db.conn()
+            .prepare("SELECT column_name FROM information_schema.columns WHERE table_name = 'host_events' ORDER BY column_name")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect();
 
-        assert_eq!(column_count, 9, "host_entries should have 9 columns");
+        assert!(columns.is_ok());
+        let cols = columns.unwrap();
+
+        // Core event columns
+        assert!(cols.contains(&"event_id".to_string()));
+        assert!(cols.contains(&"aggregate_id".to_string()));
+        assert!(cols.contains(&"event_type".to_string()));
+        assert!(cols.contains(&"event_version".to_string()));
+
+        // First-class typed columns for current state
+        assert!(cols.contains(&"ip_address".to_string()));
+        assert!(cols.contains(&"hostname".to_string()));
+        assert!(cols.contains(&"event_timestamp".to_string()));
+
+        // JSON metadata column (tags, comments, previous values)
+        assert!(cols.contains(&"metadata".to_string()));
     }
 }

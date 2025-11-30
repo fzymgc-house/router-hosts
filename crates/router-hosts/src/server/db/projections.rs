@@ -1,9 +1,9 @@
 use super::event_store::EventStore;
 use super::events::{EventEnvelope, HostEvent};
-use super::schema_v2::{Database, DatabaseError, DatabaseResult};
+use super::schema::{Database, DatabaseError, DatabaseResult};
 use chrono::{DateTime, Utc};
 use duckdb::OptionalExt;
-use uuid::Uuid;
+use ulid::Ulid;
 
 /// Read model for current host entries (CQRS Query side)
 ///
@@ -12,7 +12,7 @@ use uuid::Uuid;
 /// the event stream.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HostEntry {
-    pub id: Uuid,
+    pub id: Ulid,
     pub ip_address: String,
     pub hostname: String,
     pub comment: Option<String>,
@@ -30,7 +30,7 @@ impl HostProjections {
     ///
     /// This rebuilds the current state by replaying all events for the aggregate.
     /// Returns `None` if the host doesn't exist or has been deleted.
-    pub fn get_by_id(db: &Database, id: &Uuid) -> DatabaseResult<Option<HostEntry>> {
+    pub fn get_by_id(db: &Database, id: &Ulid) -> DatabaseResult<Option<HostEntry>> {
         let events = EventStore::load_events(db, id)?;
 
         if events.is_empty() {
@@ -104,7 +104,7 @@ impl HostProjections {
             ) =
                 row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
-            let id = Uuid::parse_str(&id_str)
+            let id = Ulid::from_string(&id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
             let tags: Vec<String> = serde_json::from_str(&tags_json)
@@ -206,7 +206,7 @@ impl HostProjections {
             ) =
                 row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
-            let id = Uuid::parse_str(&id_str)
+            let id = Ulid::from_string(&id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
             let tags: Vec<String> = serde_json::from_str(&tags_json)
@@ -303,7 +303,7 @@ impl HostProjections {
                 updated_at_micros,
                 version,
             )) => {
-                let id = Uuid::parse_str(&id_str)
+                let id = Ulid::from_string(&id_str)
                     .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
                 let tags: Vec<String> = serde_json::from_str(&tags_json).map_err(|e| {
@@ -414,7 +414,7 @@ impl HostProjections {
     /// Replays events up to the given timestamp to reconstruct past state.
     pub fn get_at_time(
         db: &Database,
-        id: &Uuid,
+        id: &Ulid,
         at_time: DateTime<Utc>,
     ) -> DatabaseResult<Option<HostEntry>> {
         let mut stmt = db
@@ -478,10 +478,10 @@ impl HostProjections {
             ) =
                 row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
-            let event_id = Uuid::parse_str(&event_id_str)
+            let event_id = Ulid::from_string(&event_id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid event_id UUID: {}", e)))?;
 
-            let agg_id = Uuid::parse_str(&aggregate_id_str).map_err(|e| {
+            let agg_id = Ulid::from_string(&aggregate_id_str).map_err(|e| {
                 DatabaseError::InvalidData(format!("Invalid aggregate_id UUID: {}", e))
             })?;
 
@@ -527,12 +527,12 @@ mod tests {
 
     #[test]
     fn test_rebuild_from_events() {
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
         let now = Utc::now();
 
         let events = vec![
             EventEnvelope {
-                event_id: Uuid::new_v4(),
+                event_id: Ulid::new(),
                 aggregate_id,
                 event: HostEvent::HostCreated {
                     ip_address: "192.168.1.10".to_string(),
@@ -547,7 +547,7 @@ mod tests {
                 metadata: None,
             },
             EventEnvelope {
-                event_id: Uuid::new_v4(),
+                event_id: Ulid::new(),
                 aggregate_id,
                 event: HostEvent::CommentUpdated {
                     old_comment: None,
@@ -573,12 +573,12 @@ mod tests {
 
     #[test]
     fn test_rebuild_deleted_host() {
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
         let now = Utc::now();
 
         let events = vec![
             EventEnvelope {
-                event_id: Uuid::new_v4(),
+                event_id: Ulid::new(),
                 aggregate_id,
                 event: HostEvent::HostCreated {
                     ip_address: "192.168.1.10".to_string(),
@@ -593,7 +593,7 @@ mod tests {
                 metadata: None,
             },
             EventEnvelope {
-                event_id: Uuid::new_v4(),
+                event_id: Ulid::new(),
                 aggregate_id,
                 event: HostEvent::HostDeleted {
                     ip_address: "192.168.1.10".to_string(),
@@ -618,7 +618,7 @@ mod tests {
     #[test]
     fn test_get_by_id() {
         let db = Database::in_memory().unwrap();
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
 
         // Create a host
         EventStore::append_event(
@@ -649,7 +649,7 @@ mod tests {
     #[test]
     fn test_find_by_ip_and_hostname() {
         let db = Database::in_memory().unwrap();
-        let aggregate_id = Uuid::new_v4();
+        let aggregate_id = Ulid::new();
 
         // Create a host
         EventStore::append_event(
@@ -685,7 +685,7 @@ mod tests {
         for i in 1..=3 {
             EventStore::append_event(
                 &db,
-                &Uuid::new_v4(),
+                &Ulid::new(),
                 HostEvent::HostCreated {
                     ip_address: format!("192.168.1.{}", i + 10),
                     hostname: format!("server{}.local", i),
@@ -710,7 +710,7 @@ mod tests {
 
         EventStore::append_event(
             &db,
-            &Uuid::new_v4(),
+            &Ulid::new(),
             HostEvent::HostCreated {
                 ip_address: "192.168.1.10".to_string(),
                 hostname: "server.local".to_string(),
@@ -726,7 +726,7 @@ mod tests {
 
         EventStore::append_event(
             &db,
-            &Uuid::new_v4(),
+            &Ulid::new(),
             HostEvent::HostCreated {
                 ip_address: "192.168.1.20".to_string(),
                 hostname: "nas.local".to_string(),
