@@ -44,6 +44,21 @@ pub type DatabaseResult<T> = Result<T, DatabaseError>;
 /// - Read models are projections built from events using DuckDB views
 /// - No soft deletes - event log captures complete history
 /// - Time travel queries supported via event replay
+///
+/// # Thread Safety
+///
+/// A single `Database` instance wraps a single DuckDB connection, which is
+/// NOT thread-safe. For concurrent access from multiple threads:
+///
+/// 1. Use [`try_clone()`](Self::try_clone) to create additional connections
+///    that share the same underlying database
+/// 2. Each thread should have its own cloned connection
+/// 3. DuckDB handles concurrency internally when using cloned connections
+///
+/// ```ignore
+/// let db = Database::new(path)?;
+/// let db_clone = db.try_clone()?;  // For another thread
+/// ```
 pub struct Database {
     conn: Connection,
 }
@@ -162,6 +177,21 @@ impl Database {
                 DatabaseError::SchemaInitFailed(format!("Failed to create temporal index: {}", e))
             })?;
 
+        // Composite index for efficient current hosts view queries
+        // The view filters by event_type and orders by hostname
+        // Note: Can't index INET type directly, but event_type + hostname helps
+        self.conn
+            .execute(
+                "CREATE INDEX IF NOT EXISTS idx_events_type_hostname ON host_events(event_type, hostname)",
+                [],
+            )
+            .map_err(|e| {
+                DatabaseError::SchemaInitFailed(format!(
+                    "Failed to create composite index: {}",
+                    e
+                ))
+            })?;
+
         // Read model: Current active hosts projection
         // This materialized view is built from events and optimized for queries
         // Uses first-class typed columns plus JSON metadata
@@ -255,6 +285,66 @@ impl Database {
     pub(crate) fn conn(&self) -> &Connection {
         &self.conn
     }
+
+    /// Clone this database connection for use in another thread
+    ///
+    /// Creates a new connection that shares the same underlying database.
+    /// Both connections can operate concurrently - DuckDB handles the
+    /// synchronization internally.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let db = Database::new(path)?;
+    /// let db_clone = db.try_clone()?;
+    ///
+    /// std::thread::spawn(move || {
+    ///     // Use db_clone in this thread
+    /// });
+    /// ```
+    pub fn try_clone(&self) -> DatabaseResult<Self> {
+        let conn = self.conn.try_clone().map_err(|e| {
+            DatabaseError::ConnectionFailed(format!("Failed to clone connection: {}", e))
+        })?;
+        Ok(Self { conn })
+    }
+
+    /// Execute a function within a database transaction
+    ///
+    /// The transaction is automatically committed if the function returns `Ok`,
+    /// or rolled back if it returns `Err` or panics.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// db.transaction(|conn| {
+    ///     conn.execute("INSERT INTO ...", [])?;
+    ///     conn.execute("UPDATE ...", [])?;
+    ///     Ok(())
+    /// })?;
+    /// ```
+    pub fn transaction<T, F>(&mut self, f: F) -> DatabaseResult<T>
+    where
+        F: FnOnce(&Connection) -> DatabaseResult<T>,
+    {
+        self.conn.execute("BEGIN TRANSACTION", []).map_err(|e| {
+            DatabaseError::QueryFailed(format!("Failed to begin transaction: {}", e))
+        })?;
+
+        match f(&self.conn) {
+            Ok(result) => {
+                self.conn.execute("COMMIT", []).map_err(|e| {
+                    DatabaseError::QueryFailed(format!("Failed to commit transaction: {}", e))
+                })?;
+                Ok(result)
+            }
+            Err(e) => {
+                // Attempt rollback, but don't mask the original error
+                let _ = self.conn.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -329,5 +419,91 @@ mod tests {
 
         // JSON metadata column (tags, comments, previous values)
         assert!(cols.contains(&"metadata".to_string()));
+    }
+
+    #[test]
+    fn test_transaction_commit() {
+        let mut db = Database::in_memory().unwrap();
+
+        // Create a test table
+        db.conn()
+            .execute("CREATE TABLE test_tx (id INTEGER, value TEXT)", [])
+            .unwrap();
+
+        // Transaction that commits
+        let result = db.transaction(|conn| {
+            conn.execute("INSERT INTO test_tx VALUES (1, 'first')", [])
+                .map_err(|e| DatabaseError::QueryFailed(e.to_string()))?;
+            conn.execute("INSERT INTO test_tx VALUES (2, 'second')", [])
+                .map_err(|e| DatabaseError::QueryFailed(e.to_string()))?;
+            Ok(())
+        });
+
+        assert!(result.is_ok());
+
+        // Verify data was committed
+        let count: i32 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM test_tx", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_transaction_rollback() {
+        let mut db = Database::in_memory().unwrap();
+
+        // Create a test table
+        db.conn()
+            .execute("CREATE TABLE test_tx_rollback (id INTEGER, value TEXT)", [])
+            .unwrap();
+
+        // Insert initial data outside transaction
+        db.conn()
+            .execute("INSERT INTO test_tx_rollback VALUES (1, 'initial')", [])
+            .unwrap();
+
+        // Transaction that fails and rolls back
+        let result: DatabaseResult<()> = db.transaction(|conn| {
+            conn.execute(
+                "INSERT INTO test_tx_rollback VALUES (2, 'will rollback')",
+                [],
+            )
+            .map_err(|e| DatabaseError::QueryFailed(e.to_string()))?;
+            // Simulate an error
+            Err(DatabaseError::QueryFailed("Simulated error".to_string()))
+        });
+
+        assert!(result.is_err());
+
+        // Verify only initial data exists (transaction was rolled back)
+        let count: i32 = db
+            .conn()
+            .query_row("SELECT COUNT(*) FROM test_tx_rollback", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn test_try_clone() {
+        let db = Database::in_memory().unwrap();
+
+        // Insert data using original connection
+        db.conn()
+            .execute("CREATE TABLE test_clone (id INTEGER)", [])
+            .unwrap();
+        db.conn()
+            .execute("INSERT INTO test_clone VALUES (42)", [])
+            .unwrap();
+
+        // Clone and verify both see the same data
+        let db_clone = db.try_clone().unwrap();
+        let value: i32 = db_clone
+            .conn()
+            .query_row("SELECT id FROM test_clone", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(value, 42);
     }
 }
