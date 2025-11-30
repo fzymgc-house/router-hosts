@@ -75,14 +75,22 @@ impl HostsRepository {
             .map_err(|e| DatabaseError::QueryFailed(format!("Failed to check existing entry: {}", e)))?;
 
         let existing = stmt
-            .query_row([&ip_address as &dyn duckdb::ToSql, &hostname as &dyn duckdb::ToSql], |row| {
-                let id_str: String = row.get(0)?;
-                let active: bool = row.get(1)?;
-                let created_at_str: String = row.get(2)?;
-                Ok((id_str, active, created_at_str))
-            })
+            .query_row(
+                [
+                    &ip_address as &dyn duckdb::ToSql,
+                    &hostname as &dyn duckdb::ToSql,
+                ],
+                |row| {
+                    let id_str: String = row.get(0)?;
+                    let active: bool = row.get(1)?;
+                    let created_at_str: String = row.get(2)?;
+                    Ok((id_str, active, created_at_str))
+                },
+            )
             .optional()
-            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query existing entry: {}", e)))?;
+            .map_err(|e| {
+                DatabaseError::QueryFailed(format!("Failed to query existing entry: {}", e))
+            })?;
 
         match existing {
             Some((_id_str, true, _created_at_str)) => {
@@ -232,8 +240,9 @@ impl HostsRepository {
                 DatabaseError::HostNotFound(format!("Host entry {} not found: {}", id, e))
             })?;
 
-        let tags: Vec<String> = serde_json::from_str(&entry.4)
-            .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags JSON for entry {}: {}", id, e)))?;
+        let tags: Vec<String> = serde_json::from_str(&entry.4).map_err(|e| {
+            DatabaseError::InvalidData(format!("Failed to parse tags JSON for entry {}: {}", id, e))
+        })?;
 
         Ok(HostEntry {
             id: Uuid::parse_str(&entry.0).map_err(|e| DatabaseError::InvalidData(e.to_string()))?,
@@ -319,8 +328,12 @@ impl HostsRepository {
         for row in rows {
             let entry =
                 row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
-            let tags: Vec<String> = serde_json::from_str(&entry.4)
-                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags JSON in list_active: {}", e)))?;
+            let tags: Vec<String> = serde_json::from_str(&entry.4).map_err(|e| {
+                DatabaseError::InvalidData(format!(
+                    "Failed to parse tags JSON in list_active: {}",
+                    e
+                ))
+            })?;
 
             entries.push(HostEntry {
                 id: Uuid::parse_str(&entry.0)
@@ -433,8 +446,8 @@ impl HostsRepository {
             .map_err(|e| DatabaseError::InvalidData(format!("Invalid hostname: {}", e)))?;
 
         // Check for duplicate (ip_address, hostname) if either changed
-        let ip_or_hostname_changed = new_ip != existing.ip_address.as_str()
-            || new_hostname != existing.hostname.as_str();
+        let ip_or_hostname_changed =
+            new_ip != existing.ip_address.as_str() || new_hostname != existing.hostname.as_str();
 
         if ip_or_hostname_changed {
             // Check if another active entry exists with the new (ip, hostname) combination
@@ -445,14 +458,20 @@ impl HostsRepository {
 
             let duplicate = stmt
                 .query_row(
-                    [&new_ip as &dyn duckdb::ToSql, &new_hostname as &dyn duckdb::ToSql, &id.to_string() as &dyn duckdb::ToSql],
+                    [
+                        &new_ip as &dyn duckdb::ToSql,
+                        &new_hostname as &dyn duckdb::ToSql,
+                        &id.to_string() as &dyn duckdb::ToSql,
+                    ],
                     |row| {
                         let active: bool = row.get(1)?;
                         Ok(active)
                     },
                 )
                 .optional()
-                .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query for duplicates: {}", e)))?;
+                .map_err(|e| {
+                    DatabaseError::QueryFailed(format!("Failed to query for duplicates: {}", e))
+                })?;
 
             if let Some(true) = duplicate {
                 return Err(DatabaseError::DuplicateEntry(format!(
@@ -474,7 +493,8 @@ impl HostsRepository {
 
         // Perform the update with version check in WHERE clause for additional safety
         // The early version check above catches most cases, but this provides defense-in-depth
-        let rows_affected = db.conn()
+        let rows_affected = db
+            .conn()
             .execute(
                 r#"
             UPDATE host_entries
@@ -573,7 +593,8 @@ impl HostsRepository {
 
         if rows_affected == 0 {
             // Check if entry exists to differentiate between NotFound and ConcurrentModification
-            let exists = db.conn()
+            let exists = db
+                .conn()
                 .query_row(
                     "SELECT version_tag FROM host_entries WHERE id = ?",
                     [&id.to_string()],
@@ -583,7 +604,9 @@ impl HostsRepository {
                     },
                 )
                 .optional()
-                .map_err(|e| DatabaseError::QueryFailed(format!("Failed to check entry existence: {}", e)))?;
+                .map_err(|e| {
+                    DatabaseError::QueryFailed(format!("Failed to check entry existence: {}", e))
+                })?;
 
             match exists {
                 Some(current_version) => {
@@ -759,7 +782,8 @@ mod tests {
         let db = Database::in_memory().unwrap();
 
         // Add an entry
-        let first = HostsRepository::add(&db, "192.168.1.10", "server.local", Some("First"), &[]).unwrap();
+        let first =
+            HostsRepository::add(&db, "192.168.1.10", "server.local", Some("First"), &[]).unwrap();
         let first_id = first.id;
         let first_created_at = first.created_at;
 
@@ -772,10 +796,20 @@ mod tests {
 
         // Verify it reactivated the SAME entry (same ID), not created a new one
         let second = second.unwrap();
-        assert_eq!(second.id, first_id, "Should reactivate same entry, not create new one");
+        assert_eq!(
+            second.id, first_id,
+            "Should reactivate same entry, not create new one"
+        );
         assert!(second.active);
-        assert_eq!(second.comment, Some("Second".to_string()), "Comment should be updated");
-        assert_eq!(second.created_at, first_created_at, "created_at should be preserved");
+        assert_eq!(
+            second.comment,
+            Some("Second".to_string()),
+            "Comment should be updated"
+        );
+        assert_eq!(
+            second.created_at, first_created_at,
+            "created_at should be preserved"
+        );
 
         // Verify only ONE record exists in database (no duplicate inactive records)
         let total_count: i32 = db
@@ -786,7 +820,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(total_count, 1, "Should have exactly one record, not duplicates");
+        assert_eq!(
+            total_count, 1,
+            "Should have exactly one record, not duplicates"
+        );
 
         // Verify only one active entry
         let active_entries = HostsRepository::list_active(&db).unwrap();
@@ -848,7 +885,10 @@ mod tests {
 
         // Verify entry wasn't modified
         let current = HostsRepository::get(&db, &added.id).unwrap();
-        assert_eq!(current.ip_address, "192.168.1.11", "Entry should not be modified");
+        assert_eq!(
+            current.ip_address, "192.168.1.11",
+            "Entry should not be modified"
+        );
         assert_eq!(current.version_tag, updated.version_tag);
     }
 
@@ -907,7 +947,8 @@ mod tests {
         let db = Database::in_memory().unwrap();
 
         // Create two entries
-        let _entry1 = HostsRepository::add(&db, "192.168.1.10", "server1.local", None, &[]).unwrap();
+        let _entry1 =
+            HostsRepository::add(&db, "192.168.1.10", "server1.local", None, &[]).unwrap();
         let entry2 = HostsRepository::add(&db, "192.168.1.20", "server2.local", None, &[]).unwrap();
 
         // Try to update entry2 to have the same ip/hostname as entry1
@@ -922,7 +963,10 @@ mod tests {
         );
 
         // Should fail with DuplicateEntry error
-        assert!(result.is_err(), "Update to duplicate ip/hostname should fail");
+        assert!(
+            result.is_err(),
+            "Update to duplicate ip/hostname should fail"
+        );
         let err = result.unwrap_err();
         assert!(
             matches!(err, DatabaseError::DuplicateEntry(_)),
@@ -934,7 +978,10 @@ mod tests {
         let entry2_current = HostsRepository::get(&db, &entry2.id).unwrap();
         assert_eq!(entry2_current.ip_address, "192.168.1.20");
         assert_eq!(entry2_current.hostname, "server2.local");
-        assert_eq!(entry2_current.version_tag, entry2.version_tag, "Version should be unchanged");
+        assert_eq!(
+            entry2_current.version_tag, entry2.version_tag,
+            "Version should be unchanged"
+        );
     }
 
     #[test]
@@ -942,7 +989,8 @@ mod tests {
         let db = Database::in_memory().unwrap();
 
         // Create two entries with different hostnames
-        let _entry1 = HostsRepository::add(&db, "192.168.1.10", "server1.local", None, &[]).unwrap();
+        let _entry1 =
+            HostsRepository::add(&db, "192.168.1.10", "server1.local", None, &[]).unwrap();
         let entry2 = HostsRepository::add(&db, "192.168.1.20", "server2.local", None, &[]).unwrap();
 
         // Update entry2 to have same IP but different hostname - should succeed
@@ -956,7 +1004,10 @@ mod tests {
             None,
         );
 
-        assert!(result.is_ok(), "Update with same IP but different hostname should succeed");
+        assert!(
+            result.is_ok(),
+            "Update with same IP but different hostname should succeed"
+        );
         let updated = result.unwrap();
         assert_eq!(updated.ip_address, "192.168.1.10");
         assert_eq!(updated.hostname, "server2.local");
