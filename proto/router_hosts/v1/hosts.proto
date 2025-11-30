@@ -7,9 +7,8 @@ import "google/protobuf/timestamp.proto";
 // Host entry messages
 
 // Represents a single host entry in the /etc/hosts file
-// This is a projection built from the event-sourced data model
 message HostEntry {
-  // Unique identifier for this host entry (ULID format for lexicographic ordering)
+  // Unique identifier for this host entry (UUID format)
   string id = 1;
 
   // IP address (IPv4 or IPv6) for the host
@@ -30,9 +29,8 @@ message HostEntry {
   // Timestamp when this entry was last updated
   google.protobuf.Timestamp updated_at = 7;
 
-  // Event version for optimistic concurrency control
-  // Include this in update requests to prevent lost updates
-  int64 version = 8;
+  // Whether this entry is active (false = soft deleted, won't appear in /etc/hosts)
+  bool active = 8;
 }
 
 // Host management requests/responses
@@ -96,10 +94,6 @@ message UpdateHostRequest {
   // New tags array (replaces all existing tags). Empty array = clear all tags.
   // Not providing this field = keep existing tags unchanged.
   repeated string tags = 6;
-
-  // Expected version for optimistic concurrency control (optional)
-  // If provided and doesn't match current version, update fails with ABORTED status
-  optional int64 expected_version = 7;
 }
 
 // Response after updating a host entry
@@ -108,19 +102,13 @@ message UpdateHostResponse {
   HostEntry entry = 1;
 }
 
-// Request to delete a host entry (creates HostDeleted tombstone event)
+// Request to delete a host entry (soft delete by setting active=false)
 message DeleteHostRequest {
   // Optional edit session token. If provided, deletion is staged; if omitted, entry is deleted immediately
   optional string edit_token = 1;
 
   // ID of the host entry to delete
   string id = 2;
-
-  // Optional reason for deletion (stored in event log for audit)
-  optional string reason = 3;
-
-  // Expected version for optimistic concurrency control (optional)
-  optional int64 expected_version = 4;
 }
 
 // Response after deleting a host entry
@@ -344,7 +332,7 @@ service HostsService {
   // Update an existing host entry
   rpc UpdateHost(UpdateHostRequest) returns (UpdateHostResponse);
 
-  // Delete a host entry (creates HostDeleted tombstone event in event log)
+  // Delete a host entry (soft delete by setting active=false)
   rpc DeleteHost(DeleteHostRequest) returns (DeleteHostResponse);
 
   // List all host entries with optional filtering and pagination (server streaming)
