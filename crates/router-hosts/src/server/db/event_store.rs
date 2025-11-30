@@ -3,6 +3,7 @@ use super::projections::HostProjections;
 use super::schema::{Database, DatabaseError, DatabaseResult};
 use chrono::{DateTime, Utc};
 use duckdb::OptionalExt;
+use tracing::error;
 use ulid::Ulid;
 
 /// Event store for persisting and retrieving domain events
@@ -54,7 +55,12 @@ impl EventStore {
         } = &event
         {
             if HostProjections::find_by_ip_and_hostname(db, ip_address, hostname)?.is_some() {
-                let _ = db.conn().execute("ROLLBACK", []);
+                db.conn()
+                    .execute("ROLLBACK", [])
+                    .inspect_err(|e| {
+                        error!("Failed to rollback transaction: {}", e);
+                    })
+                    .ok();
                 return Err(DatabaseError::DuplicateEntry(format!(
                     "Host with IP {} and hostname {} already exists",
                     ip_address, hostname
@@ -64,12 +70,22 @@ impl EventStore {
 
         // Get current version for this aggregate
         let current_version = Self::get_current_version(db, aggregate_id).inspect_err(|_| {
-            let _ = db.conn().execute("ROLLBACK", []);
+            db.conn()
+                .execute("ROLLBACK", [])
+                .inspect_err(|e| {
+                    error!("Failed to rollback transaction: {}", e);
+                })
+                .ok();
         })?;
 
         // Verify expected version matches (optimistic concurrency control)
         if expected_version != current_version {
-            let _ = db.conn().execute("ROLLBACK", []);
+            db.conn()
+                .execute("ROLLBACK", [])
+                .inspect_err(|e| {
+                    error!("Failed to rollback transaction: {}", e);
+                })
+                .ok();
             return Err(DatabaseError::ConcurrentWriteConflict(format!(
                 "Expected version {:?} but current version is {:?} for aggregate {}",
                 expected_version, current_version, aggregate_id
@@ -175,7 +191,12 @@ impl EventStore {
 
         // Serialize EventData to JSON
         let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
-            let _ = db.conn().execute("ROLLBACK", []);
+            db.conn()
+                .execute("ROLLBACK", [])
+                .inspect_err(|e| {
+                    error!("Failed to rollback transaction: {}", e);
+                })
+                .ok();
             DatabaseError::InvalidData(format!("Failed to serialize event data: {}", e))
         })?;
 
@@ -204,7 +225,9 @@ impl EventStore {
                 ],
             )
             .map_err(|e: duckdb::Error| {
-                let _ = db.conn().execute("ROLLBACK", []);
+                db.conn().execute("ROLLBACK", []).inspect_err(|e| {
+                    error!("Failed to rollback transaction: {}", e);
+                }).ok();
                 // Check if this was a uniqueness violation (concurrent write)
                 let error_str = e.to_string();
                 if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {

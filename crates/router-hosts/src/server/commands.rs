@@ -156,11 +156,16 @@ impl CommandHandler {
         let current_version = current.version;
         let mut events = Vec::new();
 
+        // Track final IP and hostname for duplicate check
+        let mut final_ip = current.ip_address.clone();
+        let mut final_hostname = current.hostname.clone();
+
         // Generate events for each change
         if let Some(new_ip) = ip_address {
             validate_ip_address(&new_ip)
                 .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
             if new_ip != current.ip_address {
+                final_ip = new_ip.clone();
                 events.push(HostEvent::IpAddressChanged {
                     old_ip: current.ip_address.clone(),
                     new_ip,
@@ -173,11 +178,26 @@ impl CommandHandler {
             validate_hostname(&new_hostname)
                 .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
             if new_hostname != current.hostname {
+                final_hostname = new_hostname.clone();
                 events.push(HostEvent::HostnameChanged {
                     old_hostname: current.hostname.clone(),
                     new_hostname,
                     changed_at: Utc::now(),
                 });
+            }
+        }
+
+        // Check for duplicate IP+hostname (if either changed)
+        if final_ip != current.ip_address || final_hostname != current.hostname {
+            if let Some(existing) =
+                HostProjections::find_by_ip_and_hostname(&self.db, &final_ip, &final_hostname)?
+            {
+                if existing.id != id {
+                    return Err(CommandError::DuplicateEntry(format!(
+                        "Host with IP {} and hostname {} already exists",
+                        final_ip, final_hostname
+                    )));
+                }
             }
         }
 
@@ -281,11 +301,18 @@ impl CommandHandler {
     }
 
     /// Finish an edit session and commit all staged changes
+    ///
+    /// Note: Each event is committed in its own transaction via append_event.
+    /// If one event fails, previously committed events remain committed.
+    /// This is acceptable because:
+    /// 1. Each event is a valid state transition on its own
+    /// 2. The hosts file is only regenerated after all events succeed
+    /// 3. Partial failure leaves the database in a consistent (if incomplete) state
     pub async fn finish_edit(&self, token: &str) -> CommandResult<usize> {
         let staged_events = self.session_mgr.finish_edit(token)?;
         let count = staged_events.len();
 
-        // Commit all staged events
+        // Commit all staged events (each in its own transaction)
         for (agg_id, event) in staged_events {
             // Get current version for this aggregate
             let version = match HostProjections::get_by_id(&self.db, &agg_id)? {
@@ -295,7 +322,7 @@ impl CommandHandler {
             EventStore::append_event(&self.db, &agg_id, event, version, None)?;
         }
 
-        // Regenerate hosts file
+        // Regenerate hosts file only after all events committed successfully
         self.regenerate_hosts_file().await?;
 
         Ok(count)
