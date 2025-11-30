@@ -74,7 +74,7 @@ impl Database {
                     created_at VARCHAR NOT NULL,
                     updated_at VARCHAR NOT NULL,
                     active BOOLEAN NOT NULL DEFAULT true,
-                    UNIQUE(ip_address, hostname)
+                    UNIQUE(ip_address, hostname, active)
                 )
                 "#,
                 [],

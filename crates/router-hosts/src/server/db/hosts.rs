@@ -403,6 +403,31 @@ mod tests {
     }
 
     #[test]
+    fn test_readd_deleted_entry() {
+        let db = Database::in_memory().unwrap();
+
+        // Add an entry
+        let first = HostsRepository::add(&db, "192.168.1.10", "server.local", Some("First"), &[]).unwrap();
+
+        // Delete it
+        HostsRepository::delete(&db, &first.id).unwrap();
+
+        // Re-add the same ip/hostname combination - should succeed due to UNIQUE(ip, hostname, active)
+        let second = HostsRepository::add(&db, "192.168.1.10", "server.local", Some("Second"), &[]);
+        assert!(second.is_ok(), "Should be able to re-add deleted entry");
+
+        // Verify the new entry is active
+        let second = second.unwrap();
+        assert!(second.active);
+        assert_eq!(second.comment, Some("Second".to_string()));
+
+        // Verify only one active entry
+        let active_entries = HostsRepository::list_active(&db).unwrap();
+        assert_eq!(active_entries.len(), 1);
+        assert_eq!(active_entries[0].id, second.id);
+    }
+
+    #[test]
     fn test_count_active_entries() {
         let db = Database::in_memory().unwrap();
         assert_eq!(HostsRepository::count_active(&db).unwrap(), 0);
