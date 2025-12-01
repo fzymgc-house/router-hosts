@@ -1,5 +1,11 @@
 # Server Completion Implementation Plan
 
+**Status:** DEPRECATED - Superseded by 2025-12-01-router-hosts-v1-design.md
+
+> **Note:** This document is kept for historical reference only. See the v1.0 design document.
+
+---
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Complete the router-hosts gRPC server from current database layer to fully functional server with mTLS, edit sessions, /etc/hosts generation, and snapshot management.

@@ -150,11 +150,13 @@ cargo tarpaulin --workspace --fail-under 80
 
 ## Project Overview
 
-**router-hosts** is a Rust CLI tool for managing DNS host entries on routers. It uses a client-server architecture where:
-- **Server** runs on the router (OpenWrt/embedded Linux), manages /etc/hosts file via DuckDB storage
+**router-hosts** is a Rust CLI tool for managing DNS host entries on routers and servers. It uses a client-server architecture where:
+- **Server** runs on the target machine (router, server, container), manages a configurable hosts file via event-sourced DuckDB storage
 - **Client** runs on workstation, connects via gRPC over TLS with mutual authentication
 
-See `docs/plans/2025-11-28-router-hosts-design.md` for complete design specification.
+See `docs/plans/2025-12-01-router-hosts-v1-design.md` for complete design specification.
+
+See `docs/plans/2025-12-01-v1-tasks.md` for remaining implementation tasks, including proto file alignment work.
 
 ## Build and Development Commands
 
@@ -309,21 +311,21 @@ Two crates in a Cargo workspace:
 
 2. **router-hosts** - Unified binary (client and server modes)
    - **Client mode (default):** CLI interface using clap, gRPC client wrapper, command handlers
-   - **Server mode:** gRPC service implementation, DuckDB database operations, /etc/hosts file generation with atomic writes, edit session management (single session, 15min timeout), post-edit hook execution
+   - **Server mode:** gRPC service implementation, DuckDB event-sourced storage, hosts file generation with atomic writes, post-edit hook execution
    - Mode selection: runs in server mode when first argument is "server", otherwise client mode
 
 ### Key Design Decisions
 
-**Edit Sessions:**
-- Only ONE active edit session allowed server-wide
-- `StartEdit()` returns token, `FinishEdit(token)` commits changes
-- 15-minute timeout resets on each operation with the token
-- Without edit token, operations apply immediately
+**Event Sourcing:**
+- All changes stored as immutable events in DuckDB
+- Current state reconstructed from event log (CQRS pattern)
+- Complete audit trail and time-travel query capability
+- Optimistic concurrency via event versions
 
 **Streaming APIs:**
 - All multi-item operations use gRPC streaming (not arrays/lists)
 - `ListHosts`, `SearchHosts`, `ExportHosts` - server streaming
-- `BulkAddHosts`, `ImportHosts` - bidirectional streaming
+- `ImportHosts` - bidirectional streaming
 - Better memory efficiency and flow control
 
 **Request/Response Messages:**
@@ -378,8 +380,8 @@ All validation logic lives in `router-hosts-common/src/validation.rs`:
 Map domain errors to appropriate gRPC status codes:
 - `INVALID_ARGUMENT` - validation failures
 - `ALREADY_EXISTS` - duplicates
-- `NOT_FOUND` - missing entries/tokens
-- `FAILED_PRECONDITION` - session conflicts, expired tokens
+- `NOT_FOUND` - missing entries/snapshots
+- `ABORTED` - concurrent write conflicts (version mismatch)
 - `PERMISSION_DENIED` - TLS auth failures
 
 Include detailed error context in response messages.
