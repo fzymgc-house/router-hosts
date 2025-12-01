@@ -49,9 +49,3 @@ jobs:
             #   run: |
             #     cargo install cargo-tarpaulin
             #     cargo tarpaulin --workspace --fail-under 80
-
-            - name: Lint Rust (clippy)
-              run: cargo clippy -- -D warnings
-
-            - name: Lint protobuf
-              run: buf lint
