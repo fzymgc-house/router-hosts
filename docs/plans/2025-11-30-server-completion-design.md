@@ -1,7 +1,9 @@
 # Server Completion Design
 
 **Date:** 2025-11-30
-**Status:** Draft
+**Status:** DEPRECATED - Superseded by 2025-12-01-router-hosts-v1-design.md
+
+> **Note:** This document is kept for historical reference only. See the v1.0 design document.
 
 ## Overview
 
