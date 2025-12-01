@@ -156,6 +156,8 @@ cargo tarpaulin --workspace --fail-under 80
 
 See `docs/plans/2025-12-01-router-hosts-v1-design.md` for complete design specification.
 
+See `docs/plans/2025-12-01-v1-tasks.md` for remaining implementation tasks, including proto file alignment work.
+
 ## Build and Development Commands
 
 ### Build
