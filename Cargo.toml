@@ -29,8 +29,7 @@ tokio-stream = { version = "0.1", features = ["sync", "net"] }
 futures = "0.3"
 
 # Database (bundled build for self-contained compilation)
-# json feature includes JSON extension for json_extract_string in views
-duckdb = { version = "1.1", features = ["bundled", "json"] }
+duckdb = { version = "1.1", features = ["bundled"] }
 
 # CLI
 clap = { version = "4.4", features = ["derive"] }

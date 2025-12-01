@@ -192,8 +192,8 @@ impl Database {
                     aggregate_id as id,
                     CAST(ip_address AS VARCHAR) as ip_address,
                     hostname,
-                    json_extract_string(latest_metadata, '$.comment') as comment,
-                    COALESCE(json_extract_string(latest_metadata, '$.tags'), '[]') as tags,
+                    -- Return raw metadata JSON; Rust will parse comment/tags
+                    CAST(latest_metadata AS VARCHAR) as metadata,
                     CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) as created_at,
                     CAST(EXTRACT(EPOCH FROM updated_at) * 1000000 AS BIGINT) as updated_at,
                     event_version

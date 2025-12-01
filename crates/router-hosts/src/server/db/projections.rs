@@ -1,5 +1,5 @@
 use super::event_store::EventStore;
-use super::events::{EventEnvelope, HostEvent};
+use super::events::{EventData, EventEnvelope, HostEvent};
 use super::schema::{Database, DatabaseError, DatabaseResult};
 use chrono::{DateTime, Utc};
 use duckdb::OptionalExt;
@@ -54,8 +54,7 @@ impl HostProjections {
                     id,
                     ip_address,
                     hostname,
-                    comment,
-                    tags,
+                    metadata,
                     created_at,
                     updated_at,
                     event_version
@@ -73,11 +72,10 @@ impl HostProjections {
                     row.get::<_, String>(0)?,         // id
                     row.get::<_, String>(1)?,         // ip_address
                     row.get::<_, String>(2)?,         // hostname
-                    row.get::<_, Option<String>>(3)?, // comment
-                    row.get::<_, String>(4)?,         // tags (JSON)
-                    row.get::<_, i64>(5)?,            // created_at
-                    row.get::<_, i64>(6)?,            // updated_at
-                    row.get::<_, i64>(7)?,            // event_version
+                    row.get::<_, String>(3)?,         // metadata (JSON)
+                    row.get::<_, i64>(4)?,            // created_at
+                    row.get::<_, i64>(5)?,            // updated_at
+                    row.get::<_, i64>(6)?,            // event_version
                 ))
             })
             .map_err(|e| {
@@ -86,23 +84,19 @@ impl HostProjections {
 
         let mut entries = Vec::new();
         for row_result in rows {
-            let (
-                id_str,
-                ip_address,
-                hostname,
-                comment,
-                tags_json,
-                created_at_micros,
-                updated_at_micros,
-                version,
-            ) = row_result
-                .map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
+            let (id_str, ip_address, hostname, metadata_json, created_at_micros, updated_at_micros, version) =
+                row_result
+                    .map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
             let id = Ulid::from_string(&id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid ULID: {}", e)))?;
 
-            let tags: Vec<String> = serde_json::from_str(&tags_json)
-                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags: {}", e)))?;
+            // Parse metadata JSON to extract comment and tags
+            let event_data: EventData = serde_json::from_str(&metadata_json)
+                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse metadata: {}", e)))?;
+
+            let comment = event_data.comment;
+            let tags = event_data.tags.unwrap_or_default();
 
             let created_at =
                 DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
@@ -167,8 +161,7 @@ impl HostProjections {
                     id,
                     ip_address,
                     hostname,
-                    comment,
-                    tags,
+                    metadata,
                     created_at,
                     updated_at,
                     event_version
@@ -180,18 +173,16 @@ impl HostProjections {
                     let id_str: String = row.get(0)?;
                     let ip_address: String = row.get(1)?;
                     let hostname: String = row.get(2)?;
-                    let comment: Option<String> = row.get(3)?;
-                    let tags_json: String = row.get(4)?;
-                    let created_at_micros: i64 = row.get(5)?;
-                    let updated_at_micros: i64 = row.get(6)?;
-                    let version: i64 = row.get(7)?;
+                    let metadata_json: String = row.get(3)?;
+                    let created_at_micros: i64 = row.get(4)?;
+                    let updated_at_micros: i64 = row.get(5)?;
+                    let version: i64 = row.get(6)?;
 
                     Ok((
                         id_str,
                         ip_address,
                         hostname,
-                        comment,
-                        tags_json,
+                        metadata_json,
                         created_at_micros,
                         updated_at_micros,
                         version,
@@ -207,8 +198,7 @@ impl HostProjections {
                 id_str,
                 ip_address,
                 hostname,
-                comment,
-                tags_json,
+                metadata_json,
                 created_at_micros,
                 updated_at_micros,
                 version,
@@ -216,8 +206,8 @@ impl HostProjections {
                 let id = Ulid::from_string(&id_str)
                     .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
-                let tags: Vec<String> = serde_json::from_str(&tags_json).map_err(|e| {
-                    DatabaseError::InvalidData(format!("Failed to parse tags: {}", e))
+                let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
+                    DatabaseError::InvalidData(format!("Failed to parse metadata: {}", e))
                 })?;
 
                 let created_at =
@@ -240,8 +230,8 @@ impl HostProjections {
                     id,
                     ip_address,
                     hostname,
-                    comment,
-                    tags,
+                    comment: event_data.comment,
+                    tags: event_data.tags.unwrap_or_default(),
                     created_at,
                     updated_at,
                     version,
