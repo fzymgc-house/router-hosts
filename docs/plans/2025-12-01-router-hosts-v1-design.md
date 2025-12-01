@@ -59,6 +59,12 @@ The logical view of a host entry (reconstructed from events):
 - Hostname must be valid DNS name (RFC 1123)
 - Duplicate IP+hostname combinations are rejected
 
+**Optimistic concurrency:**
+- Each entry has a `version` field incremented on every change
+- Updates require the current version; mismatches return `ABORTED`
+- Clients should retry with fresh data on conflict
+- `GetHost` returns the current version for use in subsequent updates
+
 ### Domain Events
 
 The event store records immutable facts:
@@ -81,7 +87,7 @@ Point-in-time captures of the hosts file content:
 | `snapshot_id` | ULID | Unique identifier |
 | `created_at` | Timestamp | When snapshot was created |
 | `entry_count` | Integer | Number of entries captured |
-| `trigger` | String | "manual", "pre-rollback", "scheduled" |
+| `trigger` | String | "manual", "pre-rollback" |
 
 ## gRPC API
 
@@ -104,6 +110,8 @@ All operations use dedicated request/response message types for API evolution. N
 |-----|------|-------------|
 | `ImportHosts` | Bidirectional streaming | Import from file format (chunked upload, progress responses) |
 | `ExportHosts` | Server streaming | Export entries in specified format (hosts/json/csv) |
+
+**Note:** Bulk operations use `ImportHosts` streaming rather than a separate `BulkAddHosts` RPC. For adding multiple entries programmatically, use multiple `AddHost` calls or import from a file.
 
 ### Snapshots
 
@@ -178,6 +186,32 @@ Commands:
   delete    Delete a snapshot
 ```
 
+### Example Usage
+
+```bash
+# Add a host entry
+router-hosts host add --ip 192.168.1.10 --hostname server.local \
+  --comment "Dev server" --tags homelab,dev
+
+# List all hosts
+router-hosts host list
+
+# Search for hosts
+router-hosts host search nas
+
+# Update a host (by ID from list output)
+router-hosts host update 01JF... --ip 192.168.1.11
+
+# Export to JSON for backup
+router-hosts host export --format json > hosts-backup.json
+
+# Create snapshot before major changes
+router-hosts snapshot create
+
+# Rollback if something goes wrong
+router-hosts snapshot rollback 01JF...
+```
+
 ### Configuration Precedence
 
 CLI arguments > Environment variables > Config file
@@ -190,6 +224,23 @@ CLI arguments > Environment variables > Config file
 | CA cert | `--ca` | `ROUTER_HOSTS_CA` |
 
 Config file: `~/.config/router-hosts/client.toml` (or `--config` override)
+
+### Client Configuration File
+
+```toml
+# ~/.config/router-hosts/client.toml
+
+[server]
+address = "router.local:50051"
+
+[tls]
+cert_path = "~/.config/router-hosts/client.crt"
+key_path = "~/.config/router-hosts/client.key"
+ca_cert_path = "~/.config/router-hosts/ca.crt"
+
+[output]
+format = "table"  # table, json, csv
+```
 
 ## Server Configuration
 
@@ -245,6 +296,22 @@ on_failure = [
 
 Enforced on snapshot creation - both limits apply (whichever triggers first).
 
+### Event Store Compaction
+
+The event store grows unbounded as events accumulate. For v1.0, compaction is manual:
+
+```bash
+# Export current state, compact events
+router-hosts host export --format json > backup.json
+# Future: router-hosts admin compact --before-date 2025-01-01
+```
+
+**Future enhancement:** Automatic compaction that:
+- Creates a snapshot of current state
+- Replaces event history with synthetic `HostCreated` events
+- Preserves audit trail in archived event files
+- Runs based on event count or age thresholds
+
 ## Deployment
 
 ### Systemd Service
@@ -268,8 +335,7 @@ Group=router-hosts
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/router-hosts
-ReadWritePaths=/etc/hosts
+ReadWritePaths=/var/lib/router-hosts /etc/hosts
 
 [Install]
 WantedBy=multi-user.target
@@ -299,6 +365,22 @@ docker run -d \
   -p 50051:50051 \
   router-hosts:latest
 ```
+
+#### Container Security
+
+The container runs as non-root user `nonroot` (UID 65532) from the Chainguard base image.
+
+**Volume permissions:** Ensure mounted directories are accessible:
+```bash
+# Data directory owned by container user
+chown 65532:65532 /path/to/data
+
+# Hosts file writable by container user
+chown 65532:65532 /etc/hosts
+# Or use a dedicated hosts file, not the system one
+```
+
+**Note:** Writing to `/etc/hosts` on the host requires either root privileges or appropriate file ownership. For containerized deployments, consider using a dedicated hosts file path that dnsmasq reads separately.
 
 ### Certificate Management
 
@@ -345,6 +427,15 @@ dns_credentials_file = "/etc/router-hosts/dns-credentials.toml"
 | `dns` | None | Behind NAT, firewalled, or wildcard certs |
 
 DNS-01 provider support: Cloudflare, Route53, Google Cloud DNS, RFC2136 (dynamic DNS).
+
+#### ACME Certificate Renewal
+
+Certificates are automatically renewed before expiration:
+- Renewal attempted 30 days before expiry
+- Server continues serving with existing cert during renewal
+- No restart required - new cert loaded automatically
+- Renewal failures logged; server continues with current cert
+- Alerts can be configured via failure hooks
 
 ## Hosts File Generation
 
