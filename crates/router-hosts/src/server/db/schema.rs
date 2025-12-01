@@ -85,17 +85,17 @@ impl Database {
     fn initialize_schema(&mut self) -> DatabaseResult<()> {
         let conn = self.conn.lock();
 
-        // JSON extension is included via duckdb crate's "json" feature flag
-        // No need to INSTALL/LOAD - it's compiled in
-
         // Use VARCHAR for IP addresses instead of INET type to avoid extension dependency
         // Validation happens at the application layer via router_hosts_common::validation
+        //
+        // Note: Metadata is stored as VARCHAR (JSON string) to avoid DuckDB JSON extension
+        // dependency. JSON parsing happens in Rust code (see projections.rs).
 
         // Event store - append-only immutable log of all domain events
         // This is the source of truth for all state changes
         //
         // Design: First-class typed columns for current state (ip_address, hostname)
-        // JSON metadata column for tags, comments, and previous values
+        // Metadata stored as VARCHAR (JSON string) - parsed in Rust to avoid DuckDB JSON extension
         conn.execute(
             r#"
                 CREATE TABLE IF NOT EXISTS host_events (
@@ -107,8 +107,8 @@ impl Database {
                     ip_address VARCHAR,
                     hostname VARCHAR,
                     event_timestamp TIMESTAMP NOT NULL,
-                    -- Event metadata: tags, comments, previous values (old_ip, old_hostname, etc.)
-                    metadata JSON NOT NULL,
+                    -- Event metadata: tags, comments, previous values (stored as JSON string)
+                    metadata VARCHAR NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     created_by VARCHAR,
                     -- Optimistic concurrency control
@@ -192,8 +192,8 @@ impl Database {
                     aggregate_id as id,
                     CAST(ip_address AS VARCHAR) as ip_address,
                     hostname,
-                    -- Return raw metadata JSON; Rust will parse comment/tags
-                    CAST(latest_metadata AS VARCHAR) as metadata,
+                    -- Return raw metadata (already VARCHAR); Rust will parse JSON
+                    latest_metadata as metadata,
                     CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) as created_at,
                     CAST(EXTRACT(EPOCH FROM updated_at) * 1000000 AS BIGINT) as updated_at,
                     event_version
