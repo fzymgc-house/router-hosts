@@ -81,6 +81,36 @@ pub fn format_json_entry(entry: &HostEntry) -> Vec<u8> {
     bytes
 }
 
+/// Format CSV header row
+pub fn format_csv_header() -> Vec<u8> {
+    b"ip_address,hostname,comment,tags\n".to_vec()
+}
+
+/// Format a host entry as CSV
+pub fn format_csv_entry(entry: &HostEntry) -> Vec<u8> {
+    let comment = entry.comment.as_deref().unwrap_or("");
+    let tags = entry.tags.join(";");
+
+    // Quote fields that might contain commas or quotes
+    let comment_escaped = escape_csv_field(comment);
+    let tags_escaped = escape_csv_field(&tags);
+
+    format!(
+        "{},{},{},{}\n",
+        entry.ip_address, entry.hostname, comment_escaped, tags_escaped
+    )
+    .into_bytes()
+}
+
+/// Escape a CSV field (quote if contains comma, quote, or newline)
+fn escape_csv_field(s: &str) -> String {
+    if s.contains(',') || s.contains('"') || s.contains('\n') {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,5 +188,32 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(parsed["comment"].is_null());
+    }
+
+    #[test]
+    fn test_format_csv_entry_simple() {
+        let entry = make_entry("192.168.1.10", "server.local", None, vec![]);
+        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        assert_eq!(output, "192.168.1.10,server.local,,\n");
+    }
+
+    #[test]
+    fn test_format_csv_entry_with_tags() {
+        let entry = make_entry("192.168.1.10", "server.local", None, vec!["tag1", "tag2"]);
+        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        assert_eq!(output, "192.168.1.10,server.local,,tag1;tag2\n");
+    }
+
+    #[test]
+    fn test_format_csv_entry_with_comma_in_comment() {
+        let entry = make_entry("192.168.1.10", "server.local", Some("Hello, world"), vec![]);
+        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        assert_eq!(output, "192.168.1.10,server.local,\"Hello, world\",\n");
+    }
+
+    #[test]
+    fn test_csv_header() {
+        let header = String::from_utf8(format_csv_header()).unwrap();
+        assert_eq!(header, "ip_address,hostname,comment,tags\n");
     }
 }
