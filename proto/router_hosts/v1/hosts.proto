@@ -29,7 +29,8 @@ message HostEntry {
   // Timestamp when this entry was last updated
   google.protobuf.Timestamp updated_at = 7;
 
-  // Version identifier for optimistic concurrency (ULID, changes on each update)
+  // Version identifier for optimistic concurrency (opaque string, changes on each update)
+  // Note: Currently integer-as-string; will migrate to ULID format in future
   string version = 8;
 }
 
@@ -89,7 +90,7 @@ message UpdateHostRequest {
   // Not providing this field = keep existing tags unchanged.
   repeated string tags = 5;
 
-  // Expected version for optimistic concurrency (ULID)
+  // Expected version for optimistic concurrency (opaque string, future: ULID)
   // If provided and doesn't match current version, returns ABORTED
   optional string expected_version = 6;
 }

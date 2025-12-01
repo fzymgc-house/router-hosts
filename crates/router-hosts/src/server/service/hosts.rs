@@ -83,6 +83,7 @@ impl HostsServiceImpl {
                 req.hostname,   // Already Option<String> from proto
                 comment,
                 tags,
+                req.expected_version, // For optimistic concurrency
             )
             .await
             .map_err(Status::from)?;
@@ -162,6 +163,10 @@ impl From<CommandError> for Status {
             CommandError::ValidationFailed(msg) => Status::invalid_argument(msg),
             CommandError::DuplicateEntry(msg) => Status::already_exists(msg),
             CommandError::NotFound(msg) => Status::not_found(msg),
+            CommandError::VersionConflict { expected, actual } => Status::aborted(format!(
+                "Version conflict: expected {}, actual {}",
+                expected, actual
+            )),
             CommandError::Database(e) => Status::internal(format!("Database error: {}", e)),
             CommandError::FileGeneration(msg) => {
                 Status::internal(format!("File generation error: {}", msg))
