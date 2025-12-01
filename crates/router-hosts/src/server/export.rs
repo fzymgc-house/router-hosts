@@ -61,6 +61,26 @@ pub fn format_hosts_header(count: usize) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Format a host entry as JSON (one line, JSONL format)
+pub fn format_json_entry(entry: &HostEntry) -> Vec<u8> {
+    use serde_json::json;
+
+    let obj = json!({
+        "id": entry.id.to_string(),
+        "ip_address": entry.ip_address,
+        "hostname": entry.hostname,
+        "comment": entry.comment,
+        "tags": entry.tags,
+        "created_at": entry.created_at.to_rfc3339(),
+        "updated_at": entry.updated_at.to_rfc3339(),
+        "version": entry.version.to_string(),
+    });
+
+    let mut bytes = serde_json::to_vec(&obj).expect("JSON serialization should not fail");
+    bytes.push(b'\n');
+    bytes
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,5 +136,27 @@ mod tests {
         assert_eq!(ExportFormat::from_str("csv"), Some(ExportFormat::Csv));
         assert_eq!(ExportFormat::from_str("JSON"), Some(ExportFormat::Json));
         assert_eq!(ExportFormat::from_str("invalid"), None);
+    }
+
+    #[test]
+    fn test_format_json_entry() {
+        let entry = make_entry("192.168.1.10", "server.local", Some("Test"), vec!["tag1"]);
+        let output = String::from_utf8(format_json_entry(&entry)).unwrap();
+
+        // Parse back to verify it's valid JSON
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["ip_address"], "192.168.1.10");
+        assert_eq!(parsed["hostname"], "server.local");
+        assert_eq!(parsed["comment"], "Test");
+        assert_eq!(parsed["tags"][0], "tag1");
+    }
+
+    #[test]
+    fn test_format_json_entry_null_comment() {
+        let entry = make_entry("192.168.1.10", "server.local", None, vec![]);
+        let output = String::from_utf8(format_json_entry(&entry)).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert!(parsed["comment"].is_null());
     }
 }
