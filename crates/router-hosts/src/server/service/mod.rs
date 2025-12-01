@@ -11,18 +11,16 @@ use crate::server::commands::CommandHandler;
 use crate::server::db::Database;
 use router_hosts_common::proto::hosts_service_server::HostsService;
 use router_hosts_common::proto::{
-    AddHostRequest, AddHostResponse, BulkAddHostsRequest, BulkAddHostsResponse,
-    CreateSnapshotRequest, CreateSnapshotResponse, DeleteHostRequest, DeleteHostResponse,
-    DeleteSnapshotRequest, DeleteSnapshotResponse, ExportHostsRequest, ExportHostsResponse,
-    GetHostRequest, GetHostResponse, ImportHostsRequest, ImportHostsResponse, ListHostsRequest,
-    ListHostsResponse, ListSnapshotsRequest, ListSnapshotsResponse, RollbackToSnapshotRequest,
-    RollbackToSnapshotResponse, SearchHostsRequest, SearchHostsResponse, UpdateHostRequest,
-    UpdateHostResponse,
+    AddHostRequest, AddHostResponse, CreateSnapshotRequest, CreateSnapshotResponse,
+    DeleteHostRequest, DeleteHostResponse, DeleteSnapshotRequest, DeleteSnapshotResponse,
+    ExportHostsRequest, ExportHostsResponse, GetHostRequest, GetHostResponse, ImportHostsRequest,
+    ImportHostsResponse, ListHostsRequest, ListHostsResponse, ListSnapshotsRequest,
+    ListSnapshotsResponse, RollbackToSnapshotRequest, RollbackToSnapshotResponse,
+    SearchHostsRequest, SearchHostsResponse, UpdateHostRequest, UpdateHostResponse,
 };
 use std::pin::Pin;
 use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio_stream::{wrappers::ReceiverStream, Stream, StreamExt};
+use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
 /// Main gRPC service implementation
@@ -97,50 +95,7 @@ impl HostsService for HostsServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    // Bulk operations (bidirectional streaming)
-    type BulkAddHostsStream = ResponseStream<BulkAddHostsResponse>;
-
-    async fn bulk_add_hosts(
-        &self,
-        request: Request<Streaming<BulkAddHostsRequest>>,
-    ) -> Result<Response<Self::BulkAddHostsStream>, Status> {
-        let mut in_stream = request.into_inner();
-        let commands = Arc::clone(&self.commands);
-
-        let (tx, rx) = mpsc::channel(32);
-
-        tokio::spawn(async move {
-            while let Some(result) = in_stream.next().await {
-                match result {
-                    Ok(req) => {
-                        let response = match commands
-                            .add_host(req.ip_address, req.hostname, req.comment, req.tags)
-                            .await
-                        {
-                            Ok(entry) => BulkAddHostsResponse {
-                                id: Some(entry.id.to_string()),
-                                error: None,
-                            },
-                            Err(e) => BulkAddHostsResponse {
-                                id: None,
-                                error: Some(e.to_string()),
-                            },
-                        };
-                        if tx.send(Ok(response)).await.is_err() {
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        let _ = tx.send(Err(e)).await;
-                        break;
-                    }
-                }
-            }
-        });
-
-        Ok(Response::new(Box::pin(ReceiverStream::new(rx))))
-    }
-
+    // Import/Export operations
     type ImportHostsStream = ResponseStream<ImportHostsResponse>;
 
     async fn import_hosts(

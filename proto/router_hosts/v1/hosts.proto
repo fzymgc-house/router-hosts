@@ -6,9 +6,9 @@ import "google/protobuf/timestamp.proto";
 
 // Host entry messages
 
-// Represents a single host entry in the /etc/hosts file
+// Represents a single host entry in the hosts file
 message HostEntry {
-  // Unique identifier for this host entry (UUID format)
+  // Unique identifier for this host entry (ULID format)
   string id = 1;
 
   // IP address (IPv4 or IPv6) for the host
@@ -17,7 +17,7 @@ message HostEntry {
   // DNS hostname or FQDN for the host
   string hostname = 3;
 
-  // Optional comment to appear in /etc/hosts (supports inline comments)
+  // Optional comment to appear in hosts file
   optional string comment = 4;
 
   // Optional tags for categorization and filtering (e.g., "homelab", "production")
@@ -29,8 +29,8 @@ message HostEntry {
   // Timestamp when this entry was last updated
   google.protobuf.Timestamp updated_at = 7;
 
-  // Whether this entry is active (false = soft deleted, won't appear in /etc/hosts)
-  bool active = 8;
+  // Version identifier for optimistic concurrency (ULID, changes on each update)
+  string version = 8;
 }
 
 // Host management requests/responses
@@ -88,6 +88,10 @@ message UpdateHostRequest {
   // New tags array (replaces all existing tags). Empty array = clear all tags.
   // Not providing this field = keep existing tags unchanged.
   repeated string tags = 5;
+
+  // Expected version for optimistic concurrency (ULID)
+  // If provided and doesn't match current version, returns ABORTED
+  optional string expected_version = 6;
 }
 
 // Response after updating a host entry
@@ -96,7 +100,7 @@ message UpdateHostResponse {
   HostEntry entry = 1;
 }
 
-// Request to delete a host entry (soft delete by setting active=false)
+// Request to delete a host entry (creates tombstone event)
 message DeleteHostRequest {
   // ID of the host entry to delete
   string id = 1;
@@ -138,31 +142,7 @@ message SearchHostsResponse {
   HostEntry entry = 1;
 }
 
-// Bulk operations
-
-// Request message for bulk adding multiple hosts via streaming (one per message)
-message BulkAddHostsRequest {
-  // IP address for the host entry (required)
-  string ip_address = 1;
-
-  // Hostname for the host entry (required)
-  string hostname = 2;
-
-  // Optional comment for the host entry
-  optional string comment = 3;
-
-  // Optional tags for categorization
-  repeated string tags = 4;
-}
-
-// Response for each host in bulk add operation (streamed)
-message BulkAddHostsResponse {
-  // ID of successfully created host entry (empty if error occurred)
-  optional string id = 1;
-
-  // Error message if this particular host failed to add
-  optional string error = 2;
-}
+// Import/Export operations
 
 // Request to import hosts from a file format via streaming chunks
 message ImportHostsRequest {
@@ -171,18 +151,30 @@ message ImportHostsRequest {
 
   // Whether this is the final chunk of the import
   bool last_chunk = 2;
+
+  // Import format: "hosts" (default), "json", "csv"
+  optional string format = 3;
+
+  // Conflict handling: "skip" (default), "replace", "strict"
+  optional string conflict_mode = 4;
 }
 
 // Response for host import operation (streamed progress updates)
 message ImportHostsResponse {
-  // Number of host entries successfully imported so far
-  int32 imported = 1;
+  // Total entries processed so far
+  int32 processed = 1;
 
-  // Number of host entries that failed to import
-  int32 failed = 2;
+  // Successfully created entries
+  int32 created = 2;
+
+  // Duplicates skipped (when conflict_mode = "skip")
+  int32 skipped = 3;
+
+  // Validation failures
+  int32 failed = 4;
 
   // Error message if import operation encountered an issue
-  optional string error = 3;
+  optional string error = 5;
 }
 
 // Request to export all hosts in a specified format
@@ -200,10 +192,7 @@ message ExportHostsResponse {
 // Snapshot requests/responses
 
 // Request to create a snapshot of the current hosts database state
-message CreateSnapshotRequest {
-  // Optional human-readable name for this snapshot
-  optional string name = 1;
-}
+message CreateSnapshotRequest {}
 
 // Response after creating a snapshot
 message CreateSnapshotResponse {
@@ -224,9 +213,6 @@ message Snapshot {
 
   // What triggered this snapshot (e.g., "manual", "pre-rollback", "scheduled")
   string trigger = 4;
-
-  // Optional human-readable name for this snapshot
-  optional string name = 5;
 }
 
 // Request to list all available snapshots
@@ -278,7 +264,7 @@ service HostsService {
   // Update an existing host entry
   rpc UpdateHost(UpdateHostRequest) returns (UpdateHostResponse);
 
-  // Delete a host entry (soft delete by setting active=false)
+  // Delete a host entry (creates tombstone event)
   rpc DeleteHost(DeleteHostRequest) returns (DeleteHostResponse);
 
   // List all host entries with optional filtering and pagination (server streaming)
@@ -287,10 +273,7 @@ service HostsService {
   // Search for host entries by query string (server streaming)
   rpc SearchHosts(SearchHostsRequest) returns (stream SearchHostsResponse);
 
-  // Bulk operations
-
-  // Add multiple hosts via bidirectional streaming (client sends hosts, server responds per-host)
-  rpc BulkAddHosts(stream BulkAddHostsRequest) returns (stream BulkAddHostsResponse);
+  // Import/Export operations
 
   // Import hosts from a file format via client streaming with server progress updates
   rpc ImportHosts(stream ImportHostsRequest) returns (stream ImportHostsResponse);
