@@ -322,12 +322,28 @@ impl CommandHandler {
 
     /// Finish an edit session and commit all staged changes
     ///
-    /// Note: Each event is committed in its own transaction via append_event.
-    /// If one event fails, previously committed events remain committed.
-    /// This is acceptable because:
-    /// 1. Each event is a valid state transition on its own
-    /// 2. The hosts file is only regenerated after all events succeed
-    /// 3. Partial failure leaves the database in a consistent (if incomplete) state
+    /// # Transaction Semantics
+    ///
+    /// **IMPORTANT**: This operation does NOT provide all-or-nothing atomicity.
+    /// Each event is committed in its own transaction. If event N fails,
+    /// events 1 through N-1 remain committed in the database.
+    ///
+    /// This design is intentional because:
+    /// 1. Each event represents a valid, independent state transition
+    /// 2. The hosts file is only regenerated after ALL events succeed
+    /// 3. Partial failure leaves the database consistent (committed events are valid)
+    /// 4. Recovery: If partial commit occurs, the hosts file remains unchanged,
+    ///    and the operator can inspect the database to see what was committed
+    ///
+    /// If full atomicity is required, consider implementing a saga pattern or
+    /// wrapping all events in a single database transaction at the event store level.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The session token is invalid or expired
+    /// - Any event fails to commit (partial commit may have occurred)
+    /// - Hosts file regeneration fails (all events are committed but file unchanged)
     pub async fn finish_edit(&self, token: &str) -> CommandResult<usize> {
         let staged_events = self.session_mgr.finish_edit(token)?;
         let count = staged_events.len();
@@ -356,11 +372,24 @@ impl CommandHandler {
     async fn regenerate_hosts_file(&self) -> CommandResult<()> {
         match self.hosts_file.regenerate(&self.db).await {
             Ok(count) => {
-                self.hooks.run_success(count).await;
+                let hook_failures = self.hooks.run_success(count).await;
+                if hook_failures > 0 {
+                    tracing::warn!(
+                        hook_failures,
+                        entry_count = count,
+                        "Hosts file updated but some hooks failed"
+                    );
+                }
                 Ok(())
             }
             Err(e) => {
-                self.hooks.run_failure(0, &e.to_string()).await;
+                let hook_failures = self.hooks.run_failure(0, &e.to_string()).await;
+                if hook_failures > 0 {
+                    tracing::error!(
+                        hook_failures,
+                        "Hosts file regeneration failed AND failure hooks also failed"
+                    );
+                }
                 Err(CommandError::FileGeneration(e.to_string()))
             }
         }

@@ -1,4 +1,18 @@
 //! Post-edit hook execution
+//!
+//! Hooks are shell commands that run after hosts file updates.
+//!
+//! # Failure Behavior
+//!
+//! Hook failures are logged but do NOT fail the overall operation by default.
+//! This is intentional - the hosts file update has already succeeded, and
+//! failing the operation would leave the system in an inconsistent state.
+//!
+//! Callers can check the returned failure count and take action if needed.
+//! For critical hooks (e.g., DNS reload), consider:
+//! - Monitoring logs for hook failures
+//! - Using external health checks
+//! - Implementing retry logic in the hook script itself
 
 use std::process::Stdio;
 use std::time::Duration;
@@ -35,24 +49,59 @@ impl HookExecutor {
     }
 
     /// Run success hooks after successful hosts file regeneration
-    pub async fn run_success(&self, entry_count: usize) {
+    ///
+    /// Returns the number of hooks that failed. Callers can use this for
+    /// observability or to take corrective action.
+    pub async fn run_success(&self, entry_count: usize) -> usize {
+        let mut failures = 0;
         for cmd in &self.on_success {
             if let Err(e) = self.run_hook(cmd, "success", entry_count).await {
-                warn!("Success hook failed (continuing): {} - {}", cmd, e);
+                error!(
+                    hook = %cmd,
+                    error = %e,
+                    "Success hook failed - hosts file was updated but hook did not run successfully"
+                );
+                failures += 1;
             }
         }
+        if failures > 0 {
+            warn!(
+                total_hooks = self.on_success.len(),
+                failed_hooks = failures,
+                "Some success hooks failed - check logs for details"
+            );
+        }
+        failures
     }
 
     /// Run failure hooks after failed hosts file regeneration
-    pub async fn run_failure(&self, entry_count: usize, error: &str) {
+    ///
+    /// Returns the number of hooks that failed. Callers can use this for
+    /// observability or to take corrective action.
+    pub async fn run_failure(&self, entry_count: usize, error: &str) -> usize {
+        let mut failures = 0;
         for cmd in &self.on_failure {
             if let Err(e) = self
                 .run_hook_with_error(cmd, "failure", entry_count, error)
                 .await
             {
-                warn!("Failure hook failed (continuing): {} - {}", cmd, e);
+                error!(
+                    hook = %cmd,
+                    error = %e,
+                    original_error = %error,
+                    "Failure hook failed - hosts file regeneration failed and hook also failed"
+                );
+                failures += 1;
             }
         }
+        if failures > 0 {
+            warn!(
+                total_hooks = self.on_failure.len(),
+                failed_hooks = failures,
+                "Some failure hooks failed - check logs for details"
+            );
+        }
+        failures
     }
 
     async fn run_hook(&self, cmd: &str, event: &str, entry_count: usize) -> Result<(), HookError> {

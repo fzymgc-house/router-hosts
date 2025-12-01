@@ -58,14 +58,23 @@ pub struct SessionManager {
 impl SessionManager {
     /// Create a new session manager with the specified timeout in minutes.
     ///
+    /// # Timeout Clamping
+    ///
+    /// The timeout is automatically clamped to the range [1, 60] minutes:
+    /// - Values < 1 are raised to 1 minute (prevents infinite sessions or DoS)
+    /// - Values > 60 are lowered to 60 minutes (prevents forgotten sessions)
+    ///
+    /// A warning is logged when clamping occurs. This is intentional behavior
+    /// to provide safe defaults while alerting operators to configuration issues.
+    ///
     /// # Arguments
-    /// * `timeout_minutes` - Session timeout in minutes. Will be clamped to [1, 60].
+    /// * `timeout_minutes` - Session timeout in minutes. Values outside [1, 60] are clamped.
     ///
     /// # Examples
     /// ```ignore
-    /// let mgr = SessionManager::new(15); // 15 minute timeout
-    /// let mgr = SessionManager::new(0);  // Clamped to 1 minute
-    /// let mgr = SessionManager::new(120); // Clamped to 60 minutes
+    /// let mgr = SessionManager::new(15);  // 15 minute timeout (used as-is)
+    /// let mgr = SessionManager::new(0);   // Clamped to 1 minute (warning logged)
+    /// let mgr = SessionManager::new(120); // Clamped to 60 minutes (warning logged)
     /// ```
     pub fn new(timeout_minutes: i64) -> Self {
         let clamped_timeout = timeout_minutes.clamp(MIN_TIMEOUT_MINUTES, MAX_TIMEOUT_MINUTES);
