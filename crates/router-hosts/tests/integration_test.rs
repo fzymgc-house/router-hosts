@@ -184,6 +184,7 @@ async fn test_update_host() {
             hostname: Some("new.local".to_string()),
             comment: Some("Updated".to_string()),
             tags: vec!["updated".to_string()],
+            expected_version: None,
         })
         .await
         .unwrap()

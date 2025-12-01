@@ -25,6 +25,9 @@ pub enum CommandError {
     #[error("Not found: {0}")]
     NotFound(String),
 
+    #[error("Version conflict: expected {expected}, actual {actual}")]
+    VersionConflict { expected: String, actual: String },
+
     #[error("Database error: {0}")]
     Database(#[from] DatabaseError),
 
@@ -101,6 +104,9 @@ impl CommandHandler {
     }
 
     /// Update an existing host entry
+    ///
+    /// If `expected_version` is provided, the update will only succeed if the
+    /// current version matches. This enables optimistic concurrency control.
     pub async fn update_host(
         &self,
         id: Ulid,
@@ -108,12 +114,26 @@ impl CommandHandler {
         hostname: Option<String>,
         comment: Option<Option<String>>,
         tags: Option<Vec<String>>,
+        expected_version: Option<String>,
     ) -> CommandResult<HostEntry> {
         // Get current state
         let current = HostProjections::get_by_id(&self.db, &id)?
             .ok_or_else(|| CommandError::NotFound(format!("Host {} not found", id)))?;
 
         let current_version = current.version;
+
+        // Check expected version if provided (optimistic concurrency)
+        if let Some(expected) = expected_version {
+            if expected.is_empty() {
+                return Err(CommandError::ValidationFailed(
+                    "expected_version cannot be empty".to_string(),
+                ));
+            }
+            let actual = current_version.to_string();
+            if expected != actual {
+                return Err(CommandError::VersionConflict { expected, actual });
+            }
+        }
         let mut events = Vec::new();
 
         // Track final IP and hostname for duplicate check
@@ -349,7 +369,14 @@ mod tests {
             .unwrap();
 
         let updated = handler
-            .update_host(entry.id, Some("192.168.1.2".to_string()), None, None, None)
+            .update_host(
+                entry.id,
+                Some("192.168.1.2".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -446,7 +473,14 @@ mod tests {
             .unwrap();
 
         let updated = handler
-            .update_host(entry.id, None, Some("new.local".to_string()), None, None)
+            .update_host(
+                entry.id,
+                None,
+                Some("new.local".to_string()),
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -472,6 +506,7 @@ mod tests {
                 None,
                 None,
                 Some(Some("Test comment".to_string())),
+                None,
                 None,
             )
             .await
@@ -500,6 +535,7 @@ mod tests {
                 None,
                 None,
                 Some(vec!["prod".to_string(), "web".to_string()]),
+                None,
             )
             .await
             .unwrap();
@@ -522,7 +558,7 @@ mod tests {
 
         // Update with no actual changes
         let result = handler
-            .update_host(entry.id, None, None, None, None)
+            .update_host(entry.id, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -544,7 +580,9 @@ mod tests {
         let handler = setup();
         let fake_id = Ulid::new();
 
-        let result = handler.update_host(fake_id, None, None, None, None).await;
+        let result = handler
+            .update_host(fake_id, None, None, None, None, None)
+            .await;
         assert!(matches!(result, Err(CommandError::NotFound(_))));
     }
 
@@ -597,12 +635,141 @@ mod tests {
                 Some("host-b.local".to_string()),
                 None,
                 None,
+                None,
             )
             .await;
 
         assert!(
             matches!(result, Err(CommandError::DuplicateEntry(_))),
             "Expected DuplicateEntry error, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_empty_expected_version() {
+        let handler = setup();
+        let entry = handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "test.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        // Update with empty expected_version should fail validation
+        let result = handler
+            .update_host(
+                entry.id,
+                Some("192.168.1.2".to_string()),
+                None,
+                None,
+                None,
+                Some(String::new()),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(CommandError::ValidationFailed(_))),
+            "Expected ValidationFailed error for empty version, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_version_conflict() {
+        let handler = setup();
+        let entry = handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "test.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        let current_version = entry.version.to_string();
+
+        // Update with correct expected_version should succeed
+        let updated = handler
+            .update_host(
+                entry.id,
+                Some("192.168.1.2".to_string()),
+                None,
+                None,
+                None,
+                Some(current_version),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(updated.ip_address, "192.168.1.2");
+
+        // Update with wrong expected_version should fail with VersionConflict
+        let result = handler
+            .update_host(
+                entry.id,
+                Some("192.168.1.3".to_string()),
+                None,
+                None,
+                None,
+                Some("wrong-version".to_string()),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(CommandError::VersionConflict { .. })),
+            "Expected VersionConflict error, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_version_conflict_stale_version() {
+        let handler = setup();
+        let entry = handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "test.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        let stale_version = entry.version.to_string();
+
+        // First update succeeds, changing the version
+        handler
+            .update_host(
+                entry.id,
+                Some("192.168.1.2".to_string()),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Second update with stale version should fail
+        let result = handler
+            .update_host(
+                entry.id,
+                Some("192.168.1.3".to_string()),
+                None,
+                None,
+                None,
+                Some(stale_version),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(CommandError::VersionConflict { .. })),
+            "Expected VersionConflict error for stale version, got {:?}",
             result
         );
     }

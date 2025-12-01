@@ -527,7 +527,10 @@ impl From<HostEntry> for proto::HostEntry {
                 seconds: entry.updated_at.timestamp(),
                 nanos: entry.updated_at.timestamp_subsec_nanos() as i32,
             }),
-            active: true, // All entries from db are active (deleted ones don't exist)
+            // INTERIM: Using event_version (i64) converted to string until ULID implementation.
+            // Clients should treat as opaque version identifier, not parse as ULID.
+            // TODO: Full ULID-based versioning needs event store changes.
+            version: entry.version.to_string(),
         }
     }
 }
