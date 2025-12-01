@@ -69,13 +69,13 @@ impl HostProjections {
         let rows = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,         // id
-                    row.get::<_, String>(1)?,         // ip_address
-                    row.get::<_, String>(2)?,         // hostname
-                    row.get::<_, String>(3)?,         // metadata (JSON)
-                    row.get::<_, i64>(4)?,            // created_at
-                    row.get::<_, i64>(5)?,            // updated_at
-                    row.get::<_, i64>(6)?,            // event_version
+                    row.get::<_, String>(0)?, // id
+                    row.get::<_, String>(1)?, // ip_address
+                    row.get::<_, String>(2)?, // hostname
+                    row.get::<_, String>(3)?, // metadata (JSON)
+                    row.get::<_, i64>(4)?,    // created_at
+                    row.get::<_, i64>(5)?,    // updated_at
+                    row.get::<_, i64>(6)?,    // event_version
                 ))
             })
             .map_err(|e| {
@@ -84,16 +84,24 @@ impl HostProjections {
 
         let mut entries = Vec::new();
         for row_result in rows {
-            let (id_str, ip_address, hostname, metadata_json, created_at_micros, updated_at_micros, version) =
-                row_result
-                    .map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
+            let (
+                id_str,
+                ip_address,
+                hostname,
+                metadata_json,
+                created_at_micros,
+                updated_at_micros,
+                version,
+            ) = row_result
+                .map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
             let id = Ulid::from_string(&id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid ULID: {}", e)))?;
 
             // Parse metadata JSON to extract comment and tags
-            let event_data: EventData = serde_json::from_str(&metadata_json)
-                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse metadata: {}", e)))?;
+            let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to parse metadata: {}", e))
+            })?;
 
             let comment = event_data.comment;
             let tags = event_data.tags.unwrap_or_default();
