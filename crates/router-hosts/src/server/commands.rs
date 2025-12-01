@@ -185,12 +185,9 @@ impl CommandHandler {
             return Ok(current);
         }
 
-        // Commit all events
-        let mut version = current_version;
-        for event in events {
-            EventStore::append_event(&self.db, &id, event, Some(version), None)?;
-            version += 1;
-        }
+        // Commit all events atomically - prevents race condition where partial
+        // updates could be committed if a concurrent write occurs mid-loop
+        EventStore::append_events(&self.db, &id, events, Some(current_version), None)?;
 
         // Regenerate hosts file
         self.regenerate_hosts_file().await?;

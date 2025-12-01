@@ -170,21 +170,48 @@ impl Database {
 
         // Read model: Current active hosts projection
         // This materialized view is built from events and optimized for queries
-        // Uses first-class typed columns plus JSON metadata
+        // Uses window functions to carry forward the most recent non-null value for each field,
+        // since update events only set the fields they change (e.g., IpAddressChanged
+        // only sets ip_address, not hostname).
         conn.execute(
                 r#"
                 CREATE VIEW IF NOT EXISTS host_entries_current AS
-                WITH latest_events AS (
-                    -- Get the latest event for each aggregate
+                WITH windowed AS (
+                    -- Build current state using window functions
                     SELECT
                         aggregate_id,
-                        event_type,
                         event_version,
-                        ip_address,
-                        hostname,
-                        metadata,
-                        event_timestamp,
-                        created_at,
+                        event_type,
+                        LAST_VALUE(ip_address IGNORE NULLS) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as ip_address,
+                        LAST_VALUE(hostname IGNORE NULLS) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as hostname,
+                        LAST_VALUE(metadata) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as latest_metadata,
+                        FIRST_VALUE(event_timestamp) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as created_at,
+                        LAST_VALUE(created_at) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as updated_at,
+                        LAST_VALUE(event_type) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as latest_event_type,
                         ROW_NUMBER() OVER (PARTITION BY aggregate_id ORDER BY event_version DESC) as rn
                     FROM host_events
                 )
@@ -192,15 +219,14 @@ impl Database {
                     aggregate_id as id,
                     CAST(ip_address AS VARCHAR) as ip_address,
                     hostname,
-                    json_extract_string(metadata, '$.comment') as comment,
-                    COALESCE(json_extract_string(metadata, '$.tags'), '[]') as tags,
-                    event_timestamp as created_at,
-                    created_at as updated_at,
-                    event_version,
-                    event_type
-                FROM latest_events
+                    json_extract_string(latest_metadata, '$.comment') as comment,
+                    COALESCE(json_extract_string(latest_metadata, '$.tags'), '[]') as tags,
+                    CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) as created_at,
+                    CAST(EXTRACT(EPOCH FROM updated_at) * 1000000 AS BIGINT) as updated_at,
+                    event_version
+                FROM windowed
                 WHERE rn = 1
-                  AND event_type != 'HostDeleted'
+                  AND latest_event_type != 'HostDeleted'
                 "#,
                 [],
             )

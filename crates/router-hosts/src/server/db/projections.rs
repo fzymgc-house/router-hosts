@@ -43,51 +43,94 @@ impl HostProjections {
 
     /// List all active host entries
     ///
-    /// This rebuilds state from events to ensure consistency.
+    /// Uses the `host_entries_current` materialized view for O(n) performance
+    /// instead of N+1 queries. The view is automatically maintained by DuckDB.
     pub fn list_all(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
-        // Get all unique aggregate IDs
         let conn = db.conn();
         let mut stmt = conn
             .prepare(
                 r#"
-                SELECT DISTINCT aggregate_id
-                FROM host_events
-                ORDER BY aggregate_id
+                SELECT
+                    id,
+                    ip_address,
+                    hostname,
+                    comment,
+                    tags,
+                    created_at,
+                    updated_at,
+                    event_version
+                FROM host_entries_current
+                ORDER BY ip_address, hostname
                 "#,
             )
             .map_err(|e| {
-                DatabaseError::QueryFailed(format!("Failed to prepare aggregate query: {}", e))
+                DatabaseError::QueryFailed(format!("Failed to prepare list query: {}", e))
             })?;
 
-        let aggregate_ids = stmt
+        let rows = stmt
             .query_map([], |row| {
-                let id_str: String = row.get(0)?;
-                Ok(id_str)
+                Ok((
+                    row.get::<_, String>(0)?,         // id
+                    row.get::<_, String>(1)?,         // ip_address
+                    row.get::<_, String>(2)?,         // hostname
+                    row.get::<_, Option<String>>(3)?, // comment
+                    row.get::<_, String>(4)?,         // tags (JSON)
+                    row.get::<_, i64>(5)?,            // created_at
+                    row.get::<_, i64>(6)?,            // updated_at
+                    row.get::<_, i64>(7)?,            // event_version
+                ))
             })
             .map_err(|e| {
-                DatabaseError::QueryFailed(format!("Failed to query aggregates: {}", e))
+                DatabaseError::QueryFailed(format!("Failed to query host entries: {}", e))
             })?;
 
         let mut entries = Vec::new();
-        for id_result in aggregate_ids {
-            let id_str = id_result.map_err(|e| {
-                DatabaseError::QueryFailed(format!("Failed to read aggregate ID: {}", e))
-            })?;
+        for row_result in rows {
+            let (
+                id_str,
+                ip_address,
+                hostname,
+                comment,
+                tags_json,
+                created_at_micros,
+                updated_at_micros,
+                version,
+            ) = row_result
+                .map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
+
             let id = Ulid::from_string(&id_str)
-                .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
+                .map_err(|e| DatabaseError::InvalidData(format!("Invalid ULID: {}", e)))?;
 
-            // Rebuild state from events for this aggregate
-            if let Some(entry) = Self::get_by_id(db, &id)? {
-                entries.push(entry);
-            }
+            let tags: Vec<String> = serde_json::from_str(&tags_json)
+                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags: {}", e)))?;
+
+            let created_at =
+                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
+                    DatabaseError::InvalidData(format!(
+                        "Invalid created_at timestamp: {}",
+                        created_at_micros
+                    ))
+                })?;
+
+            let updated_at =
+                DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
+                    DatabaseError::InvalidData(format!(
+                        "Invalid updated_at timestamp: {}",
+                        updated_at_micros
+                    ))
+                })?;
+
+            entries.push(HostEntry {
+                id,
+                ip_address,
+                hostname,
+                comment,
+                tags,
+                created_at,
+                updated_at,
+                version,
+            });
         }
-
-        // Sort by IP and hostname
-        entries.sort_by(|a, b| {
-            a.ip_address
-                .cmp(&b.ip_address)
-                .then_with(|| a.hostname.cmp(&b.hostname))
-        });
 
         Ok(entries)
     }

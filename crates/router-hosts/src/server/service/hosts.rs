@@ -22,7 +22,7 @@ impl HostsServiceImpl {
             .commands
             .add_host(req.ip_address, req.hostname, req.comment, req.tags)
             .await
-            .map_err(command_error_to_status)?;
+            .map_err(Status::from)?;
 
         Ok(Response::new(AddHostResponse {
             id: entry.id.to_string(),
@@ -44,7 +44,7 @@ impl HostsServiceImpl {
             .commands
             .get_host(id)
             .await
-            .map_err(command_error_to_status)?
+            .map_err(Status::from)?
             .ok_or_else(|| Status::not_found(format!("Host {} not found", req.id)))?;
 
         Ok(Response::new(GetHostResponse {
@@ -85,7 +85,7 @@ impl HostsServiceImpl {
                 tags,
             )
             .await
-            .map_err(command_error_to_status)?;
+            .map_err(Status::from)?;
 
         Ok(Response::new(UpdateHostResponse {
             entry: Some(entry.into()),
@@ -105,7 +105,7 @@ impl HostsServiceImpl {
         self.commands
             .delete_host(id, None)
             .await
-            .map_err(command_error_to_status)?;
+            .map_err(Status::from)?;
 
         Ok(Response::new(DeleteHostResponse { success: true }))
     }
@@ -115,11 +115,7 @@ impl HostsServiceImpl {
         &self,
         _request: Request<ListHostsRequest>,
     ) -> Result<Response<Vec<ListHostsResponse>>, Status> {
-        let entries = self
-            .commands
-            .list_hosts()
-            .await
-            .map_err(command_error_to_status)?;
+        let entries = self.commands.list_hosts().await.map_err(Status::from)?;
 
         let responses: Vec<ListHostsResponse> = entries
             .into_iter()
@@ -142,7 +138,7 @@ impl HostsServiceImpl {
             .commands
             .search_hosts(&req.query)
             .await
-            .map_err(command_error_to_status)?;
+            .map_err(Status::from)?;
 
         let responses: Vec<SearchHostsResponse> = entries
             .into_iter()
@@ -155,16 +151,22 @@ impl HostsServiceImpl {
     }
 }
 
-/// Convert CommandError to gRPC Status
-pub fn command_error_to_status(err: CommandError) -> Status {
-    match err {
-        CommandError::ValidationFailed(msg) => Status::invalid_argument(msg),
-        CommandError::DuplicateEntry(msg) => Status::already_exists(msg),
-        CommandError::NotFound(msg) => Status::not_found(msg),
-        CommandError::Database(e) => Status::internal(format!("Database error: {}", e)),
-        CommandError::FileGeneration(msg) => {
-            Status::internal(format!("File generation error: {}", msg))
+/// Convert CommandError to gRPC Status using idiomatic From trait
+///
+/// This centralized implementation ensures consistent error mapping across
+/// all gRPC service methods. Each CommandError variant maps to the appropriate
+/// gRPC status code per the error handling guidelines in CLAUDE.md.
+impl From<CommandError> for Status {
+    fn from(err: CommandError) -> Self {
+        match err {
+            CommandError::ValidationFailed(msg) => Status::invalid_argument(msg),
+            CommandError::DuplicateEntry(msg) => Status::already_exists(msg),
+            CommandError::NotFound(msg) => Status::not_found(msg),
+            CommandError::Database(e) => Status::internal(format!("Database error: {}", e)),
+            CommandError::FileGeneration(msg) => {
+                Status::internal(format!("File generation error: {}", msg))
+            }
+            CommandError::Internal(msg) => Status::internal(msg),
         }
-        CommandError::Internal(msg) => Status::internal(msg),
     }
 }

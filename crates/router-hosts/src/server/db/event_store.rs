@@ -532,6 +532,250 @@ impl EventStore {
 
         Ok(count)
     }
+
+    /// Append multiple events atomically to the store
+    ///
+    /// This method ensures that either ALL events are committed or NONE are,
+    /// preventing partial updates from race conditions. This is critical for
+    /// multi-field updates where several events need to be applied together.
+    ///
+    /// # Optimistic Concurrency
+    ///
+    /// The `expected_version` parameter implements optimistic locking for the first event:
+    /// - Pass `None` when creating a new aggregate (first event)
+    /// - Pass `Some(n)` where `n` is the last known version number
+    /// - Returns `ConcurrentWriteConflict` if another write occurred
+    /// - Subsequent events use incremented versions automatically
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection
+    /// * `aggregate_id` - ID of the aggregate (host entry)
+    /// * `events` - Domain events to store (must be non-empty)
+    /// * `expected_version` - Expected current version for optimistic locking
+    /// * `created_by` - Optional user/system identifier
+    ///
+    /// # Returns
+    ///
+    /// Returns the stored `EventEnvelope`s with generated event_ids and versions
+    pub fn append_events(
+        db: &Database,
+        aggregate_id: &Ulid,
+        events: Vec<HostEvent>,
+        expected_version: Option<i64>,
+        created_by: Option<String>,
+    ) -> DatabaseResult<Vec<EventEnvelope>> {
+        if events.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Begin transaction for atomic multi-event insert
+        db.conn().execute("BEGIN TRANSACTION", []).map_err(|e| {
+            DatabaseError::QueryFailed(format!("Failed to begin transaction: {}", e))
+        })?;
+
+        // Get current version for this aggregate
+        let current_version = match Self::get_current_version(db, aggregate_id) {
+            Ok(v) => v,
+            Err(e) => {
+                db.conn()
+                    .execute("ROLLBACK", [])
+                    .inspect_err(|e| {
+                        error!("Failed to rollback transaction: {}", e);
+                    })
+                    .ok();
+                return Err(e);
+            }
+        };
+
+        // Verify expected version matches (optimistic concurrency control)
+        if expected_version != current_version {
+            db.conn()
+                .execute("ROLLBACK", [])
+                .inspect_err(|e| {
+                    error!("Failed to rollback transaction: {}", e);
+                })
+                .ok();
+            return Err(DatabaseError::ConcurrentWriteConflict(format!(
+                "Expected version {:?} but current version is {:?} for aggregate {}",
+                expected_version, current_version, aggregate_id
+            )));
+        }
+
+        let mut envelopes = Vec::with_capacity(events.len());
+        let mut version = current_version.unwrap_or(0);
+        let now = Utc::now();
+
+        for event in events {
+            version += 1;
+            let event_id = Ulid::new();
+
+            // Build event data and extract typed columns
+            let (ip_address_opt, hostname_opt, event_timestamp, event_data) = match &event {
+                HostEvent::HostCreated {
+                    ip_address,
+                    hostname,
+                    comment,
+                    tags,
+                    created_at,
+                } => (
+                    Some(ip_address.clone()),
+                    Some(hostname.clone()),
+                    *created_at,
+                    EventData {
+                        comment: comment.clone(),
+                        tags: Some(tags.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::IpAddressChanged {
+                    old_ip,
+                    new_ip,
+                    changed_at,
+                } => (
+                    Some(new_ip.clone()),
+                    None,
+                    *changed_at,
+                    EventData {
+                        previous_ip: Some(old_ip.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::HostnameChanged {
+                    old_hostname,
+                    new_hostname,
+                    changed_at,
+                } => (
+                    None,
+                    Some(new_hostname.clone()),
+                    *changed_at,
+                    EventData {
+                        previous_hostname: Some(old_hostname.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::CommentUpdated {
+                    old_comment,
+                    new_comment,
+                    updated_at,
+                } => (
+                    None,
+                    None,
+                    *updated_at,
+                    EventData {
+                        comment: new_comment.clone(),
+                        previous_comment: old_comment.clone(),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::TagsModified {
+                    old_tags,
+                    new_tags,
+                    modified_at,
+                } => (
+                    None,
+                    None,
+                    *modified_at,
+                    EventData {
+                        tags: Some(new_tags.clone()),
+                        previous_tags: Some(old_tags.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::HostDeleted {
+                    ip_address,
+                    hostname,
+                    deleted_at,
+                    reason,
+                } => (
+                    Some(ip_address.clone()),
+                    Some(hostname.clone()),
+                    *deleted_at,
+                    EventData {
+                        deleted_reason: reason.clone(),
+                        ..Default::default()
+                    },
+                ),
+            };
+
+            // Serialize EventData to JSON
+            let event_data_json = match serde_json::to_string(&event_data) {
+                Ok(json) => json,
+                Err(e) => {
+                    db.conn()
+                        .execute("ROLLBACK", [])
+                        .inspect_err(|e| {
+                            error!("Failed to rollback transaction: {}", e);
+                        })
+                        .ok();
+                    return Err(DatabaseError::InvalidData(format!(
+                        "Failed to serialize event data: {}",
+                        e
+                    )));
+                }
+            };
+
+            // Insert event
+            if let Err(e) = db.conn().execute(
+                r#"
+                INSERT INTO host_events (
+                    event_id, aggregate_id, event_type, event_version,
+                    ip_address, hostname, event_timestamp, metadata,
+                    created_at, created_by, expected_version
+                ) VALUES (?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
+                "#,
+                [
+                    &event_id.to_string() as &dyn duckdb::ToSql,
+                    &aggregate_id.to_string(),
+                    &event.event_type(),
+                    &version,
+                    &ip_address_opt as &dyn duckdb::ToSql,
+                    &hostname_opt as &dyn duckdb::ToSql,
+                    &event_timestamp.timestamp_micros(),
+                    &event_data_json as &dyn duckdb::ToSql,
+                    &now.timestamp_micros(),
+                    &created_by.as_deref().unwrap_or("system"),
+                    &expected_version,
+                ],
+            ) {
+                db.conn()
+                    .execute("ROLLBACK", [])
+                    .inspect_err(|e| {
+                        error!("Failed to rollback transaction: {}", e);
+                    })
+                    .ok();
+                let error_str = e.to_string();
+                if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
+                    return Err(DatabaseError::ConcurrentWriteConflict(format!(
+                        "Concurrent write detected for aggregate {} at version {}",
+                        aggregate_id, version
+                    )));
+                } else {
+                    return Err(DatabaseError::QueryFailed(format!(
+                        "Failed to insert event: {}",
+                        e
+                    )));
+                }
+            }
+
+            envelopes.push(EventEnvelope {
+                event_id,
+                aggregate_id: *aggregate_id,
+                event,
+                event_version: version,
+                created_at: now,
+                created_by: created_by.clone(),
+                metadata: None,
+            });
+        }
+
+        // Commit transaction - all events or none
+        db.conn().execute("COMMIT", []).map_err(|e| {
+            DatabaseError::QueryFailed(format!("Failed to commit transaction: {}", e))
+        })?;
+
+        Ok(envelopes)
+    }
 }
 
 #[cfg(test)]
@@ -1270,5 +1514,177 @@ mod tests {
             result.unwrap_err(),
             DatabaseError::DuplicateEntry(_)
         ));
+    }
+
+    // Tests for append_events (atomic batch insertion)
+
+    #[test]
+    fn test_append_events_empty_list() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        let result = EventStore::append_events(&db, &aggregate_id, vec![], None, None);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_append_events_single_event() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        let events = vec![HostEvent::HostCreated {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "single.local".to_string(),
+            comment: None,
+            tags: vec![],
+            created_at: Utc::now(),
+        }];
+
+        let result = EventStore::append_events(&db, &aggregate_id, events, None, None);
+        assert!(result.is_ok());
+
+        let envelopes = result.unwrap();
+        assert_eq!(envelopes.len(), 1);
+        assert_eq!(envelopes[0].event_version, 1);
+    }
+
+    #[test]
+    fn test_append_events_multiple_atomic() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // First create the host
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "test.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Now update multiple fields atomically
+        let events = vec![
+            HostEvent::IpAddressChanged {
+                old_ip: "192.168.1.1".to_string(),
+                new_ip: "192.168.1.2".to_string(),
+                changed_at: Utc::now(),
+            },
+            HostEvent::HostnameChanged {
+                old_hostname: "test.local".to_string(),
+                new_hostname: "updated.local".to_string(),
+                changed_at: Utc::now(),
+            },
+            HostEvent::CommentUpdated {
+                old_comment: None,
+                new_comment: Some("Updated".to_string()),
+                updated_at: Utc::now(),
+            },
+        ];
+
+        let result = EventStore::append_events(&db, &aggregate_id, events, Some(1), None);
+        assert!(result.is_ok());
+
+        let envelopes = result.unwrap();
+        assert_eq!(envelopes.len(), 3);
+        assert_eq!(envelopes[0].event_version, 2);
+        assert_eq!(envelopes[1].event_version, 3);
+        assert_eq!(envelopes[2].event_version, 4);
+
+        // Verify all events were stored
+        let loaded = EventStore::load_events(&db, &aggregate_id).unwrap();
+        assert_eq!(loaded.len(), 4);
+    }
+
+    #[test]
+    fn test_append_events_optimistic_concurrency() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // Create host
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "test.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Try to append events with wrong expected version
+        let events = vec![HostEvent::CommentUpdated {
+            old_comment: None,
+            new_comment: Some("Test".to_string()),
+            updated_at: Utc::now(),
+        }];
+
+        let result = EventStore::append_events(&db, &aggregate_id, events, Some(5), None);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            DatabaseError::ConcurrentWriteConflict(_)
+        ));
+
+        // Verify no events were added (atomicity)
+        let loaded = EventStore::load_events(&db, &aggregate_id).unwrap();
+        assert_eq!(loaded.len(), 1); // Only the original HostCreated
+    }
+
+    #[test]
+    fn test_append_events_all_or_nothing() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // Create host
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "test.local".to_string(),
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Append multiple events successfully
+        let events = vec![
+            HostEvent::CommentUpdated {
+                old_comment: None,
+                new_comment: Some("First update".to_string()),
+                updated_at: Utc::now(),
+            },
+            HostEvent::TagsModified {
+                old_tags: vec![],
+                new_tags: vec!["tag1".to_string()],
+                modified_at: Utc::now(),
+            },
+        ];
+
+        let result = EventStore::append_events(&db, &aggregate_id, events, Some(1), None);
+        assert!(result.is_ok());
+
+        // Verify both events were stored atomically
+        let loaded = EventStore::load_events(&db, &aggregate_id).unwrap();
+        assert_eq!(loaded.len(), 3);
+        assert!(matches!(loaded[1].event, HostEvent::CommentUpdated { .. }));
+        assert!(matches!(loaded[2].event, HostEvent::TagsModified { .. }));
     }
 }
