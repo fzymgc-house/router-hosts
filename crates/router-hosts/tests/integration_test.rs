@@ -35,13 +35,16 @@ use router_hosts_common::proto::{
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tonic::transport::{Channel, Server};
 
 /// Start a test server on a random port and return the address
 async fn start_test_server() -> SocketAddr {
-    //  Use a fixed port range to avoid conflicts
-    let addr = "127.0.0.1:50051".parse::<SocketAddr>().unwrap();
+    // Bind to port 0 to let the OS assign an available port
+    // This prevents port conflicts when tests run in parallel
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener); // Release the port for the server to use
 
     // Create in-memory database
     let db = Arc::new(Database::in_memory().unwrap());

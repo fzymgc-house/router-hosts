@@ -67,15 +67,30 @@ fn default_timeout_minutes() -> u64 {
 ///
 /// # Security Warning
 ///
-/// These hooks execute shell commands with elevated privileges. To prevent command injection:
-/// - NEVER interpolate user-controlled data into hook commands
-/// - Use environment variables to pass context (entry count, snapshot ID, etc.)
-/// - Implement 30-second timeout per CLAUDE.md
-/// - Use `std::process::Command` instead of `sh -c` for execution
-/// - Log all hook executions for audit trails
-/// - Consider running hooks in a restricted shell environment
+/// **CRITICAL**: Hook commands execute as shell scripts with the same privileges as
+/// the router-hosts server process. The configuration file MUST be:
+/// - Owned by root or the service account
+/// - Not writable by unprivileged users
+/// - Located in a protected directory (e.g., /etc/router-hosts/)
 ///
-/// Example safe usage:
+/// If an attacker can modify the config file, they can execute arbitrary commands.
+///
+/// ## Safe Usage Guidelines
+///
+/// - NEVER interpolate user-controlled data into hook commands
+/// - Use environment variables to pass context (entry count, error message, etc.)
+/// - Hooks have a 30-second timeout to prevent DoS
+/// - All hook executions are logged via tracing
+/// - Hook failures do NOT fail the overall operation (hosts file is already updated)
+///
+/// ## Available Environment Variables
+///
+/// - `ROUTER_HOSTS_EVENT`: "success" or "failure"
+/// - `ROUTER_HOSTS_ENTRY_COUNT`: Number of host entries
+/// - `ROUTER_HOSTS_ERROR`: Error message (failure hooks only)
+///
+/// ## Example Configuration
+///
 /// ```toml
 /// [hooks]
 /// on_success = ["systemctl reload dnsmasq"]

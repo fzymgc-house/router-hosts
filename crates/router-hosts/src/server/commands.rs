@@ -15,7 +15,6 @@ use thiserror::Error;
 use ulid::Ulid;
 
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum CommandError {
     #[error("Validation failed: {0}")]
     ValidationFailed(String),
@@ -99,32 +98,29 @@ impl CommandHandler {
         validate_hostname(&hostname).map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
 
         let aggregate_id = Ulid::new();
+        let now = Utc::now();
         let event = HostEvent::HostCreated {
-            ip_address,
-            hostname,
-            comment,
-            tags,
-            created_at: Utc::now(),
+            ip_address: ip_address.clone(),
+            hostname: hostname.clone(),
+            comment: comment.clone(),
+            tags: tags.clone(),
+            created_at: now,
         };
 
         if let Some(ref token) = edit_token {
             // Stage the event
             self.session_mgr.stage_event(token, aggregate_id, event)?;
-            // Return placeholder entry (not yet committed)
-            return self.get_host(aggregate_id).await.map(|opt| {
-                opt.unwrap_or_else(|| {
-                    // Return a stub since event is staged, not committed
-                    HostEntry {
-                        id: aggregate_id,
-                        ip_address: String::new(),
-                        hostname: String::new(),
-                        comment: None,
-                        tags: vec![],
-                        created_at: Utc::now(),
-                        updated_at: Utc::now(),
-                        version: 0,
-                    }
-                })
+            // Return a preview of the entry (not yet committed to DB)
+            // This allows callers to see what will be created when the session is committed
+            return Ok(HostEntry {
+                id: aggregate_id,
+                ip_address,
+                hostname,
+                comment,
+                tags,
+                created_at: now,
+                updated_at: now,
+                version: 0, // Will be 1 after commit
             });
         }
 
