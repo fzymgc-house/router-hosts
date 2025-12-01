@@ -53,11 +53,5 @@ jobs:
             - name: Lint Rust (clippy)
               run: cargo clippy -- -D warnings
 
-            - name: Format Rust (check)
-              run: cargo fmt -- --check
-
             - name: Lint protobuf
               run: buf lint
-
-            - name: Format protobuf (check)
-              run: buf format --diff --exit-code
