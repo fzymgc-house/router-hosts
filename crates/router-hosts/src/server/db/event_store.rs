@@ -960,8 +960,8 @@ mod tests {
             ..
         } = &events[0].event
         {
-            // DuckDB INET type normalizes IPv6 addresses (removes leading zeros, compresses)
-            assert_eq!(ip_address, "2001:db8:85a3::8a2e:370:7334");
+            // IP addresses are stored as VARCHAR (validation at app layer)
+            assert_eq!(ip_address, "2001:0db8:85a3:0000:0000:8a2e:0370:7334");
             assert_eq!(
                 hostname,
                 "very-long-hostname-with-many-parts.subdomain.example.com"

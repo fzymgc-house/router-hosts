@@ -85,38 +85,11 @@ impl Database {
     fn initialize_schema(&mut self) -> DatabaseResult<()> {
         let conn = self.conn.lock();
 
-        // Install and load JSON extension
-        // Use INSTALL with FORCE to download if needed, or just load if already installed
-        if let Err(e) = conn.execute("INSTALL json", []) {
-            // If install fails, try to load anyway (might already be installed)
-            if let Err(load_err) = conn.execute("LOAD json", []) {
-                return Err(DatabaseError::SchemaInitFailed(format!(
-                    "Failed to setup json extension. Install error: {}. Load error: {}",
-                    e, load_err
-                )));
-            }
-        } else {
-            // Install succeeded, now load
-            conn.execute("LOAD json", []).map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to load json extension: {}", e))
-            })?;
-        }
+        // JSON extension is included via duckdb crate's "json" feature flag
+        // No need to INSTALL/LOAD - it's compiled in
 
-        // Install and load INET extension for IP address types
-        if let Err(e) = conn.execute("INSTALL inet", []) {
-            // If install fails, try to load anyway (might already be installed)
-            if let Err(load_err) = conn.execute("LOAD inet", []) {
-                return Err(DatabaseError::SchemaInitFailed(format!(
-                    "Failed to setup inet extension. Install error: {}. Load error: {}",
-                    e, load_err
-                )));
-            }
-        } else {
-            // Install succeeded, now load
-            conn.execute("LOAD inet", []).map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to load inet extension: {}", e))
-            })?;
-        }
+        // Use VARCHAR for IP addresses instead of INET type to avoid extension dependency
+        // Validation happens at the application layer via router_hosts_common::validation
 
         // Event store - append-only immutable log of all domain events
         // This is the source of truth for all state changes
@@ -131,7 +104,7 @@ impl Database {
                     event_type VARCHAR NOT NULL,
                     event_version INTEGER NOT NULL,
                     -- Current state in typed columns for queryability
-                    ip_address INET,
+                    ip_address VARCHAR,
                     hostname VARCHAR,
                     event_timestamp TIMESTAMP NOT NULL,
                     -- Event metadata: tags, comments, previous values (old_ip, old_hostname, etc.)
