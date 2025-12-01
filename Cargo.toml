@@ -20,8 +20,8 @@ prost = "0.12"
 prost-types = "0.12"
 tonic-build = "0.11"
 
-# Bundled protoc for build (eliminates system protoc requirement)
-protobuf-src = "1.1"
+# Download pre-built protoc binary (much faster than compiling from source)
+dlprotoc = "0.4"
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
