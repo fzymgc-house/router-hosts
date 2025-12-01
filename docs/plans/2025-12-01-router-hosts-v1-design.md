@@ -62,8 +62,13 @@ The logical view of a host entry (reconstructed from events):
 **Optimistic concurrency:**
 - Each entry has a `version` field incremented on every change
 - Updates require the current version; mismatches return `ABORTED`
-- Clients should retry with fresh data on conflict
 - `GetHost` returns the current version for use in subsequent updates
+
+**Conflict resolution (CLI):**
+- On version mismatch, CLI shows diff between local changes and server state
+- Interactive prompt: "Entry was modified. Apply your changes to new version? [y/n]"
+- Use `--non-interactive` flag to fail immediately on conflict (for scripts)
+- Programmatic clients should implement retry with exponential backoff (max 3 attempts)
 
 ### Domain Events
 
@@ -112,6 +117,17 @@ All operations use dedicated request/response message types for API evolution. N
 | `ExportHosts` | Server streaming | Export entries in specified format (hosts/json/csv) |
 
 **Note:** Bulk operations use `ImportHosts` streaming rather than a separate `BulkAddHosts` RPC. For adding multiple entries programmatically, use multiple `AddHost` calls or import from a file.
+
+**Import conflict handling:**
+- Default: Skip existing IP+hostname combinations (idempotent imports)
+- `--replace` flag: Update existing entries with imported data
+- `--strict` flag: Fail on any duplicate
+
+**Progress responses include:**
+- Entries processed / total
+- Entries created
+- Entries skipped (duplicates)
+- Entries failed (validation errors)
 
 ### Snapshots
 
@@ -200,7 +216,8 @@ router-hosts host list
 router-hosts host search nas
 
 # Update a host (by ID from list output)
-router-hosts host update 01JF... --ip 192.168.1.11
+# All fields optional: --ip, --hostname, --comment, --tags
+router-hosts host update 01JF... --ip 192.168.1.11 --comment "Updated server"
 
 # Export to JSON for backup
 router-hosts host export --format json > hosts-backup.json
@@ -306,6 +323,11 @@ router-hosts host export --format json > backup.json
 # Future: router-hosts admin compact --before-date 2025-01-01
 ```
 
+**When to compact:**
+- Monitor DuckDB file size (consider compaction at 100MB+)
+- Track event count via `router-hosts admin stats` (future command)
+- Server logs warning when event count exceeds 100K
+
 **Future enhancement:** Automatic compaction that:
 - Creates a snapshot of current state
 - Replaces event history with synthetic `HostCreated` events
@@ -363,6 +385,14 @@ docker run -d \
   -v /path/to/data:/var/lib/router-hosts \
   -v /etc/hosts:/etc/hosts \
   -p 50051:50051 \
+  router-hosts:latest
+
+# Or with host networking (simpler for local deployments)
+docker run -d \
+  --network host \
+  -v /path/to/config:/etc/router-hosts:ro \
+  -v /path/to/data:/var/lib/router-hosts \
+  -v /etc/hosts:/etc/hosts \
   router-hosts:latest
 ```
 
@@ -428,6 +458,18 @@ dns_credentials_file = "/etc/router-hosts/dns-credentials.toml"
 
 DNS-01 provider support: Cloudflare, Route53, Google Cloud DNS, RFC2136 (dynamic DNS).
 
+#### ACME Initial Certificate Acquisition
+
+On first server start with ACME mode:
+1. Server attempts ACME challenge before starting gRPC service
+2. If successful: Server starts with acquired certificate
+3. If failed: Server exits with error (requires manual intervention)
+
+**Bootstrap strategy:** For initial setup where DNS/firewall isn't ready:
+1. Start with `mode = "manual"` using self-signed or internal CA certs
+2. Configure DNS/firewall for ACME challenge
+3. Switch to `mode = "acme"` and restart server
+
 #### ACME Certificate Renewal
 
 Certificates are automatically renewed before expiration:
@@ -458,6 +500,12 @@ Certificates are automatically renewed before expiration:
 - Comments appear inline after `#`
 - Tags shown in brackets at end of comment: `[tag1, tag2]`
 - Tab-separated columns for readability
+
+**Edge cases:**
+- Comments truncated at 200 characters (prevents line-length issues)
+- Empty tags array: no bracket notation in output
+- Newlines in comments: rejected during validation (single-line only)
+- Hash characters in comments: escaped or rejected during validation
 
 ### Atomic Write Process
 
@@ -551,7 +599,7 @@ router-hosts/
 │   │   │       └── service/      # gRPC handlers
 │   │   │           ├── mod.rs
 │   │   │           ├── hosts.rs
-│   │   │           ├── bulk.rs
+│   │   │           ├── import_export.rs
 │   │   │           └── snapshots.rs
 │   │   └── tests/
 │   │       └── integration_test.rs
