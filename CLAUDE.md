@@ -156,7 +156,19 @@ cargo tarpaulin --workspace --fail-under 80
 
 See `docs/plans/2025-12-01-router-hosts-v1-design.md` for complete design specification.
 
-See `docs/plans/2025-12-01-v1-tasks.md` for remaining implementation tasks, including proto file alignment work.
+### Issue Tracking
+
+**All tasks are tracked in GitHub Issues.** Use `gh issue list` to see open issues.
+
+When completing work:
+- Reference issues in commit messages: `Fixes #123`, `Closes #456`
+- Close issues via PR merge or manual close after verification
+- Create new issues for discovered work or follow-up tasks
+
+Key issue categories:
+- **High priority:** Core features blocking v1.0 release
+- **Medium priority:** Important but not blocking
+- **Low priority:** Nice-to-have improvements
 
 ## Build and Development Commands
 

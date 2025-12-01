@@ -94,6 +94,8 @@ message UpdateHostRequest {
   // Expected version for optimistic concurrency control.
   // If provided and doesn't match current version, returns ABORTED.
   // Treat as opaque - use the value from GetHost response unchanged.
+  // Example: Get host, receive version "1", update with expected_version "1".
+  // Note: Empty string is invalid and will return INVALID_ARGUMENT.
   optional string expected_version = 6;
 }
 
