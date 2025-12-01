@@ -421,3 +421,46 @@ async fn test_export_hosts_invalid_format() {
     let status = result.unwrap_err();
     assert_eq!(status.code(), tonic::Code::InvalidArgument);
 }
+
+#[tokio::test]
+async fn test_export_hosts_csv_format() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add a host with a comment containing a comma
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            comment: Some("Hello, world".to_string()),
+            tags: vec!["tag1".to_string(), "tag2".to_string()],
+        })
+        .await
+        .unwrap();
+
+    // Export as CSV
+    let mut stream = client
+        .export_hosts(ExportHostsRequest {
+            format: "csv".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut chunks = Vec::new();
+    while let Some(response) = stream.message().await.unwrap() {
+        chunks.push(response.chunk);
+    }
+
+    // CSV has header + 1 entry = 2 chunks
+    assert_eq!(chunks.len(), 2);
+
+    // First chunk should be header
+    let header = String::from_utf8(chunks[0].clone()).unwrap();
+    assert_eq!(header, "ip_address,hostname,comment,tags\n");
+
+    // Second chunk should have properly escaped comment
+    let entry = String::from_utf8(chunks[1].clone()).unwrap();
+    assert!(entry.contains("\"Hello, world\"")); // Comma should be quoted
+    assert!(entry.contains("tag1;tag2"));
+}

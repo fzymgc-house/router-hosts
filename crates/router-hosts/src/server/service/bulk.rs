@@ -81,7 +81,8 @@ impl HostsServiceImpl {
         for entry in entries {
             let chunk = match format {
                 ExportFormat::Hosts => format_hosts_entry(&entry),
-                ExportFormat::Json => format_json_entry(&entry),
+                ExportFormat::Json => format_json_entry(&entry)
+                    .map_err(|e| Status::internal(format!("Failed to format entry: {}", e)))?,
                 ExportFormat::Csv => format_csv_entry(&entry),
             };
             responses.push(ExportHostsResponse { chunk });

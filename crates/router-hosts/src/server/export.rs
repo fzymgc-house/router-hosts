@@ -43,13 +43,12 @@ pub fn format_hosts_entry(entry: &HostEntry) -> Vec<u8> {
 
     if has_comment || has_tags {
         line.push_str("\t# ");
-        if let Some(comment) = entry.comment.as_ref() {
-            if !comment.is_empty() {
-                line.push_str(comment);
-            }
+        if has_comment {
+            // Safe to unwrap since has_comment guarantees Some with non-empty content
+            line.push_str(entry.comment.as_ref().unwrap());
         }
         if has_tags {
-            if has_comment && entry.comment.as_ref().is_some_and(|c| !c.is_empty()) {
+            if has_comment {
                 line.push(' ');
             }
             line.push('[');
@@ -72,8 +71,20 @@ pub fn format_hosts_header(count: usize) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Error type for export formatting failures
+#[derive(Debug)]
+pub struct ExportError(pub String);
+
+impl std::fmt::Display for ExportError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "export error: {}", self.0)
+    }
+}
+
+impl std::error::Error for ExportError {}
+
 /// Format a host entry as JSON (one line, JSONL format)
-pub fn format_json_entry(entry: &HostEntry) -> Vec<u8> {
+pub fn format_json_entry(entry: &HostEntry) -> Result<Vec<u8>, ExportError> {
     use serde_json::json;
 
     let obj = json!({
@@ -87,9 +98,10 @@ pub fn format_json_entry(entry: &HostEntry) -> Vec<u8> {
         "version": entry.version.to_string(),
     });
 
-    let mut bytes = serde_json::to_vec(&obj).expect("JSON serialization should not fail");
+    let mut bytes = serde_json::to_vec(&obj)
+        .map_err(|e| ExportError(format!("JSON serialization failed: {}", e)))?;
     bytes.push(b'\n');
-    bytes
+    Ok(bytes)
 }
 
 /// Format CSV header row
@@ -102,13 +114,15 @@ pub fn format_csv_entry(entry: &HostEntry) -> Vec<u8> {
     let comment = entry.comment.as_deref().unwrap_or("");
     let tags = entry.tags.join(";");
 
-    // Quote fields that might contain commas or quotes
+    // Escape all fields for defensive CSV formatting
+    let ip_escaped = escape_csv_field(&entry.ip_address);
+    let hostname_escaped = escape_csv_field(&entry.hostname);
     let comment_escaped = escape_csv_field(comment);
     let tags_escaped = escape_csv_field(&tags);
 
     format!(
         "{},{},{},{}\n",
-        entry.ip_address, entry.hostname, comment_escaped, tags_escaped
+        ip_escaped, hostname_escaped, comment_escaped, tags_escaped
     )
     .into_bytes()
 }
@@ -182,7 +196,7 @@ mod tests {
     #[test]
     fn test_format_json_entry() {
         let entry = make_entry("192.168.1.10", "server.local", Some("Test"), vec!["tag1"]);
-        let output = String::from_utf8(format_json_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
 
         // Parse back to verify it's valid JSON
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -195,7 +209,7 @@ mod tests {
     #[test]
     fn test_format_json_entry_null_comment() {
         let entry = make_entry("192.168.1.10", "server.local", None, vec![]);
-        let output = String::from_utf8(format_json_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
         assert!(parsed["comment"].is_null());
@@ -226,5 +240,29 @@ mod tests {
     fn test_csv_header() {
         let header = String::from_utf8(format_csv_header()).unwrap();
         assert_eq!(header, "ip_address,hostname,comment,tags\n");
+    }
+
+    #[test]
+    fn test_format_csv_entry_with_quotes_in_comment() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            Some("He said \"hello\""),
+            vec![],
+        );
+        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        // Quotes should be escaped by doubling them
+        assert_eq!(
+            output,
+            "192.168.1.10,server.local,\"He said \"\"hello\"\"\",\n"
+        );
+    }
+
+    #[test]
+    fn test_format_hosts_entry_empty_comment() {
+        // Empty string comment should not add comment marker
+        let entry = make_entry("192.168.1.10", "server.local", Some(""), vec![]);
+        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        assert_eq!(output, "192.168.1.10\tserver.local\n");
     }
 }
