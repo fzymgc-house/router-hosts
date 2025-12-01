@@ -124,6 +124,11 @@ impl CommandHandler {
 
         // Check expected version if provided (optimistic concurrency)
         if let Some(expected) = expected_version {
+            if expected.is_empty() {
+                return Err(CommandError::ValidationFailed(
+                    "expected_version cannot be empty".to_string(),
+                ));
+            }
             let actual = current_version.to_string();
             if expected != actual {
                 return Err(CommandError::VersionConflict { expected, actual });
@@ -637,6 +642,38 @@ mod tests {
         assert!(
             matches!(result, Err(CommandError::DuplicateEntry(_))),
             "Expected DuplicateEntry error, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_update_empty_expected_version() {
+        let handler = setup();
+        let entry = handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "test.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        // Update with empty expected_version should fail validation
+        let result = handler
+            .update_host(
+                entry.id,
+                Some("192.168.1.2".to_string()),
+                None,
+                None,
+                None,
+                Some(String::new()),
+            )
+            .await;
+
+        assert!(
+            matches!(result, Err(CommandError::ValidationFailed(_))),
+            "Expected ValidationFailed error for empty version, got {:?}",
             result
         );
     }
