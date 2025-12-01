@@ -3,7 +3,6 @@
 //! This module implements the server-side functionality including:
 //! - gRPC service with mTLS
 //! - Database management with event sourcing
-//! - Edit session management
 //! - /etc/hosts file generation
 
 pub mod commands;
@@ -12,7 +11,6 @@ pub mod db;
 pub mod hooks;
 pub mod hosts_file;
 pub mod service;
-pub mod session;
 
 use crate::server::commands::CommandHandler;
 use crate::server::config::Config;
@@ -20,7 +18,6 @@ use crate::server::db::Database;
 use crate::server::hooks::HookExecutor;
 use crate::server::hosts_file::HostsFileGenerator;
 use crate::server::service::HostsServiceImpl;
-use crate::server::session::SessionManager;
 use anyhow::Result;
 use clap::Parser;
 use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
@@ -99,11 +96,6 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
     // Initialize database
     let db = Arc::new(Database::new(&config.database.path)?);
 
-    // Create session manager (timeout in minutes)
-    let session_mgr = Arc::new(SessionManager::new(
-        config.edit_session.timeout_minutes as i64,
-    ));
-
     // Create hook executor (timeout in seconds, default 30s)
     let hooks = Arc::new(HookExecutor::new(
         config.hooks.on_success.clone(),
@@ -119,17 +111,12 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
     // Create command handler
     let commands = Arc::new(CommandHandler::new(
         Arc::clone(&db),
-        Arc::clone(&session_mgr),
         Arc::clone(&hosts_file),
         Arc::clone(&hooks),
     ));
 
     // Create service implementation
-    let service = HostsServiceImpl::new(
-        Arc::clone(&commands),
-        Arc::clone(&session_mgr),
-        Arc::clone(&db),
-    );
+    let service = HostsServiceImpl::new(Arc::clone(&commands), Arc::clone(&db));
 
     // Load TLS certificates
     info!("Loading TLS certificates");

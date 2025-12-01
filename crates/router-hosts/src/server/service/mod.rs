@@ -5,22 +5,19 @@
 
 mod bulk;
 mod hosts;
-mod sessions;
 mod snapshots;
 
 use crate::server::commands::CommandHandler;
 use crate::server::db::Database;
-use crate::server::session::SessionManager;
 use router_hosts_common::proto::hosts_service_server::HostsService;
 use router_hosts_common::proto::{
-    AddHostRequest, AddHostResponse, BulkAddHostsRequest, BulkAddHostsResponse, CancelEditRequest,
-    CancelEditResponse, CreateSnapshotRequest, CreateSnapshotResponse, DeleteHostRequest,
-    DeleteHostResponse, DeleteSnapshotRequest, DeleteSnapshotResponse, ExportHostsRequest,
-    ExportHostsResponse, FinishEditRequest, FinishEditResponse, GetHostRequest, GetHostResponse,
-    ImportHostsRequest, ImportHostsResponse, ListHostsRequest, ListHostsResponse,
-    ListSnapshotsRequest, ListSnapshotsResponse, RollbackToSnapshotRequest,
-    RollbackToSnapshotResponse, SearchHostsRequest, SearchHostsResponse, StartEditRequest,
-    StartEditResponse, UpdateHostRequest, UpdateHostResponse,
+    AddHostRequest, AddHostResponse, BulkAddHostsRequest, BulkAddHostsResponse,
+    CreateSnapshotRequest, CreateSnapshotResponse, DeleteHostRequest, DeleteHostResponse,
+    DeleteSnapshotRequest, DeleteSnapshotResponse, ExportHostsRequest, ExportHostsResponse,
+    GetHostRequest, GetHostResponse, ImportHostsRequest, ImportHostsResponse, ListHostsRequest,
+    ListHostsResponse, ListSnapshotsRequest, ListSnapshotsResponse, RollbackToSnapshotRequest,
+    RollbackToSnapshotResponse, SearchHostsRequest, SearchHostsResponse, UpdateHostRequest,
+    UpdateHostResponse,
 };
 use std::pin::Pin;
 use std::sync::Arc;
@@ -32,9 +29,6 @@ use tonic::{Request, Response, Status, Streaming};
 pub struct HostsServiceImpl {
     /// Command handler for business logic
     pub(crate) commands: Arc<CommandHandler>,
-    /// Session manager for edit sessions (used by snapshot handlers)
-    #[allow(dead_code)]
-    pub(crate) session_mgr: Arc<SessionManager>,
     /// Database connection (used by snapshot handlers)
     #[allow(dead_code)]
     pub(crate) db: Arc<Database>,
@@ -42,16 +36,8 @@ pub struct HostsServiceImpl {
 
 impl HostsServiceImpl {
     /// Create a new service instance
-    pub fn new(
-        commands: Arc<CommandHandler>,
-        session_mgr: Arc<SessionManager>,
-        db: Arc<Database>,
-    ) -> Self {
-        Self {
-            commands,
-            session_mgr,
-            db,
-        }
+    pub fn new(commands: Arc<CommandHandler>, db: Arc<Database>) -> Self {
+        Self { commands, db }
     }
 }
 
@@ -111,28 +97,6 @@ impl HostsService for HostsServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 
-    // Edit sessions
-    async fn start_edit(
-        &self,
-        request: Request<StartEditRequest>,
-    ) -> Result<Response<StartEditResponse>, Status> {
-        self.handle_start_edit(request).await
-    }
-
-    async fn finish_edit(
-        &self,
-        request: Request<FinishEditRequest>,
-    ) -> Result<Response<FinishEditResponse>, Status> {
-        self.handle_finish_edit(request).await
-    }
-
-    async fn cancel_edit(
-        &self,
-        request: Request<CancelEditRequest>,
-    ) -> Result<Response<CancelEditResponse>, Status> {
-        self.handle_cancel_edit(request).await
-    }
-
     // Bulk operations (bidirectional streaming)
     type BulkAddHostsStream = ResponseStream<BulkAddHostsResponse>;
 
@@ -150,13 +114,7 @@ impl HostsService for HostsServiceImpl {
                 match result {
                     Ok(req) => {
                         let response = match commands
-                            .add_host(
-                                req.ip_address,
-                                req.hostname,
-                                req.comment,
-                                req.tags,
-                                req.edit_token,
-                            )
+                            .add_host(req.ip_address, req.hostname, req.comment, req.tags)
                             .await
                         {
                             Ok(entry) => BulkAddHostsResponse {

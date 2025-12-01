@@ -20,13 +20,7 @@ impl HostsServiceImpl {
 
         let entry = self
             .commands
-            .add_host(
-                req.ip_address,
-                req.hostname,
-                req.comment,
-                req.tags,
-                req.edit_token,
-            )
+            .add_host(req.ip_address, req.hostname, req.comment, req.tags)
             .await
             .map_err(command_error_to_status)?;
 
@@ -89,7 +83,6 @@ impl HostsServiceImpl {
                 req.hostname,   // Already Option<String> from proto
                 comment,
                 tags,
-                req.edit_token,
             )
             .await
             .map_err(command_error_to_status)?;
@@ -110,7 +103,7 @@ impl HostsServiceImpl {
             .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
 
         self.commands
-            .delete_host(id, None, req.edit_token)
+            .delete_host(id, None)
             .await
             .map_err(command_error_to_status)?;
 
@@ -168,12 +161,6 @@ pub fn command_error_to_status(err: CommandError) -> Status {
         CommandError::ValidationFailed(msg) => Status::invalid_argument(msg),
         CommandError::DuplicateEntry(msg) => Status::already_exists(msg),
         CommandError::NotFound(msg) => Status::not_found(msg),
-        CommandError::SessionConflict => {
-            Status::failed_precondition("Session conflict: another edit session is active")
-        }
-        CommandError::SessionExpired => Status::failed_precondition("Session expired"),
-        CommandError::InvalidToken => Status::failed_precondition("Invalid token"),
-        CommandError::NoActiveSession => Status::failed_precondition("No active session"),
         CommandError::Database(e) => Status::internal(format!("Database error: {}", e)),
         CommandError::FileGeneration(msg) => {
             Status::internal(format!("File generation error: {}", msg))

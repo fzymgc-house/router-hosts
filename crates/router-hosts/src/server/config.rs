@@ -53,16 +53,6 @@ fn default_max_age_days() -> u32 {
     30
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct EditSessionConfig {
-    #[serde(default = "default_timeout_minutes")]
-    pub timeout_minutes: u64,
-}
-
-fn default_timeout_minutes() -> u64 {
-    15
-}
-
 /// Configuration for post-edit hook commands
 ///
 /// # Security Warning
@@ -116,9 +106,6 @@ pub struct Config {
     pub retention: RetentionConfig,
 
     #[serde(default)]
-    pub edit_session: EditSessionConfig,
-
-    #[serde(default)]
     pub hooks: HooksConfig,
 }
 
@@ -127,14 +114,6 @@ impl Default for RetentionConfig {
         Self {
             max_snapshots: default_max_snapshots(),
             max_age_days: default_max_age_days(),
-        }
-    }
-}
-
-impl Default for EditSessionConfig {
-    fn default() -> Self {
-        Self {
-            timeout_minutes: default_timeout_minutes(),
         }
     }
 }
@@ -181,7 +160,6 @@ mod tests {
         assert_eq!(config.server.bind_address, "0.0.0.0:50051");
         assert_eq!(config.server.hosts_file_path, "/etc/hosts");
         assert_eq!(config.retention.max_snapshots, 50);
-        assert_eq!(config.edit_session.timeout_minutes, 15);
     }
 
     #[test]
@@ -258,7 +236,7 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
     }
 
     #[test]
-    fn test_config_custom_retention_and_edit_session() {
+    fn test_config_custom_retention() {
         let toml_str = r#"
             [server]
             bind_address = "0.0.0.0:50051"
@@ -275,9 +253,6 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             [retention]
             max_snapshots = 100
             max_age_days = 60
-
-            [edit_session]
-            timeout_minutes = 30
         "#;
 
         let config: Config = toml::from_str(toml_str).unwrap();
@@ -285,9 +260,6 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
         // Verify custom retention values override defaults
         assert_eq!(config.retention.max_snapshots, 100);
         assert_eq!(config.retention.max_age_days, 60);
-
-        // Verify custom edit session timeout overrides default
-        assert_eq!(config.edit_session.timeout_minutes, 30);
 
         // Verify required fields are still present
         assert_eq!(config.server.bind_address, "0.0.0.0:50051");

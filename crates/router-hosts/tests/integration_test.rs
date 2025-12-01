@@ -26,12 +26,11 @@ use router_hosts::server::db::Database;
 use router_hosts::server::hooks::HookExecutor;
 use router_hosts::server::hosts_file::HostsFileGenerator;
 use router_hosts::server::service::HostsServiceImpl;
-use router_hosts::server::session::SessionManager;
 use router_hosts_common::proto::hosts_service_client::HostsServiceClient;
 use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
 use router_hosts_common::proto::{
-    AddHostRequest, DeleteHostRequest, FinishEditRequest, GetHostRequest, ListHostsRequest,
-    SearchHostsRequest, StartEditRequest, UpdateHostRequest,
+    AddHostRequest, DeleteHostRequest, GetHostRequest, ListHostsRequest, SearchHostsRequest,
+    UpdateHostRequest,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -49,9 +48,6 @@ async fn start_test_server() -> SocketAddr {
     // Create in-memory database
     let db = Arc::new(Database::in_memory().unwrap());
 
-    // Create session manager with short timeout for tests
-    let session_mgr = Arc::new(SessionManager::new(1)); // 1 minute timeout
-
     // Create hooks (no-op for tests)
     let hooks = Arc::new(HookExecutor::new(vec![], vec![], 30));
 
@@ -64,17 +60,12 @@ async fn start_test_server() -> SocketAddr {
     // Create command handler
     let commands = Arc::new(CommandHandler::new(
         Arc::clone(&db),
-        Arc::clone(&session_mgr),
         Arc::clone(&hosts_file),
         Arc::clone(&hooks),
     ));
 
     // Create service
-    let service = HostsServiceImpl::new(
-        Arc::clone(&commands),
-        Arc::clone(&session_mgr),
-        Arc::clone(&db),
-    );
+    let service = HostsServiceImpl::new(Arc::clone(&commands), Arc::clone(&db));
 
     // Spawn server task
     tokio::spawn(async move {
@@ -125,7 +116,6 @@ async fn test_add_and_get_host() {
     // Add a host
     let add_response = client
         .add_host(AddHostRequest {
-            edit_token: None,
             ip_address: "192.168.1.10".to_string(),
             hostname: "server.local".to_string(),
             comment: Some("Test server".to_string()),
@@ -175,7 +165,6 @@ async fn test_update_host() {
     // Add a host
     let add_response = client
         .add_host(AddHostRequest {
-            edit_token: None,
             ip_address: "192.168.1.20".to_string(),
             hostname: "old.local".to_string(),
             comment: None,
@@ -190,7 +179,6 @@ async fn test_update_host() {
     // Update the host
     let update_response = client
         .update_host(UpdateHostRequest {
-            edit_token: None,
             id: host_id.clone(),
             ip_address: Some("192.168.1.21".to_string()),
             hostname: Some("new.local".to_string()),
@@ -216,7 +204,6 @@ async fn test_delete_host() {
     // Add a host
     let add_response = client
         .add_host(AddHostRequest {
-            edit_token: None,
             ip_address: "192.168.1.30".to_string(),
             hostname: "delete.local".to_string(),
             comment: None,
@@ -231,7 +218,6 @@ async fn test_delete_host() {
     // Delete the host
     let delete_response = client
         .delete_host(DeleteHostRequest {
-            edit_token: None,
             id: host_id.clone(),
         })
         .await
@@ -256,7 +242,6 @@ async fn test_list_hosts() {
     for i in 1..=3 {
         client
             .add_host(AddHostRequest {
-                edit_token: None,
                 ip_address: format!("192.168.1.{}", 40 + i),
                 hostname: format!("host{}.local", i),
                 comment: None,
@@ -295,7 +280,6 @@ async fn test_search_hosts() {
     // Add hosts with different names
     client
         .add_host(AddHostRequest {
-            edit_token: None,
             ip_address: "192.168.1.50".to_string(),
             hostname: "webserver.local".to_string(),
             comment: None,
@@ -306,7 +290,6 @@ async fn test_search_hosts() {
 
     client
         .add_host(AddHostRequest {
-            edit_token: None,
             ip_address: "192.168.1.51".to_string(),
             hostname: "database.local".to_string(),
             comment: None,
@@ -331,43 +314,4 @@ async fn test_search_hosts() {
 
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].hostname, "webserver.local");
-}
-
-#[tokio::test]
-#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
-async fn test_edit_session() {
-    let addr = start_test_server().await;
-    let mut client = create_client(addr).await;
-
-    // Start edit session
-    let start_response = client
-        .start_edit(StartEditRequest {})
-        .await
-        .unwrap()
-        .into_inner();
-
-    let token = start_response.edit_token;
-    assert!(!token.is_empty());
-
-    // Add host with token
-    client
-        .add_host(AddHostRequest {
-            edit_token: Some(token.clone()),
-            ip_address: "192.168.1.60".to_string(),
-            hostname: "staged.local".to_string(),
-            comment: None,
-            tags: vec![],
-        })
-        .await
-        .unwrap();
-
-    // Finish edit session
-    let finish_response = client
-        .finish_edit(FinishEditRequest { edit_token: token })
-        .await
-        .unwrap()
-        .into_inner();
-
-    assert!(finish_response.success);
-    assert!(finish_response.entries_changed >= 1);
 }
