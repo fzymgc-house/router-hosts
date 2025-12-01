@@ -1,7 +1,7 @@
 //! Import/Export operation handlers (streaming)
 
-use crate::server::db::HostProjections;
 use crate::server::db::Database;
+use crate::server::db::HostProjections;
 use crate::server::export::{
     format_csv_entry, format_csv_header, format_hosts_entry, format_hosts_header,
     format_json_entry, ExportFormat,
@@ -26,6 +26,7 @@ impl HostsServiceImpl {
     /// - created: New entries added
     /// - skipped: Duplicates skipped (when conflict_mode = "skip")
     /// - failed: Validation failures
+    #[allow(dead_code)]
     pub async fn handle_import_hosts(
         &self,
         _request: Request<Streaming<ImportHostsRequest>>,
@@ -46,7 +47,7 @@ impl HostsServiceImpl {
         let req = request.into_inner();
 
         // Parse and validate format
-        let format = ExportFormat::from_str(&req.format).ok_or_else(|| {
+        let format: ExportFormat = req.format.parse().map_err(|_| {
             Status::invalid_argument(format!(
                 "Invalid format '{}'. Supported: hosts, json, csv",
                 req.format
@@ -54,9 +55,8 @@ impl HostsServiceImpl {
         })?;
 
         // Query all hosts
-        let entries = HostProjections::list_all(&db).map_err(|e| {
-            Status::internal(format!("Failed to query hosts: {}", e))
-        })?;
+        let entries = HostProjections::list_all(&db)
+            .map_err(|e| Status::internal(format!("Failed to query hosts: {}", e)))?;
 
         let mut responses = Vec::new();
 

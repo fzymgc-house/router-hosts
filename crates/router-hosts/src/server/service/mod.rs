@@ -110,7 +110,9 @@ impl HostsService for HostsServiceImpl {
         &self,
         request: Request<ExportHostsRequest>,
     ) -> Result<Response<Self::ExportHostsStream>, Status> {
-        let responses = self.handle_export_hosts(request, Arc::clone(&self.db)).await?;
+        let responses = self
+            .handle_export_hosts(request, Arc::clone(&self.db))
+            .await?;
         let stream = futures::stream::iter(responses.into_inner().into_iter().map(Ok));
         Ok(Response::new(Box::pin(stream)))
     }

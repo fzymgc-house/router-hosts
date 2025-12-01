@@ -10,14 +10,25 @@ pub enum ExportFormat {
     Csv,
 }
 
-impl ExportFormat {
-    /// Parse format string, returns None for invalid format
-    pub fn from_str(s: &str) -> Option<Self> {
+/// Error type for invalid export format strings
+#[derive(Debug, Clone, PartialEq)]
+pub struct InvalidExportFormat;
+
+impl std::fmt::Display for InvalidExportFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "invalid export format")
+    }
+}
+
+impl std::str::FromStr for ExportFormat {
+    type Err = InvalidExportFormat;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "hosts" | "" => Some(Self::Hosts),
-            "json" => Some(Self::Json),
-            "csv" => Some(Self::Csv),
-            _ => None,
+            "hosts" | "" => Ok(Self::Hosts),
+            "json" => Ok(Self::Json),
+            "csv" => Ok(Self::Csv),
+            _ => Err(InvalidExportFormat),
         }
     }
 }
@@ -160,12 +171,12 @@ mod tests {
 
     #[test]
     fn test_export_format_parsing() {
-        assert_eq!(ExportFormat::from_str("hosts"), Some(ExportFormat::Hosts));
-        assert_eq!(ExportFormat::from_str(""), Some(ExportFormat::Hosts));
-        assert_eq!(ExportFormat::from_str("json"), Some(ExportFormat::Json));
-        assert_eq!(ExportFormat::from_str("csv"), Some(ExportFormat::Csv));
-        assert_eq!(ExportFormat::from_str("JSON"), Some(ExportFormat::Json));
-        assert_eq!(ExportFormat::from_str("invalid"), None);
+        assert_eq!("hosts".parse::<ExportFormat>(), Ok(ExportFormat::Hosts));
+        assert_eq!("".parse::<ExportFormat>(), Ok(ExportFormat::Hosts));
+        assert_eq!("json".parse::<ExportFormat>(), Ok(ExportFormat::Json));
+        assert_eq!("csv".parse::<ExportFormat>(), Ok(ExportFormat::Csv));
+        assert_eq!("JSON".parse::<ExportFormat>(), Ok(ExportFormat::Json));
+        assert!("invalid".parse::<ExportFormat>().is_err());
     }
 
     #[test]
