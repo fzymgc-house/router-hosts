@@ -12,11 +12,14 @@ router-hosts-common = { path = "../router-hosts-common" }
 # CLI and async runtime
 clap.workspace = true
 tokio.workspace = true
+tokio-stream.workspace = true
+futures.workspace = true
 anyhow.workspace = true
 
 # gRPC
-tonic.workspace = true
+tonic = { workspace = true, features = ["tls"] }
 prost.workspace = true
+prost-types.workspace = true
 
 # Configuration
 serde.workspace = true
@@ -31,6 +34,7 @@ thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 duckdb.workspace = true
+parking_lot.workspace = true
 
 [dev-dependencies]
-tempfile = "3.8"
+tempfile.workspace = true

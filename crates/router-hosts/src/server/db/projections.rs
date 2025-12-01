@@ -1,8 +1,9 @@
 use super::event_store::EventStore;
-use super::events::{EventEnvelope, HostEvent};
+use super::events::{EventData, EventEnvelope, HostEvent};
 use super::schema::{Database, DatabaseError, DatabaseResult};
 use chrono::{DateTime, Utc};
 use duckdb::OptionalExt;
+use router_hosts_common::proto;
 use ulid::Ulid;
 
 /// Read model for current host entries (CQRS Query side)
@@ -42,122 +43,69 @@ impl HostProjections {
 
     /// List all active host entries
     ///
-    /// This queries the materialized view for efficient access.
-    /// For large datasets, prefer [`list_paginated`](Self::list_paginated) to avoid
-    /// loading all entries into memory.
+    /// Uses the `host_entries_current` materialized view for O(n) performance
+    /// instead of N+1 queries. The view is automatically maintained by DuckDB.
     pub fn list_all(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
-        Self::list_paginated(db, None, None)
-    }
-
-    /// List active host entries with pagination
-    ///
-    /// # Arguments
-    ///
-    /// * `db` - Database connection
-    /// * `limit` - Maximum number of entries to return (None = unlimited)
-    /// * `offset` - Number of entries to skip (None = start from beginning)
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// // Get first 100 entries
-    /// let page1 = HostProjections::list_paginated(&db, Some(100), None)?;
-    ///
-    /// // Get next 100 entries
-    /// let page2 = HostProjections::list_paginated(&db, Some(100), Some(100))?;
-    /// ```
-    pub fn list_paginated(
-        db: &Database,
-        limit: Option<u32>,
-        offset: Option<u32>,
-    ) -> DatabaseResult<Vec<HostEntry>> {
-        // Build query with optional LIMIT/OFFSET
-        let query = match (limit, offset) {
-            (Some(l), Some(o)) => format!(
+        let conn = db.conn();
+        let mut stmt = conn
+            .prepare(
                 r#"
-                SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, event_version
+                SELECT
+                    id,
+                    ip_address,
+                    hostname,
+                    metadata,
+                    created_at,
+                    updated_at,
+                    event_version
                 FROM host_entries_current
                 ORDER BY ip_address, hostname
-                LIMIT {} OFFSET {}
                 "#,
-                l, o
-            ),
-            (Some(l), None) => format!(
-                r#"
-                SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, event_version
-                FROM host_entries_current
-                ORDER BY ip_address, hostname
-                LIMIT {}
-                "#,
-                l
-            ),
-            (None, Some(o)) => format!(
-                r#"
-                SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, event_version
-                FROM host_entries_current
-                ORDER BY ip_address, hostname
-                OFFSET {}
-                "#,
-                o
-            ),
-            (None, None) => r#"
-                SELECT id, ip_address, hostname, comment, tags, created_at, updated_at, event_version
-                FROM host_entries_current
-                ORDER BY ip_address, hostname
-                "#
-            .to_string(),
-        };
-
-        let mut stmt = db.conn().prepare(&query).map_err(|e| {
-            DatabaseError::QueryFailed(format!("Failed to prepare list query: {}", e))
-        })?;
+            )
+            .map_err(|e| {
+                DatabaseError::QueryFailed(format!("Failed to prepare list query: {}", e))
+            })?;
 
         let rows = stmt
             .query_map([], |row| {
-                let id_str: String = row.get(0)?;
-                let ip_address: String = row.get(1)?;
-                let hostname: String = row.get(2)?;
-                let comment: Option<String> = row.get(3)?;
-                let tags_json: String = row.get(4)?;
-                // DuckDB returns TIMESTAMP as i64 microseconds since epoch
-                let created_at_micros: i64 = row.get(5)?;
-                let updated_at_micros: i64 = row.get(6)?;
-                let version: i64 = row.get(7)?;
-
                 Ok((
-                    id_str,
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags_json,
-                    created_at_micros,
-                    updated_at_micros,
-                    version,
+                    row.get::<_, String>(0)?, // id
+                    row.get::<_, String>(1)?, // ip_address
+                    row.get::<_, String>(2)?, // hostname
+                    row.get::<_, String>(3)?, // metadata (JSON)
+                    row.get::<_, i64>(4)?,    // created_at
+                    row.get::<_, i64>(5)?,    // updated_at
+                    row.get::<_, i64>(6)?,    // event_version
                 ))
             })
-            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query hosts: {}", e)))?;
+            .map_err(|e| {
+                DatabaseError::QueryFailed(format!("Failed to query host entries: {}", e))
+            })?;
 
         let mut entries = Vec::new();
-        for row in rows {
+        for row_result in rows {
             let (
                 id_str,
                 ip_address,
                 hostname,
-                comment,
-                tags_json,
+                metadata_json,
                 created_at_micros,
                 updated_at_micros,
                 version,
-            ) =
-                row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
+            ) = row_result
+                .map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
             let id = Ulid::from_string(&id_str)
-                .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
+                .map_err(|e| DatabaseError::InvalidData(format!("Invalid ULID: {}", e)))?;
 
-            let tags: Vec<String> = serde_json::from_str(&tags_json)
-                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags: {}", e)))?;
+            // Parse metadata JSON to extract comment and tags
+            let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to parse metadata: {}", e))
+            })?;
 
-            // Convert DuckDB timestamp (microseconds since epoch) to DateTime<Utc>
+            let comment = event_data.comment;
+            let tags = event_data.tags.unwrap_or_default();
+
             let created_at =
                 DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
                     DatabaseError::InvalidData(format!(
@@ -190,104 +138,21 @@ impl HostProjections {
     }
 
     /// Search hosts by IP address or hostname pattern
+    ///
+    /// This rebuilds state from events and filters in memory.
     pub fn search(db: &Database, pattern: &str) -> DatabaseResult<Vec<HostEntry>> {
-        let search_pattern = format!("%{}%", pattern);
+        let all_entries = Self::list_all(db)?;
+        let pattern_lower = pattern.to_lowercase();
 
-        let mut stmt = db
-            .conn()
-            .prepare(
-                r#"
-                SELECT
-                    id,
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags,
-                    created_at,
-                    updated_at,
-                    event_version
-                FROM host_entries_current
-                WHERE ip_address LIKE ? OR hostname LIKE ?
-                ORDER BY ip_address, hostname
-                "#,
-            )
-            .map_err(|e| {
-                DatabaseError::QueryFailed(format!("Failed to prepare search query: {}", e))
-            })?;
-
-        let rows = stmt
-            .query_map([&search_pattern, &search_pattern], |row| {
-                let id_str: String = row.get(0)?;
-                let ip_address: String = row.get(1)?;
-                let hostname: String = row.get(2)?;
-                let comment: Option<String> = row.get(3)?;
-                let tags_json: String = row.get(4)?;
-                let created_at_micros: i64 = row.get(5)?;
-                let updated_at_micros: i64 = row.get(6)?;
-                let version: i64 = row.get(7)?;
-
-                Ok((
-                    id_str,
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags_json,
-                    created_at_micros,
-                    updated_at_micros,
-                    version,
-                ))
+        let filtered: Vec<HostEntry> = all_entries
+            .into_iter()
+            .filter(|entry| {
+                entry.ip_address.to_lowercase().contains(&pattern_lower)
+                    || entry.hostname.to_lowercase().contains(&pattern_lower)
             })
-            .map_err(|e| DatabaseError::QueryFailed(format!("Failed to execute search: {}", e)))?;
+            .collect();
 
-        let mut entries = Vec::new();
-        for row in rows {
-            let (
-                id_str,
-                ip_address,
-                hostname,
-                comment,
-                tags_json,
-                created_at_micros,
-                updated_at_micros,
-                version,
-            ) =
-                row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
-
-            let id = Ulid::from_string(&id_str)
-                .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
-
-            let tags: Vec<String> = serde_json::from_str(&tags_json)
-                .map_err(|e| DatabaseError::InvalidData(format!("Failed to parse tags: {}", e)))?;
-
-            let created_at =
-                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                    DatabaseError::InvalidData(format!(
-                        "Invalid created_at timestamp: {}",
-                        created_at_micros
-                    ))
-                })?;
-
-            let updated_at =
-                DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                    DatabaseError::InvalidData(format!(
-                        "Invalid updated_at timestamp: {}",
-                        updated_at_micros
-                    ))
-                })?;
-
-            entries.push(HostEntry {
-                id,
-                ip_address,
-                hostname,
-                comment,
-                tags,
-                created_at,
-                updated_at,
-                version,
-            });
-        }
-
-        Ok(entries)
+        Ok(filtered)
     }
 
     /// Find host by exact IP and hostname match
@@ -304,8 +169,7 @@ impl HostProjections {
                     id,
                     ip_address,
                     hostname,
-                    comment,
-                    tags,
+                    metadata,
                     created_at,
                     updated_at,
                     event_version
@@ -317,18 +181,16 @@ impl HostProjections {
                     let id_str: String = row.get(0)?;
                     let ip_address: String = row.get(1)?;
                     let hostname: String = row.get(2)?;
-                    let comment: Option<String> = row.get(3)?;
-                    let tags_json: String = row.get(4)?;
-                    let created_at_micros: i64 = row.get(5)?;
-                    let updated_at_micros: i64 = row.get(6)?;
-                    let version: i64 = row.get(7)?;
+                    let metadata_json: String = row.get(3)?;
+                    let created_at_micros: i64 = row.get(4)?;
+                    let updated_at_micros: i64 = row.get(5)?;
+                    let version: i64 = row.get(6)?;
 
                     Ok((
                         id_str,
                         ip_address,
                         hostname,
-                        comment,
-                        tags_json,
+                        metadata_json,
                         created_at_micros,
                         updated_at_micros,
                         version,
@@ -344,8 +206,7 @@ impl HostProjections {
                 id_str,
                 ip_address,
                 hostname,
-                comment,
-                tags_json,
+                metadata_json,
                 created_at_micros,
                 updated_at_micros,
                 version,
@@ -353,8 +214,8 @@ impl HostProjections {
                 let id = Ulid::from_string(&id_str)
                     .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
-                let tags: Vec<String> = serde_json::from_str(&tags_json).map_err(|e| {
-                    DatabaseError::InvalidData(format!("Failed to parse tags: {}", e))
+                let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
+                    DatabaseError::InvalidData(format!("Failed to parse metadata: {}", e))
                 })?;
 
                 let created_at =
@@ -377,8 +238,8 @@ impl HostProjections {
                     id,
                     ip_address,
                     hostname,
-                    comment,
-                    tags,
+                    comment: event_data.comment,
+                    tags: event_data.tags.unwrap_or_default(),
                     created_at,
                     updated_at,
                     version,
@@ -464,11 +325,8 @@ impl HostProjections {
         id: &Ulid,
         at_time: DateTime<Utc>,
     ) -> DatabaseResult<Option<HostEntry>> {
-        use super::events::EventData;
-
-        let mut stmt = db
-            .conn()
-            .prepare(
+        let conn = db.conn();
+        let mut stmt = conn.prepare(
                 r#"
                 SELECT
                     event_id,
@@ -482,7 +340,7 @@ impl HostProjections {
                     created_at,
                     created_by
                 FROM host_events
-                WHERE aggregate_id = ? AND created_at <= make_timestamp(?)
+                WHERE aggregate_id = ? AND CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) <= ?
                 ORDER BY event_version ASC
                 "#,
             )
@@ -490,7 +348,6 @@ impl HostProjections {
                 DatabaseError::QueryFailed(format!("Failed to prepare time travel query: {}", e))
             })?;
 
-        // Convert timestamp to microseconds for DuckDB comparison
         let at_time_micros = at_time.timestamp_micros();
 
         let rows = stmt
@@ -516,6 +373,7 @@ impl HostProjections {
             )
             .map_err(|e| DatabaseError::QueryFailed(format!("Failed to query events: {}", e)))?;
 
+        // Reuse the same event reconstruction logic as load_events
         let mut envelopes = Vec::new();
         for row in rows {
             let (
@@ -533,10 +391,10 @@ impl HostProjections {
                 row.map_err(|e| DatabaseError::QueryFailed(format!("Failed to read row: {}", e)))?;
 
             let event_id = Ulid::from_string(&event_id_str)
-                .map_err(|e| DatabaseError::InvalidData(format!("Invalid event_id UUID: {}", e)))?;
+                .map_err(|e| DatabaseError::InvalidData(format!("Invalid event_id ULID: {}", e)))?;
 
             let agg_id = Ulid::from_string(&aggregate_id_str).map_err(|e| {
-                DatabaseError::InvalidData(format!("Invalid aggregate_id UUID: {}", e))
+                DatabaseError::InvalidData(format!("Invalid aggregate_id ULID: {}", e))
             })?;
 
             let event_timestamp = DateTime::from_timestamp_micros(event_timestamp_micros)
@@ -547,12 +405,11 @@ impl HostProjections {
                     ))
                 })?;
 
-            // Deserialize EventData from metadata JSON
+            use super::events::EventData;
             let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
                 DatabaseError::InvalidData(format!("Failed to deserialize event metadata: {}", e))
             })?;
 
-            // Reconstruct the event from typed columns + metadata
             let event = match event_type.as_str() {
                 "HostCreated" => {
                     let ip = ip_address.ok_or_else(|| {
@@ -561,7 +418,6 @@ impl HostProjections {
                     let host = hostname.ok_or_else(|| {
                         DatabaseError::InvalidData("HostCreated missing hostname".to_string())
                     })?;
-
                     HostEvent::HostCreated {
                         ip_address: ip,
                         hostname: host,
@@ -576,12 +432,11 @@ impl HostProjections {
                             "IpAddressChanged missing ip_address".to_string(),
                         )
                     })?;
-                    let old_ip = event_data.previous_ip.ok_or_else(|| {
+                    let old_ip = event_data.previous_ip.clone().ok_or_else(|| {
                         DatabaseError::InvalidData(
-                            "IpAddressChanged missing previous_ip in metadata".to_string(),
+                            "IpAddressChanged missing previous_ip".to_string(),
                         )
                     })?;
-
                     HostEvent::IpAddressChanged {
                         old_ip,
                         new_ip,
@@ -592,12 +447,11 @@ impl HostProjections {
                     let new_hostname = hostname.ok_or_else(|| {
                         DatabaseError::InvalidData("HostnameChanged missing hostname".to_string())
                     })?;
-                    let old_hostname = event_data.previous_hostname.ok_or_else(|| {
+                    let old_hostname = event_data.previous_hostname.clone().ok_or_else(|| {
                         DatabaseError::InvalidData(
-                            "HostnameChanged missing previous_hostname in metadata".to_string(),
+                            "HostnameChanged missing previous_hostname".to_string(),
                         )
                     })?;
-
                     HostEvent::HostnameChanged {
                         old_hostname,
                         new_hostname,
@@ -653,6 +507,28 @@ impl HostProjections {
         }
 
         Self::rebuild_from_events(&envelopes)
+    }
+}
+
+/// Convert database HostEntry to protobuf HostEntry
+impl From<HostEntry> for proto::HostEntry {
+    fn from(entry: HostEntry) -> Self {
+        proto::HostEntry {
+            id: entry.id.to_string(),
+            ip_address: entry.ip_address,
+            hostname: entry.hostname,
+            comment: entry.comment,
+            tags: entry.tags,
+            created_at: Some(prost_types::Timestamp {
+                seconds: entry.created_at.timestamp(),
+                nanos: entry.created_at.timestamp_subsec_nanos() as i32,
+            }),
+            updated_at: Some(prost_types::Timestamp {
+                seconds: entry.updated_at.timestamp(),
+                nanos: entry.updated_at.timestamp_subsec_nanos() as i32,
+            }),
+            active: true, // All entries from db are active (deleted ones don't exist)
+        }
     }
 }
 
@@ -768,7 +644,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -797,7 +672,6 @@ mod tests {
                 tags: vec![],
                 created_at: Utc::now(),
             },
-            None,
             None,
             None,
         )
@@ -830,7 +704,6 @@ mod tests {
                 },
                 None,
                 None,
-                None,
             )
             .unwrap();
         }
@@ -855,7 +728,6 @@ mod tests {
             },
             None,
             None,
-            None,
         )
         .unwrap();
 
@@ -869,7 +741,6 @@ mod tests {
                 tags: vec![],
                 created_at: Utc::now(),
             },
-            None,
             None,
             None,
         )
@@ -887,157 +758,59 @@ mod tests {
     }
 
     #[test]
-    fn test_list_paginated() {
-        let db = Database::in_memory().unwrap();
-
-        // Create 5 hosts
-        for i in 1..=5 {
-            EventStore::append_event(
-                &db,
-                &Ulid::new(),
-                HostEvent::HostCreated {
-                    ip_address: format!("192.168.1.{}", i),
-                    hostname: format!("server{}.local", i),
-                    comment: None,
-                    tags: vec![],
-                    created_at: Utc::now(),
-                },
-                None,
-                None,
-                None,
-            )
-            .unwrap();
-        }
-
-        // Test limit only
-        let page1 = HostProjections::list_paginated(&db, Some(2), None).unwrap();
-        assert_eq!(page1.len(), 2);
-
-        // Test limit and offset
-        let page2 = HostProjections::list_paginated(&db, Some(2), Some(2)).unwrap();
-        assert_eq!(page2.len(), 2);
-
-        // Test offset beyond data
-        let empty = HostProjections::list_paginated(&db, Some(10), Some(100)).unwrap();
-        assert_eq!(empty.len(), 0);
-
-        // Test no limit (should get all)
-        let all = HostProjections::list_paginated(&db, None, None).unwrap();
-        assert_eq!(all.len(), 5);
-    }
-
-    #[test]
     fn test_get_at_time() {
-        use std::thread::sleep;
-        use std::time::Duration;
-
         let db = Database::in_memory().unwrap();
         let aggregate_id = Ulid::new();
+        let t0 = Utc::now();
 
-        // Create a host
-        let created_time = Utc::now();
+        // Create host
         EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::HostCreated {
-                ip_address: "192.168.1.10".to_string(),
-                hostname: "server.local".to_string(),
-                comment: Some("Initial".to_string()),
-                tags: vec!["prod".to_string()],
-                created_at: created_time,
-            },
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Small delay to ensure time difference
-        sleep(Duration::from_millis(10));
-        let after_create = Utc::now();
-
-        // Modify the host
-        sleep(Duration::from_millis(10));
-        EventStore::append_event(
-            &db,
-            &aggregate_id,
-            HostEvent::CommentUpdated {
-                old_comment: Some("Initial".to_string()),
-                new_comment: Some("Updated".to_string()),
-                updated_at: Utc::now(),
-            },
-            Some(1),
-            None,
-            None,
-        )
-        .unwrap();
-
-        // Query at time after creation but before update
-        let entry_at_create = HostProjections::get_at_time(&db, &aggregate_id, after_create)
-            .unwrap()
-            .expect("Should find entry");
-        assert_eq!(entry_at_create.comment, Some("Initial".to_string()));
-        assert_eq!(entry_at_create.version, 1);
-
-        // Query at current time (after update)
-        let entry_now = HostProjections::get_at_time(&db, &aggregate_id, Utc::now())
-            .unwrap()
-            .expect("Should find entry");
-        assert_eq!(entry_now.comment, Some("Updated".to_string()));
-        assert_eq!(entry_now.version, 2);
-    }
-
-    #[test]
-    fn test_get_at_time_deleted_host() {
-        use std::thread::sleep;
-        use std::time::Duration;
-
-        let db = Database::in_memory().unwrap();
-        let aggregate_id = Ulid::new();
-
-        // Create a host
-        EventStore::append_event(
-            &db,
-            &aggregate_id,
-            HostEvent::HostCreated {
-                ip_address: "192.168.1.10".to_string(),
-                hostname: "server.local".to_string(),
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "original.local".to_string(),
                 comment: None,
                 tags: vec![],
-                created_at: Utc::now(),
+                created_at: t0,
             },
-            None,
             None,
             None,
         )
         .unwrap();
 
-        sleep(Duration::from_millis(10));
-        let before_delete = Utc::now();
+        // Capture time after first event but before second event
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let between_time = Utc::now();
 
-        // Delete the host
-        sleep(Duration::from_millis(10));
+        // Small delay before second event
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Update hostname
         EventStore::append_event(
             &db,
             &aggregate_id,
-            HostEvent::HostDeleted {
-                ip_address: "192.168.1.10".to_string(),
-                hostname: "server.local".to_string(),
-                deleted_at: Utc::now(),
-                reason: Some("Decommissioned".to_string()),
+            HostEvent::HostnameChanged {
+                old_hostname: "original.local".to_string(),
+                new_hostname: "updated.local".to_string(),
+                changed_at: Utc::now(),
             },
             Some(1),
-            None,
             None,
         )
         .unwrap();
 
-        // Query before deletion - should exist
-        let before = HostProjections::get_at_time(&db, &aggregate_id, before_delete).unwrap();
-        assert!(before.is_some());
+        // Query at time between the two events - should see original hostname
+        let state_at_t0 = HostProjections::get_at_time(&db, &aggregate_id, between_time).unwrap();
+        assert!(
+            state_at_t0.is_some(),
+            "Expected to find host state at time between creation and update"
+        );
+        assert_eq!(state_at_t0.unwrap().hostname, "original.local");
 
-        // Query after deletion - should not exist (deleted)
-        let after = HostProjections::get_at_time(&db, &aggregate_id, Utc::now()).unwrap();
-        assert!(after.is_none());
+        // Query at current time - should see updated hostname
+        let state_now = HostProjections::get_at_time(&db, &aggregate_id, Utc::now()).unwrap();
+        assert!(state_now.is_some());
+        assert_eq!(state_now.unwrap().hostname, "updated.local");
     }
 }

@@ -1,4 +1,5 @@
 use duckdb::Connection;
+use parking_lot::ReentrantMutex;
 use std::path::Path;
 use thiserror::Error;
 
@@ -45,22 +46,12 @@ pub type DatabaseResult<T> = Result<T, DatabaseError>;
 /// - No soft deletes - event log captures complete history
 /// - Time travel queries supported via event replay
 ///
-/// # Thread Safety
-///
-/// A single `Database` instance wraps a single DuckDB connection, which is
-/// NOT thread-safe. For concurrent access from multiple threads:
-///
-/// 1. Use [`try_clone()`](Self::try_clone) to create additional connections
-///    that share the same underlying database
-/// 2. Each thread should have its own cloned connection
-/// 3. DuckDB handles concurrency internally when using cloned connections
-///
-/// ```ignore
-/// let db = Database::new(path)?;
-/// let db_clone = db.try_clone()?;  // For another thread
-/// ```
+/// The connection is wrapped in a ReentrantMutex to allow safe concurrent access
+/// from multiple async tasks in the gRPC server. ReentrantMutex is used instead
+/// of std::sync::Mutex to support reentrant locking patterns where methods like
+/// list_all() call get_by_id(), both of which need to acquire the connection lock.
 pub struct Database {
-    conn: Connection,
+    conn: ReentrantMutex<Connection>,
 }
 
 impl Database {
@@ -70,7 +61,9 @@ impl Database {
             DatabaseError::ConnectionFailed(format!("Failed to open database at {:?}: {}", path, e))
         })?;
 
-        let mut db = Self { conn };
+        let mut db = Self {
+            conn: ReentrantMutex::new(conn),
+        };
         db.initialize_schema()?;
         Ok(db)
     }
@@ -81,65 +74,41 @@ impl Database {
             DatabaseError::ConnectionFailed(format!("Failed to open in-memory database: {}", e))
         })?;
 
-        let mut db = Self { conn };
+        let mut db = Self {
+            conn: ReentrantMutex::new(conn),
+        };
         db.initialize_schema()?;
         Ok(db)
     }
 
     /// Initialize CQRS event-sourced schema
     fn initialize_schema(&mut self) -> DatabaseResult<()> {
-        // Install and load JSON extension
-        // Use INSTALL with FORCE to download if needed, or just load if already installed
-        if let Err(e) = self.conn.execute("INSTALL json", []) {
-            // If install fails, try to load anyway (might already be installed)
-            if let Err(load_err) = self.conn.execute("LOAD json", []) {
-                return Err(DatabaseError::SchemaInitFailed(format!(
-                    "Failed to setup json extension. Install error: {}. Load error: {}",
-                    e, load_err
-                )));
-            }
-        } else {
-            // Install succeeded, now load
-            self.conn.execute("LOAD json", []).map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to load json extension: {}", e))
-            })?;
-        }
+        let conn = self.conn.lock();
 
-        // Install and load INET extension for IP address types
-        if let Err(e) = self.conn.execute("INSTALL inet", []) {
-            // If install fails, try to load anyway (might already be installed)
-            if let Err(load_err) = self.conn.execute("LOAD inet", []) {
-                return Err(DatabaseError::SchemaInitFailed(format!(
-                    "Failed to setup inet extension. Install error: {}. Load error: {}",
-                    e, load_err
-                )));
-            }
-        } else {
-            // Install succeeded, now load
-            self.conn.execute("LOAD inet", []).map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to load inet extension: {}", e))
-            })?;
-        }
+        // Use VARCHAR for IP addresses instead of INET type to avoid extension dependency
+        // Validation happens at the application layer via router_hosts_common::validation
+        //
+        // Note: Metadata is stored as VARCHAR (JSON string) to avoid DuckDB JSON extension
+        // dependency. JSON parsing happens in Rust code (see projections.rs).
 
         // Event store - append-only immutable log of all domain events
         // This is the source of truth for all state changes
         //
         // Design: First-class typed columns for current state (ip_address, hostname)
-        // JSON metadata column for tags, comments, and previous values
-        self.conn
-            .execute(
-                r#"
+        // Metadata stored as VARCHAR (JSON string) - parsed in Rust to avoid DuckDB JSON extension
+        conn.execute(
+            r#"
                 CREATE TABLE IF NOT EXISTS host_events (
                     event_id VARCHAR PRIMARY KEY,
                     aggregate_id VARCHAR NOT NULL,
                     event_type VARCHAR NOT NULL,
                     event_version INTEGER NOT NULL,
                     -- Current state in typed columns for queryability
-                    ip_address INET,
+                    ip_address VARCHAR,
                     hostname VARCHAR,
                     event_timestamp TIMESTAMP NOT NULL,
-                    -- Event metadata: tags, comments, previous values (old_ip, old_hostname, etc.)
-                    metadata JSON NOT NULL,
+                    -- Event metadata: tags, comments, previous values (stored as JSON string)
+                    metadata VARCHAR NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     created_by VARCHAR,
                     -- Optimistic concurrency control
@@ -148,18 +117,14 @@ impl Database {
                     UNIQUE(aggregate_id, event_version)
                 )
                 "#,
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!(
-                    "Failed to create host_events table: {}",
-                    e
-                ))
-            })?;
+            [],
+        )
+        .map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to create host_events table: {}", e))
+        })?;
 
         // Index for fast event replay by aggregate
-        self.conn
-            .execute(
+        conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_aggregate ON host_events(aggregate_id, event_version)",
                 [],
             )
@@ -168,48 +133,58 @@ impl Database {
             })?;
 
         // Index for temporal queries
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_events_time ON host_events(created_at)",
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to create temporal index: {}", e))
-            })?;
-
-        // Composite index for efficient current hosts view queries
-        // The view filters by event_type and orders by hostname
-        // Note: Can't index INET type directly, but event_type + hostname helps
-        self.conn
-            .execute(
-                "CREATE INDEX IF NOT EXISTS idx_events_type_hostname ON host_events(event_type, hostname)",
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!(
-                    "Failed to create composite index: {}",
-                    e
-                ))
-            })?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_events_time ON host_events(created_at)",
+            [],
+        )
+        .map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to create temporal index: {}", e))
+        })?;
 
         // Read model: Current active hosts projection
         // This materialized view is built from events and optimized for queries
-        // Uses first-class typed columns plus JSON metadata
-        self.conn
-            .execute(
+        // Uses window functions to carry forward the most recent non-null value for each field,
+        // since update events only set the fields they change (e.g., IpAddressChanged
+        // only sets ip_address, not hostname).
+        conn.execute(
                 r#"
                 CREATE VIEW IF NOT EXISTS host_entries_current AS
-                WITH latest_events AS (
-                    -- Get the latest event for each aggregate
+                WITH windowed AS (
+                    -- Build current state using window functions
                     SELECT
                         aggregate_id,
-                        event_type,
                         event_version,
-                        ip_address,
-                        hostname,
-                        metadata,
-                        event_timestamp,
-                        created_at,
+                        event_type,
+                        LAST_VALUE(ip_address IGNORE NULLS) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as ip_address,
+                        LAST_VALUE(hostname IGNORE NULLS) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as hostname,
+                        LAST_VALUE(metadata) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as latest_metadata,
+                        FIRST_VALUE(event_timestamp) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as created_at,
+                        LAST_VALUE(created_at) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as updated_at,
+                        LAST_VALUE(event_type) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as latest_event_type,
                         ROW_NUMBER() OVER (PARTITION BY aggregate_id ORDER BY event_version DESC) as rn
                     FROM host_events
                 )
@@ -217,15 +192,14 @@ impl Database {
                     aggregate_id as id,
                     CAST(ip_address AS VARCHAR) as ip_address,
                     hostname,
-                    json_extract_string(metadata, '$.comment') as comment,
-                    COALESCE(json_extract_string(metadata, '$.tags'), '[]') as tags,
-                    event_timestamp as created_at,
-                    created_at as updated_at,
-                    event_version,
-                    event_type
-                FROM latest_events
+                    -- Return raw metadata (already VARCHAR); Rust will parse JSON
+                    latest_metadata as metadata,
+                    CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) as created_at,
+                    CAST(EXTRACT(EPOCH FROM updated_at) * 1000000 AS BIGINT) as updated_at,
+                    event_version
+                FROM windowed
                 WHERE rn = 1
-                  AND event_type != 'HostDeleted'
+                  AND latest_event_type != 'HostDeleted'
                 "#,
                 [],
             )
@@ -234,9 +208,8 @@ impl Database {
             })?;
 
         // Read model: Complete history including deleted entries
-        self.conn
-            .execute(
-                r#"
+        conn.execute(
+            r#"
                 CREATE VIEW IF NOT EXISTS host_entries_history AS
                 SELECT
                     event_id,
@@ -251,16 +224,15 @@ impl Database {
                 FROM host_events
                 ORDER BY aggregate_id, event_version
                 "#,
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to create history view: {}", e))
-            })?;
+            [],
+        )
+        .map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to create history view: {}", e))
+        })?;
 
         // Snapshots table for /etc/hosts versioning
-        self.conn
-            .execute(
-                r#"
+        conn.execute(
+            r#"
                 CREATE TABLE IF NOT EXISTS snapshots (
                     snapshot_id VARCHAR PRIMARY KEY,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -272,78 +244,22 @@ impl Database {
                     event_log_position INTEGER
                 )
                 "#,
-                [],
-            )
-            .map_err(|e| {
-                DatabaseError::SchemaInitFailed(format!("Failed to create snapshots table: {}", e))
-            })?;
+            [],
+        )
+        .map_err(|e| {
+            DatabaseError::SchemaInitFailed(format!("Failed to create snapshots table: {}", e))
+        })?;
 
         Ok(())
     }
 
     /// Get a reference to the underlying connection
-    pub(crate) fn conn(&self) -> &Connection {
-        &self.conn
-    }
-
-    /// Clone this database connection for use in another thread
     ///
-    /// Creates a new connection that shares the same underlying database.
-    /// Both connections can operate concurrently - DuckDB handles the
-    /// synchronization internally.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let db = Database::new(path)?;
-    /// let db_clone = db.try_clone()?;
-    ///
-    /// std::thread::spawn(move || {
-    ///     // Use db_clone in this thread
-    /// });
-    /// ```
-    pub fn try_clone(&self) -> DatabaseResult<Self> {
-        let conn = self.conn.try_clone().map_err(|e| {
-            DatabaseError::ConnectionFailed(format!("Failed to clone connection: {}", e))
-        })?;
-        Ok(Self { conn })
-    }
-
-    /// Execute a function within a database transaction
-    ///
-    /// The transaction is automatically committed if the function returns `Ok`,
-    /// or rolled back if it returns `Err` or panics.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// db.transaction(|conn| {
-    ///     conn.execute("INSERT INTO ...", [])?;
-    ///     conn.execute("UPDATE ...", [])?;
-    ///     Ok(())
-    /// })?;
-    /// ```
-    pub fn transaction<T, F>(&mut self, f: F) -> DatabaseResult<T>
-    where
-        F: FnOnce(&Connection) -> DatabaseResult<T>,
-    {
-        self.conn.execute("BEGIN TRANSACTION", []).map_err(|e| {
-            DatabaseError::QueryFailed(format!("Failed to begin transaction: {}", e))
-        })?;
-
-        match f(&self.conn) {
-            Ok(result) => {
-                self.conn.execute("COMMIT", []).map_err(|e| {
-                    DatabaseError::QueryFailed(format!("Failed to commit transaction: {}", e))
-                })?;
-                Ok(result)
-            }
-            Err(e) => {
-                // Attempt rollback, but don't mask the original error
-                let _ = self.conn.execute("ROLLBACK", []);
-                Err(e)
-            }
-        }
+    /// This locks the mutex and returns a guard. The lock is released when
+    /// the guard is dropped. Uses ReentrantMutex to support reentrant locking
+    /// from the same thread.
+    pub(crate) fn conn(&self) -> parking_lot::ReentrantMutexGuard<'_, Connection> {
+        self.conn.lock()
     }
 }
 
@@ -419,91 +335,5 @@ mod tests {
 
         // JSON metadata column (tags, comments, previous values)
         assert!(cols.contains(&"metadata".to_string()));
-    }
-
-    #[test]
-    fn test_transaction_commit() {
-        let mut db = Database::in_memory().unwrap();
-
-        // Create a test table
-        db.conn()
-            .execute("CREATE TABLE test_tx (id INTEGER, value TEXT)", [])
-            .unwrap();
-
-        // Transaction that commits
-        let result = db.transaction(|conn| {
-            conn.execute("INSERT INTO test_tx VALUES (1, 'first')", [])
-                .map_err(|e| DatabaseError::QueryFailed(e.to_string()))?;
-            conn.execute("INSERT INTO test_tx VALUES (2, 'second')", [])
-                .map_err(|e| DatabaseError::QueryFailed(e.to_string()))?;
-            Ok(())
-        });
-
-        assert!(result.is_ok());
-
-        // Verify data was committed
-        let count: i32 = db
-            .conn()
-            .query_row("SELECT COUNT(*) FROM test_tx", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 2);
-    }
-
-    #[test]
-    fn test_transaction_rollback() {
-        let mut db = Database::in_memory().unwrap();
-
-        // Create a test table
-        db.conn()
-            .execute("CREATE TABLE test_tx_rollback (id INTEGER, value TEXT)", [])
-            .unwrap();
-
-        // Insert initial data outside transaction
-        db.conn()
-            .execute("INSERT INTO test_tx_rollback VALUES (1, 'initial')", [])
-            .unwrap();
-
-        // Transaction that fails and rolls back
-        let result: DatabaseResult<()> = db.transaction(|conn| {
-            conn.execute(
-                "INSERT INTO test_tx_rollback VALUES (2, 'will rollback')",
-                [],
-            )
-            .map_err(|e| DatabaseError::QueryFailed(e.to_string()))?;
-            // Simulate an error
-            Err(DatabaseError::QueryFailed("Simulated error".to_string()))
-        });
-
-        assert!(result.is_err());
-
-        // Verify only initial data exists (transaction was rolled back)
-        let count: i32 = db
-            .conn()
-            .query_row("SELECT COUNT(*) FROM test_tx_rollback", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(count, 1);
-    }
-
-    #[test]
-    fn test_try_clone() {
-        let db = Database::in_memory().unwrap();
-
-        // Insert data using original connection
-        db.conn()
-            .execute("CREATE TABLE test_clone (id INTEGER)", [])
-            .unwrap();
-        db.conn()
-            .execute("INSERT INTO test_clone VALUES (42)", [])
-            .unwrap();
-
-        // Clone and verify both see the same data
-        let db_clone = db.try_clone().unwrap();
-        let value: i32 = db_clone
-            .conn()
-            .query_row("SELECT id FROM test_clone", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(value, 42);
     }
 }

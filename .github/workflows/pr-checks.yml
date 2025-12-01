@@ -1,0 +1,44 @@
+name: PR Checks
+
+on:
+    pull_request:
+        branches: [main]
+
+env:
+    CARGO_TERM_COLOR: always
+
+jobs:
+    lint:
+        runs-on:
+            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price/volume=100gb
+        steps:
+            - uses: runs-on/action@v2
+              with:
+                  metrics: cpu,network,memory,disk,io
+            - uses: actions/checkout@v5
+
+            - name: Install Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Install buf
+              uses: bufbuild/buf-setup-action@v1
+              with:
+                  github_token: ${{ github.token }}
+
+            - name: Cache Rust dependencies
+              uses: Swatinem/rust-cache@v2
+              with:
+                  cache-all-crates: "true"
+                  key: ${{ runner.os }}-rust
+
+            - name: Format Rust (check)
+              run: cargo fmt -- --check
+
+            - name: Format protobuf (check)
+              run: buf format --diff --exit-code
+
+            - name: Lint Rust (clippy)
+              run: cargo clippy -- -D warnings
+
+            - name: Lint protobuf
+              run: buf lint

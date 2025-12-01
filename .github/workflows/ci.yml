@@ -1,76 +1,54 @@
 name: CI
 
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    push:
+        branches: [main]
+    pull_request:
+        branches: [main]
 
 env:
-  CARGO_TERM_COLOR: always
+    CARGO_TERM_COLOR: always
 
 jobs:
-  test:
-    runs-on: ubuntu-latest
+    test:
+        runs-on:
+            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price/volume=100gb
 
-    steps:
-    - uses: actions/checkout@v4
+        steps:
+            - uses: runs-on/action@v2
+              with:
+                  metrics: cpu,network,memory,disk,io
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+            - uses: actions/checkout@v5
 
-    - name: Install buf
-      uses: bufbuild/buf-setup-action@v1
-      with:
-        github_token: ${{ github.token }}
+            - name: Install Rust
+              uses: dtolnay/rust-toolchain@stable
 
-    - name: Cache cargo registry
-      uses: actions/cache@v3
-      with:
-        path: ~/.cargo/registry
-        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+            - name: Install buf
+              uses: bufbuild/buf-setup-action@v1
+              with:
+                  github_token: ${{ github.token }}
 
-    - name: Cache cargo index
-      uses: actions/cache@v3
-      with:
-        path: ~/.cargo/git
-        key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+            # Use Swatinem/rust-cache for better Rust caching
+            # This caches ~/.cargo and target/ with smart invalidation
+            - name: Cache Rust dependencies
+              uses: Swatinem/rust-cache@v2
+              with:
+                  # Cache the protobuf-src build which takes 10+ minutes
+                  cache-all-crates: "true"
+                  # Include Cargo.toml in cache key for better invalidation
+                  key: ${{ runner.os }}-rust
 
-    - name: Cache cargo build
-      uses: actions/cache@v3
-      with:
-        path: target
-        key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+            - name: Build
+              run: cargo build --verbose
 
-    - name: Build
-      run: cargo build --verbose
+            - name: Run tests
+              run: cargo test --verbose
 
-    - name: Run tests
-      run: cargo test --verbose
-
-    # TODO: Enable test coverage enforcement once implementation begins
-    # CLAUDE.md mandates ≥80% coverage, but deferred for skeleton PR
-    # Uncomment when ready:
-    # - name: Check test coverage
-    #   run: |
-    #     cargo install cargo-tarpaulin
-    #     cargo tarpaulin --workspace --fail-under 80
-
-    # Free up disk space before clippy (DuckDB bundled build is large)
-    - name: Free disk space
-      run: |
-        df -h
-        cargo clean
-        df -h
-
-    - name: Lint Rust (clippy)
-      run: cargo clippy -- -D warnings
-
-    - name: Format Rust (check)
-      run: cargo fmt -- --check
-
-    - name: Lint protobuf
-      run: buf lint
-
-    - name: Format protobuf (check)
-      run: buf format --diff --exit-code
+            # TODO: Enable test coverage enforcement once implementation begins
+            # CLAUDE.md mandates ≥80% coverage, but deferred for skeleton PR
+            # Uncomment when ready:
+            # - name: Check test coverage
+            #   run: |
+            #     cargo install cargo-tarpaulin
+            #     cargo tarpaulin --workspace --fail-under 80

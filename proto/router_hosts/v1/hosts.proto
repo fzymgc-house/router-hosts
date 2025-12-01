@@ -7,9 +7,8 @@ import "google/protobuf/timestamp.proto";
 // Host entry messages
 
 // Represents a single host entry in the /etc/hosts file
-// This is a projection built from the event-sourced data model
 message HostEntry {
-  // Unique identifier for this host entry (ULID format for lexicographic ordering)
+  // Unique identifier for this host entry (UUID format)
   string id = 1;
 
   // IP address (IPv4 or IPv6) for the host
@@ -30,29 +29,25 @@ message HostEntry {
   // Timestamp when this entry was last updated
   google.protobuf.Timestamp updated_at = 7;
 
-  // Event version for optimistic concurrency control
-  // Include this in update requests to prevent lost updates
-  int64 version = 8;
+  // Whether this entry is active (false = soft deleted, won't appear in /etc/hosts)
+  bool active = 8;
 }
 
 // Host management requests/responses
 
 // Request to add a new host entry
 message AddHostRequest {
-  // Optional edit session token. If provided, changes are staged; if omitted, entry is added immediately
-  optional string edit_token = 1;
-
   // IP address (IPv4 or IPv6) for the new host (required)
-  string ip_address = 2;
+  string ip_address = 1;
 
   // DNS hostname for the new host (required)
-  string hostname = 3;
+  string hostname = 2;
 
   // Optional comment for the host entry
-  optional string comment = 4;
+  optional string comment = 3;
 
   // Optional tags for categorization
-  repeated string tags = 5;
+  repeated string tags = 4;
 }
 
 // Response after adding a host entry
@@ -78,28 +73,21 @@ message GetHostResponse {
 
 // Request to update an existing host entry
 message UpdateHostRequest {
-  // Optional edit session token. If provided, changes are staged; if omitted, changes apply immediately
-  optional string edit_token = 1;
-
   // ID of the host entry to update (required)
-  string id = 2;
+  string id = 1;
 
   // New IP address (optional, keeps existing if not provided)
-  optional string ip_address = 3;
+  optional string ip_address = 2;
 
   // New hostname (optional, keeps existing if not provided)
-  optional string hostname = 4;
+  optional string hostname = 3;
 
   // New comment (optional, keeps existing if not provided, empty string to clear)
-  optional string comment = 5;
+  optional string comment = 4;
 
   // New tags array (replaces all existing tags). Empty array = clear all tags.
   // Not providing this field = keep existing tags unchanged.
-  repeated string tags = 6;
-
-  // Expected version for optimistic concurrency control (optional)
-  // If provided and doesn't match current version, update fails with ABORTED status
-  optional int64 expected_version = 7;
+  repeated string tags = 5;
 }
 
 // Response after updating a host entry
@@ -108,19 +96,10 @@ message UpdateHostResponse {
   HostEntry entry = 1;
 }
 
-// Request to delete a host entry (creates HostDeleted tombstone event)
+// Request to delete a host entry (soft delete by setting active=false)
 message DeleteHostRequest {
-  // Optional edit session token. If provided, deletion is staged; if omitted, entry is deleted immediately
-  optional string edit_token = 1;
-
   // ID of the host entry to delete
-  string id = 2;
-
-  // Optional reason for deletion (stored in event log for audit)
-  optional string reason = 3;
-
-  // Expected version for optimistic concurrency control (optional)
-  optional int64 expected_version = 4;
+  string id = 1;
 }
 
 // Response after deleting a host entry
@@ -159,63 +138,21 @@ message SearchHostsResponse {
   HostEntry entry = 1;
 }
 
-// Edit session requests/responses
-// Only ONE edit session can be active at a time server-wide
-
-// Request to start a new edit session
-message StartEditRequest {}
-
-// Response containing the edit session token
-message StartEditResponse {
-  // Edit token to use with subsequent operations. Valid for 15 minutes (timeout resets on each operation)
-  string edit_token = 1;
-}
-
-// Request to commit all changes from an edit session
-message FinishEditRequest {
-  // Edit token from StartEditResponse
-  string edit_token = 1;
-}
-
-// Response after committing edit session changes
-message FinishEditResponse {
-  // Whether the commit succeeded
-  bool success = 1;
-
-  // Number of host entries that were changed during this edit session
-  int32 entries_changed = 2;
-}
-
-// Request to cancel an edit session and discard all changes
-message CancelEditRequest {
-  // Edit token from StartEditResponse
-  string edit_token = 1;
-}
-
-// Response after canceling edit session
-message CancelEditResponse {
-  // Whether the cancellation succeeded
-  bool success = 1;
-}
-
 // Bulk operations
 
 // Request message for bulk adding multiple hosts via streaming (one per message)
 message BulkAddHostsRequest {
-  // Optional edit session token for staging changes
-  optional string edit_token = 1;
-
   // IP address for the host entry (required)
-  string ip_address = 2;
+  string ip_address = 1;
 
   // Hostname for the host entry (required)
-  string hostname = 3;
+  string hostname = 2;
 
   // Optional comment for the host entry
-  optional string comment = 4;
+  optional string comment = 3;
 
   // Optional tags for categorization
-  repeated string tags = 5;
+  repeated string tags = 4;
 }
 
 // Response for each host in bulk add operation (streamed)
@@ -229,14 +166,11 @@ message BulkAddHostsResponse {
 
 // Request to import hosts from a file format via streaming chunks
 message ImportHostsRequest {
-  // Optional edit session token for staging imported entries
-  optional string edit_token = 1;
-
   // Chunk of file data being uploaded
-  bytes chunk = 2;
+  bytes chunk = 1;
 
   // Whether this is the final chunk of the import
-  bool last_chunk = 3;
+  bool last_chunk = 2;
 }
 
 // Response for host import operation (streamed progress updates)
@@ -344,7 +278,7 @@ service HostsService {
   // Update an existing host entry
   rpc UpdateHost(UpdateHostRequest) returns (UpdateHostResponse);
 
-  // Delete a host entry (creates HostDeleted tombstone event in event log)
+  // Delete a host entry (soft delete by setting active=false)
   rpc DeleteHost(DeleteHostRequest) returns (DeleteHostResponse);
 
   // List all host entries with optional filtering and pagination (server streaming)
@@ -352,17 +286,6 @@ service HostsService {
 
   // Search for host entries by query string (server streaming)
   rpc SearchHosts(SearchHostsRequest) returns (stream SearchHostsResponse);
-
-  // Edit sessions
-
-  // Start a new edit session to stage multiple changes atomically
-  rpc StartEdit(StartEditRequest) returns (StartEditResponse);
-
-  // Commit all staged changes from an edit session to the hosts file
-  rpc FinishEdit(FinishEditRequest) returns (FinishEditResponse);
-
-  // Cancel an edit session and discard all staged changes
-  rpc CancelEdit(CancelEditRequest) returns (CancelEditResponse);
 
   // Bulk operations
 
