@@ -28,6 +28,10 @@ jobs:
             id-token: write
 
         steps:
+            - uses: runs-on/action@v2
+              with:
+                  metrics: cpu,network,memory,disk,io
+
             - name: Checkout repository
               uses: actions/checkout@v4
               with:

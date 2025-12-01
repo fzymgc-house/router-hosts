@@ -26,6 +26,10 @@ jobs:
             id-token: write
             actions: read # Required for Claude to read CI results on PRs
         steps:
+            - uses: runs-on/action@v2
+              with:
+                  metrics: cpu,network,memory,disk,io
+
             - name: Checkout repository
               uses: actions/checkout@v4
               with:

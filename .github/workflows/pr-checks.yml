@@ -13,6 +13,8 @@ jobs:
             - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price/volume=100gb
         steps:
             - uses: runs-on/action@v2
+              with:
+                  metrics: cpu,network,memory,disk,io
             - uses: actions/checkout@v5
 
             - name: Install Rust

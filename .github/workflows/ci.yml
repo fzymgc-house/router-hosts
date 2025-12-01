@@ -16,6 +16,9 @@ jobs:
 
         steps:
             - uses: runs-on/action@v2
+              with:
+                  metrics: cpu,network,memory,disk,io
+
             - uses: actions/checkout@v5
 
             - name: Install Rust
