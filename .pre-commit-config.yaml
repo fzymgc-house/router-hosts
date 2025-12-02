@@ -25,6 +25,7 @@ repos:
         language: system
         types: [rust]
         pass_filenames: false
+        stages: [pre-push]
 
       - id: buf-lint
         name: buf lint
