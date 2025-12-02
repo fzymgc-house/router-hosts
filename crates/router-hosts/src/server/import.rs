@@ -187,9 +187,100 @@ fn parse_json_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
     Ok(entries)
 }
 
-fn parse_csv_format(_text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
-    // TODO: Implement
-    Ok(vec![])
+fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
+    let mut entries = Vec::new();
+    let mut lines = text.lines().enumerate();
+
+    // Skip header row
+    if lines.next().is_none() {
+        return Ok(entries);
+    }
+
+    for (line_num, line) in lines {
+        let line_number = line_num + 1;
+        let line = line.trim();
+
+        if line.is_empty() {
+            continue;
+        }
+
+        let fields = parse_csv_line(line).map_err(|e| ParseError::CsvError(e))?;
+
+        if fields.len() < 2 {
+            return Err(ParseError::InvalidLine {
+                line: line_number,
+                message: "CSV row must have at least ip_address and hostname".to_string(),
+            });
+        }
+
+        let comment = fields.get(2).and_then(|s| {
+            let s = s.trim();
+            if s.is_empty() {
+                None
+            } else {
+                Some(s.to_string())
+            }
+        });
+
+        let tags = fields
+            .get(3)
+            .map(|s| {
+                s.split(';')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        entries.push(ParsedEntry {
+            ip_address: fields[0].clone(),
+            hostname: fields[1].clone(),
+            comment,
+            tags,
+            line_number,
+        });
+    }
+
+    Ok(entries)
+}
+
+/// Parse a CSV line, handling quoted fields
+fn parse_csv_line(line: &str) -> Result<Vec<String>, String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        match c {
+            '"' if in_quotes => {
+                // Check for escaped quote
+                if chars.peek() == Some(&'"') {
+                    chars.next();
+                    current.push('"');
+                } else {
+                    in_quotes = false;
+                }
+            }
+            '"' if !in_quotes => {
+                in_quotes = true;
+            }
+            ',' if !in_quotes => {
+                fields.push(current.clone());
+                current.clear();
+            }
+            _ => {
+                current.push(c);
+            }
+        }
+    }
+    fields.push(current);
+
+    if in_quotes {
+        return Err("Unclosed quote in CSV".to_string());
+    }
+
+    Ok(fields)
 }
 
 #[cfg(test)]
@@ -287,5 +378,36 @@ mod tests {
 "#;
         let entries = parse_import(input, ImportFormat::Json).unwrap();
         assert_eq!(entries.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_csv_simple() {
+        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,,\n";
+        let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].ip_address, "192.168.1.10");
+        assert_eq!(entries[0].hostname, "server.local");
+    }
+
+    #[test]
+    fn test_parse_csv_with_all_fields() {
+        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,My server,prod;web\n";
+        let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries[0].comment, Some("My server".to_string()));
+        assert_eq!(entries[0].tags, vec!["prod", "web"]);
+    }
+
+    #[test]
+    fn test_parse_csv_escaped_fields() {
+        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"Hello, world\",\n";
+        let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries[0].comment, Some("Hello, world".to_string()));
+    }
+
+    #[test]
+    fn test_parse_csv_multiple_rows() {
+        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server1.local,,\n192.168.1.11,server2.local,,\n";
+        let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries.len(), 2);
     }
 }
