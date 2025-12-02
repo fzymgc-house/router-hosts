@@ -31,18 +31,6 @@ jobs:
                   cache-all-crates: "true"
                   key: ${{ runner.os }}-rust
 
-            - name: Format Rust (check)
-              run: cargo fmt -- --check
-
-            - name: Format protobuf (check)
-              run: buf format --diff --exit-code
-
-            - name: Lint Rust (clippy)
-              run: cargo clippy -- -D warnings
-
-            - name: Lint protobuf
-              run: buf lint
-
             - name: Install pre-commit
               run: pip install pre-commit
 
