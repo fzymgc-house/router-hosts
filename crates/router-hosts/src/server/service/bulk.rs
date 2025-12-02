@@ -19,6 +19,131 @@ use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 
 impl HostsServiceImpl {
+    /// Process a single parsed entry with validation and conflict handling
+    ///
+    /// Returns Ok(()) on success, Err(response) when strict mode should fail
+    async fn process_entry(
+        &self,
+        parsed: &crate::server::import::ParsedEntry,
+        state: &mut ImportState,
+        db_set: &std::collections::HashSet<(String, String)>,
+    ) -> Result<(), ImportHostsResponse> {
+        state.processed += 1;
+
+        // Validate IP address
+        if validate_ip_address(&parsed.ip_address).is_err() {
+            state.failed += 1;
+            if state.conflict_mode == ConflictMode::Strict {
+                return Err(ImportHostsResponse {
+                    processed: state.processed,
+                    created: state.created,
+                    skipped: state.skipped,
+                    failed: state.failed,
+                    error: Some(format!("Invalid IP: {}", parsed.ip_address)),
+                });
+            }
+            return Ok(());
+        }
+
+        // Validate hostname
+        if validate_hostname(&parsed.hostname).is_err() {
+            state.failed += 1;
+            if state.conflict_mode == ConflictMode::Strict {
+                return Err(ImportHostsResponse {
+                    processed: state.processed,
+                    created: state.created,
+                    skipped: state.skipped,
+                    failed: state.failed,
+                    error: Some(format!("Invalid hostname: {}", parsed.hostname)),
+                });
+            }
+            return Ok(());
+        }
+
+        // Check for duplicates in this import
+        let key = (parsed.ip_address.clone(), parsed.hostname.clone());
+        if state.seen.contains(&key) {
+            state.skipped += 1;
+            if state.conflict_mode == ConflictMode::Strict {
+                return Err(ImportHostsResponse {
+                    processed: state.processed,
+                    created: state.created,
+                    skipped: state.skipped,
+                    failed: state.failed,
+                    error: Some(format!(
+                        "Duplicate in import: {} {}",
+                        parsed.ip_address, parsed.hostname
+                    )),
+                });
+            }
+            return Ok(());
+        }
+
+        // Check for duplicates in database
+        let db_duplicate = db_set.contains(&key);
+
+        if db_duplicate {
+            match state.conflict_mode {
+                ConflictMode::Skip => {
+                    state.skipped += 1;
+                    state.seen.insert(key);
+                    return Ok(());
+                }
+                ConflictMode::Replace => {
+                    // For replace, we'd need to update - for now treat as skip
+                    // TODO: Implement update logic
+                    state.skipped += 1;
+                    state.seen.insert(key);
+                    return Ok(());
+                }
+                ConflictMode::Strict => {
+                    return Err(ImportHostsResponse {
+                        processed: state.processed,
+                        created: state.created,
+                        skipped: state.skipped,
+                        failed: state.failed,
+                        error: Some(format!(
+                            "Duplicate in database: {} {}",
+                            parsed.ip_address, parsed.hostname
+                        )),
+                    });
+                }
+            }
+        }
+
+        // Create entry
+        match self
+            .commands
+            .add_host(
+                parsed.ip_address.clone(),
+                parsed.hostname.clone(),
+                parsed.comment.clone(),
+                parsed.tags.clone(),
+            )
+            .await
+        {
+            Ok(_) => {
+                state.created += 1;
+                state.seen.insert(key);
+                Ok(())
+            }
+            Err(e) => {
+                state.failed += 1;
+                if state.conflict_mode == ConflictMode::Strict {
+                    Err(ImportHostsResponse {
+                        processed: state.processed,
+                        created: state.created,
+                        skipped: state.skipped,
+                        failed: state.failed,
+                        error: Some(format!("Failed to create: {}", e)),
+                    })
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
     /// Import hosts from file format via streaming
     ///
     /// Supports conflict handling modes via `conflict_mode` field:
@@ -103,115 +228,9 @@ impl HostsServiceImpl {
                     }
                 };
 
-                state.processed += 1;
-
-                // Validate
-                if validate_ip_address(&parsed.ip_address).is_err() {
-                    state.failed += 1;
-                    if state.conflict_mode == ConflictMode::Strict {
-                        return Ok(Response::new(vec![ImportHostsResponse {
-                            processed: state.processed,
-                            created: state.created,
-                            skipped: state.skipped,
-                            failed: state.failed,
-                            error: Some(format!("Invalid IP: {}", parsed.ip_address)),
-                        }]));
-                    }
-                    continue;
-                }
-
-                if validate_hostname(&parsed.hostname).is_err() {
-                    state.failed += 1;
-                    if state.conflict_mode == ConflictMode::Strict {
-                        return Ok(Response::new(vec![ImportHostsResponse {
-                            processed: state.processed,
-                            created: state.created,
-                            skipped: state.skipped,
-                            failed: state.failed,
-                            error: Some(format!("Invalid hostname: {}", parsed.hostname)),
-                        }]));
-                    }
-                    continue;
-                }
-
-                // Check for duplicates in this import
-                let key = (parsed.ip_address.clone(), parsed.hostname.clone());
-                if state.seen.contains(&key) {
-                    state.skipped += 1;
-                    if state.conflict_mode == ConflictMode::Strict {
-                        return Ok(Response::new(vec![ImportHostsResponse {
-                            processed: state.processed,
-                            created: state.created,
-                            skipped: state.skipped,
-                            failed: state.failed,
-                            error: Some(format!(
-                                "Duplicate in import: {} {}",
-                                parsed.ip_address, parsed.hostname
-                            )),
-                        }]));
-                    }
-                    continue;
-                }
-
-                // Check for duplicates in database
-                let db_duplicate = db_set.contains(&key);
-
-                if db_duplicate {
-                    match state.conflict_mode {
-                        ConflictMode::Skip => {
-                            state.skipped += 1;
-                            state.seen.insert(key);
-                            continue;
-                        }
-                        ConflictMode::Replace => {
-                            // For replace, we'd need to update - for now treat as skip
-                            // TODO: Implement update logic
-                            state.skipped += 1;
-                            state.seen.insert(key);
-                            continue;
-                        }
-                        ConflictMode::Strict => {
-                            return Ok(Response::new(vec![ImportHostsResponse {
-                                processed: state.processed,
-                                created: state.created,
-                                skipped: state.skipped,
-                                failed: state.failed,
-                                error: Some(format!(
-                                    "Duplicate in database: {} {}",
-                                    parsed.ip_address, parsed.hostname
-                                )),
-                            }]));
-                        }
-                    }
-                }
-
-                // Create entry
-                match self
-                    .commands
-                    .add_host(
-                        parsed.ip_address.clone(),
-                        parsed.hostname.clone(),
-                        parsed.comment.clone(),
-                        parsed.tags.clone(),
-                    )
-                    .await
-                {
-                    Ok(_) => {
-                        state.created += 1;
-                        state.seen.insert(key);
-                    }
-                    Err(e) => {
-                        state.failed += 1;
-                        if state.conflict_mode == ConflictMode::Strict {
-                            return Ok(Response::new(vec![ImportHostsResponse {
-                                processed: state.processed,
-                                created: state.created,
-                                skipped: state.skipped,
-                                failed: state.failed,
-                                error: Some(format!("Failed to create: {}", e)),
-                            }]));
-                        }
-                    }
+                // Process entry using helper
+                if let Err(error_response) = self.process_entry(&parsed, state, &db_set).await {
+                    return Ok(Response::new(vec![error_response]));
                 }
             }
 
@@ -221,7 +240,7 @@ impl HostsServiceImpl {
                     if let Ok(line) = String::from_utf8(std::mem::take(&mut state.line_buffer)) {
                         let line = line.trim();
                         if !line.is_empty() {
-                            // Process final partial line with same logic as main loop
+                            // Process final partial line
                             let parsed = match parse_line(line, state.format) {
                                 Ok(entry) => entry,
                                 Err(ParseError::EmptyLine) | Err(ParseError::CommentLine) => {
@@ -237,135 +256,18 @@ impl HostsServiceImpl {
                                             created: state.created,
                                             skipped: state.skipped,
                                             failed: state.failed,
-                                            error: Some(format!(
-                                                "Parse error in final line: {}",
-                                                e
-                                            )),
+                                            error: Some(format!("Parse error: {}", e)),
                                         }]));
                                     }
                                     break;
                                 }
                             };
 
-                            state.processed += 1;
-
-                            // Validate IP address
-                            if validate_ip_address(&parsed.ip_address).is_err() {
-                                state.failed += 1;
-                                if state.conflict_mode == ConflictMode::Strict {
-                                    return Ok(Response::new(vec![ImportHostsResponse {
-                                        processed: state.processed,
-                                        created: state.created,
-                                        skipped: state.skipped,
-                                        failed: state.failed,
-                                        error: Some(format!(
-                                            "Invalid IP in final line: {}",
-                                            parsed.ip_address
-                                        )),
-                                    }]));
-                                }
-                                break;
-                            }
-
-                            // Validate hostname
-                            if validate_hostname(&parsed.hostname).is_err() {
-                                state.failed += 1;
-                                if state.conflict_mode == ConflictMode::Strict {
-                                    return Ok(Response::new(vec![ImportHostsResponse {
-                                        processed: state.processed,
-                                        created: state.created,
-                                        skipped: state.skipped,
-                                        failed: state.failed,
-                                        error: Some(format!(
-                                            "Invalid hostname in final line: {}",
-                                            parsed.hostname
-                                        )),
-                                    }]));
-                                }
-                                break;
-                            }
-
-                            // Check for duplicates in import
-                            let key = (parsed.ip_address.clone(), parsed.hostname.clone());
-                            if state.seen.contains(&key) {
-                                state.skipped += 1;
-                                if state.conflict_mode == ConflictMode::Strict {
-                                    return Ok(Response::new(vec![ImportHostsResponse {
-                                        processed: state.processed,
-                                        created: state.created,
-                                        skipped: state.skipped,
-                                        failed: state.failed,
-                                        error: Some(format!(
-                                            "Duplicate in import (final line): {} {}",
-                                            parsed.ip_address, parsed.hostname
-                                        )),
-                                    }]));
-                                }
-                                break;
-                            }
-
-                            // Check for duplicates in database
-                            let db_duplicate = db_set.contains(&key);
-
-                            if db_duplicate {
-                                match state.conflict_mode {
-                                    ConflictMode::Skip => {
-                                        state.skipped += 1;
-                                        state.seen.insert(key);
-                                        break;
-                                    }
-                                    ConflictMode::Replace => {
-                                        // For replace, we'd need to update - for now treat as skip
-                                        // TODO: Implement update logic
-                                        state.skipped += 1;
-                                        state.seen.insert(key);
-                                        break;
-                                    }
-                                    ConflictMode::Strict => {
-                                        return Ok(Response::new(vec![ImportHostsResponse {
-                                            processed: state.processed,
-                                            created: state.created,
-                                            skipped: state.skipped,
-                                            failed: state.failed,
-                                            error: Some(format!(
-                                                "Duplicate in database (final line): {} {}",
-                                                parsed.ip_address, parsed.hostname
-                                            )),
-                                        }]));
-                                    }
-                                }
-                            }
-
-                            // Create entry
-                            match self
-                                .commands
-                                .add_host(
-                                    parsed.ip_address.clone(),
-                                    parsed.hostname.clone(),
-                                    parsed.comment.clone(),
-                                    parsed.tags.clone(),
-                                )
-                                .await
+                            // Process entry using helper
+                            if let Err(error_response) =
+                                self.process_entry(&parsed, state, &db_set).await
                             {
-                                Ok(_) => {
-                                    state.created += 1;
-                                    state.seen.insert(key);
-                                }
-                                Err(e) => {
-                                    state.failed += 1;
-                                    if state.conflict_mode == ConflictMode::Strict {
-                                        return Ok(Response::new(vec![ImportHostsResponse {
-                                            processed: state.processed,
-                                            created: state.created,
-                                            skipped: state.skipped,
-                                            failed: state.failed,
-                                            error: Some(format!(
-                                                "Failed to create (final line): {}",
-                                                e
-                                            )),
-                                        }]));
-                                    }
-                                }
+                                return Ok(Response::new(vec![error_response]));
                             }
                         }
                     }

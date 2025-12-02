@@ -586,3 +586,133 @@ async fn test_import_hosts_strict_fails_on_duplicate() {
     assert!(response.error.is_some());
     assert!(response.error.unwrap().contains("Duplicate"));
 }
+
+#[tokio::test]
+async fn test_import_hosts_json_format() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create JSON/JSONL data
+    let data = r#"{"ip_address":"192.168.1.10","hostname":"server.local","comment":"Test server","tags":["test"]}
+{"ip_address":"192.168.1.20","hostname":"nas.local","comment":null,"tags":[]}
+"#;
+
+    let requests = vec![ImportHostsRequest {
+        chunk: data.as_bytes().to_vec(),
+        last_chunk: true,
+        format: Some("json".to_string()),
+        conflict_mode: Some("skip".to_string()),
+    }];
+
+    let request_stream = futures::stream::iter(requests);
+    let mut response_stream = client
+        .import_hosts(request_stream)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut final_response = None;
+    while let Some(response) = response_stream.message().await.unwrap() {
+        final_response = Some(response);
+    }
+
+    let response = final_response.unwrap();
+    assert_eq!(response.processed, 2);
+    assert_eq!(response.created, 2);
+    assert_eq!(response.skipped, 0);
+    assert_eq!(response.failed, 0);
+    assert!(response.error.is_none());
+}
+
+#[tokio::test]
+async fn test_import_hosts_csv_format() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create CSV data with header
+    let data = r#"ip_address,hostname,comment,tags
+192.168.1.10,server.local,Test server,test;prod
+192.168.1.20,nas.local,,storage
+"#;
+
+    let requests = vec![ImportHostsRequest {
+        chunk: data.as_bytes().to_vec(),
+        last_chunk: true,
+        format: Some("csv".to_string()),
+        conflict_mode: Some("skip".to_string()),
+    }];
+
+    let request_stream = futures::stream::iter(requests);
+    let mut response_stream = client
+        .import_hosts(request_stream)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut final_response = None;
+    while let Some(response) = response_stream.message().await.unwrap() {
+        final_response = Some(response);
+    }
+
+    let response = final_response.unwrap();
+    assert_eq!(response.processed, 2);
+    assert_eq!(response.created, 2);
+    assert_eq!(response.skipped, 0);
+    assert_eq!(response.failed, 0);
+    assert!(response.error.is_none());
+}
+
+#[tokio::test]
+async fn test_import_hosts_chunked_streaming() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Split data across multiple chunks
+    let chunk1 = b"192.168.1.10\tserv";
+    let chunk2 = b"er.local\n192.168.1.";
+    let chunk3 = b"20\tnas.local\n";
+
+    let requests = vec![
+        ImportHostsRequest {
+            chunk: chunk1.to_vec(),
+            last_chunk: false,
+            format: Some("hosts".to_string()),
+            conflict_mode: Some("skip".to_string()),
+        },
+        ImportHostsRequest {
+            chunk: chunk2.to_vec(),
+            last_chunk: false,
+            format: None, // Format only needed on first chunk
+            conflict_mode: None,
+        },
+        ImportHostsRequest {
+            chunk: chunk3.to_vec(),
+            last_chunk: true,
+            format: None,
+            conflict_mode: None,
+        },
+    ];
+
+    let request_stream = futures::stream::iter(requests);
+    let mut response_stream = client
+        .import_hosts(request_stream)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut responses = Vec::new();
+    while let Some(response) = response_stream.message().await.unwrap() {
+        responses.push(response);
+    }
+
+    // Should get progress updates for each chunk
+    assert!(!responses.is_empty());
+
+    // Final response should show both entries processed
+    let final_response = responses.last().unwrap();
+    assert_eq!(final_response.processed, 2);
+    assert_eq!(final_response.created, 2);
+    assert_eq!(final_response.skipped, 0);
+    assert_eq!(final_response.failed, 0);
+    assert!(final_response.error.is_none());
+}
