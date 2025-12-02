@@ -51,8 +51,13 @@ async fn start_test_server() -> SocketAddr {
     // Create hooks (no-op for tests)
     let hooks = Arc::new(HookExecutor::new(vec![], vec![], 30));
 
-    // Create hosts file generator with temp path
-    // We leak the temp_dir to keep it alive for the test duration
+    // Create hosts file generator with temp path.
+    //
+    // Note on Box::leak: The temp directory must outlive the spawned server task,
+    // but we can't move an Arc<TempDir> into the spawned task without complex
+    // lifetime gymnastics. Since tests are short-lived and the OS cleans up /tmp
+    // on reboot, leaking the TempDir handle is acceptable here. The actual temp
+    // directory still gets cleaned up when the test process exits.
     let temp_dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let hosts_path = temp_dir.path().join("hosts");
     let hosts_file = Arc::new(HostsFileGenerator::new(hosts_path));
@@ -108,7 +113,6 @@ async fn create_client(addr: SocketAddr) -> HostsServiceClient<Channel> {
 }
 
 #[tokio::test]
-#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_add_and_get_host() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -157,7 +161,6 @@ async fn test_server_starts() {
 }
 
 #[tokio::test]
-#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_update_host() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -197,7 +200,6 @@ async fn test_update_host() {
 }
 
 #[tokio::test]
-#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_delete_host() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -234,7 +236,6 @@ async fn test_delete_host() {
 }
 
 #[tokio::test]
-#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_list_hosts() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -273,7 +274,6 @@ async fn test_list_hosts() {
 }
 
 #[tokio::test]
-#[ignore = "gRPC calls hang - requires investigation of tonic server/client interaction"]
 async fn test_search_hosts() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
