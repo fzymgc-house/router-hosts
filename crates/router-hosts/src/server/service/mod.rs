@@ -99,9 +99,11 @@ impl HostsService for HostsServiceImpl {
 
     async fn import_hosts(
         &self,
-        _request: Request<Streaming<ImportHostsRequest>>,
+        request: Request<Streaming<ImportHostsRequest>>,
     ) -> Result<Response<Self::ImportHostsStream>, Status> {
-        Err(Status::unimplemented("ImportHosts not yet implemented"))
+        let responses = self.handle_import_hosts(request).await?;
+        let stream = futures::stream::iter(responses.into_inner().into_iter().map(Ok));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     type ExportHostsStream = ResponseStream<ExportHostsResponse>;
