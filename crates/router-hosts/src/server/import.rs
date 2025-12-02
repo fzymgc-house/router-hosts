@@ -2,6 +2,7 @@
 //! Import format parsing for ImportHosts RPC
 
 use crate::server::write_queue::ParsedEntry;
+use serde::Deserialize;
 use thiserror::Error;
 
 /// Supported import formats
@@ -147,9 +148,43 @@ fn parse_comment_and_tags(comment_part: Option<&str>) -> (Option<String>, Vec<St
     }
 }
 
-fn parse_json_format(_text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
-    // TODO: Implement
-    Ok(vec![])
+/// JSON entry format for import
+#[derive(Debug, Deserialize)]
+struct JsonEntry {
+    ip_address: String,
+    hostname: String,
+    comment: Option<String>,
+    #[serde(default)]
+    tags: Vec<String>,
+}
+
+fn parse_json_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
+    let mut entries = Vec::new();
+
+    for (line_num, line) in text.lines().enumerate() {
+        let line_number = line_num + 1;
+        let line = line.trim();
+
+        if line.is_empty() {
+            continue;
+        }
+
+        let json_entry: JsonEntry =
+            serde_json::from_str(line).map_err(|e| ParseError::JsonError {
+                line: line_number,
+                message: e.to_string(),
+            })?;
+
+        entries.push(ParsedEntry {
+            ip_address: json_entry.ip_address,
+            hostname: json_entry.hostname,
+            comment: json_entry.comment,
+            tags: json_entry.tags,
+            line_number,
+        });
+    }
+
+    Ok(entries)
 }
 
 fn parse_csv_format(_text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
@@ -218,5 +253,39 @@ mod tests {
         let entries = parse_import(input, ImportFormat::Hosts).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].hostname, "server.local");
+    }
+
+    #[test]
+    fn test_parse_json_simple() {
+        let input = br#"{"ip_address": "192.168.1.10", "hostname": "server.local"}"#;
+        let entries = parse_import(input, ImportFormat::Json).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].ip_address, "192.168.1.10");
+        assert_eq!(entries[0].hostname, "server.local");
+    }
+
+    #[test]
+    fn test_parse_json_with_all_fields() {
+        let input = br#"{"ip_address": "192.168.1.10", "hostname": "server.local", "comment": "My server", "tags": ["prod", "web"]}"#;
+        let entries = parse_import(input, ImportFormat::Json).unwrap();
+        assert_eq!(entries[0].comment, Some("My server".to_string()));
+        assert_eq!(entries[0].tags, vec!["prod", "web"]);
+    }
+
+    #[test]
+    fn test_parse_json_multiple_lines() {
+        let input = br#"{"ip_address": "192.168.1.10", "hostname": "server1.local"}
+{"ip_address": "192.168.1.11", "hostname": "server2.local"}"#;
+        let entries = parse_import(input, ImportFormat::Json).unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_json_skips_empty_lines() {
+        let input = br#"{"ip_address": "192.168.1.10", "hostname": "server.local"}
+
+"#;
+        let entries = parse_import(input, ImportFormat::Json).unwrap();
+        assert_eq!(entries.len(), 1);
     }
 }
