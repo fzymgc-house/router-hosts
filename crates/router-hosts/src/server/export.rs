@@ -43,14 +43,15 @@ pub fn format_hosts_entry(entry: &HostEntry) -> Vec<u8> {
 
     if has_comment || has_tags {
         line.push_str("\t# ");
-        if has_comment {
-            // Safe to unwrap since has_comment guarantees Some with non-empty content
-            line.push_str(entry.comment.as_ref().unwrap());
+        if let Some(comment) = &entry.comment {
+            if !comment.is_empty() {
+                line.push_str(comment);
+                if has_tags {
+                    line.push(' ');
+                }
+            }
         }
         if has_tags {
-            if has_comment {
-                line.push(' ');
-            }
             line.push('[');
             line.push_str(&entry.tags.join(", "));
             line.push(']');
