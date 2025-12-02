@@ -29,8 +29,8 @@ use router_hosts::server::service::HostsServiceImpl;
 use router_hosts_common::proto::hosts_service_client::HostsServiceClient;
 use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
 use router_hosts_common::proto::{
-    AddHostRequest, DeleteHostRequest, ExportHostsRequest, GetHostRequest, ListHostsRequest,
-    SearchHostsRequest, UpdateHostRequest,
+    AddHostRequest, DeleteHostRequest, ExportHostsRequest, GetHostRequest, ImportHostsRequest,
+    ListHostsRequest, SearchHostsRequest, UpdateHostRequest,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -463,4 +463,126 @@ async fn test_export_hosts_csv_format() {
     let entry = String::from_utf8(chunks[1].clone()).unwrap();
     assert!(entry.contains("\"Hello, world\"")); // Comma should be quoted
     assert!(entry.contains("tag1;tag2"));
+}
+
+#[tokio::test]
+async fn test_import_hosts_hosts_format() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create import data
+    let data = b"192.168.1.10\tserver.local\t# Test server\n192.168.1.20\tnas.local\n";
+
+    let requests = vec![ImportHostsRequest {
+        chunk: data.to_vec(),
+        last_chunk: true,
+        format: Some("hosts".to_string()),
+        conflict_mode: Some("skip".to_string()),
+    }];
+
+    let request_stream = futures::stream::iter(requests);
+    let mut response_stream = client
+        .import_hosts(request_stream)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut final_response = None;
+    while let Some(response) = response_stream.message().await.unwrap() {
+        final_response = Some(response);
+    }
+
+    let response = final_response.unwrap();
+    assert_eq!(response.processed, 2);
+    assert_eq!(response.created, 2);
+    assert_eq!(response.skipped, 0);
+    assert_eq!(response.failed, 0);
+    assert!(response.error.is_none());
+}
+
+#[tokio::test]
+async fn test_import_hosts_skip_duplicates() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add an existing host
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "existing.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Try to import same host
+    let data = b"192.168.1.10\texisting.local\n192.168.1.20\tnew.local\n";
+
+    let requests = vec![ImportHostsRequest {
+        chunk: data.to_vec(),
+        last_chunk: true,
+        format: Some("hosts".to_string()),
+        conflict_mode: Some("skip".to_string()),
+    }];
+
+    let request_stream = futures::stream::iter(requests);
+    let mut response_stream = client
+        .import_hosts(request_stream)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut final_response = None;
+    while let Some(response) = response_stream.message().await.unwrap() {
+        final_response = Some(response);
+    }
+
+    let response = final_response.unwrap();
+    assert_eq!(response.processed, 2);
+    assert_eq!(response.created, 1); // Only new.local created
+    assert_eq!(response.skipped, 1); // existing.local skipped
+}
+
+#[tokio::test]
+async fn test_import_hosts_strict_fails_on_duplicate() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add an existing host
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "existing.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Try to import same host with strict mode
+    let data = b"192.168.1.10\texisting.local\n";
+
+    let requests = vec![ImportHostsRequest {
+        chunk: data.to_vec(),
+        last_chunk: true,
+        format: Some("hosts".to_string()),
+        conflict_mode: Some("strict".to_string()),
+    }];
+
+    let request_stream = futures::stream::iter(requests);
+    let mut response_stream = client
+        .import_hosts(request_stream)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut final_response = None;
+    while let Some(response) = response_stream.message().await.unwrap() {
+        final_response = Some(response);
+    }
+
+    let response = final_response.unwrap();
+    assert!(response.error.is_some());
+    assert!(response.error.unwrap().contains("Duplicate"));
 }
