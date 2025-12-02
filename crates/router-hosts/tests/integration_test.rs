@@ -767,3 +767,33 @@ async fn test_import_hosts_invalid_utf8() {
     assert_eq!(response.failed, 1); // Invalid UTF-8 chunk increments failed
     assert!(response.error.is_none()); // No fatal error in non-strict mode
 }
+
+#[tokio::test]
+async fn test_import_hosts_buffer_limit() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create data larger than 10MB without newlines (will trigger buffer limit)
+    let large_data = vec![b'x'; 11 * 1024 * 1024]; // 11MB
+
+    let requests = vec![ImportHostsRequest {
+        chunk: large_data,
+        last_chunk: false,
+        format: Some("hosts".to_string()),
+        conflict_mode: Some("skip".to_string()),
+    }];
+
+    let request_stream = futures::stream::iter(requests);
+    let result = client.import_hosts(request_stream).await;
+
+    // Should fail (gRPC stream terminates on buffer overflow)
+    assert!(result.is_err());
+    let status = result.unwrap_err();
+    // The actual error code depends on how tonic handles the stream termination
+    // We just verify it fails, not the specific code
+    assert!(
+        status.code() == tonic::Code::ResourceExhausted || status.code() == tonic::Code::OutOfRange,
+        "Expected ResourceExhausted or OutOfRange, got {:?}",
+        status.code()
+    );
+}

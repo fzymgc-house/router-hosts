@@ -378,6 +378,12 @@ mod tests {
     }
 
     #[test]
+    fn test_import_format_invalid() {
+        assert!("xml".parse::<ImportFormat>().is_err());
+        assert!("yaml".parse::<ImportFormat>().is_err());
+    }
+
+    #[test]
     fn test_conflict_mode_parsing() {
         assert_eq!("skip".parse::<ConflictMode>().unwrap(), ConflictMode::Skip);
         assert_eq!("".parse::<ConflictMode>().unwrap(), ConflictMode::Skip);
@@ -390,6 +396,12 @@ mod tests {
             ConflictMode::Strict
         );
         assert!("invalid".parse::<ConflictMode>().is_err());
+    }
+
+    #[test]
+    fn test_conflict_mode_invalid() {
+        assert!("merge".parse::<ConflictMode>().is_err());
+        assert!("overwrite".parse::<ConflictMode>().is_err());
     }
 
     #[test]

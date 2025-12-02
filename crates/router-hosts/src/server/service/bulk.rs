@@ -24,6 +24,9 @@ const MAX_LINE_BUFFER_SIZE: usize = 10 * 1024 * 1024;
 impl HostsServiceImpl {
     /// Process a single parsed entry with validation and conflict handling
     ///
+    /// Increments `processed` counter for every entry attempted to process,
+    /// regardless of validation outcome.
+    ///
     /// Returns Ok(()) on success, Err(response) when strict mode should fail
     async fn process_entry(
         &self,
@@ -31,6 +34,9 @@ impl HostsServiceImpl {
         state: &mut ImportState,
         db_set: &std::collections::HashSet<(String, String)>,
     ) -> Result<(), ImportHostsResponse> {
+        // Increment processed counter for all entries attempted to process
+        state.processed += 1;
+
         // Validate IP address
         if validate_ip_address(&parsed.ip_address).is_err() {
             state.failed += 1;
@@ -48,9 +54,6 @@ impl HostsServiceImpl {
             }
             return Ok(());
         }
-
-        // Entry passed validation, increment processed counter
-        state.processed += 1;
 
         // Check for duplicates in this import
         let key = (parsed.ip_address.clone(), parsed.hostname.clone());
@@ -133,10 +136,10 @@ impl HostsServiceImpl {
     /// - "strict": Fail if any duplicate is found
     ///
     /// Progress is reported via streaming ImportHostsResponse with counters:
-    /// - processed: Total entries validated successfully (may still fail during creation)
+    /// - processed: Total entries attempted to process (parse failures are NOT counted)
     /// - created: New entries added
     /// - skipped: Duplicates skipped (when conflict_mode = "skip")
-    /// - failed: Validation or creation failures
+    /// - failed: Parse, validation, or creation failures
     pub async fn handle_import_hosts(
         &self,
         request: Request<Streaming<ImportHostsRequest>>,
@@ -148,7 +151,7 @@ impl HostsServiceImpl {
         // OPTIMIZATION: Load existing database entries once for duplicate checking
         let db_entries = HostProjections::list_all(&self.db)
             .map_err(|e| Status::internal(format!("Failed to load existing hosts: {}", e)))?;
-        let db_set: std::collections::HashSet<_> = db_entries
+        let db_set: std::collections::HashSet<(String, String)> = db_entries
             .into_iter()
             .map(|e| (e.ip_address, e.hostname))
             .collect();
@@ -210,7 +213,6 @@ impl HostsServiceImpl {
                     Ok(entry) => entry,
                     Err(ParseError::EmptyLine) | Err(ParseError::CommentLine) => continue,
                     Err(e) => {
-                        state.processed += 1;
                         state.failed += 1;
                         if state.conflict_mode == ConflictMode::Strict {
                             return Ok(Response::new(vec![
@@ -252,7 +254,6 @@ impl HostsServiceImpl {
                                 break;
                             }
                             Err(e) => {
-                                state.processed += 1;
                                 state.failed += 1;
                                 if state.conflict_mode == ConflictMode::Strict {
                                     return Ok(Response::new(vec![
