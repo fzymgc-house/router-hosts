@@ -258,19 +258,29 @@ pub fn parse_csv_line(line: &str) -> Result<ParsedEntry, ParseError> {
         return Err(ParseError::EmptyLine);
     }
 
-    // Simple CSV parsing - handles quoted fields
-    let fields = parse_csv_fields(line);
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(line.as_bytes());
 
-    if fields.len() < 2 {
+    let record = reader
+        .records()
+        .next()
+        .ok_or_else(|| ParseError::InvalidFormat("no CSV record found".to_string()))?
+        .map_err(|e| ParseError::InvalidFormat(e.to_string()))?;
+
+    if record.len() < 2 {
         return Err(ParseError::InvalidFormat(
             "expected at least ip_address,hostname".to_string(),
         ));
     }
 
-    let ip_address = fields[0].clone();
-    let hostname = fields[1].clone();
-    let comment = fields.get(2).filter(|s| !s.is_empty()).cloned();
-    let tags: Vec<String> = fields
+    let ip_address = record.get(0).unwrap_or("").to_string();
+    let hostname = record.get(1).unwrap_or("").to_string();
+    let comment = record
+        .get(2)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    let tags: Vec<String> = record
         .get(3)
         .map(|s| {
             s.split(';')
@@ -286,42 +296,6 @@ pub fn parse_csv_line(line: &str) -> Result<ParsedEntry, ParseError> {
         comment,
         tags,
     })
-}
-
-/// Parse CSV fields handling quoted values
-fn parse_csv_fields(line: &str) -> Vec<String> {
-    let mut fields = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut chars = line.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if in_quotes {
-            if c == '"' {
-                // Check for escaped quote
-                if chars.peek() == Some(&'"') {
-                    current.push('"');
-                    chars.next(); // Consume the second quote
-                } else {
-                    in_quotes = false;
-                }
-            } else {
-                current.push(c);
-            }
-        } else {
-            match c {
-                '"' => in_quotes = true,
-                ',' => {
-                    fields.push(current.clone());
-                    current.clear();
-                }
-                _ => current.push(c),
-            }
-        }
-    }
-    fields.push(current);
-
-    fields
 }
 
 /// Check if line is CSV header
