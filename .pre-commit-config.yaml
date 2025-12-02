@@ -4,7 +4,8 @@
 # Run all stages: pre-commit run --all-files --hook-stage pre-push
 #
 # Hooks are ordered by speed (fast checks first) for fail-fast behavior.
-# Expensive checks (clippy, tests) run only on pre-push stage.
+# Expensive checks (clippy) run only on pre-push stage.
+# Tests run in ci.yml workflow, not pre-commit (avoids CI duplication).
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -54,10 +55,3 @@ repos:
         pass_filenames: false
         stages: [pre-push]
 
-      - id: cargo-test
-        name: cargo test
-        entry: cargo test --workspace
-        language: system
-        types: [rust]
-        pass_filenames: false
-        stages: [pre-push]
