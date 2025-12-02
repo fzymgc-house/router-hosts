@@ -273,6 +273,7 @@ impl CommandHandler {
             updated: 0,
             skipped: 0,
             failed: 0,
+            validation_errors: Vec::new(),
         };
 
         // Group events by aggregate_id: (aggregate_id, events, expected_version)
@@ -283,22 +284,32 @@ impl CommandHandler {
 
             // Validate
             if let Err(e) = validate_ip_address(&entry.ip_address) {
+                let error_msg = format!(
+                    "Line {}: Invalid IP '{}': {}",
+                    entry.line_number, entry.ip_address, e
+                );
                 tracing::warn!(
                     line = entry.line_number,
                     ip = %entry.ip_address,
                     error = %e,
                     "Import validation failed"
                 );
+                result.validation_errors.push(error_msg);
                 result.failed += 1;
                 continue;
             }
             if let Err(e) = validate_hostname(&entry.hostname) {
+                let error_msg = format!(
+                    "Line {}: Invalid hostname '{}': {}",
+                    entry.line_number, entry.hostname, e
+                );
                 tracing::warn!(
                     line = entry.line_number,
                     hostname = %entry.hostname,
                     error = %e,
                     "Import validation failed"
                 );
+                result.validation_errors.push(error_msg);
                 result.failed += 1;
                 continue;
             }
@@ -315,7 +326,12 @@ impl CommandHandler {
                     result.skipped += 1;
                 }
                 (Some(existing_entry), ConflictMode::Replace) => {
-                    // Check for duplicate aggregate updates in this batch
+                    // Reject duplicate aggregate updates within a single batch.
+                    // Rationale:
+                    // 1. Indicates malformed import data (same IP+hostname appears twice)
+                    // 2. Outcome would be non-deterministic (which entry's values win?)
+                    // 3. Fail-fast with clear error is better than silent last-wins behavior
+                    // Users should deduplicate their import data before sending.
                     if events_by_aggregate.contains_key(&existing_entry.id) {
                         return Err(CommandError::ValidationFailed(format!(
                             "Line {}: Multiple updates to same host in import batch (IP {} hostname {})",

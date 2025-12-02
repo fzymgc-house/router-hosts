@@ -391,7 +391,8 @@ mod tests {
     #[test]
     fn test_parse_csv_multiline_field() {
         // CSV with newline inside quoted field (the csv crate handles this)
-        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"Line 1\nLine 2\",\n";
+        let input =
+            b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"Line 1\nLine 2\",\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].comment, Some("Line 1\nLine 2".to_string()));

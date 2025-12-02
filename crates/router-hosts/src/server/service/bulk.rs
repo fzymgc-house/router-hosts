@@ -116,6 +116,7 @@ impl HostsServiceImpl {
             skipped: result.skipped,
             failed: result.failed,
             error: None,
+            validation_errors: result.validation_errors,
         }]))
     }
 

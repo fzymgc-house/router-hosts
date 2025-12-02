@@ -172,7 +172,8 @@ message ImportHostsResponse {
   // Successfully created entries
   int32 created = 2;
 
-  // Existing entries updated (when conflict_mode = "replace")
+  // Existing entries updated. Only non-zero when conflict_mode = "replace".
+  // In skip mode, duplicates increment skipped instead.
   int32 updated = 3;
 
   // Duplicates skipped (when conflict_mode = "skip")
@@ -183,6 +184,10 @@ message ImportHostsResponse {
 
   // Error message if import operation encountered an issue
   optional string error = 6;
+
+  // Details of validation failures (line number and reason)
+  // Only populated when failed > 0
+  repeated string validation_errors = 7;
 }
 
 // Request to export all hosts in a specified format

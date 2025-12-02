@@ -46,6 +46,8 @@ pub struct ImportResult {
     pub skipped: i32,
     /// Entries that failed validation (invalid IP/hostname)
     pub failed: i32,
+    /// Details of validation failures (line number and reason)
+    pub validation_errors: Vec<String>,
 }
 
 /// Conflict handling mode for imports
@@ -670,5 +672,63 @@ mod tests {
         // Verify only 5 unique hosts exist
         let hosts = commands.list_hosts().await.unwrap();
         assert_eq!(hosts.len(), 5, "Should have exactly 5 unique hosts");
+    }
+
+    /// Tests queue behavior with 150 concurrent operations (exceeds queue capacity of 100).
+    /// Verifies that:
+    /// 1. All operations eventually complete (backpressure works correctly)
+    /// 2. Data integrity is maintained (no duplicates, correct count)
+    /// 3. No deadlocks or timeouts occur
+    #[tokio::test]
+    async fn test_backpressure_with_high_concurrency() {
+        let (write_queue, commands, _tempdir) = setup_write_queue();
+
+        // Spawn 150 concurrent add_host operations (exceeds QUEUE_CAPACITY of 100)
+        let mut handles = Vec::with_capacity(150);
+
+        for i in 0..150 {
+            let wq = write_queue.clone();
+            let handle = tokio::spawn(async move {
+                wq.add_host(
+                    format!("192.168.{}.{}", i / 256, i % 256),
+                    format!("host{}.local", i),
+                    Some(format!("Host {}", i)),
+                    vec![format!("batch{}", i / 50)],
+                )
+                .await
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all operations to complete
+        let mut success_count = 0;
+        let mut error_count = 0;
+
+        for handle in handles {
+            match handle.await {
+                Ok(Ok(_)) => success_count += 1,
+                Ok(Err(e)) => {
+                    error_count += 1;
+                    // Log the error for debugging but don't fail
+                    eprintln!("Operation failed: {:?}", e);
+                }
+                Err(e) => panic!("Task panicked: {:?}", e),
+            }
+        }
+
+        // All 150 operations should succeed
+        assert_eq!(
+            success_count, 150,
+            "All 150 operations should succeed, but {} failed",
+            error_count
+        );
+
+        // Verify all hosts were created
+        let hosts = commands.list_hosts().await.unwrap();
+        assert_eq!(
+            hosts.len(),
+            150,
+            "Should have exactly 150 hosts after all operations complete"
+        );
     }
 }
