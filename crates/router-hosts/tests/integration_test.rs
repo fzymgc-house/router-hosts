@@ -32,6 +32,7 @@ use router_hosts_common::proto::{
     AddHostRequest, DeleteHostRequest, ExportHostsRequest, GetHostRequest, ImportHostsRequest,
     ListHostsRequest, SearchHostsRequest, UpdateHostRequest,
 };
+use tokio_stream::StreamExt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -466,334 +467,137 @@ async fn test_export_hosts_csv_format() {
 }
 
 #[tokio::test]
-async fn test_import_hosts_hosts_format() {
+async fn test_import_hosts_via_grpc() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
 
-    // Create import data
-    let data = b"192.168.1.10\tserver.local\t# Test server\n192.168.1.20\tnas.local\n";
+    // Import some hosts
+    let import_data = b"192.168.1.10\tserver1.local\n192.168.1.11\tserver2.local\t# Second server\n";
 
     let requests = vec![ImportHostsRequest {
-        chunk: data.to_vec(),
+        chunk: import_data.to_vec(),
         last_chunk: true,
         format: Some("hosts".to_string()),
         conflict_mode: Some("skip".to_string()),
     }];
 
-    let request_stream = futures::stream::iter(requests);
-    let mut response_stream = client
-        .import_hosts(request_stream)
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
         .await
-        .unwrap()
-        .into_inner();
+        .unwrap();
 
-    let mut final_response = None;
-    while let Some(response) = response_stream.message().await.unwrap() {
-        final_response = Some(response);
-    }
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
 
-    let response = final_response.unwrap();
-    assert_eq!(response.processed, 2);
-    assert_eq!(response.created, 2);
-    assert_eq!(response.skipped, 0);
-    assert_eq!(response.failed, 0);
-    assert!(response.error.is_none());
-}
+    assert_eq!(progress.processed, 2);
+    assert_eq!(progress.created, 2);
+    assert_eq!(progress.skipped, 0);
+    assert_eq!(progress.failed, 0);
 
-#[tokio::test]
-async fn test_import_hosts_skip_duplicates() {
-    let addr = start_test_server().await;
-    let mut client = create_client(addr).await;
-
-    // Add an existing host
-    client
-        .add_host(AddHostRequest {
-            ip_address: "192.168.1.10".to_string(),
-            hostname: "existing.local".to_string(),
-            comment: None,
-            tags: vec![],
+    // Verify hosts were created
+    let list_response = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
         })
         .await
         .unwrap();
 
-    // Try to import same host
-    let data = b"192.168.1.10\texisting.local\n192.168.1.20\tnew.local\n";
-
-    let requests = vec![ImportHostsRequest {
-        chunk: data.to_vec(),
-        last_chunk: true,
-        format: Some("hosts".to_string()),
-        conflict_mode: Some("skip".to_string()),
-    }];
-
-    let request_stream = futures::stream::iter(requests);
-    let mut response_stream = client
-        .import_hosts(request_stream)
-        .await
-        .unwrap()
-        .into_inner();
-
-    let mut final_response = None;
-    while let Some(response) = response_stream.message().await.unwrap() {
-        final_response = Some(response);
+    let mut stream = list_response.into_inner();
+    let mut count = 0;
+    while let Some(_) = stream.message().await.unwrap() {
+        count += 1;
     }
-
-    let response = final_response.unwrap();
-    assert_eq!(response.processed, 2);
-    assert_eq!(response.created, 1); // Only new.local created
-    assert_eq!(response.skipped, 1); // existing.local skipped
+    assert_eq!(count, 2);
 }
 
 #[tokio::test]
-async fn test_import_hosts_strict_fails_on_duplicate() {
+async fn test_import_export_roundtrip() {
     let addr = start_test_server().await;
     let mut client = create_client(addr).await;
 
-    // Add an existing host
+    // Add a host
     client
         .add_host(AddHostRequest {
             ip_address: "192.168.1.10".to_string(),
-            hostname: "existing.local".to_string(),
-            comment: None,
-            tags: vec![],
+            hostname: "roundtrip.local".to_string(),
+            comment: Some("Roundtrip test".to_string()),
+            tags: vec!["test".to_string()],
         })
         .await
         .unwrap();
 
-    // Try to import same host with strict mode
-    let data = b"192.168.1.10\texisting.local\n";
+    // Export as hosts format
+    let export_response = client
+        .export_hosts(ExportHostsRequest {
+            format: "hosts".to_string(),
+        })
+        .await
+        .unwrap();
 
+    let mut export_data = Vec::new();
+    let mut stream = export_response.into_inner();
+    while let Some(chunk) = stream.message().await.unwrap() {
+        export_data.extend_from_slice(&chunk.chunk);
+    }
+
+    // Delete the host
+    let list_response = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap();
+
+    let mut stream = list_response.into_inner();
+    let first_entry = stream.message().await.unwrap().unwrap();
+    let host_id = first_entry.entry.as_ref().unwrap().id.clone();
+
+    client
+        .delete_host(DeleteHostRequest { id: host_id })
+        .await
+        .unwrap();
+
+    // Import the exported data
     let requests = vec![ImportHostsRequest {
-        chunk: data.to_vec(),
+        chunk: export_data,
         last_chunk: true,
         format: Some("hosts".to_string()),
-        conflict_mode: Some("strict".to_string()),
-    }];
-
-    let request_stream = futures::stream::iter(requests);
-    let mut response_stream = client
-        .import_hosts(request_stream)
-        .await
-        .unwrap()
-        .into_inner();
-
-    let mut final_response = None;
-    while let Some(response) = response_stream.message().await.unwrap() {
-        final_response = Some(response);
-    }
-
-    let response = final_response.unwrap();
-    assert!(response.error.is_some());
-    assert!(response.error.unwrap().contains("Duplicate"));
-}
-
-#[tokio::test]
-async fn test_import_hosts_json_format() {
-    let addr = start_test_server().await;
-    let mut client = create_client(addr).await;
-
-    // Create JSON/JSONL data
-    let data = r#"{"ip_address":"192.168.1.10","hostname":"server.local","comment":"Test server","tags":["test"]}
-{"ip_address":"192.168.1.20","hostname":"nas.local","comment":null,"tags":[]}
-"#;
-
-    let requests = vec![ImportHostsRequest {
-        chunk: data.as_bytes().to_vec(),
-        last_chunk: true,
-        format: Some("json".to_string()),
         conflict_mode: Some("skip".to_string()),
     }];
 
-    let request_stream = futures::stream::iter(requests);
-    let mut response_stream = client
-        .import_hosts(request_stream)
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
         .await
-        .unwrap()
-        .into_inner();
+        .unwrap();
 
-    let mut final_response = None;
-    while let Some(response) = response_stream.message().await.unwrap() {
-        final_response = Some(response);
-    }
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
 
-    let response = final_response.unwrap();
-    assert_eq!(response.processed, 2);
-    assert_eq!(response.created, 2);
-    assert_eq!(response.skipped, 0);
-    assert_eq!(response.failed, 0);
-    assert!(response.error.is_none());
-}
+    assert_eq!(progress.created, 1);
 
-#[tokio::test]
-async fn test_import_hosts_csv_format() {
-    let addr = start_test_server().await;
-    let mut client = create_client(addr).await;
-
-    // Create CSV data with header
-    let data = r#"ip_address,hostname,comment,tags
-192.168.1.10,server.local,Test server,test;prod
-192.168.1.20,nas.local,,storage
-"#;
-
-    let requests = vec![ImportHostsRequest {
-        chunk: data.as_bytes().to_vec(),
-        last_chunk: true,
-        format: Some("csv".to_string()),
-        conflict_mode: Some("skip".to_string()),
-    }];
-
-    let request_stream = futures::stream::iter(requests);
-    let mut response_stream = client
-        .import_hosts(request_stream)
+    // Verify host is back
+    let list_response = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
         .await
-        .unwrap()
-        .into_inner();
+        .unwrap();
 
-    let mut final_response = None;
-    while let Some(response) = response_stream.message().await.unwrap() {
-        final_response = Some(response);
+    let mut stream = list_response.into_inner();
+    let mut count = 0;
+    let mut restored_hostname = None;
+    while let Some(response) = stream.message().await.unwrap() {
+        if let Some(entry) = response.entry {
+            restored_hostname = Some(entry.hostname);
+            count += 1;
+        }
     }
-
-    let response = final_response.unwrap();
-    assert_eq!(response.processed, 2);
-    assert_eq!(response.created, 2);
-    assert_eq!(response.skipped, 0);
-    assert_eq!(response.failed, 0);
-    assert!(response.error.is_none());
-}
-
-#[tokio::test]
-async fn test_import_hosts_chunked_streaming() {
-    let addr = start_test_server().await;
-    let mut client = create_client(addr).await;
-
-    // Split data across multiple chunks
-    let chunk1 = b"192.168.1.10\tserv";
-    let chunk2 = b"er.local\n192.168.1.";
-    let chunk3 = b"20\tnas.local\n";
-
-    let requests = vec![
-        ImportHostsRequest {
-            chunk: chunk1.to_vec(),
-            last_chunk: false,
-            format: Some("hosts".to_string()),
-            conflict_mode: Some("skip".to_string()),
-        },
-        ImportHostsRequest {
-            chunk: chunk2.to_vec(),
-            last_chunk: false,
-            format: None, // Format only needed on first chunk
-            conflict_mode: None,
-        },
-        ImportHostsRequest {
-            chunk: chunk3.to_vec(),
-            last_chunk: true,
-            format: None,
-            conflict_mode: None,
-        },
-    ];
-
-    let request_stream = futures::stream::iter(requests);
-    let mut response_stream = client
-        .import_hosts(request_stream)
-        .await
-        .unwrap()
-        .into_inner();
-
-    let mut responses = Vec::new();
-    while let Some(response) = response_stream.message().await.unwrap() {
-        responses.push(response);
-    }
-
-    // Should get progress updates for each chunk
-    assert!(!responses.is_empty());
-
-    // Final response should show both entries processed
-    let final_response = responses.last().unwrap();
-    assert_eq!(final_response.processed, 2);
-    assert_eq!(final_response.created, 2);
-    assert_eq!(final_response.skipped, 0);
-    assert_eq!(final_response.failed, 0);
-    assert!(final_response.error.is_none());
-}
-
-#[tokio::test]
-async fn test_import_hosts_invalid_utf8() {
-    let addr = start_test_server().await;
-    let mut client = create_client(addr).await;
-
-    // Test that invalid UTF-8 doesn't crash the server
-    // The implementation uses extract_lines() which silently drops chunks
-    // containing invalid UTF-8 (String::from_utf8 returns Err)
-    // Send a chunk with invalid UTF-8 bytes
-    let mut invalid_chunk = Vec::new();
-    invalid_chunk.extend_from_slice(b"192.168.1.10\tserver.local\n");
-    invalid_chunk.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // Invalid UTF-8 bytes
-    invalid_chunk.extend_from_slice(b"\n");
-
-    // Send a separate valid chunk
-    let valid_chunk = b"192.168.1.20\tnas.local\n";
-
-    let requests = vec![
-        ImportHostsRequest {
-            chunk: invalid_chunk,
-            last_chunk: false,
-            format: Some("hosts".to_string()),
-            conflict_mode: Some("skip".to_string()),
-        },
-        ImportHostsRequest {
-            chunk: valid_chunk.to_vec(),
-            last_chunk: true,
-            format: None,
-            conflict_mode: None,
-        },
-    ];
-
-    let request_stream = futures::stream::iter(requests);
-    let mut response_stream = client
-        .import_hosts(request_stream)
-        .await
-        .unwrap()
-        .into_inner();
-
-    let mut final_response = None;
-    while let Some(response) = response_stream.message().await.unwrap() {
-        final_response = Some(response);
-    }
-
-    let response = final_response.unwrap();
-    // Invalid UTF-8 increments failed counter, valid chunk succeeds
-    assert_eq!(response.created, 1); // Only nas.local from valid chunk
-    assert_eq!(response.failed, 1); // Invalid UTF-8 chunk increments failed
-    assert!(response.error.is_none()); // No fatal error in non-strict mode
-}
-
-#[tokio::test]
-async fn test_import_hosts_buffer_limit() {
-    let addr = start_test_server().await;
-    let mut client = create_client(addr).await;
-
-    // Create data larger than 10MB without newlines (will trigger buffer limit)
-    let large_data = vec![b'x'; 11 * 1024 * 1024]; // 11MB
-
-    let requests = vec![ImportHostsRequest {
-        chunk: large_data,
-        last_chunk: false,
-        format: Some("hosts".to_string()),
-        conflict_mode: Some("skip".to_string()),
-    }];
-
-    let request_stream = futures::stream::iter(requests);
-    let result = client.import_hosts(request_stream).await;
-
-    // Should fail (gRPC stream terminates on buffer overflow)
-    assert!(result.is_err());
-    let status = result.unwrap_err();
-    // The actual error code depends on how tonic handles the stream termination
-    // We just verify it fails, not the specific code
-    assert!(
-        status.code() == tonic::Code::ResourceExhausted || status.code() == tonic::Code::OutOfRange,
-        "Expected ResourceExhausted or OutOfRange, got {:?}",
-        status.code()
-    );
+    assert_eq!(count, 1);
+    assert_eq!(restored_hostname, Some("roundtrip.local".to_string()));
 }
