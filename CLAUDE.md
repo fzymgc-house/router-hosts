@@ -178,11 +178,13 @@ Before contributing, ensure you have the following tools installed:
 - **buf CLI** (for protobuf linting/formatting):
   - macOS: `brew install bufbuild/buf/buf`
   - Other: [buf.build/docs/installation](https://buf.build/docs/installation)
-- **pre-commit** (recommended for local development): `pip install pre-commit`
+- **pre-commit** (CI enforces these checks): `pip install pre-commit`
   - Enable hooks: `pre-commit install && pre-commit install --hook-type pre-push`
-  - CI enforces all pre-commit hooks, so running locally avoids surprises
+  - Running locally catches issues before push
 
 **Note on linting:** Workspace lints in `Cargo.toml` use `warn` level during development, but CI treats warnings as errors via `cargo clippy -- -D warnings`. This allows iterative development while enforcing quality before merge.
+
+**Note on testing:** Tests are run by the `ci.yml` workflow, not pre-commit hooks. Pre-commit handles formatting and linting only (cargo fmt, clippy, buf). This avoids running the test suite twice in CI while keeping local commits fast.
 
 ### Dependency Management
 
@@ -193,7 +195,7 @@ This project uses [Renovate](https://docs.renovatebot.com/) for automated depend
 - **Manual review:** Minor/major updates require manual review (especially DuckDB)
 - **Stability:** Non-patch Cargo updates wait 3 days before being proposed
 
-To temporarily disable Renovate, add `renovate.json` to `.gitignore` or close the Renovate PR with a "wontfix" label.
+To temporarily disable Renovate, set `"enabled": false` in `renovate.json` or close unwanted Renovate PRs with a "wontfix" label.
 
 ## Build and Development Commands
 
