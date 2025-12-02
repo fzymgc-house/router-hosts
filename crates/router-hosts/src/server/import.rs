@@ -324,6 +324,35 @@ pub fn is_csv_header(line: &str) -> bool {
     line.starts_with("ip_address") || line.starts_with("ip,") || line == "ip_address,hostname,comment,tags"
 }
 
+/// Extract complete lines from buffer, returning lines and remaining partial data
+pub fn extract_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    // Find last newline position
+    if let Some(last_newline) = buffer.iter().rposition(|&b| b == b'\n') {
+        // Extract everything up to and including last newline
+        let complete: Vec<u8> = buffer.drain(..=last_newline).collect();
+
+        // Parse as string and split into lines
+        if let Ok(text) = String::from_utf8(complete) {
+            for line in text.lines() {
+                lines.push(line.to_string());
+            }
+        }
+    }
+
+    lines
+}
+
+/// Parse a line based on format
+pub fn parse_line(line: &str, format: ImportFormat) -> Result<ParsedEntry, ParseError> {
+    match format {
+        ImportFormat::Hosts => parse_hosts_line(line),
+        ImportFormat::Json => parse_json_line(line),
+        ImportFormat::Csv => parse_csv_line(line),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,5 +482,41 @@ mod tests {
         assert!(is_csv_header("ip_address,hostname,comment,tags"));
         assert!(is_csv_header("IP_ADDRESS,HOSTNAME"));
         assert!(!is_csv_header("192.168.1.10,server.local"));
+    }
+
+    #[test]
+    fn test_extract_lines_complete() {
+        let mut buffer = b"line1\nline2\nline3\n".to_vec();
+        let lines = extract_lines(&mut buffer);
+        assert_eq!(lines, vec!["line1", "line2", "line3"]);
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn test_extract_lines_partial() {
+        let mut buffer = b"line1\nline2\npartial".to_vec();
+        let lines = extract_lines(&mut buffer);
+        assert_eq!(lines, vec!["line1", "line2"]);
+        assert_eq!(buffer, b"partial");
+    }
+
+    #[test]
+    fn test_extract_lines_no_newline() {
+        let mut buffer = b"partial data".to_vec();
+        let lines = extract_lines(&mut buffer);
+        assert!(lines.is_empty());
+        assert_eq!(buffer, b"partial data");
+    }
+
+    #[test]
+    fn test_parse_line_dispatch() {
+        let hosts_entry = parse_line("192.168.1.1 host.local", ImportFormat::Hosts).unwrap();
+        assert_eq!(hosts_entry.hostname, "host.local");
+
+        let json_entry = parse_line(r#"{"ip_address":"192.168.1.1","hostname":"host.local"}"#, ImportFormat::Json).unwrap();
+        assert_eq!(json_entry.hostname, "host.local");
+
+        let csv_entry = parse_line("192.168.1.1,host.local,,", ImportFormat::Csv).unwrap();
+        assert_eq!(csv_entry.hostname, "host.local");
     }
 }
