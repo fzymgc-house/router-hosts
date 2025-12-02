@@ -42,3 +42,9 @@ jobs:
 
             - name: Lint protobuf
               run: buf lint
+
+            - name: Install pre-commit
+              run: pip install pre-commit
+
+            - name: Run pre-commit
+              run: pre-commit run --all-files
