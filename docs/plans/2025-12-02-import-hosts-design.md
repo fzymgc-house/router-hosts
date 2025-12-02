@@ -1,8 +1,9 @@
 # ImportHosts RPC Design
 
 **Date:** 2025-12-02
-**Status:** Active
+**Status:** Complete
 **Related:** [v1.0 Design Document](2025-12-01-router-hosts-v1-design.md)
+**PR:** #33
 
 ## Overview
 
@@ -214,3 +215,31 @@ Maintain ≥80% coverage as per project requirements.
 4. Wire up service layer in bulk.rs
 5. Add integration tests
 6. Add test fixture files
+
+## Implementation Notes
+
+**Completed:** 2025-12-02
+
+### Files Added/Modified
+
+- `crates/router-hosts/src/server/write_queue.rs` - WriteQueue, WriteCommand, write_worker
+- `crates/router-hosts/src/server/import.rs` - Format parsing (hosts, JSON, CSV)
+- `crates/router-hosts/src/server/commands.rs` - import_hosts method with conflict handling
+- `crates/router-hosts/src/server/service/bulk.rs` - ImportHosts handler wired to WriteQueue
+- `crates/router-hosts/src/server/service/mod.rs` - Added WriteQueue to HostsServiceImpl
+- `crates/router-hosts/src/server/service/hosts.rs` - Mutations routed through WriteQueue
+- `crates/router-hosts/tests/integration_test.rs` - ImportHosts and roundtrip tests
+
+### Key Implementation Details
+
+1. **ImportResult includes `updated` counter** - Tracks entries updated in replace mode
+2. **Duplicate aggregate detection** - If same IP+hostname appears twice in import batch, returns error
+3. **CSV parsing uses `csv` crate** - Robust handling of escaped fields, quotes, commas
+4. **All mutations serialized** - add_host, update_host, delete_host, import_hosts go through WriteQueue
+
+### Test Coverage
+
+- 15 unit tests for format parsing
+- 6 unit tests for conflict handling modes
+- 2 integration tests (gRPC import, export→import roundtrip)
+- 217 total tests passing

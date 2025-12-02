@@ -1,5 +1,8 @@
 # ImportHosts Implementation Plan
 
+**Status:** ✅ Complete (2025-12-02)
+**PR:** #33
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement the ImportHosts bidirectional streaming RPC with write serialization, multi-format parsing, and conflict handling.
