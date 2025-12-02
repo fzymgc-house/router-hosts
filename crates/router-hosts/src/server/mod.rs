@@ -11,6 +11,7 @@ pub mod db;
 pub mod export;
 pub mod hooks;
 pub mod hosts_file;
+pub mod import;
 pub mod service;
 
 use crate::server::commands::CommandHandler;
