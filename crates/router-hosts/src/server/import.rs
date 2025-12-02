@@ -189,31 +189,36 @@ fn parse_json_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
 
 fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
     let mut entries = Vec::new();
-    let mut lines = text.lines().enumerate();
 
-    // Skip header row
-    if lines.next().is_none() {
-        return Ok(entries);
-    }
+    // Use csv crate for robust parsing of quoted fields, escaped quotes, etc.
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(true)
+        .flexible(true) // Allow varying number of fields per row
+        .trim(csv::Trim::All)
+        .from_reader(text.as_bytes());
 
-    for (line_num, line) in lines {
-        let line_number = line_num + 1;
-        let line = line.trim();
+    for (record_idx, result) in reader.records().enumerate() {
+        // Line number is record index + 2 (1 for 0-indexing, 1 for header row)
+        let line_number = record_idx + 2;
 
-        if line.is_empty() {
-            continue;
-        }
+        let record = result.map_err(|e| ParseError::CsvError(e.to_string()))?;
 
-        let fields = parse_csv_line(line).map_err(ParseError::CsvError)?;
-
-        if fields.len() < 2 {
+        if record.len() < 2 {
             return Err(ParseError::InvalidLine {
                 line: line_number,
                 message: "CSV row must have at least ip_address and hostname".to_string(),
             });
         }
 
-        let comment = fields.get(2).and_then(|s| {
+        let ip_address = record.get(0).unwrap_or("").trim().to_string();
+        let hostname = record.get(1).unwrap_or("").trim().to_string();
+
+        // Skip rows where both required fields are empty (allows blank lines in CSV)
+        if ip_address.is_empty() && hostname.is_empty() {
+            continue;
+        }
+
+        let comment = record.get(2).and_then(|s| {
             let s = s.trim();
             if s.is_empty() {
                 None
@@ -222,7 +227,7 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
             }
         });
 
-        let tags = fields
+        let tags = record
             .get(3)
             .map(|s| {
                 s.split(';')
@@ -233,8 +238,8 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
             .unwrap_or_default();
 
         entries.push(ParsedEntry {
-            ip_address: fields[0].clone(),
-            hostname: fields[1].clone(),
+            ip_address,
+            hostname,
             comment,
             tags,
             line_number,
@@ -242,45 +247,6 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
     }
 
     Ok(entries)
-}
-
-/// Parse a CSV line, handling quoted fields
-fn parse_csv_line(line: &str) -> Result<Vec<String>, String> {
-    let mut fields = Vec::new();
-    let mut current = String::new();
-    let mut in_quotes = false;
-    let mut chars = line.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        match c {
-            '"' if in_quotes => {
-                // Check for escaped quote
-                if chars.peek() == Some(&'"') {
-                    chars.next();
-                    current.push('"');
-                } else {
-                    in_quotes = false;
-                }
-            }
-            '"' if !in_quotes => {
-                in_quotes = true;
-            }
-            ',' if !in_quotes => {
-                fields.push(current.clone());
-                current.clear();
-            }
-            _ => {
-                current.push(c);
-            }
-        }
-    }
-    fields.push(current);
-
-    if in_quotes {
-        return Err("Unclosed quote in CSV".to_string());
-    }
-
-    Ok(fields)
 }
 
 #[cfg(test)]
@@ -411,5 +377,23 @@ mod tests {
         let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server1.local,,\n192.168.1.11,server2.local,,\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_csv_escaped_quotes() {
+        // CSV with embedded quotes (escaped as "")
+        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"He said \"\"hello\"\"\",\n";
+        let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].comment, Some("He said \"hello\"".to_string()));
+    }
+
+    #[test]
+    fn test_parse_csv_multiline_field() {
+        // CSV with newline inside quoted field (the csv crate handles this)
+        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"Line 1\nLine 2\",\n";
+        let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].comment, Some("Line 1\nLine 2".to_string()));
     }
 }

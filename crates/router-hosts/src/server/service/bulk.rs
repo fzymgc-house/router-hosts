@@ -13,6 +13,13 @@ use router_hosts_common::proto::{
 use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
 
+/// Maximum size of import data in bytes (10 MiB)
+///
+/// This limit prevents OOM on resource-constrained devices like routers.
+/// A typical hosts file with 10,000 entries is ~500KB, so 10MB allows for
+/// very large imports while protecting against memory exhaustion.
+const MAX_IMPORT_SIZE: usize = 10 * 1024 * 1024;
+
 impl HostsServiceImpl {
     /// Import hosts from file format via streaming
     ///
@@ -40,9 +47,17 @@ impl HostsServiceImpl {
         let mut format: Option<String> = None;
         let mut conflict_mode: Option<String> = None;
 
-        // Collect all chunks
+        // Collect all chunks with size limit check
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result?;
+
+            // Check size limit before extending buffer
+            if data.len() + chunk.chunk.len() > MAX_IMPORT_SIZE {
+                return Err(Status::resource_exhausted(format!(
+                    "Import data exceeds maximum size of {} bytes",
+                    MAX_IMPORT_SIZE
+                )));
+            }
 
             data.extend_from_slice(&chunk.chunk);
 

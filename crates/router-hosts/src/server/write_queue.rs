@@ -31,12 +31,20 @@ use ulid::Ulid;
 const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Result of an import operation
+///
+/// Counter fields use `i32` for protobuf compatibility - the gRPC proto uses int32
+/// for these counters in ImportHostsResponse, and protobuf int32 maps to Rust i32.
 #[derive(Debug, Clone)]
 pub struct ImportResult {
+    /// Total entries parsed from input data
     pub processed: i32,
+    /// New entries successfully created
     pub created: i32,
+    /// Existing entries updated (replace mode only)
     pub updated: i32,
+    /// Entries skipped due to existing duplicates (skip mode)
     pub skipped: i32,
+    /// Entries that failed validation (invalid IP/hostname)
     pub failed: i32,
 }
 

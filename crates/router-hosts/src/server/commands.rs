@@ -999,6 +999,7 @@ mod tests {
         // Verify host was updated
         // NOTE: We must use get_by_id which rebuilds from events, not list_hosts which uses SQL view
         // The SQL view has a bug where LAST_VALUE(metadata) doesn't properly merge partial updates
+        // See: https://github.com/fzymgc-house/router-hosts/issues/35
         let hosts = handler.list_hosts().await.unwrap();
         let host_id = hosts[0].id;
         let updated = handler.get_host(host_id).await.unwrap().unwrap();
@@ -1116,5 +1117,65 @@ mod tests {
         assert_eq!(result.updated, 0);
         assert_eq!(result.skipped, 1); // No changes needed, counted as skipped
         assert_eq!(result.failed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_validation_failures() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Mix of valid and invalid entries
+        let entries = vec![
+            // Valid entry
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "valid.local".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 1,
+            },
+            // Invalid IP address
+            ParsedEntry {
+                ip_address: "not-an-ip".to_string(),
+                hostname: "badip.local".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 2,
+            },
+            // Invalid hostname (contains underscore, which is invalid per RFC)
+            ParsedEntry {
+                ip_address: "192.168.1.3".to_string(),
+                hostname: "bad_hostname".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 3,
+            },
+            // Another valid entry
+            ParsedEntry {
+                ip_address: "192.168.1.4".to_string(),
+                hostname: "valid2.local".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 4,
+            },
+        ];
+
+        let result = handler
+            .import_hosts(entries, ConflictMode::Skip)
+            .await
+            .unwrap();
+
+        // Should process all 4, create 2 valid ones, fail 2 invalid ones
+        assert_eq!(result.processed, 4);
+        assert_eq!(result.created, 2);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.failed, 2);
+
+        // Verify only valid entries were created
+        let hosts = handler.list_hosts().await.unwrap();
+        assert_eq!(hosts.len(), 2);
+        assert!(hosts.iter().any(|h| h.hostname == "valid.local"));
+        assert!(hosts.iter().any(|h| h.hostname == "valid2.local"));
     }
 }
