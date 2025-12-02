@@ -170,6 +170,19 @@ Key issue categories:
 - **Medium priority:** Important but not blocking
 - **Low priority:** Nice-to-have improvements
 
+## Development Prerequisites
+
+Before contributing, ensure you have the following tools installed:
+
+- **Rust toolchain** (stable): `rustup install stable`
+- **buf CLI** (for protobuf linting/formatting):
+  - macOS: `brew install bufbuild/buf/buf`
+  - Other: [buf.build/docs/installation](https://buf.build/docs/installation)
+- **pre-commit** (optional, for local git hooks): `pip install pre-commit`
+  - Enable hooks: `pre-commit install && pre-commit install --hook-type pre-push`
+
+**Note on linting:** Workspace lints in `Cargo.toml` use `warn` level during development, but CI treats warnings as errors via `cargo clippy -- -D warnings`. This allows iterative development while enforcing quality before merge.
+
 ## Build and Development Commands
 
 ### Build

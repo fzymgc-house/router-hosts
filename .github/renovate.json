@@ -8,6 +8,7 @@
   ],
   "labels": ["dependencies"],
   "rangeStrategy": "bump",
+  "timezone": "America/New_York",
   "lockFileMaintenance": {
     "enabled": true,
     "schedule": ["before 6am on monday"]
@@ -27,7 +28,9 @@
       "automerge": true
     },
     {
+      "description": "DuckDB minor/major updates require manual review due to potential breaking changes",
       "matchPackageNames": ["duckdb"],
+      "matchUpdateTypes": ["minor", "major"],
       "groupName": "DuckDB",
       "automerge": false
     }
@@ -36,5 +39,5 @@
     "enabled": true,
     "labels": ["security"]
   },
-  "schedule": ["before 6am on weekdays"]
+  "schedule": ["before 6am on monday"]
 }
