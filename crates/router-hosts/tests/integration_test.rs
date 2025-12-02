@@ -716,3 +716,53 @@ async fn test_import_hosts_chunked_streaming() {
     assert_eq!(final_response.failed, 0);
     assert!(final_response.error.is_none());
 }
+
+#[tokio::test]
+async fn test_import_hosts_invalid_utf8() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Test that invalid UTF-8 doesn't crash the server
+    // The implementation uses extract_lines() which silently drops chunks
+    // containing invalid UTF-8 (String::from_utf8 returns Err)
+    // Send a chunk with invalid UTF-8 bytes
+    let mut invalid_chunk = Vec::new();
+    invalid_chunk.extend_from_slice(b"192.168.1.10\tserver.local\n");
+    invalid_chunk.extend_from_slice(&[0xFF, 0xFE, 0xFD]); // Invalid UTF-8 bytes
+    invalid_chunk.extend_from_slice(b"\n");
+
+    // Send a separate valid chunk
+    let valid_chunk = b"192.168.1.20\tnas.local\n";
+
+    let requests = vec![
+        ImportHostsRequest {
+            chunk: invalid_chunk,
+            last_chunk: false,
+            format: Some("hosts".to_string()),
+            conflict_mode: Some("skip".to_string()),
+        },
+        ImportHostsRequest {
+            chunk: valid_chunk.to_vec(),
+            last_chunk: true,
+            format: None,
+            conflict_mode: None,
+        },
+    ];
+
+    let request_stream = futures::stream::iter(requests);
+    let mut response_stream = client
+        .import_hosts(request_stream)
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut final_response = None;
+    while let Some(response) = response_stream.message().await.unwrap() {
+        final_response = Some(response);
+    }
+
+    let response = final_response.unwrap();
+    // Invalid UTF-8 chunk is silently dropped, valid chunk succeeds
+    assert_eq!(response.created, 1); // Only nas.local from valid chunk
+    assert!(response.error.is_none()); // No fatal error, graceful handling
+}

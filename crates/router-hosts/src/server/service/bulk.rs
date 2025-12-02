@@ -76,6 +76,7 @@ impl HostsServiceImpl {
                     )),
                 });
             }
+            state.seen.insert(key);
             return Ok(());
         }
 
@@ -90,11 +91,13 @@ impl HostsServiceImpl {
                     return Ok(());
                 }
                 ConflictMode::Replace => {
-                    // For replace, we'd need to update - for now treat as skip
-                    // TODO: Implement update logic
-                    state.skipped += 1;
-                    state.seen.insert(key);
-                    return Ok(());
+                    return Err(ImportHostsResponse {
+                        processed: state.processed,
+                        created: state.created,
+                        skipped: state.skipped,
+                        failed: state.failed,
+                        error: Some("replace mode not yet implemented".to_string()),
+                    });
                 }
                 ConflictMode::Strict => {
                     return Err(ImportHostsResponse {

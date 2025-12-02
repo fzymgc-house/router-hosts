@@ -293,19 +293,15 @@ fn parse_csv_fields(line: &str) -> Vec<String> {
     let mut fields = Vec::new();
     let mut current = String::new();
     let mut in_quotes = false;
+    let mut chars = line.chars().peekable();
 
-    let chars: Vec<char> = line.chars().collect();
-    let mut i = 0;
-
-    while i < chars.len() {
-        let c = chars[i];
-
+    while let Some(c) = chars.next() {
         if in_quotes {
             if c == '"' {
                 // Check for escaped quote
-                if i + 1 < chars.len() && chars[i + 1] == '"' {
+                if chars.peek() == Some(&'"') {
                     current.push('"');
-                    i += 1;
+                    chars.next(); // Consume the second quote
                 } else {
                     in_quotes = false;
                 }
@@ -322,7 +318,6 @@ fn parse_csv_fields(line: &str) -> Vec<String> {
                 _ => current.push(c),
             }
         }
-        i += 1;
     }
     fields.push(current);
 
