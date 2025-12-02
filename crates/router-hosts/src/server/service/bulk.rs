@@ -237,7 +237,10 @@ impl HostsServiceImpl {
                                             created: state.created,
                                             skipped: state.skipped,
                                             failed: state.failed,
-                                            error: Some(format!("Parse error in final line: {}", e)),
+                                            error: Some(format!(
+                                                "Parse error in final line: {}",
+                                                e
+                                            )),
                                         }]));
                                     }
                                     break;

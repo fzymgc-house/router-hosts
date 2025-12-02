@@ -214,7 +214,11 @@ fn parse_comment_and_tags(s: &str) -> (Option<String>, Vec<String>) {
     }
 
     // No tags found
-    let comment = if s.is_empty() { None } else { Some(s.to_string()) };
+    let comment = if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    };
     (comment, vec![])
 }
 
@@ -235,8 +239,8 @@ pub fn parse_json_line(line: &str) -> Result<ParsedEntry, ParseError> {
         tags: Vec<String>,
     }
 
-    let parsed: JsonEntry = serde_json::from_str(line)
-        .map_err(|e| ParseError::InvalidFormat(e.to_string()))?;
+    let parsed: JsonEntry =
+        serde_json::from_str(line).map_err(|e| ParseError::InvalidFormat(e.to_string()))?;
 
     Ok(ParsedEntry {
         ip_address: parsed.ip_address,
@@ -258,7 +262,9 @@ pub fn parse_csv_line(line: &str) -> Result<ParsedEntry, ParseError> {
     let fields = parse_csv_fields(line);
 
     if fields.len() < 2 {
-        return Err(ParseError::InvalidFormat("expected at least ip_address,hostname".to_string()));
+        return Err(ParseError::InvalidFormat(
+            "expected at least ip_address,hostname".to_string(),
+        ));
     }
 
     let ip_address = fields[0].clone();
@@ -266,7 +272,12 @@ pub fn parse_csv_line(line: &str) -> Result<ParsedEntry, ParseError> {
     let comment = fields.get(2).filter(|s| !s.is_empty()).cloned();
     let tags: Vec<String> = fields
         .get(3)
-        .map(|s| s.split(';').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect())
+        .map(|s| {
+            s.split(';')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect()
+        })
         .unwrap_or_default();
 
     Ok(ParsedEntry {
@@ -321,7 +332,9 @@ fn parse_csv_fields(line: &str) -> Vec<String> {
 /// Check if line is CSV header
 pub fn is_csv_header(line: &str) -> bool {
     let line = line.trim().to_lowercase();
-    line.starts_with("ip_address") || line.starts_with("ip,") || line == "ip_address,hostname,comment,tags"
+    line.starts_with("ip_address")
+        || line.starts_with("ip,")
+        || line == "ip_address,hostname,comment,tags"
 }
 
 /// Extract complete lines from buffer, returning lines and remaining partial data
@@ -359,7 +372,10 @@ mod tests {
 
     #[test]
     fn test_import_format_parsing() {
-        assert_eq!("hosts".parse::<ImportFormat>().unwrap(), ImportFormat::Hosts);
+        assert_eq!(
+            "hosts".parse::<ImportFormat>().unwrap(),
+            ImportFormat::Hosts
+        );
         assert_eq!("".parse::<ImportFormat>().unwrap(), ImportFormat::Hosts);
         assert_eq!("json".parse::<ImportFormat>().unwrap(), ImportFormat::Json);
         assert_eq!("JSON".parse::<ImportFormat>().unwrap(), ImportFormat::Json);
@@ -371,8 +387,14 @@ mod tests {
     fn test_conflict_mode_parsing() {
         assert_eq!("skip".parse::<ConflictMode>().unwrap(), ConflictMode::Skip);
         assert_eq!("".parse::<ConflictMode>().unwrap(), ConflictMode::Skip);
-        assert_eq!("replace".parse::<ConflictMode>().unwrap(), ConflictMode::Replace);
-        assert_eq!("strict".parse::<ConflictMode>().unwrap(), ConflictMode::Strict);
+        assert_eq!(
+            "replace".parse::<ConflictMode>().unwrap(),
+            ConflictMode::Replace
+        );
+        assert_eq!(
+            "strict".parse::<ConflictMode>().unwrap(),
+            ConflictMode::Strict
+        );
         assert!("invalid".parse::<ConflictMode>().is_err());
     }
 
@@ -420,7 +442,10 @@ mod tests {
 
     #[test]
     fn test_parse_hosts_line_comment() {
-        assert_eq!(parse_hosts_line("# This is a comment").unwrap_err(), ParseError::CommentLine);
+        assert_eq!(
+            parse_hosts_line("# This is a comment").unwrap_err(),
+            ParseError::CommentLine
+        );
     }
 
     #[test]
@@ -431,7 +456,8 @@ mod tests {
 
     #[test]
     fn test_parse_json_line() {
-        let entry = parse_json_line(r#"{"ip_address":"192.168.1.10","hostname":"server.local"}"#).unwrap();
+        let entry =
+            parse_json_line(r#"{"ip_address":"192.168.1.10","hostname":"server.local"}"#).unwrap();
         assert_eq!(entry.ip_address, "192.168.1.10");
         assert_eq!(entry.hostname, "server.local");
         assert_eq!(entry.comment, None);
@@ -513,7 +539,11 @@ mod tests {
         let hosts_entry = parse_line("192.168.1.1 host.local", ImportFormat::Hosts).unwrap();
         assert_eq!(hosts_entry.hostname, "host.local");
 
-        let json_entry = parse_line(r#"{"ip_address":"192.168.1.1","hostname":"host.local"}"#, ImportFormat::Json).unwrap();
+        let json_entry = parse_line(
+            r#"{"ip_address":"192.168.1.1","hostname":"host.local"}"#,
+            ImportFormat::Json,
+        )
+        .unwrap();
         assert_eq!(json_entry.hostname, "host.local");
 
         let csv_entry = parse_line("192.168.1.1,host.local,,", ImportFormat::Csv).unwrap();
