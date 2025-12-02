@@ -327,13 +327,13 @@ fn parse_csv_fields(line: &str) -> Vec<String> {
 /// Check if line is CSV header
 pub fn is_csv_header(line: &str) -> bool {
     let line = line.trim().to_lowercase();
-    line.starts_with("ip_address")
-        || line.starts_with("ip,")
-        || line == "ip_address,hostname,comment,tags"
+    line.starts_with("ip_address,") || line == "ip_address,hostname,comment,tags"
 }
 
 /// Extract complete lines from buffer, returning lines and remaining partial data
-pub fn extract_lines(buffer: &mut Vec<u8>) -> Vec<String> {
+///
+/// Returns an error message if UTF-8 decoding fails, otherwise returns the list of lines.
+pub fn extract_lines(buffer: &mut Vec<u8>) -> Result<Vec<String>, String> {
     let mut lines = Vec::new();
 
     // Find last newline position
@@ -342,14 +342,14 @@ pub fn extract_lines(buffer: &mut Vec<u8>) -> Vec<String> {
         let complete: Vec<u8> = buffer.drain(..=last_newline).collect();
 
         // Parse as string and split into lines
-        if let Ok(text) = String::from_utf8(complete) {
-            for line in text.lines() {
-                lines.push(line.to_string());
-            }
+        let text =
+            String::from_utf8(complete).map_err(|_| "invalid UTF-8 in input data".to_string())?;
+        for line in text.lines() {
+            lines.push(line.to_string());
         }
     }
 
-    lines
+    Ok(lines)
 }
 
 /// Parse a line based on format
@@ -502,13 +502,15 @@ mod tests {
     fn test_is_csv_header() {
         assert!(is_csv_header("ip_address,hostname,comment,tags"));
         assert!(is_csv_header("IP_ADDRESS,HOSTNAME"));
+        assert!(is_csv_header("ip_address,hostname"));
         assert!(!is_csv_header("192.168.1.10,server.local"));
+        assert!(!is_csv_header("ip,hostname.local")); // Should not match "ip," prefix
     }
 
     #[test]
     fn test_extract_lines_complete() {
         let mut buffer = b"line1\nline2\nline3\n".to_vec();
-        let lines = extract_lines(&mut buffer);
+        let lines = extract_lines(&mut buffer).unwrap();
         assert_eq!(lines, vec!["line1", "line2", "line3"]);
         assert!(buffer.is_empty());
     }
@@ -516,7 +518,7 @@ mod tests {
     #[test]
     fn test_extract_lines_partial() {
         let mut buffer = b"line1\nline2\npartial".to_vec();
-        let lines = extract_lines(&mut buffer);
+        let lines = extract_lines(&mut buffer).unwrap();
         assert_eq!(lines, vec!["line1", "line2"]);
         assert_eq!(buffer, b"partial");
     }
@@ -524,9 +526,17 @@ mod tests {
     #[test]
     fn test_extract_lines_no_newline() {
         let mut buffer = b"partial data".to_vec();
-        let lines = extract_lines(&mut buffer);
+        let lines = extract_lines(&mut buffer).unwrap();
         assert!(lines.is_empty());
         assert_eq!(buffer, b"partial data");
+    }
+
+    #[test]
+    fn test_extract_lines_invalid_utf8() {
+        let mut buffer = b"line1\n\xFF\xFE invalid\n".to_vec();
+        let result = extract_lines(&mut buffer);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "invalid UTF-8 in input data");
     }
 
     #[test]

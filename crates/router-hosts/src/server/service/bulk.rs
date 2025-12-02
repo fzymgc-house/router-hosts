@@ -173,8 +173,8 @@ impl HostsServiceImpl {
         let db_entries = HostProjections::list_all(&self.db)
             .map_err(|e| Status::internal(format!("Failed to load existing hosts: {}", e)))?;
         let db_set: std::collections::HashSet<_> = db_entries
-            .iter()
-            .map(|e| (e.ip_address.clone(), e.hostname.clone()))
+            .into_iter()
+            .map(|e| (e.ip_address, e.hostname))
             .collect();
 
         while let Some(req) = stream.next().await {
@@ -208,7 +208,22 @@ impl HostsServiceImpl {
             }
 
             // Extract and process complete lines
-            let lines = extract_lines(&mut state.line_buffer);
+            let lines = match extract_lines(&mut state.line_buffer) {
+                Ok(lines) => lines,
+                Err(e) => {
+                    state.failed += 1;
+                    if state.conflict_mode == ConflictMode::Strict {
+                        return Ok(Response::new(vec![ImportHostsResponse {
+                            processed: state.processed,
+                            created: state.created,
+                            skipped: state.skipped,
+                            failed: state.failed,
+                            error: Some(e),
+                        }]));
+                    }
+                    continue;
+                }
+            };
 
             for line in lines {
                 // Skip CSV header
@@ -249,38 +264,52 @@ impl HostsServiceImpl {
             // If this is the last chunk, process remaining buffer
             if req.last_chunk {
                 if !state.line_buffer.is_empty() {
-                    if let Ok(line) = String::from_utf8(std::mem::take(&mut state.line_buffer)) {
-                        let line = line.trim();
-                        if !line.is_empty() {
-                            // Process final partial line
-                            let parsed = match parse_line(line, state.format) {
-                                Ok(entry) => entry,
-                                Err(ParseError::EmptyLine) | Err(ParseError::CommentLine) => {
-                                    // Skip empty/comment lines
-                                    break;
-                                }
-                                Err(e) => {
-                                    state.processed += 1;
-                                    state.failed += 1;
-                                    if state.conflict_mode == ConflictMode::Strict {
-                                        return Ok(Response::new(vec![ImportHostsResponse {
-                                            processed: state.processed,
-                                            created: state.created,
-                                            skipped: state.skipped,
-                                            failed: state.failed,
-                                            error: Some(format!("Parse error: {}", e)),
-                                        }]));
-                                    }
-                                    break;
-                                }
-                            };
-
-                            // Process entry using helper
-                            if let Err(error_response) =
-                                self.process_entry(&parsed, state, &db_set).await
-                            {
-                                return Ok(Response::new(vec![error_response]));
+                    let line = match String::from_utf8(std::mem::take(&mut state.line_buffer)) {
+                        Ok(l) => l,
+                        Err(_) => {
+                            state.failed += 1;
+                            if state.conflict_mode == ConflictMode::Strict {
+                                return Ok(Response::new(vec![ImportHostsResponse {
+                                    processed: state.processed,
+                                    created: state.created,
+                                    skipped: state.skipped,
+                                    failed: state.failed,
+                                    error: Some("invalid UTF-8 in final buffer".to_string()),
+                                }]));
                             }
+                            String::new()
+                        }
+                    };
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        // Process final partial line
+                        let parsed = match parse_line(line, state.format) {
+                            Ok(entry) => entry,
+                            Err(ParseError::EmptyLine) | Err(ParseError::CommentLine) => {
+                                // Skip empty/comment lines
+                                break;
+                            }
+                            Err(e) => {
+                                state.processed += 1;
+                                state.failed += 1;
+                                if state.conflict_mode == ConflictMode::Strict {
+                                    return Ok(Response::new(vec![ImportHostsResponse {
+                                        processed: state.processed,
+                                        created: state.created,
+                                        skipped: state.skipped,
+                                        failed: state.failed,
+                                        error: Some(format!("Parse error: {}", e)),
+                                    }]));
+                                }
+                                break;
+                            }
+                        };
+
+                        // Process entry using helper
+                        if let Err(error_response) =
+                            self.process_entry(&parsed, state, &db_set).await
+                        {
+                            return Ok(Response::new(vec![error_response]));
                         }
                     }
                 }
