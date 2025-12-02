@@ -762,7 +762,8 @@ async fn test_import_hosts_invalid_utf8() {
     }
 
     let response = final_response.unwrap();
-    // Invalid UTF-8 chunk is silently dropped, valid chunk succeeds
+    // Invalid UTF-8 increments failed counter, valid chunk succeeds
     assert_eq!(response.created, 1); // Only nas.local from valid chunk
-    assert!(response.error.is_none()); // No fatal error, graceful handling
+    assert_eq!(response.failed, 1); // Invalid UTF-8 chunk increments failed
+    assert!(response.error.is_none()); // No fatal error in non-strict mode
 }

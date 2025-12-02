@@ -31,8 +31,6 @@ impl HostsServiceImpl {
         state: &mut ImportState,
         db_set: &std::collections::HashSet<(String, String)>,
     ) -> Result<(), ImportHostsResponse> {
-        state.processed += 1;
-
         // Validate IP address
         if validate_ip_address(&parsed.ip_address).is_err() {
             state.failed += 1;
@@ -50,6 +48,9 @@ impl HostsServiceImpl {
             }
             return Ok(());
         }
+
+        // Entry passed validation, increment processed counter
+        state.processed += 1;
 
         // Check for duplicates in this import
         let key = (parsed.ip_address.clone(), parsed.hostname.clone());
@@ -71,7 +72,6 @@ impl HostsServiceImpl {
             match state.conflict_mode {
                 ConflictMode::Skip => {
                     state.skipped += 1;
-                    state.seen.insert(key);
                     return Ok(());
                 }
                 ConflictMode::Replace => {
@@ -133,10 +133,10 @@ impl HostsServiceImpl {
     /// - "strict": Fail if any duplicate is found
     ///
     /// Progress is reported via streaming ImportHostsResponse with counters:
-    /// - processed: Total entries parsed from input
+    /// - processed: Total entries validated successfully (may still fail during creation)
     /// - created: New entries added
     /// - skipped: Duplicates skipped (when conflict_mode = "skip")
-    /// - failed: Validation failures
+    /// - failed: Validation or creation failures
     pub async fn handle_import_hosts(
         &self,
         request: Request<Streaming<ImportHostsRequest>>,
