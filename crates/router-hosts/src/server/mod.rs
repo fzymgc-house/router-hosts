@@ -21,6 +21,7 @@ use crate::server::db::Database;
 use crate::server::hooks::HookExecutor;
 use crate::server::hosts_file::HostsFileGenerator;
 use crate::server::service::HostsServiceImpl;
+use crate::server::write_queue::WriteQueue;
 use anyhow::Result;
 use clap::Parser;
 use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
@@ -118,8 +119,11 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
         Arc::clone(&hooks),
     ));
 
+    // Create write queue for serialized mutation operations
+    let write_queue = WriteQueue::new(Arc::clone(&commands));
+
     // Create service implementation
-    let service = HostsServiceImpl::new(Arc::clone(&commands), Arc::clone(&db));
+    let service = HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&db));
 
     // Load TLS certificates
     info!("Loading TLS certificates");

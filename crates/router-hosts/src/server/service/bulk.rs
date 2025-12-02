@@ -60,11 +60,8 @@ impl HostsServiceImpl {
         }
 
         // Parse format
-        let import_format: ImportFormat = format
-            .as_deref()
-            .unwrap_or("")
-            .parse()
-            .map_err(|_| {
+        let import_format: ImportFormat =
+            format.as_deref().unwrap_or("").parse().map_err(|_| {
                 Status::invalid_argument(format!(
                     "Invalid format '{}'. Supported: hosts, json, csv",
                     format.as_deref().unwrap_or("")
@@ -76,15 +73,15 @@ impl HostsServiceImpl {
             .as_deref()
             .unwrap_or("")
             .parse()
-            .map_err(|e| Status::invalid_argument(e))?;
+            .map_err(Status::invalid_argument)?;
 
         // Parse the import data
         let entries = parse_import(&data, import_format)
             .map_err(|e| Status::invalid_argument(format!("Parse error: {}", e)))?;
 
-        // Import via command handler
+        // Import via write queue for serialization
         let result = self
-            .commands
+            .write_queue
             .import_hosts(entries, mode)
             .await
             .map_err(|e| match e {

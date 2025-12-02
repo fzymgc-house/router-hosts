@@ -26,13 +26,13 @@ use router_hosts::server::db::Database;
 use router_hosts::server::hooks::HookExecutor;
 use router_hosts::server::hosts_file::HostsFileGenerator;
 use router_hosts::server::service::HostsServiceImpl;
+use router_hosts::server::write_queue::WriteQueue;
 use router_hosts_common::proto::hosts_service_client::HostsServiceClient;
 use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
 use router_hosts_common::proto::{
     AddHostRequest, DeleteHostRequest, ExportHostsRequest, GetHostRequest, ImportHostsRequest,
     ListHostsRequest, SearchHostsRequest, UpdateHostRequest,
 };
-use tokio_stream::StreamExt;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -70,8 +70,11 @@ async fn start_test_server() -> SocketAddr {
         Arc::clone(&hooks),
     ));
 
+    // Create write queue for serialized mutation operations
+    let write_queue = WriteQueue::new(Arc::clone(&commands));
+
     // Create service
-    let service = HostsServiceImpl::new(Arc::clone(&commands), Arc::clone(&db));
+    let service = HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&db));
 
     // Spawn server task
     tokio::spawn(async move {
@@ -472,7 +475,8 @@ async fn test_import_hosts_via_grpc() {
     let mut client = create_client(addr).await;
 
     // Import some hosts
-    let import_data = b"192.168.1.10\tserver1.local\n192.168.1.11\tserver2.local\t# Second server\n";
+    let import_data =
+        b"192.168.1.10\tserver1.local\n192.168.1.11\tserver2.local\t# Second server\n";
 
     let requests = vec![ImportHostsRequest {
         chunk: import_data.to_vec(),
