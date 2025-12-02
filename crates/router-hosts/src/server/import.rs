@@ -218,6 +218,112 @@ fn parse_comment_and_tags(s: &str) -> (Option<String>, Vec<String>) {
     (comment, vec![])
 }
 
+/// Parse a JSON line (JSONL format)
+pub fn parse_json_line(line: &str) -> Result<ParsedEntry, ParseError> {
+    let line = line.trim();
+
+    if line.is_empty() {
+        return Err(ParseError::EmptyLine);
+    }
+
+    #[derive(serde::Deserialize)]
+    struct JsonEntry {
+        ip_address: String,
+        hostname: String,
+        comment: Option<String>,
+        #[serde(default)]
+        tags: Vec<String>,
+    }
+
+    let parsed: JsonEntry = serde_json::from_str(line)
+        .map_err(|e| ParseError::InvalidFormat(e.to_string()))?;
+
+    Ok(ParsedEntry {
+        ip_address: parsed.ip_address,
+        hostname: parsed.hostname,
+        comment: parsed.comment,
+        tags: parsed.tags,
+    })
+}
+
+/// Parse a CSV line (after header)
+pub fn parse_csv_line(line: &str) -> Result<ParsedEntry, ParseError> {
+    let line = line.trim();
+
+    if line.is_empty() {
+        return Err(ParseError::EmptyLine);
+    }
+
+    // Simple CSV parsing - handles quoted fields
+    let fields = parse_csv_fields(line);
+
+    if fields.len() < 2 {
+        return Err(ParseError::InvalidFormat("expected at least ip_address,hostname".to_string()));
+    }
+
+    let ip_address = fields[0].clone();
+    let hostname = fields[1].clone();
+    let comment = fields.get(2).filter(|s| !s.is_empty()).cloned();
+    let tags: Vec<String> = fields
+        .get(3)
+        .map(|s| s.split(';').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect())
+        .unwrap_or_default();
+
+    Ok(ParsedEntry {
+        ip_address,
+        hostname,
+        comment,
+        tags,
+    })
+}
+
+/// Parse CSV fields handling quoted values
+fn parse_csv_fields(line: &str) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let c = chars[i];
+
+        if in_quotes {
+            if c == '"' {
+                // Check for escaped quote
+                if i + 1 < chars.len() && chars[i + 1] == '"' {
+                    current.push('"');
+                    i += 1;
+                } else {
+                    in_quotes = false;
+                }
+            } else {
+                current.push(c);
+            }
+        } else {
+            match c {
+                '"' => in_quotes = true,
+                ',' => {
+                    fields.push(current.clone());
+                    current.clear();
+                }
+                _ => current.push(c),
+            }
+        }
+        i += 1;
+    }
+    fields.push(current);
+
+    fields
+}
+
+/// Check if line is CSV header
+pub fn is_csv_header(line: &str) -> bool {
+    let line = line.trim().to_lowercase();
+    line.starts_with("ip_address") || line.starts_with("ip,") || line == "ip_address,hostname,comment,tags"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +398,60 @@ mod tests {
     fn test_parse_hosts_line_missing_hostname() {
         let err = parse_hosts_line("192.168.1.10").unwrap_err();
         assert!(matches!(err, ParseError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn test_parse_json_line() {
+        let entry = parse_json_line(r#"{"ip_address":"192.168.1.10","hostname":"server.local"}"#).unwrap();
+        assert_eq!(entry.ip_address, "192.168.1.10");
+        assert_eq!(entry.hostname, "server.local");
+        assert_eq!(entry.comment, None);
+        assert!(entry.tags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_json_line_full() {
+        let entry = parse_json_line(r#"{"ip_address":"192.168.1.10","hostname":"server.local","comment":"Test","tags":["a","b"]}"#).unwrap();
+        assert_eq!(entry.ip_address, "192.168.1.10");
+        assert_eq!(entry.hostname, "server.local");
+        assert_eq!(entry.comment, Some("Test".to_string()));
+        assert_eq!(entry.tags, vec!["a", "b"]);
+    }
+
+    #[test]
+    fn test_parse_json_line_invalid() {
+        assert!(parse_json_line("not json").is_err());
+        assert!(parse_json_line(r#"{"hostname":"only"}"#).is_err());
+    }
+
+    #[test]
+    fn test_parse_csv_line() {
+        let entry = parse_csv_line("192.168.1.10,server.local,,").unwrap();
+        assert_eq!(entry.ip_address, "192.168.1.10");
+        assert_eq!(entry.hostname, "server.local");
+        assert_eq!(entry.comment, None);
+        assert!(entry.tags.is_empty());
+    }
+
+    #[test]
+    fn test_parse_csv_line_with_tags() {
+        let entry = parse_csv_line("192.168.1.10,server.local,comment,tag1;tag2").unwrap();
+        assert_eq!(entry.ip_address, "192.168.1.10");
+        assert_eq!(entry.hostname, "server.local");
+        assert_eq!(entry.comment, Some("comment".to_string()));
+        assert_eq!(entry.tags, vec!["tag1", "tag2"]);
+    }
+
+    #[test]
+    fn test_parse_csv_line_quoted() {
+        let entry = parse_csv_line(r#"192.168.1.10,server.local,"hello, world",tag1"#).unwrap();
+        assert_eq!(entry.comment, Some("hello, world".to_string()));
+    }
+
+    #[test]
+    fn test_is_csv_header() {
+        assert!(is_csv_header("ip_address,hostname,comment,tags"));
+        assert!(is_csv_header("IP_ADDRESS,HOSTNAME"));
+        assert!(!is_csv_header("192.168.1.10,server.local"));
     }
 }
