@@ -254,6 +254,35 @@ impl CommandHandler {
         Ok(HostProjections::search(&self.db, pattern)?)
     }
 
+    /// Import multiple hosts with conflict handling
+    ///
+    /// Unlike add_host, this commits all events in a single batch and
+    /// only regenerates the hosts file once at the end.
+    pub async fn import_hosts(
+        &self,
+        entries: Vec<crate::server::write_queue::ParsedEntry>,
+        conflict_mode: crate::server::write_queue::ConflictMode,
+    ) -> CommandResult<crate::server::write_queue::ImportResult> {
+        use crate::server::write_queue::{ConflictMode, ImportResult};
+
+        let mut result = ImportResult {
+            processed: 0,
+            created: 0,
+            skipped: 0,
+            failed: 0,
+        };
+
+        // TODO: Implement import logic
+        let _ = (entries, conflict_mode);
+
+        // Regenerate hosts file once at end
+        if result.created > 0 {
+            self.regenerate_hosts_file().await?;
+        }
+
+        Ok(result)
+    }
+
     async fn regenerate_hosts_file(&self) -> CommandResult<()> {
         match self.hosts_file.regenerate(&self.db).await {
             Ok(count) => {
