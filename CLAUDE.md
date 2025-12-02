@@ -170,6 +170,33 @@ Key issue categories:
 - **Medium priority:** Important but not blocking
 - **Low priority:** Nice-to-have improvements
 
+## Development Prerequisites
+
+Before contributing, ensure you have the following tools installed:
+
+- **Rust toolchain** (stable): `rustup install stable`
+- **buf CLI** (for protobuf linting/formatting):
+  - macOS: `brew install bufbuild/buf/buf`
+  - Other: [buf.build/docs/installation](https://buf.build/docs/installation)
+- **pre-commit** (CI enforces these checks): `pip install pre-commit`
+  - Enable hooks: `pre-commit install && pre-commit install --hook-type pre-push`
+  - Running locally catches issues before push
+
+**Note on linting:** Workspace lints in `Cargo.toml` use `warn` level during development, but CI treats warnings as errors via `cargo clippy -- -D warnings`. This allows iterative development while enforcing quality before merge.
+
+**Note on testing:** Tests are run by the `ci.yml` workflow, not pre-commit hooks. Pre-commit handles formatting and linting only (cargo fmt, clippy, buf). This avoids running the test suite twice in CI while keeping local commits fast.
+
+### Dependency Management
+
+This project uses [Renovate](https://docs.renovatebot.com/) for automated dependency updates:
+
+- **Schedule:** Weekly (Monday mornings, America/New_York timezone)
+- **Auto-merge:** Patch updates and GitHub Actions are auto-merged after CI passes
+- **Manual review:** Minor/major updates require manual review (especially DuckDB)
+- **Stability:** Non-patch Cargo updates wait 3 days before being proposed
+
+To temporarily disable Renovate, set `"enabled": false` in `renovate.json` or close unwanted Renovate PRs with a "wontfix" label.
+
 ## Build and Development Commands
 
 ### Build

@@ -1,0 +1,48 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(build)",
+    "group:allNonMajor"
+  ],
+  "labels": ["dependencies"],
+  "timezone": "America/New_York",
+  "schedule": ["before 6am on monday"],
+  "prConcurrentLimit": 5,
+  "lockFileMaintenance": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "matchManagers": ["cargo"],
+      "commitMessageTopic": "Rust crate {{depName}}"
+    },
+    {
+      "description": "Wait 3 days before updating non-patch Cargo dependencies to avoid bleeding-edge bugs",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "major"],
+      "stabilityDays": 3
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "commitMessageTopic": "GitHub Action {{depName}}",
+      "automerge": true
+    },
+    {
+      "matchUpdateTypes": ["patch"],
+      "automerge": true
+    },
+    {
+      "description": "DuckDB minor/major updates require manual review due to potential breaking changes",
+      "matchPackageNames": ["duckdb"],
+      "matchUpdateTypes": ["minor", "major"],
+      "groupName": "DuckDB",
+      "automerge": false
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security"]
+  }
+}

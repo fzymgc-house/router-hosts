@@ -31,14 +31,12 @@ jobs:
                   cache-all-crates: "true"
                   key: ${{ runner.os }}-rust
 
-            - name: Format Rust (check)
-              run: cargo fmt -- --check
+            - name: Install pre-commit
+              run: pip install pre-commit
 
-            - name: Format protobuf (check)
-              run: buf format --diff --exit-code
-
-            - name: Lint Rust (clippy)
-              run: cargo clippy -- -D warnings
-
-            - name: Lint protobuf
-              run: buf lint
+            - name: Run pre-commit (all hooks)
+              run: |
+                # Run commit-stage hooks first
+                pre-commit run --all-files
+                # Run push-stage hooks (clippy, tests) separately to avoid cache skipping
+                pre-commit run --all-files --hook-stage pre-push
