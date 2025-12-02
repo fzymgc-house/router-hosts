@@ -13,6 +13,7 @@ pub mod hooks;
 pub mod hosts_file;
 pub mod import;
 pub mod service;
+pub mod write_queue;
 
 use crate::server::commands::CommandHandler;
 use crate::server::config::Config;
