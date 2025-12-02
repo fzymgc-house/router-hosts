@@ -1,5 +1,6 @@
 //! Import format helpers for ImportHosts RPC
 
+use router_hosts_common::proto::ImportHostsResponse;
 use std::collections::HashSet;
 
 /// Supported import formats
@@ -137,6 +138,28 @@ impl ImportState {
             skipped: 0,
             failed: 0,
             csv_header_seen: false,
+        }
+    }
+
+    /// Create an error response with current counters
+    pub fn error_response(&self, message: String) -> ImportHostsResponse {
+        ImportHostsResponse {
+            processed: self.processed,
+            created: self.created,
+            skipped: self.skipped,
+            failed: self.failed,
+            error: Some(message),
+        }
+    }
+
+    /// Create a success response with current counters
+    pub fn success_response(&self) -> ImportHostsResponse {
+        ImportHostsResponse {
+            processed: self.processed,
+            created: self.created,
+            skipped: self.skipped,
+            failed: self.failed,
+            error: None,
         }
     }
 }
@@ -301,7 +324,9 @@ pub fn parse_csv_line(line: &str) -> Result<ParsedEntry, ParseError> {
 /// Check if line is CSV header
 pub fn is_csv_header(line: &str) -> bool {
     let line = line.trim().to_lowercase();
-    line.starts_with("ip_address,") || line == "ip_address,hostname,comment,tags"
+    line == "ip_address,hostname"
+        || line == "ip_address,hostname,comment,tags"
+        || line.starts_with("ip_address,hostname,")
 }
 
 /// Extract complete lines from buffer, returning lines and remaining partial data

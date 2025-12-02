@@ -27,7 +27,7 @@ impl HostsServiceImpl {
     /// Returns Ok(()) on success, Err(response) when strict mode should fail
     async fn process_entry(
         &self,
-        parsed: &crate::server::import::ParsedEntry,
+        parsed: crate::server::import::ParsedEntry,
         state: &mut ImportState,
         db_set: &std::collections::HashSet<(String, String)>,
     ) -> Result<(), ImportHostsResponse> {
@@ -37,13 +37,7 @@ impl HostsServiceImpl {
         if validate_ip_address(&parsed.ip_address).is_err() {
             state.failed += 1;
             if state.conflict_mode == ConflictMode::Strict {
-                return Err(ImportHostsResponse {
-                    processed: state.processed,
-                    created: state.created,
-                    skipped: state.skipped,
-                    failed: state.failed,
-                    error: Some(format!("Invalid IP: {}", parsed.ip_address)),
-                });
+                return Err(state.error_response(format!("Invalid IP: {}", parsed.ip_address)));
             }
             return Ok(());
         }
@@ -52,13 +46,7 @@ impl HostsServiceImpl {
         if validate_hostname(&parsed.hostname).is_err() {
             state.failed += 1;
             if state.conflict_mode == ConflictMode::Strict {
-                return Err(ImportHostsResponse {
-                    processed: state.processed,
-                    created: state.created,
-                    skipped: state.skipped,
-                    failed: state.failed,
-                    error: Some(format!("Invalid hostname: {}", parsed.hostname)),
-                });
+                return Err(state.error_response(format!("Invalid hostname: {}", parsed.hostname)));
             }
             return Ok(());
         }
@@ -68,16 +56,10 @@ impl HostsServiceImpl {
         if state.seen.contains(&key) {
             state.skipped += 1;
             if state.conflict_mode == ConflictMode::Strict {
-                return Err(ImportHostsResponse {
-                    processed: state.processed,
-                    created: state.created,
-                    skipped: state.skipped,
-                    failed: state.failed,
-                    error: Some(format!(
-                        "Duplicate in import: {} {}",
-                        parsed.ip_address, parsed.hostname
-                    )),
-                });
+                return Err(state.error_response(format!(
+                    "Duplicate in import: {} {}",
+                    parsed.ip_address, parsed.hostname
+                )));
             }
             return Ok(());
         }
@@ -93,25 +75,15 @@ impl HostsServiceImpl {
                     return Ok(());
                 }
                 ConflictMode::Replace => {
-                    return Err(ImportHostsResponse {
-                        processed: state.processed,
-                        created: state.created,
-                        skipped: state.skipped,
-                        failed: state.failed,
-                        error: Some("replace mode not yet implemented".to_string()),
-                    });
+                    return Err(
+                        state.error_response("replace mode not yet implemented".to_string())
+                    );
                 }
                 ConflictMode::Strict => {
-                    return Err(ImportHostsResponse {
-                        processed: state.processed,
-                        created: state.created,
-                        skipped: state.skipped,
-                        failed: state.failed,
-                        error: Some(format!(
-                            "Duplicate in database: {} {}",
-                            parsed.ip_address, parsed.hostname
-                        )),
-                    });
+                    return Err(state.error_response(format!(
+                        "Duplicate in database: {} {}",
+                        parsed.ip_address, parsed.hostname
+                    )));
                 }
             }
         }
@@ -120,10 +92,10 @@ impl HostsServiceImpl {
         match self
             .commands
             .add_host(
-                parsed.ip_address.clone(),
-                parsed.hostname.clone(),
-                parsed.comment.clone(),
-                parsed.tags.clone(),
+                parsed.ip_address,
+                parsed.hostname,
+                parsed.comment,
+                parsed.tags,
             )
             .await
         {
@@ -135,13 +107,7 @@ impl HostsServiceImpl {
             Err(e) => {
                 state.failed += 1;
                 if state.conflict_mode == ConflictMode::Strict {
-                    Err(ImportHostsResponse {
-                        processed: state.processed,
-                        created: state.created,
-                        skipped: state.skipped,
-                        failed: state.failed,
-                        error: Some(format!("Failed to create: {}", e)),
-                    })
+                    Err(state.error_response(format!("Failed to create: {}", e)))
                 } else {
                     Ok(())
                 }
@@ -150,6 +116,16 @@ impl HostsServiceImpl {
     }
 
     /// Import hosts from file format via streaming
+    ///
+    /// # Memory Usage
+    /// - Loads all existing database entries into memory at start for duplicate detection
+    /// - Line buffer limited to 10MB to prevent DoS attacks
+    /// - For large databases (>100k entries), consider memory implications
+    ///
+    /// # Streaming Behavior
+    /// - Processes entries immediately as chunks arrive
+    /// - Progress updates sent after each chunk
+    /// - If stream ends without last_chunk=true, remaining buffer data is processed
     ///
     /// Supports conflict handling modes via `conflict_mode` field:
     /// - "skip" (default): Skip entries that already exist (same IP+hostname)
@@ -213,13 +189,7 @@ impl HostsServiceImpl {
                 Err(e) => {
                     state.failed += 1;
                     if state.conflict_mode == ConflictMode::Strict {
-                        return Ok(Response::new(vec![ImportHostsResponse {
-                            processed: state.processed,
-                            created: state.created,
-                            skipped: state.skipped,
-                            failed: state.failed,
-                            error: Some(e),
-                        }]));
+                        return Ok(Response::new(vec![state.error_response(e)]));
                     }
                     continue;
                 }
@@ -243,20 +213,16 @@ impl HostsServiceImpl {
                         state.processed += 1;
                         state.failed += 1;
                         if state.conflict_mode == ConflictMode::Strict {
-                            return Ok(Response::new(vec![ImportHostsResponse {
-                                processed: state.processed,
-                                created: state.created,
-                                skipped: state.skipped,
-                                failed: state.failed,
-                                error: Some(format!("Parse error: {}", e)),
-                            }]));
+                            return Ok(Response::new(vec![
+                                state.error_response(format!("Parse error: {}", e))
+                            ]));
                         }
                         continue;
                     }
                 };
 
                 // Process entry using helper
-                if let Err(error_response) = self.process_entry(&parsed, state, &db_set).await {
+                if let Err(error_response) = self.process_entry(parsed, state, &db_set).await {
                     return Ok(Response::new(vec![error_response]));
                 }
             }
@@ -269,13 +235,9 @@ impl HostsServiceImpl {
                         Err(_) => {
                             state.failed += 1;
                             if state.conflict_mode == ConflictMode::Strict {
-                                return Ok(Response::new(vec![ImportHostsResponse {
-                                    processed: state.processed,
-                                    created: state.created,
-                                    skipped: state.skipped,
-                                    failed: state.failed,
-                                    error: Some("invalid UTF-8 in final buffer".to_string()),
-                                }]));
+                                return Ok(Response::new(vec![state.error_response(
+                                    "invalid UTF-8 in final buffer".to_string(),
+                                )]));
                             }
                             String::new()
                         }
@@ -293,13 +255,9 @@ impl HostsServiceImpl {
                                 state.processed += 1;
                                 state.failed += 1;
                                 if state.conflict_mode == ConflictMode::Strict {
-                                    return Ok(Response::new(vec![ImportHostsResponse {
-                                        processed: state.processed,
-                                        created: state.created,
-                                        skipped: state.skipped,
-                                        failed: state.failed,
-                                        error: Some(format!("Parse error: {}", e)),
-                                    }]));
+                                    return Ok(Response::new(vec![
+                                        state.error_response(format!("Parse error: {}", e))
+                                    ]));
                                 }
                                 break;
                             }
@@ -307,31 +265,19 @@ impl HostsServiceImpl {
 
                         // Process entry using helper
                         if let Err(error_response) =
-                            self.process_entry(&parsed, state, &db_set).await
+                            self.process_entry(parsed, state, &db_set).await
                         {
                             return Ok(Response::new(vec![error_response]));
                         }
                     }
                 }
                 // Send final progress update and exit
-                responses.push(ImportHostsResponse {
-                    processed: state.processed,
-                    created: state.created,
-                    skipped: state.skipped,
-                    failed: state.failed,
-                    error: None,
-                });
+                responses.push(state.success_response());
                 break;
             }
 
             // Send progress update after each non-final chunk
-            responses.push(ImportHostsResponse {
-                processed: state.processed,
-                created: state.created,
-                skipped: state.skipped,
-                failed: state.failed,
-                error: None,
-            });
+            responses.push(state.success_response());
         }
 
         Ok(Response::new(responses))
