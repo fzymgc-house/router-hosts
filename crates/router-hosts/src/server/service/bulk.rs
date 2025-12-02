@@ -6,11 +6,16 @@ use crate::server::export::{
     format_csv_entry, format_csv_header, format_hosts_entry, format_hosts_header,
     format_json_entry, ExportFormat,
 };
+use crate::server::import::{
+    extract_lines, is_csv_header, parse_line, ConflictMode, ImportFormat, ImportState, ParseError,
+};
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
     ExportHostsRequest, ExportHostsResponse, ImportHostsRequest, ImportHostsResponse,
 };
+use router_hosts_common::validation::{validate_hostname, validate_ip_address};
 use std::sync::Arc;
+use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 
 impl HostsServiceImpl {
@@ -26,13 +31,364 @@ impl HostsServiceImpl {
     /// - created: New entries added
     /// - skipped: Duplicates skipped (when conflict_mode = "skip")
     /// - failed: Validation failures
-    #[allow(dead_code)]
     pub async fn handle_import_hosts(
         &self,
-        _request: Request<Streaming<ImportHostsRequest>>,
+        request: Request<Streaming<ImportHostsRequest>>,
     ) -> Result<Response<Vec<ImportHostsResponse>>, Status> {
-        // TODO: Implement streaming import
-        Err(Status::unimplemented("ImportHosts not yet implemented"))
+        let mut stream = request.into_inner();
+        let mut responses = Vec::new();
+        let mut state: Option<ImportState> = None;
+
+        // OPTIMIZATION: Load existing database entries once for duplicate checking
+        let db_entries = HostProjections::list_all(&self.db)
+            .map_err(|e| Status::internal(format!("Failed to load existing hosts: {}", e)))?;
+        let db_set: std::collections::HashSet<_> = db_entries
+            .iter()
+            .map(|e| (e.ip_address.clone(), e.hostname.clone()))
+            .collect();
+
+        while let Some(req) = stream.next().await {
+            let req = req?;
+
+            // Initialize state on first chunk
+            let state = state.get_or_insert_with(|| {
+                let format: ImportFormat = req
+                    .format
+                    .as_deref()
+                    .unwrap_or("")
+                    .parse()
+                    .unwrap_or_default();
+                let conflict_mode: ConflictMode = req
+                    .conflict_mode
+                    .as_deref()
+                    .unwrap_or("")
+                    .parse()
+                    .unwrap_or_default();
+                ImportState::new(format, conflict_mode)
+            });
+
+            // Append chunk to buffer
+            state.line_buffer.extend_from_slice(&req.chunk);
+
+            // Extract and process complete lines
+            let lines = extract_lines(&mut state.line_buffer);
+
+            for line in lines {
+                // Skip CSV header
+                if state.format == ImportFormat::Csv && !state.csv_header_seen {
+                    if is_csv_header(&line) {
+                        state.csv_header_seen = true;
+                        continue;
+                    }
+                    state.csv_header_seen = true;
+                }
+
+                // Parse line
+                let parsed = match parse_line(&line, state.format) {
+                    Ok(entry) => entry,
+                    Err(ParseError::EmptyLine) | Err(ParseError::CommentLine) => continue,
+                    Err(e) => {
+                        state.processed += 1;
+                        state.failed += 1;
+                        if state.conflict_mode == ConflictMode::Strict {
+                            return Ok(Response::new(vec![ImportHostsResponse {
+                                processed: state.processed,
+                                created: state.created,
+                                skipped: state.skipped,
+                                failed: state.failed,
+                                error: Some(format!("Parse error: {}", e)),
+                            }]));
+                        }
+                        continue;
+                    }
+                };
+
+                state.processed += 1;
+
+                // Validate
+                if validate_ip_address(&parsed.ip_address).is_err() {
+                    state.failed += 1;
+                    if state.conflict_mode == ConflictMode::Strict {
+                        return Ok(Response::new(vec![ImportHostsResponse {
+                            processed: state.processed,
+                            created: state.created,
+                            skipped: state.skipped,
+                            failed: state.failed,
+                            error: Some(format!("Invalid IP: {}", parsed.ip_address)),
+                        }]));
+                    }
+                    continue;
+                }
+
+                if validate_hostname(&parsed.hostname).is_err() {
+                    state.failed += 1;
+                    if state.conflict_mode == ConflictMode::Strict {
+                        return Ok(Response::new(vec![ImportHostsResponse {
+                            processed: state.processed,
+                            created: state.created,
+                            skipped: state.skipped,
+                            failed: state.failed,
+                            error: Some(format!("Invalid hostname: {}", parsed.hostname)),
+                        }]));
+                    }
+                    continue;
+                }
+
+                // Check for duplicates in this import
+                let key = (parsed.ip_address.clone(), parsed.hostname.clone());
+                if state.seen.contains(&key) {
+                    state.skipped += 1;
+                    if state.conflict_mode == ConflictMode::Strict {
+                        return Ok(Response::new(vec![ImportHostsResponse {
+                            processed: state.processed,
+                            created: state.created,
+                            skipped: state.skipped,
+                            failed: state.failed,
+                            error: Some(format!(
+                                "Duplicate in import: {} {}",
+                                parsed.ip_address, parsed.hostname
+                            )),
+                        }]));
+                    }
+                    continue;
+                }
+
+                // Check for duplicates in database
+                let db_duplicate = db_set.contains(&key);
+
+                if db_duplicate {
+                    match state.conflict_mode {
+                        ConflictMode::Skip => {
+                            state.skipped += 1;
+                            state.seen.insert(key);
+                            continue;
+                        }
+                        ConflictMode::Replace => {
+                            // For replace, we'd need to update - for now treat as skip
+                            // TODO: Implement update logic
+                            state.skipped += 1;
+                            state.seen.insert(key);
+                            continue;
+                        }
+                        ConflictMode::Strict => {
+                            return Ok(Response::new(vec![ImportHostsResponse {
+                                processed: state.processed,
+                                created: state.created,
+                                skipped: state.skipped,
+                                failed: state.failed,
+                                error: Some(format!(
+                                    "Duplicate in database: {} {}",
+                                    parsed.ip_address, parsed.hostname
+                                )),
+                            }]));
+                        }
+                    }
+                }
+
+                // Create entry
+                match self
+                    .commands
+                    .add_host(
+                        parsed.ip_address.clone(),
+                        parsed.hostname.clone(),
+                        parsed.comment.clone(),
+                        parsed.tags.clone(),
+                    )
+                    .await
+                {
+                    Ok(_) => {
+                        state.created += 1;
+                        state.seen.insert(key);
+                    }
+                    Err(e) => {
+                        state.failed += 1;
+                        if state.conflict_mode == ConflictMode::Strict {
+                            return Ok(Response::new(vec![ImportHostsResponse {
+                                processed: state.processed,
+                                created: state.created,
+                                skipped: state.skipped,
+                                failed: state.failed,
+                                error: Some(format!("Failed to create: {}", e)),
+                            }]));
+                        }
+                    }
+                }
+            }
+
+            // If this is the last chunk, process remaining buffer
+            if req.last_chunk {
+                if !state.line_buffer.is_empty() {
+                    if let Ok(line) = String::from_utf8(std::mem::take(&mut state.line_buffer)) {
+                        let line = line.trim();
+                        if !line.is_empty() {
+                            // Process final partial line with same logic as main loop
+                            let parsed = match parse_line(line, state.format) {
+                                Ok(entry) => entry,
+                                Err(ParseError::EmptyLine) | Err(ParseError::CommentLine) => {
+                                    // Skip empty/comment lines
+                                    break;
+                                }
+                                Err(e) => {
+                                    state.processed += 1;
+                                    state.failed += 1;
+                                    if state.conflict_mode == ConflictMode::Strict {
+                                        return Ok(Response::new(vec![ImportHostsResponse {
+                                            processed: state.processed,
+                                            created: state.created,
+                                            skipped: state.skipped,
+                                            failed: state.failed,
+                                            error: Some(format!("Parse error in final line: {}", e)),
+                                        }]));
+                                    }
+                                    break;
+                                }
+                            };
+
+                            state.processed += 1;
+
+                            // Validate IP address
+                            if validate_ip_address(&parsed.ip_address).is_err() {
+                                state.failed += 1;
+                                if state.conflict_mode == ConflictMode::Strict {
+                                    return Ok(Response::new(vec![ImportHostsResponse {
+                                        processed: state.processed,
+                                        created: state.created,
+                                        skipped: state.skipped,
+                                        failed: state.failed,
+                                        error: Some(format!(
+                                            "Invalid IP in final line: {}",
+                                            parsed.ip_address
+                                        )),
+                                    }]));
+                                }
+                                break;
+                            }
+
+                            // Validate hostname
+                            if validate_hostname(&parsed.hostname).is_err() {
+                                state.failed += 1;
+                                if state.conflict_mode == ConflictMode::Strict {
+                                    return Ok(Response::new(vec![ImportHostsResponse {
+                                        processed: state.processed,
+                                        created: state.created,
+                                        skipped: state.skipped,
+                                        failed: state.failed,
+                                        error: Some(format!(
+                                            "Invalid hostname in final line: {}",
+                                            parsed.hostname
+                                        )),
+                                    }]));
+                                }
+                                break;
+                            }
+
+                            // Check for duplicates in import
+                            let key = (parsed.ip_address.clone(), parsed.hostname.clone());
+                            if state.seen.contains(&key) {
+                                state.skipped += 1;
+                                if state.conflict_mode == ConflictMode::Strict {
+                                    return Ok(Response::new(vec![ImportHostsResponse {
+                                        processed: state.processed,
+                                        created: state.created,
+                                        skipped: state.skipped,
+                                        failed: state.failed,
+                                        error: Some(format!(
+                                            "Duplicate in import (final line): {} {}",
+                                            parsed.ip_address, parsed.hostname
+                                        )),
+                                    }]));
+                                }
+                                break;
+                            }
+
+                            // Check for duplicates in database
+                            let db_duplicate = db_set.contains(&key);
+
+                            if db_duplicate {
+                                match state.conflict_mode {
+                                    ConflictMode::Skip => {
+                                        state.skipped += 1;
+                                        state.seen.insert(key);
+                                        break;
+                                    }
+                                    ConflictMode::Replace => {
+                                        // For replace, we'd need to update - for now treat as skip
+                                        // TODO: Implement update logic
+                                        state.skipped += 1;
+                                        state.seen.insert(key);
+                                        break;
+                                    }
+                                    ConflictMode::Strict => {
+                                        return Ok(Response::new(vec![ImportHostsResponse {
+                                            processed: state.processed,
+                                            created: state.created,
+                                            skipped: state.skipped,
+                                            failed: state.failed,
+                                            error: Some(format!(
+                                                "Duplicate in database (final line): {} {}",
+                                                parsed.ip_address, parsed.hostname
+                                            )),
+                                        }]));
+                                    }
+                                }
+                            }
+
+                            // Create entry
+                            match self
+                                .commands
+                                .add_host(
+                                    parsed.ip_address.clone(),
+                                    parsed.hostname.clone(),
+                                    parsed.comment.clone(),
+                                    parsed.tags.clone(),
+                                )
+                                .await
+                            {
+                                Ok(_) => {
+                                    state.created += 1;
+                                    state.seen.insert(key);
+                                }
+                                Err(e) => {
+                                    state.failed += 1;
+                                    if state.conflict_mode == ConflictMode::Strict {
+                                        return Ok(Response::new(vec![ImportHostsResponse {
+                                            processed: state.processed,
+                                            created: state.created,
+                                            skipped: state.skipped,
+                                            failed: state.failed,
+                                            error: Some(format!(
+                                                "Failed to create (final line): {}",
+                                                e
+                                            )),
+                                        }]));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // Send final progress update and exit
+                responses.push(ImportHostsResponse {
+                    processed: state.processed,
+                    created: state.created,
+                    skipped: state.skipped,
+                    failed: state.failed,
+                    error: None,
+                });
+                break;
+            }
+
+            // Send progress update after each non-final chunk
+            responses.push(ImportHostsResponse {
+                processed: state.processed,
+                created: state.created,
+                skipped: state.skipped,
+                failed: state.failed,
+                error: None,
+            });
+        }
+
+        Ok(Response::new(responses))
     }
 
     /// Export hosts in specified format via streaming
