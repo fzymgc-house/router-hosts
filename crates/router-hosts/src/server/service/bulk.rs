@@ -18,6 +18,9 @@ use std::sync::Arc;
 use tokio_stream::StreamExt;
 use tonic::{Request, Response, Status, Streaming};
 
+/// Maximum line buffer size to prevent DoS attacks (10MB)
+const MAX_LINE_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+
 impl HostsServiceImpl {
     /// Process a single parsed entry with validation and conflict handling
     ///
@@ -76,7 +79,6 @@ impl HostsServiceImpl {
                     )),
                 });
             }
-            state.seen.insert(key);
             return Ok(());
         }
 
@@ -197,6 +199,13 @@ impl HostsServiceImpl {
 
             // Append chunk to buffer
             state.line_buffer.extend_from_slice(&req.chunk);
+
+            // Check buffer size limit to prevent DoS
+            if state.line_buffer.len() > MAX_LINE_BUFFER_SIZE {
+                return Err(Status::resource_exhausted(
+                    "line buffer exceeded 10MB limit",
+                ));
+            }
 
             // Extract and process complete lines
             let lines = extract_lines(&mut state.line_buffer);
