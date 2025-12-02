@@ -27,8 +27,7 @@ use tonic::{Request, Response, Status, Streaming};
 pub struct HostsServiceImpl {
     /// Command handler for business logic
     pub(crate) commands: Arc<CommandHandler>,
-    /// Database connection (used by snapshot handlers)
-    #[allow(dead_code)]
+    /// Database connection (used by export and snapshot handlers)
     pub(crate) db: Arc<Database>,
 }
 
@@ -109,9 +108,13 @@ impl HostsService for HostsServiceImpl {
 
     async fn export_hosts(
         &self,
-        _request: Request<ExportHostsRequest>,
+        request: Request<ExportHostsRequest>,
     ) -> Result<Response<Self::ExportHostsStream>, Status> {
-        Err(Status::unimplemented("ExportHosts not yet implemented"))
+        let responses = self
+            .handle_export_hosts(request, Arc::clone(&self.db))
+            .await?;
+        let stream = futures::stream::iter(responses.into_inner().into_iter().map(Ok));
+        Ok(Response::new(Box::pin(stream)))
     }
 
     // Snapshots
