@@ -546,4 +546,121 @@ mod tests {
         assert_eq!(successes, 1, "Exactly one add should succeed");
         assert_eq!(duplicates, 1, "Exactly one should fail with DuplicateEntry");
     }
+
+    #[tokio::test]
+    async fn test_concurrent_import_operations() {
+        let (write_queue, commands, _temp_dir) = setup_write_queue();
+
+        // Create two sets of entries for concurrent import
+        let entries1: Vec<ParsedEntry> = (0..10)
+            .map(|i| ParsedEntry {
+                ip_address: format!("10.0.0.{}", i),
+                hostname: format!("batch1-host{}.local", i),
+                comment: Some(format!("Batch 1 host {}", i)),
+                tags: vec!["batch1".to_string()],
+                line_number: i + 1,
+            })
+            .collect();
+
+        let entries2: Vec<ParsedEntry> = (0..10)
+            .map(|i| ParsedEntry {
+                ip_address: format!("10.0.1.{}", i),
+                hostname: format!("batch2-host{}.local", i),
+                comment: Some(format!("Batch 2 host {}", i)),
+                tags: vec!["batch2".to_string()],
+                line_number: i + 1,
+            })
+            .collect();
+
+        // Spawn concurrent imports
+        let wq1 = write_queue.clone();
+        let wq2 = write_queue.clone();
+
+        let handle1 =
+            tokio::spawn(async move { wq1.import_hosts(entries1, ConflictMode::Skip).await });
+
+        let handle2 =
+            tokio::spawn(async move { wq2.import_hosts(entries2, ConflictMode::Skip).await });
+
+        // Both should succeed
+        let (result1, result2) = tokio::join!(handle1, handle2);
+        let import1 = result1.unwrap().unwrap();
+        let import2 = result2.unwrap().unwrap();
+
+        // Both imports should complete successfully
+        assert_eq!(import1.processed, 10, "Import 1 should process 10 entries");
+        assert_eq!(import1.created, 10, "Import 1 should create 10 entries");
+        assert_eq!(import2.processed, 10, "Import 2 should process 10 entries");
+        assert_eq!(import2.created, 10, "Import 2 should create 10 entries");
+
+        // Verify all 20 entries exist
+        let hosts = commands.list_hosts().await.unwrap();
+        assert_eq!(
+            hosts.len(),
+            20,
+            "Should have 20 hosts total from both imports"
+        );
+
+        // Verify entries from both batches exist
+        let batch1_count = hosts
+            .iter()
+            .filter(|h| h.tags.contains(&"batch1".to_string()))
+            .count();
+        let batch2_count = hosts
+            .iter()
+            .filter(|h| h.tags.contains(&"batch2".to_string()))
+            .count();
+        assert_eq!(batch1_count, 10, "Should have 10 hosts from batch 1");
+        assert_eq!(batch2_count, 10, "Should have 10 hosts from batch 2");
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_imports_with_overlapping_entries() {
+        let (write_queue, commands, _temp_dir) = setup_write_queue();
+
+        // Create entries with some overlap
+        let entries1: Vec<ParsedEntry> = (0..5)
+            .map(|i| ParsedEntry {
+                ip_address: format!("10.0.0.{}", i),
+                hostname: format!("shared-host{}.local", i),
+                comment: Some("From batch 1".to_string()),
+                tags: vec!["batch1".to_string()],
+                line_number: i + 1,
+            })
+            .collect();
+
+        let entries2: Vec<ParsedEntry> = (0..5)
+            .map(|i| ParsedEntry {
+                ip_address: format!("10.0.0.{}", i), // Same IPs/hostnames as batch 1
+                hostname: format!("shared-host{}.local", i),
+                comment: Some("From batch 2".to_string()),
+                tags: vec!["batch2".to_string()],
+                line_number: i + 1,
+            })
+            .collect();
+
+        let wq1 = write_queue.clone();
+        let wq2 = write_queue.clone();
+
+        let handle1 =
+            tokio::spawn(async move { wq1.import_hosts(entries1, ConflictMode::Skip).await });
+
+        let handle2 =
+            tokio::spawn(async move { wq2.import_hosts(entries2, ConflictMode::Skip).await });
+
+        let (result1, result2) = tokio::join!(handle1, handle2);
+        let import1 = result1.unwrap().unwrap();
+        let import2 = result2.unwrap().unwrap();
+
+        // One import creates all, the other skips all (serialized)
+        let total_created = import1.created + import2.created;
+        let total_skipped = import1.skipped + import2.skipped;
+
+        assert_eq!(total_created, 5, "Exactly 5 entries should be created");
+        assert_eq!(total_skipped, 5, "Exactly 5 entries should be skipped");
+
+        // Verify only 5 unique hosts exist
+        let hosts = commands.list_hosts().await.unwrap();
+        assert_eq!(hosts.len(), 5, "Should have exactly 5 unique hosts");
+    }
 }
