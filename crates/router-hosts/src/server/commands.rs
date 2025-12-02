@@ -263,13 +263,14 @@ impl CommandHandler {
         entries: Vec<crate::server::write_queue::ParsedEntry>,
         conflict_mode: crate::server::write_queue::ConflictMode,
     ) -> CommandResult<crate::server::write_queue::ImportResult> {
-        use crate::server::write_queue::{ConflictMode, ImportResult};
         use crate::server::db::{EventStore, HostEvent, HostProjections};
+        use crate::server::write_queue::{ConflictMode, ImportResult};
         use std::collections::HashMap;
 
         let mut result = ImportResult {
             processed: 0,
             created: 0,
+            updated: 0,
             skipped: 0,
             failed: 0,
         };
@@ -303,14 +304,25 @@ impl CommandHandler {
             }
 
             // Check for existing entry
-            let existing =
-                HostProjections::find_by_ip_and_hostname(&self.db, &entry.ip_address, &entry.hostname)?;
+            let existing = HostProjections::find_by_ip_and_hostname(
+                &self.db,
+                &entry.ip_address,
+                &entry.hostname,
+            )?;
 
             match (existing, conflict_mode) {
                 (Some(_), ConflictMode::Skip) => {
                     result.skipped += 1;
                 }
                 (Some(existing_entry), ConflictMode::Replace) => {
+                    // Check for duplicate aggregate updates in this batch
+                    if events_by_aggregate.contains_key(&existing_entry.id) {
+                        return Err(CommandError::ValidationFailed(format!(
+                            "Line {}: Multiple updates to same host in import batch (IP {} hostname {})",
+                            entry.line_number, entry.ip_address, entry.hostname
+                        )));
+                    }
+
                     // Generate update events
                     let mut update_events = Vec::new();
 
@@ -330,9 +342,15 @@ impl CommandHandler {
                     }
 
                     if !update_events.is_empty() {
-                        events_by_aggregate.insert(existing_entry.id, (update_events, Some(existing_entry.version)));
+                        events_by_aggregate.insert(
+                            existing_entry.id,
+                            (update_events, Some(existing_entry.version)),
+                        );
+                        result.updated += 1;
+                    } else {
+                        // No changes needed, count as skipped
+                        result.skipped += 1;
                     }
-                    // Count as neither created nor skipped (it's an update)
                 }
                 (Some(_), ConflictMode::Strict) => {
                     return Err(CommandError::DuplicateEntry(format!(
@@ -361,8 +379,8 @@ impl CommandHandler {
             EventStore::append_events(&self.db, &aggregate_id, events, expected_version, None)?;
         }
 
-        // Regenerate hosts file once at end
-        if result.created > 0 || result.processed > result.skipped + result.failed {
+        // Regenerate hosts file once at end if any changes were made
+        if result.created > 0 || result.updated > 0 {
             self.regenerate_hosts_file().await?;
         }
 
@@ -923,7 +941,10 @@ mod tests {
             },
         ];
 
-        let result = handler.import_hosts(entries, ConflictMode::Skip).await.unwrap();
+        let result = handler
+            .import_hosts(entries, ConflictMode::Skip)
+            .await
+            .unwrap();
 
         assert_eq!(result.processed, 2);
         assert_eq!(result.created, 1);
@@ -932,7 +953,10 @@ mod tests {
 
         // Verify existing host unchanged
         let hosts = handler.list_hosts().await.unwrap();
-        let existing = hosts.iter().find(|h| h.ip_address == "192.168.1.1").unwrap();
+        let existing = hosts
+            .iter()
+            .find(|h| h.ip_address == "192.168.1.1")
+            .unwrap();
         assert!(existing.comment.is_none()); // Original had no comment
     }
 
@@ -961,11 +985,16 @@ mod tests {
             line_number: 1,
         }];
 
-        let result = handler.import_hosts(entries, ConflictMode::Replace).await.unwrap();
+        let result = handler
+            .import_hosts(entries, ConflictMode::Replace)
+            .await
+            .unwrap();
 
         assert_eq!(result.processed, 1);
         assert_eq!(result.created, 0);
-        assert_eq!(result.skipped, 0); // Replace mode: updated instead of skipped
+        assert_eq!(result.updated, 1); // Replace mode: updated existing entry
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.failed, 0);
 
         // Verify host was updated
         // NOTE: We must use get_by_id which rebuilds from events, not list_hosts which uses SQL view
@@ -1005,5 +1034,87 @@ mod tests {
         let result = handler.import_hosts(entries, ConflictMode::Strict).await;
 
         assert!(matches!(result, Err(CommandError::DuplicateEntry(_))));
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_duplicate_aggregate_in_batch() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Add existing host
+        handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "existing.local".to_string(),
+                Some("Original comment".to_string()),
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        // Try to import two updates to the same host in one batch
+        let entries = vec![
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "existing.local".to_string(),
+                comment: Some("First update".to_string()),
+                tags: vec![],
+                line_number: 1,
+            },
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "existing.local".to_string(),
+                comment: Some("Second update".to_string()),
+                tags: vec![],
+                line_number: 2,
+            },
+        ];
+
+        let result = handler.import_hosts(entries, ConflictMode::Replace).await;
+
+        assert!(
+            matches!(&result, Err(CommandError::ValidationFailed(msg)) if msg.contains("Multiple updates to same host")),
+            "Expected ValidationFailed error about duplicate aggregate updates, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_replace_mode_no_changes() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Add existing host
+        handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "existing.local".to_string(),
+                Some("Same comment".to_string()),
+                vec!["tag1".to_string()],
+            )
+            .await
+            .unwrap();
+
+        // Import same values (no actual changes)
+        let entries = vec![ParsedEntry {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "existing.local".to_string(),
+            comment: Some("Same comment".to_string()),
+            tags: vec!["tag1".to_string()],
+            line_number: 1,
+        }];
+
+        let result = handler
+            .import_hosts(entries, ConflictMode::Replace)
+            .await
+            .unwrap();
+
+        assert_eq!(result.processed, 1);
+        assert_eq!(result.created, 0);
+        assert_eq!(result.updated, 0);
+        assert_eq!(result.skipped, 1); // No changes needed, counted as skipped
+        assert_eq!(result.failed, 0);
     }
 }

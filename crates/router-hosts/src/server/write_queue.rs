@@ -12,6 +12,7 @@ use ulid::Ulid;
 pub struct ImportResult {
     pub processed: i32,
     pub created: i32,
+    pub updated: i32,
     pub skipped: i32,
     pub failed: i32,
 }
@@ -118,9 +119,7 @@ impl WriteQueue {
             })
             .await
             .map_err(|_| {
-                crate::server::commands::CommandError::Internal(
-                    "Write queue closed".to_string(),
-                )
+                crate::server::commands::CommandError::Internal("Write queue closed".to_string())
             })?;
         reply_rx.await.map_err(|_| {
             crate::server::commands::CommandError::Internal(
@@ -152,9 +151,7 @@ impl WriteQueue {
             })
             .await
             .map_err(|_| {
-                crate::server::commands::CommandError::Internal(
-                    "Write queue closed".to_string(),
-                )
+                crate::server::commands::CommandError::Internal("Write queue closed".to_string())
             })?;
         reply_rx.await.map_err(|_| {
             crate::server::commands::CommandError::Internal(
@@ -178,9 +175,7 @@ impl WriteQueue {
             })
             .await
             .map_err(|_| {
-                crate::server::commands::CommandError::Internal(
-                    "Write queue closed".to_string(),
-                )
+                crate::server::commands::CommandError::Internal("Write queue closed".to_string())
             })?;
         reply_rx.await.map_err(|_| {
             crate::server::commands::CommandError::Internal(
@@ -204,9 +199,7 @@ impl WriteQueue {
             })
             .await
             .map_err(|_| {
-                crate::server::commands::CommandError::Internal(
-                    "Write queue closed".to_string(),
-                )
+                crate::server::commands::CommandError::Internal("Write queue closed".to_string())
             })?;
         reply_rx.await.map_err(|_| {
             crate::server::commands::CommandError::Internal(

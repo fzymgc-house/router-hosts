@@ -204,7 +204,7 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
             continue;
         }
 
-        let fields = parse_csv_line(line).map_err(|e| ParseError::CsvError(e))?;
+        let fields = parse_csv_line(line).map_err(ParseError::CsvError)?;
 
         if fields.len() < 2 {
             return Err(ParseError::InvalidLine {
@@ -391,7 +391,8 @@ mod tests {
 
     #[test]
     fn test_parse_csv_with_all_fields() {
-        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,My server,prod;web\n";
+        let input =
+            b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,My server,prod;web\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries[0].comment, Some("My server".to_string()));
         assert_eq!(entries[0].tags, vec!["prod", "web"]);
@@ -399,7 +400,8 @@ mod tests {
 
     #[test]
     fn test_parse_csv_escaped_fields() {
-        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"Hello, world\",\n";
+        let input =
+            b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"Hello, world\",\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries[0].comment, Some("Hello, world".to_string()));
     }

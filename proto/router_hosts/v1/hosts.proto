@@ -172,14 +172,17 @@ message ImportHostsResponse {
   // Successfully created entries
   int32 created = 2;
 
+  // Existing entries updated (when conflict_mode = "replace")
+  int32 updated = 3;
+
   // Duplicates skipped (when conflict_mode = "skip")
-  int32 skipped = 3;
+  int32 skipped = 4;
 
   // Validation failures
-  int32 failed = 4;
+  int32 failed = 5;
 
   // Error message if import operation encountered an issue
-  optional string error = 5;
+  optional string error = 6;
 }
 
 // Request to export all hosts in a specified format
