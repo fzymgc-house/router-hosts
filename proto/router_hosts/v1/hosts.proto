@@ -165,6 +165,19 @@ message ImportHostsRequest {
 }
 
 // Response for host import operation (streamed progress updates)
+//
+// Example counter values for importing 5 entries where 2 already exist:
+//
+// With conflict_mode = "skip":
+//   processed=5, created=3, updated=0, skipped=2, failed=0
+//   (existing entries left unchanged, counted as skipped)
+//
+// With conflict_mode = "replace":
+//   processed=5, created=3, updated=2, skipped=0, failed=0
+//   (existing entries updated with new values)
+//
+// Note: In replace mode, if existing entry has identical values, it counts
+// as skipped (no-op), not updated.
 message ImportHostsResponse {
   // Total entries processed so far
   int32 processed = 1;

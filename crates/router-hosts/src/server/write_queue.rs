@@ -731,4 +731,86 @@ mod tests {
             "Should have exactly 150 hosts after all operations complete"
         );
     }
+
+    /// Tests concurrent imports targeting the same existing host in Replace mode.
+    ///
+    /// This tests the scenario where two imports are queued, both trying to update
+    /// the same host. Since imports are serialized through the WriteQueue:
+    /// - First import succeeds and updates the host
+    /// - Second import succeeds because it gets the updated version from the first
+    ///
+    /// This is the expected behavior because the queue serializes operations,
+    /// so there's no true race condition - each import sees the result of the previous.
+    #[tokio::test]
+    async fn test_concurrent_imports_same_host_replace_mode() {
+        let (write_queue, commands, _tempdir) = setup_write_queue();
+
+        // Create an existing host that both imports will try to update
+        write_queue
+            .add_host(
+                "192.168.1.1".to_string(),
+                "shared.local".to_string(),
+                Some("Original comment".to_string()),
+                vec!["original".to_string()],
+            )
+            .await
+            .unwrap();
+
+        // Two imports targeting the same host with different values
+        let entries1 = vec![ParsedEntry {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "shared.local".to_string(),
+            comment: Some("Comment from import 1".to_string()),
+            tags: vec!["import1".to_string()],
+            line_number: 1,
+        }];
+
+        let entries2 = vec![ParsedEntry {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "shared.local".to_string(),
+            comment: Some("Comment from import 2".to_string()),
+            tags: vec!["import2".to_string()],
+            line_number: 1,
+        }];
+
+        let wq1 = write_queue.clone();
+        let wq2 = write_queue.clone();
+
+        // Launch both imports concurrently
+        let handle1 =
+            tokio::spawn(async move { wq1.import_hosts(entries1, ConflictMode::Replace).await });
+        let handle2 =
+            tokio::spawn(async move { wq2.import_hosts(entries2, ConflictMode::Replace).await });
+
+        let (result1, result2) = tokio::join!(handle1, handle2);
+
+        // Both imports should succeed (serialized, no race)
+        let import1 = result1.unwrap().unwrap();
+        let import2 = result2.unwrap().unwrap();
+
+        // Verify both processed their entries
+        assert_eq!(import1.processed, 1);
+        assert_eq!(import2.processed, 1);
+
+        // One will update (first to run), one will also update (sees new version)
+        // or potentially skip if the values happen to match
+        let total_updated = import1.updated + import2.updated;
+        assert!(
+            total_updated >= 1,
+            "At least one import should have updated the host"
+        );
+
+        // Verify final state - should have exactly one host
+        let hosts = commands.list_hosts().await.unwrap();
+        assert_eq!(hosts.len(), 1, "Should have exactly 1 host");
+
+        // The final comment should be from one of the imports (whichever ran last)
+        let host = commands.get_host(hosts[0].id).await.unwrap().unwrap();
+        assert!(
+            host.comment == Some("Comment from import 1".to_string())
+                || host.comment == Some("Comment from import 2".to_string()),
+            "Final comment should be from one of the imports, got {:?}",
+            host.comment
+        );
+    }
 }

@@ -258,6 +258,29 @@ impl CommandHandler {
     ///
     /// Unlike add_host, this commits all events in a batch and
     /// only regenerates the hosts file once at the end.
+    ///
+    /// # Fail-Fast Behavior
+    ///
+    /// This function uses fail-fast semantics for certain error conditions:
+    ///
+    /// - **Duplicate aggregate updates**: If the same IP+hostname appears multiple
+    ///   times in the import batch (when `conflict_mode` is `Replace`), the entire
+    ///   operation fails with `ValidationFailed`. No partial results are preserved.
+    ///   This prevents non-deterministic outcomes where the "winner" depends on
+    ///   iteration order.
+    ///
+    /// - **Strict mode duplicates**: If `conflict_mode` is `Strict` and any entry
+    ///   already exists, the operation fails immediately with `DuplicateEntry`.
+    ///
+    /// Validation failures (invalid IP/hostname) do NOT trigger fail-fast. Instead,
+    /// they are counted in `failed` and recorded in `validation_errors`, allowing
+    /// the import to continue with valid entries.
+    ///
+    /// # Design Rationale
+    ///
+    /// Fail-fast on duplicate aggregates ensures deterministic behavior and surfaces
+    /// malformed import data early. Users should deduplicate their import data before
+    /// sending. The alternative (last-wins or first-wins) would silently discard data.
     pub async fn import_hosts(
         &self,
         entries: Vec<crate::server::write_queue::ParsedEntry>,
