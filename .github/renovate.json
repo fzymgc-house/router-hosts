@@ -7,16 +7,21 @@
     "group:allNonMajor"
   ],
   "labels": ["dependencies"],
-  "rangeStrategy": "bump",
   "timezone": "America/New_York",
+  "schedule": ["before 6am on monday"],
   "lockFileMaintenance": {
-    "enabled": true,
-    "schedule": ["before 6am on monday"]
+    "enabled": true
   },
   "packageRules": [
     {
       "matchManagers": ["cargo"],
       "commitMessageTopic": "Rust crate {{depName}}"
+    },
+    {
+      "description": "Wait 3 days before updating non-patch Cargo dependencies to avoid bleeding-edge bugs",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "major"],
+      "stabilityDays": 3
     },
     {
       "matchManagers": ["github-actions"],
@@ -38,6 +43,5 @@
   "vulnerabilityAlerts": {
     "enabled": true,
     "labels": ["security"]
-  },
-  "schedule": ["before 6am on monday"]
+  }
 }
