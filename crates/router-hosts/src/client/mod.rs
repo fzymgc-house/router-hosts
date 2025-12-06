@@ -259,3 +259,99 @@ pub async fn run() -> Result<ExitCode> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_cli_parse_host_add() {
+        let cli = Cli::try_parse_from([
+            "router-hosts",
+            "host",
+            "add",
+            "--ip",
+            "192.168.1.1",
+            "--hostname",
+            "test.local",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Host(args) => match args.command {
+                HostCommand::Add { ip, hostname, .. } => {
+                    assert_eq!(ip, "192.168.1.1");
+                    assert_eq!(hostname, "test.local");
+                }
+                _ => panic!("Expected Add command"),
+            },
+            _ => panic!("Expected Host command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_host_add_with_tags() {
+        let cli = Cli::try_parse_from([
+            "router-hosts",
+            "host",
+            "add",
+            "--ip",
+            "10.0.0.1",
+            "--hostname",
+            "server.local",
+            "--tag",
+            "prod",
+            "--tag",
+            "web",
+        ])
+        .unwrap();
+
+        if let Commands::Host(args) = cli.command {
+            if let HostCommand::Add { tags, .. } = args.command {
+                assert_eq!(tags, vec!["prod", "web"]);
+            }
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_snapshot_rollback() {
+        let cli =
+            Cli::try_parse_from(["router-hosts", "snapshot", "rollback", "01JXXXXXXXXXX"]).unwrap();
+
+        match cli.command {
+            Commands::Snapshot(args) => match args.command {
+                SnapshotCommand::Rollback { snapshot_id } => {
+                    assert_eq!(snapshot_id, "01JXXXXXXXXXX");
+                }
+                _ => panic!("Expected Rollback command"),
+            },
+            _ => panic!("Expected Snapshot command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_global_options() {
+        let cli = Cli::try_parse_from([
+            "router-hosts",
+            "--server",
+            "localhost:50051",
+            "--format",
+            "json",
+            "-q",
+            "host",
+            "list",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.server, Some("localhost:50051".to_string()));
+        assert!(matches!(cli.format, OutputFormat::Json));
+        assert!(cli.quiet);
+    }
+
+    #[test]
+    fn test_cli_parse_config_command() {
+        let cli = Cli::try_parse_from(["router-hosts", "config"]).unwrap();
+        assert!(matches!(cli.command, Commands::Config));
+    }
+}
