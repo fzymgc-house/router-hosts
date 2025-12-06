@@ -87,9 +87,8 @@ impl EventStore {
         }
 
         // Get current version for this aggregate
-        let current_version = Self::get_current_version(db, aggregate_id).map_err(|e| {
-            Self::rollback_and_return(db, e)
-        })?;
+        let current_version = Self::get_current_version(db, aggregate_id)
+            .map_err(|e| Self::rollback_and_return(db, e))?;
 
         // Verify expected version matches (optimistic concurrency control)
         if expected_version != current_version {
@@ -602,9 +601,8 @@ impl EventStore {
         })?;
 
         // Get current version for this aggregate
-        let current_version = Self::get_current_version(db, aggregate_id).map_err(|e| {
-            Self::rollback_and_return(db, e)
-        })?;
+        let current_version = Self::get_current_version(db, aggregate_id)
+            .map_err(|e| Self::rollback_and_return(db, e))?;
 
         // Verify expected version matches (optimistic concurrency control)
         if expected_version != current_version {
