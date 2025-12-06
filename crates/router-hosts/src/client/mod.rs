@@ -3,9 +3,11 @@
 
 mod config;
 mod grpc;
+mod output;
 
 pub use config::ClientConfig;
 pub use grpc::Client;
+pub use output::{print_item, print_items, TableDisplay};
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
