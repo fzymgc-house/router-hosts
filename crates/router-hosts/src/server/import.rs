@@ -148,6 +148,15 @@ fn parse_comment_and_tags(comment_part: Option<&str>) -> (Option<String>, Vec<St
     }
 }
 
+/// Normalize empty string to None for consistent comparison
+///
+/// This ensures that `Some("")` is treated as equivalent to `None`,
+/// preventing spurious update events when comparing imported entries
+/// to existing entries.
+fn normalize_comment(comment: Option<String>) -> Option<String> {
+    comment.filter(|s| !s.is_empty())
+}
+
 /// JSON entry format for import
 #[derive(Debug, Deserialize)]
 struct JsonEntry {
@@ -178,7 +187,7 @@ fn parse_json_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         entries.push(ParsedEntry {
             ip_address: json_entry.ip_address,
             hostname: json_entry.hostname,
-            comment: json_entry.comment,
+            comment: normalize_comment(json_entry.comment),
             tags: json_entry.tags,
             line_number,
         });

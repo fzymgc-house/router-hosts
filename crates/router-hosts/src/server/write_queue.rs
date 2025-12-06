@@ -292,8 +292,12 @@ impl WriteQueue {
 
     /// Send an import hosts command and wait for result
     ///
-    /// Import operations use a longer timeout (5 minutes) since they may
-    /// process many entries and regenerate the hosts file.
+    /// Import operations use a longer timeout (5 minutes) to process many entries.
+    ///
+    /// **Note**: This is the timeout for the import operation itself, not including
+    /// any time spent waiting in the queue for previous operations to complete.
+    /// If the queue is processing a slow operation, total wait time will be
+    /// that operation's duration plus this timeout.
     pub async fn import_hosts(
         &self,
         entries: Vec<ParsedEntry>,
@@ -812,5 +816,55 @@ mod tests {
             "Final comment should be from one of the imports, got {:?}",
             host.comment
         );
+    }
+
+    #[tokio::test]
+    async fn test_write_worker_graceful_shutdown() {
+        use crate::server::commands::CommandError;
+
+        let (write_queue, _commands, _temp_dir) = setup_write_queue();
+
+        // Clone for spawned task
+        let wq = write_queue.clone();
+
+        // Spawn an operation that will race with shutdown
+        let handle = tokio::spawn(async move {
+            // Small delay to ensure the drop happens while operation is queued
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            wq.add_host(
+                "192.168.1.1".to_string(),
+                "test.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+        });
+
+        // Drop the original write queue to trigger shutdown
+        drop(write_queue);
+
+        // The operation should either succeed (if it started before shutdown)
+        // or fail with a channel closed error
+        let result = handle.await.unwrap();
+
+        // If it failed, verify it's the expected error type
+        if let Err(ref e) = result {
+            match e {
+                CommandError::Internal(msg) => {
+                    assert!(
+                        msg.contains("queue closed")
+                            || msg.contains("shutting down")
+                            || msg.contains("channel"),
+                        "Expected shutdown-related error, got: {}",
+                        msg
+                    );
+                }
+                other => {
+                    // Operation might have succeeded before shutdown, that's OK
+                    panic!("Unexpected error type: {:?}", other);
+                }
+            }
+        }
+        // If it succeeded, that's also valid - the operation completed before shutdown
     }
 }

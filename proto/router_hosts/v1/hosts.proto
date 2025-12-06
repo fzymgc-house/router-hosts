@@ -176,6 +176,12 @@ message ImportHostsRequest {
 //   processed=5, created=3, updated=2, skipped=0, failed=0
 //   (existing entries updated with new values)
 //
+// Example with validation failures (2 invalid entries):
+//   processed=5, created=2, updated=0, skipped=0, failed=3
+//   validation_errors=["Line 1: Invalid IP '999.0.0.1': ...",
+//                      "Line 3: Invalid hostname 'bad_host': ...",
+//                      "Line 5: Invalid IP 'not-an-ip': ..."]
+//
 // Note: In replace mode, if existing entry has identical values, it counts
 // as skipped (no-op), not updated.
 message ImportHostsResponse {

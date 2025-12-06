@@ -303,7 +303,7 @@ impl CommandHandler {
         let mut events_by_aggregate: HashMap<Ulid, (Vec<HostEvent>, Option<i64>)> = HashMap::new();
 
         for entry in entries {
-            result.processed += 1;
+            result.processed = result.processed.saturating_add(1);
 
             // Validate
             if let Err(e) = validate_ip_address(&entry.ip_address) {
@@ -318,7 +318,7 @@ impl CommandHandler {
                     "Import validation failed"
                 );
                 result.validation_errors.push(error_msg);
-                result.failed += 1;
+                result.failed = result.failed.saturating_add(1);
                 continue;
             }
             if let Err(e) = validate_hostname(&entry.hostname) {
@@ -333,7 +333,7 @@ impl CommandHandler {
                     "Import validation failed"
                 );
                 result.validation_errors.push(error_msg);
-                result.failed += 1;
+                result.failed = result.failed.saturating_add(1);
                 continue;
             }
 
@@ -346,7 +346,7 @@ impl CommandHandler {
 
             match (existing, conflict_mode) {
                 (Some(_), ConflictMode::Skip) => {
-                    result.skipped += 1;
+                    result.skipped = result.skipped.saturating_add(1);
                 }
                 (Some(existing_entry), ConflictMode::Replace) => {
                     // Reject duplicate aggregate updates within a single batch.
@@ -385,10 +385,10 @@ impl CommandHandler {
                             existing_entry.id,
                             (update_events, Some(existing_entry.version)),
                         );
-                        result.updated += 1;
+                        result.updated = result.updated.saturating_add(1);
                     } else {
                         // No changes needed, count as skipped
-                        result.skipped += 1;
+                        result.skipped = result.skipped.saturating_add(1);
                     }
                 }
                 (Some(_), ConflictMode::Strict) => {
@@ -408,7 +408,7 @@ impl CommandHandler {
                         created_at: Utc::now(),
                     };
                     events_by_aggregate.insert(aggregate_id, (vec![event], None));
-                    result.created += 1;
+                    result.created = result.created.saturating_add(1);
                 }
             }
         }

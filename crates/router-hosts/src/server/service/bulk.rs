@@ -20,6 +20,13 @@ use tonic::{Request, Response, Status, Streaming};
 /// very large imports while protecting against memory exhaustion.
 const MAX_IMPORT_SIZE: usize = 10 * 1024 * 1024;
 
+/// Maximum number of chunks allowed in an import stream
+///
+/// Prevents DoS attacks where a client sends many small chunks without
+/// terminating the stream. With MAX_IMPORT_SIZE of 10MB, this allows
+/// chunks as small as 1KB on average.
+const MAX_CHUNKS: usize = 10_000;
+
 impl HostsServiceImpl {
     /// Import hosts from file format via streaming
     ///
@@ -46,10 +53,20 @@ impl HostsServiceImpl {
         let mut data = Vec::new();
         let mut format: Option<String> = None;
         let mut conflict_mode: Option<String> = None;
+        let mut chunk_count: usize = 0;
 
-        // Collect all chunks with size limit check
+        // Collect all chunks with size and count limit checks
         while let Some(chunk_result) = stream.next().await {
             let chunk = chunk_result?;
+
+            // Check chunk count limit to prevent DoS via endless small chunks
+            chunk_count += 1;
+            if chunk_count > MAX_CHUNKS {
+                return Err(Status::resource_exhausted(format!(
+                    "Import stream exceeds maximum chunk count of {}",
+                    MAX_CHUNKS
+                )));
+            }
 
             // Check size limit before extending buffer
             if data.len() + chunk.chunk.len() > MAX_IMPORT_SIZE {
