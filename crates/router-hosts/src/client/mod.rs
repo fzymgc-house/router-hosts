@@ -2,10 +2,12 @@
 #![allow(dead_code, unused_imports)]
 
 mod config;
+mod error;
 mod grpc;
 mod output;
 
 pub use config::ClientConfig;
+pub use error::{exit_code_for_status, format_grpc_error, EXIT_CONFLICT, EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE};
 pub use grpc::Client;
 pub use output::{print_item, print_items, TableDisplay};
 
