@@ -1,4 +1,11 @@
+// Allow dead_code and unused_imports until command handlers are connected in Task 6
+#![allow(dead_code, unused_imports)]
+
 mod config;
+mod grpc;
+
+pub use config::ClientConfig;
+pub use grpc::Client;
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};

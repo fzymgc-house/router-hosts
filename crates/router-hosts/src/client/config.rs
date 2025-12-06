@@ -57,7 +57,7 @@ impl ClientConfig {
             .or(file_config.as_ref().and_then(|f| {
                 f.tls.as_ref().and_then(|t| t.cert_path.clone())
             }))
-            .map(|p| Self::expand_tilde(p))
+            .map(Self::expand_tilde)
             .ok_or_else(|| anyhow!("Client certificate required: use --cert, ROUTER_HOSTS_CERT, or config file"))?;
 
         let key_path = cli_key
@@ -66,7 +66,7 @@ impl ClientConfig {
             .or(file_config.as_ref().and_then(|f| {
                 f.tls.as_ref().and_then(|t| t.key_path.clone())
             }))
-            .map(|p| Self::expand_tilde(p))
+            .map(Self::expand_tilde)
             .ok_or_else(|| anyhow!("Client key required: use --key, ROUTER_HOSTS_KEY, or config file"))?;
 
         let ca_cert_path = cli_ca
@@ -75,7 +75,7 @@ impl ClientConfig {
             .or(file_config.as_ref().and_then(|f| {
                 f.tls.as_ref().and_then(|t| t.ca_cert_path.clone())
             }))
-            .map(|p| Self::expand_tilde(p))
+            .map(Self::expand_tilde)
             .ok_or_else(|| anyhow!("CA certificate required: use --ca, ROUTER_HOSTS_CA, or config file"))?;
 
         Ok(Self {
@@ -121,9 +121,9 @@ impl ClientConfig {
 
     fn expand_tilde(path: PathBuf) -> PathBuf {
         if let Some(path_str) = path.to_str() {
-            if path_str.starts_with("~/") {
+            if let Some(stripped) = path_str.strip_prefix("~/") {
                 if let Some(home) = dirs::home_dir() {
-                    return home.join(&path_str[2..]);
+                    return home.join(stripped);
                 }
             }
         }
@@ -134,6 +134,7 @@ impl ClientConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -157,7 +158,14 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_load_from_config_file() {
+        // Clear any env vars from other tests
+        std::env::remove_var("ROUTER_HOSTS_SERVER");
+        std::env::remove_var("ROUTER_HOSTS_CERT");
+        std::env::remove_var("ROUTER_HOSTS_KEY");
+        std::env::remove_var("ROUTER_HOSTS_CA");
+
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
             file,
@@ -219,17 +227,30 @@ ca_cert_path = "/file/ca.crt"
     }
 
     #[test]
+    #[serial]
     fn test_missing_required_fields() {
+        // Clear any env vars from other tests
+        std::env::remove_var("ROUTER_HOSTS_SERVER");
+        std::env::remove_var("ROUTER_HOSTS_CERT");
+        std::env::remove_var("ROUTER_HOSTS_KEY");
+        std::env::remove_var("ROUTER_HOSTS_CA");
+
         let result = ClientConfig::load(None, None, None, None, None);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Server address required"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Server address required"));
     }
 
     #[test]
+    #[serial]
     fn test_env_overrides_file() {
-        // Use temp_env crate pattern: save, set, test, restore
-        // Note: This test may fail when run in parallel with other tests that use ROUTER_HOSTS_SERVER
-        // Run with --test-threads=1 if needed
+        // Clear all env vars first to avoid interference
+        std::env::remove_var("ROUTER_HOSTS_SERVER");
+        std::env::remove_var("ROUTER_HOSTS_CERT");
+        std::env::remove_var("ROUTER_HOSTS_KEY");
+        std::env::remove_var("ROUTER_HOSTS_CA");
 
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
