@@ -11,7 +11,9 @@ pub fn format_grpc_error(status: &Status) -> String {
         Code::InvalidArgument => format!("Invalid input: {}", status.message()),
         Code::NotFound => format!("Not found: {}", status.message()),
         Code::AlreadyExists => format!("Already exists: {}", status.message()),
-        Code::Aborted => "Version conflict: entry was modified. Re-fetch and try again.".to_string(),
+        Code::Aborted => {
+            "Version conflict: entry was modified. Re-fetch and try again.".to_string()
+        }
         Code::PermissionDenied => "Permission denied: check TLS certificates".to_string(),
         Code::Unavailable => "Server unavailable: check address and connectivity".to_string(),
         Code::Unauthenticated => "Authentication failed: check TLS certificates".to_string(),
@@ -35,13 +37,19 @@ mod tests {
     #[test]
     fn test_format_invalid_argument() {
         let status = Status::invalid_argument("hostname too long");
-        assert_eq!(format_grpc_error(&status), "Invalid input: hostname too long");
+        assert_eq!(
+            format_grpc_error(&status),
+            "Invalid input: hostname too long"
+        );
     }
 
     #[test]
     fn test_format_not_found() {
         let status = Status::not_found("entry 01J... not found");
-        assert_eq!(format_grpc_error(&status), "Not found: entry 01J... not found");
+        assert_eq!(
+            format_grpc_error(&status),
+            "Not found: entry 01J... not found"
+        );
     }
 
     #[test]

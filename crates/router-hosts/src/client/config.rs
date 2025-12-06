@@ -46,37 +46,49 @@ impl ClientConfig {
         let server_address = cli_server
             .map(String::from)
             .or_else(|| std::env::var("ROUTER_HOSTS_SERVER").ok())
-            .or(file_config.as_ref().and_then(|f| {
-                f.server.as_ref().and_then(|s| s.address.clone())
-            }))
-            .ok_or_else(|| anyhow!("Server address required: use --server, ROUTER_HOSTS_SERVER, or config file"))?;
+            .or(file_config
+                .as_ref()
+                .and_then(|f| f.server.as_ref().and_then(|s| s.address.clone())))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Server address required: use --server, ROUTER_HOSTS_SERVER, or config file"
+                )
+            })?;
 
         let cert_path = cli_cert
             .cloned()
             .or_else(|| std::env::var("ROUTER_HOSTS_CERT").ok().map(PathBuf::from))
-            .or(file_config.as_ref().and_then(|f| {
-                f.tls.as_ref().and_then(|t| t.cert_path.clone())
-            }))
+            .or(file_config
+                .as_ref()
+                .and_then(|f| f.tls.as_ref().and_then(|t| t.cert_path.clone())))
             .map(Self::expand_tilde)
-            .ok_or_else(|| anyhow!("Client certificate required: use --cert, ROUTER_HOSTS_CERT, or config file"))?;
+            .ok_or_else(|| {
+                anyhow!(
+                    "Client certificate required: use --cert, ROUTER_HOSTS_CERT, or config file"
+                )
+            })?;
 
         let key_path = cli_key
             .cloned()
             .or_else(|| std::env::var("ROUTER_HOSTS_KEY").ok().map(PathBuf::from))
-            .or(file_config.as_ref().and_then(|f| {
-                f.tls.as_ref().and_then(|t| t.key_path.clone())
-            }))
+            .or(file_config
+                .as_ref()
+                .and_then(|f| f.tls.as_ref().and_then(|t| t.key_path.clone())))
             .map(Self::expand_tilde)
-            .ok_or_else(|| anyhow!("Client key required: use --key, ROUTER_HOSTS_KEY, or config file"))?;
+            .ok_or_else(|| {
+                anyhow!("Client key required: use --key, ROUTER_HOSTS_KEY, or config file")
+            })?;
 
         let ca_cert_path = cli_ca
             .cloned()
             .or_else(|| std::env::var("ROUTER_HOSTS_CA").ok().map(PathBuf::from))
-            .or(file_config.as_ref().and_then(|f| {
-                f.tls.as_ref().and_then(|t| t.ca_cert_path.clone())
-            }))
+            .or(file_config
+                .as_ref()
+                .and_then(|f| f.tls.as_ref().and_then(|t| t.ca_cert_path.clone())))
             .map(Self::expand_tilde)
-            .ok_or_else(|| anyhow!("CA certificate required: use --ca, ROUTER_HOSTS_CA, or config file"))?;
+            .ok_or_else(|| {
+                anyhow!("CA certificate required: use --ca, ROUTER_HOSTS_CA, or config file")
+            })?;
 
         Ok(Self {
             server_address,
@@ -181,14 +193,8 @@ ca_cert_path = "/etc/certs/ca.crt"
         )
         .unwrap();
 
-        let config = ClientConfig::load(
-            Some(&file.path().to_path_buf()),
-            None,
-            None,
-            None,
-            None,
-        )
-        .unwrap();
+        let config =
+            ClientConfig::load(Some(&file.path().to_path_buf()), None, None, None, None).unwrap();
 
         assert_eq!(config.server_address, "router.local:50051");
         assert_eq!(config.cert_path, PathBuf::from("/etc/certs/client.crt"));

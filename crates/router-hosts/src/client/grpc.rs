@@ -3,8 +3,8 @@ use router_hosts_common::proto::{
     hosts_service_client::HostsServiceClient, AddHostRequest, AddHostResponse,
     CreateSnapshotRequest, CreateSnapshotResponse, DeleteHostRequest, DeleteHostResponse,
     DeleteSnapshotRequest, DeleteSnapshotResponse, ExportHostsRequest, GetHostRequest,
-    GetHostResponse, ImportHostsRequest, ImportHostsResponse, ListHostsRequest,
-    ListHostsResponse, ListSnapshotsRequest, ListSnapshotsResponse, RollbackToSnapshotRequest,
+    GetHostResponse, ImportHostsRequest, ImportHostsResponse, ListHostsRequest, ListHostsResponse,
+    ListSnapshotsRequest, ListSnapshotsResponse, RollbackToSnapshotRequest,
     RollbackToSnapshotResponse, SearchHostsRequest, SearchHostsResponse, UpdateHostRequest,
     UpdateHostResponse,
 };
@@ -23,10 +23,7 @@ impl Client {
     pub async fn connect(config: &ClientConfig) -> Result<Self> {
         // Load client identity (cert + key)
         let cert_pem = tokio::fs::read(&config.cert_path).await.with_context(|| {
-            format!(
-                "Failed to read client certificate: {:?}",
-                config.cert_path
-            )
+            format!("Failed to read client certificate: {:?}", config.cert_path)
         })?;
         let key_pem = tokio::fs::read(&config.key_path)
             .await
@@ -100,7 +97,10 @@ impl Client {
     }
 
     /// List all host entries (collects server stream into Vec)
-    pub async fn list_hosts(&mut self, request: ListHostsRequest) -> Result<Vec<ListHostsResponse>> {
+    pub async fn list_hosts(
+        &mut self,
+        request: ListHostsRequest,
+    ) -> Result<Vec<ListHostsResponse>> {
         let mut stream = self
             .inner
             .list_hosts(request)
