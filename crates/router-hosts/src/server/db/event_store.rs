@@ -12,6 +12,26 @@ use ulid::Ulid;
 /// - Optimistic concurrency control via event versioning
 /// - Sequential event ordering per aggregate
 /// - Efficient event replay for rebuilding state
+///
+/// # NULL vs Empty String Semantics for Comment/Tags
+///
+/// The `comment` and `tags` columns use specific semantics to enable
+/// `LAST_VALUE(... IGNORE NULLS)` in the SQL view for proper state merging:
+///
+/// - **NULL**: Means "no change" - the field was not modified by this event.
+///   Used by partial update events (e.g., `IpAddressChanged` doesn't touch comment).
+///
+/// - **Empty string `""`**: Means "cleared/no value" - the field was explicitly
+///   set to have no comment. Used when a user clears their comment.
+///
+/// This distinction is critical for the SQL view to correctly merge partial
+/// updates using `LAST_VALUE(comment IGNORE NULLS)`. Without it, an update
+/// to just the IP address would incorrectly "clear" the comment.
+///
+/// Example event sequence:
+/// 1. `HostCreated { comment: "server", ... }` → comment column = "server"
+/// 2. `IpAddressChanged { ... }` → comment column = NULL (no change)
+/// 3. View shows comment = "server" (LAST_VALUE IGNORE NULLS finds event 1)
 pub struct EventStore;
 
 impl EventStore {
