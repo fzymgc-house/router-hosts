@@ -1,19 +1,17 @@
-// Allow dead_code and unused_imports until command handlers are connected in Task 6
-#![allow(dead_code, unused_imports)]
-
+mod commands;
 mod config;
 mod error;
 mod grpc;
 mod output;
 
 pub use config::ClientConfig;
-pub use error::{exit_code_for_status, format_grpc_error, EXIT_CONFLICT, EXIT_ERROR, EXIT_SUCCESS, EXIT_USAGE};
+pub use error::{exit_code_for_status, format_grpc_error, EXIT_ERROR, EXIT_USAGE};
 pub use grpc::Client;
-pub use output::{print_item, print_items, TableDisplay};
 
 use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
+use std::process::ExitCode;
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
 pub enum OutputFormat {
@@ -186,24 +184,78 @@ pub enum SnapshotCommand {
     },
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
 
-    match &cli.command {
-        Commands::Host(args) => {
-            eprintln!("Host command: {:?}", std::mem::discriminant(&args.command));
-        }
-        Commands::Snapshot(args) => {
-            eprintln!(
-                "Snapshot command: {:?}",
-                std::mem::discriminant(&args.command)
-            );
-        }
-        Commands::Config => {
-            eprintln!("Config command");
+    // Handle Config command early (doesn't need connection)
+    if matches!(cli.command, Commands::Config) {
+        // Show what config would be used (without actually connecting)
+        match ClientConfig::load(
+            cli.config.as_ref(),
+            cli.server.as_deref(),
+            cli.cert.as_ref(),
+            cli.key.as_ref(),
+            cli.ca.as_ref(),
+        ) {
+            Ok(config) => {
+                println!("Server: {}", config.server_address);
+                println!("Certificate: {:?}", config.cert_path);
+                println!("Key: {:?}", config.key_path);
+                println!("CA: {:?}", config.ca_cert_path);
+                return Ok(ExitCode::SUCCESS);
+            }
+            Err(e) => {
+                eprintln!("Configuration error: {}", e);
+                return Ok(ExitCode::from(EXIT_USAGE as u8));
+            }
         }
     }
 
-    // TODO: Implement actual command handlers
-    Ok(())
+    // Load configuration
+    let config = match ClientConfig::load(
+        cli.config.as_ref(),
+        cli.server.as_deref(),
+        cli.cert.as_ref(),
+        cli.key.as_ref(),
+        cli.ca.as_ref(),
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Configuration error: {}", e);
+            return Ok(ExitCode::from(EXIT_USAGE as u8));
+        }
+    };
+
+    // Connect to server
+    let mut client = match Client::connect(&config).await {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Connection error: {}", e);
+            return Ok(ExitCode::from(EXIT_ERROR as u8));
+        }
+    };
+
+    // Execute command
+    let result = match cli.command {
+        Commands::Host(args) => {
+            commands::host::handle(&mut client, args.command, cli.format, cli.quiet).await
+        }
+        Commands::Snapshot(args) => {
+            commands::snapshot::handle(&mut client, args.command, cli.format, cli.quiet).await
+        }
+        Commands::Config => unreachable!(), // Handled above
+    };
+
+    match result {
+        Ok(()) => Ok(ExitCode::SUCCESS),
+        Err(e) => {
+            if let Some(status) = e.downcast_ref::<tonic::Status>() {
+                eprintln!("{}", format_grpc_error(status));
+                Ok(ExitCode::from(exit_code_for_status(status) as u8))
+            } else {
+                eprintln!("Error: {}", e);
+                Ok(ExitCode::from(EXIT_ERROR as u8))
+            }
+        }
+    }
 }

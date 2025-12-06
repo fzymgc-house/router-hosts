@@ -1,7 +1,6 @@
 use tonic::{Code, Status};
 
 /// Exit codes following Unix conventions
-pub const EXIT_SUCCESS: i32 = 0;
 pub const EXIT_ERROR: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_CONFLICT: i32 = 3;
