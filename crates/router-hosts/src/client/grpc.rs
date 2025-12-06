@@ -103,7 +103,10 @@ impl Client {
         Ok(response.into_inner())
     }
 
-    /// List all host entries (collects server stream into Vec)
+    /// List all host entries (collects server stream into Vec).
+    ///
+    /// Resource limits are enforced server-side via the `limit` request parameter.
+    /// The server bounds response size; clients should use pagination for large datasets.
     pub async fn list_hosts(
         &mut self,
         request: ListHostsRequest,
@@ -126,7 +129,10 @@ impl Client {
         Ok(results)
     }
 
-    /// Search host entries (collects server stream into Vec)
+    /// Search host entries (collects server stream into Vec).
+    ///
+    /// Resource limits are enforced server-side. Search results are bounded by the
+    /// server's maximum response size.
     pub async fn search_hosts(
         &mut self,
         request: SearchHostsRequest,
@@ -164,7 +170,10 @@ impl Client {
         Ok(response.into_inner())
     }
 
-    /// List all snapshots (collects server stream into Vec)
+    /// List all snapshots (collects server stream into Vec).
+    ///
+    /// Resource limits are enforced server-side via the retention policy,
+    /// which bounds the total number of snapshots stored.
     pub async fn list_snapshots(
         &mut self,
         request: ListSnapshotsRequest,

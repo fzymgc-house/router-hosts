@@ -155,12 +155,18 @@ pub async fn handle(
     Ok(())
 }
 
+/// Read a file and split it into chunks for streaming import.
+///
+/// # Security Notes
+/// - Symlinks are followed during path canonicalization. This is intentional
+///   for CLI usability, allowing users to import from symlinked files.
+/// - Directory traversal is prevented by verifying the resolved path is a regular file.
 fn read_file_chunks(
     path: &Path,
     format: &str,
     conflict_mode: &str,
 ) -> Result<Vec<ImportHostsRequest>> {
-    // Validate and canonicalize the path
+    // Validate and canonicalize the path (note: this follows symlinks)
     let canonical_path = path
         .canonicalize()
         .with_context(|| format!("Cannot resolve path: {}", path.display()))?;
