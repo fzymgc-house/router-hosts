@@ -48,7 +48,7 @@ impl TableDisplay for Snapshot {
             .as_ref()
             .map(|ts| {
                 chrono::DateTime::from_timestamp(ts.seconds, ts.nanos as u32)
-                    .map(|dt| dt.format("%Y-%m-%d %H:%M").to_string())
+                    .map(|dt| format!("{} UTC", dt.format("%Y-%m-%d %H:%M")))
                     .unwrap_or_else(|| "invalid".to_string())
             })
             .unwrap_or_default();
@@ -227,6 +227,7 @@ mod tests {
         let row = snapshot.row();
         assert_eq!(row[0], "01JXXXXXXXXX...");
         assert!(row[1].contains("2024")); // Year should be in the timestamp
+        assert!(row[1].ends_with(" UTC")); // Timezone indicator
         assert_eq!(row[2], "42");
         assert_eq!(row[3], "manual");
     }
