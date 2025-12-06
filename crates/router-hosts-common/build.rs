@@ -6,6 +6,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tonic_build::configure()
         .build_server(true)
         .build_client(true)
+        // Only derive serde for specific types we need to serialize
+        .type_attribute("router_hosts.v1.HostEntry", "#[derive(serde::Serialize)]")
+        .type_attribute("router_hosts.v1.Snapshot", "#[derive(serde::Serialize)]")
+        // Skip timestamp fields when serializing
+        .field_attribute("router_hosts.v1.HostEntry.created_at", "#[serde(skip)]")
+        .field_attribute("router_hosts.v1.HostEntry.updated_at", "#[serde(skip)]")
+        .field_attribute("router_hosts.v1.Snapshot.created_at", "#[serde(skip)]")
         .compile(
             &["../../proto/router_hosts/v1/hosts.proto"],
             &["../../proto"],
