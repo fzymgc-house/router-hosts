@@ -175,6 +175,11 @@ fn read_file_chunks(
 
     let data = std::fs::read(&canonical_path)
         .with_context(|| format!("Failed to read file: {}", canonical_path.display()))?;
+
+    if data.is_empty() {
+        bail!("Import file is empty: {}", canonical_path.display());
+    }
+
     let mut chunks = Vec::new();
     let total_chunks = data.len().div_ceil(CHUNK_SIZE);
 
@@ -257,9 +262,9 @@ mod tests {
         let file = NamedTempFile::new().unwrap();
         // File is empty
 
-        let chunks = read_file_chunks(file.path(), "csv", "strict").unwrap();
-
-        // Empty file produces no chunks
-        assert!(chunks.is_empty());
+        let result = read_file_chunks(file.path(), "csv", "strict");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Import file is empty"));
     }
 }
