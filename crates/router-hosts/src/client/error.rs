@@ -76,4 +76,43 @@ mod tests {
         let status = Status::internal("unexpected");
         assert_eq!(exit_code_for_status(&status), EXIT_ERROR);
     }
+
+    #[test]
+    fn test_format_already_exists() {
+        let status = Status::already_exists("hostname test.local already exists");
+        assert_eq!(
+            format_grpc_error(&status),
+            "Already exists: hostname test.local already exists"
+        );
+    }
+
+    #[test]
+    fn test_format_permission_denied() {
+        let status = Status::permission_denied("access denied");
+        assert!(format_grpc_error(&status).contains("Permission denied"));
+    }
+
+    #[test]
+    fn test_format_unavailable() {
+        let status = Status::unavailable("server down");
+        assert!(format_grpc_error(&status).contains("unavailable"));
+    }
+
+    #[test]
+    fn test_format_unauthenticated() {
+        let status = Status::unauthenticated("bad cert");
+        assert!(format_grpc_error(&status).contains("Authentication failed"));
+    }
+
+    #[test]
+    fn test_format_internal_error() {
+        let status = Status::internal("database error");
+        assert_eq!(format_grpc_error(&status), "Server error: database error");
+    }
+
+    #[test]
+    fn test_exit_code_not_found() {
+        let status = Status::not_found("missing");
+        assert_eq!(exit_code_for_status(&status), EXIT_ERROR);
+    }
 }

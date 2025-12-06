@@ -130,22 +130,26 @@ fn print_json<T: Serialize>(items: &[T]) {
 }
 
 fn print_csv<T: TableDisplay>(items: &[T]) {
-    let headers = T::headers();
-    println!("{}", headers.join(","));
+    let mut writer = csv::Writer::from_writer(std::io::stdout());
 
+    // Write headers
+    let headers = T::headers();
+    if let Err(e) = writer.write_record(&headers) {
+        eprintln!("Error writing CSV headers: {}", e);
+        return;
+    }
+
+    // Write rows
     for item in items {
         let row = item.row();
-        let escaped: Vec<String> = row
-            .iter()
-            .map(|cell| {
-                if cell.contains(',') || cell.contains('"') || cell.contains('\n') {
-                    format!("\"{}\"", cell.replace('"', "\"\""))
-                } else {
-                    cell.clone()
-                }
-            })
-            .collect();
-        println!("{}", escaped.join(","));
+        if let Err(e) = writer.write_record(&row) {
+            eprintln!("Error writing CSV row: {}", e);
+            return;
+        }
+    }
+
+    if let Err(e) = writer.flush() {
+        eprintln!("Error flushing CSV output: {}", e);
     }
 }
 
@@ -172,6 +176,75 @@ mod tests {
         assert_eq!(row[2], "test.local");
         assert_eq!(row[3], "Test host");
         assert_eq!(row[4], "tag1,tag2");
+    }
+
+    #[test]
+    fn test_host_entry_row_short_id() {
+        let entry = HostEntry {
+            id: "SHORT".to_string(),
+            ip_address: "10.0.0.1".to_string(),
+            hostname: "short.local".to_string(),
+            comment: None,
+            tags: vec![],
+            created_at: None,
+            updated_at: None,
+            version: "1".to_string(),
+        };
+
+        let row = entry.row();
+        // Short ID should not be truncated
+        assert_eq!(row[0], "SHORT");
+        // Empty comment should be empty string
+        assert_eq!(row[3], "");
+        // Empty tags should be empty string
+        assert_eq!(row[4], "");
+    }
+
+    #[test]
+    fn test_host_entry_headers() {
+        let headers = HostEntry::headers();
+        assert_eq!(headers, vec!["ID", "IP", "HOSTNAME", "COMMENT", "TAGS"]);
+    }
+
+    #[test]
+    fn test_snapshot_headers() {
+        let headers = Snapshot::headers();
+        assert_eq!(headers, vec!["ID", "CREATED", "ENTRIES", "TRIGGER"]);
+    }
+
+    #[test]
+    fn test_snapshot_row() {
+        let snapshot = Snapshot {
+            snapshot_id: "01JXXXXXXXXXXXXXXXXX".to_string(),
+            created_at: Some(prost_types::Timestamp {
+                seconds: 1733500000,
+                nanos: 0,
+            }),
+            entry_count: 42,
+            trigger: "manual".to_string(),
+        };
+
+        let row = snapshot.row();
+        assert_eq!(row[0], "01JXXXXXXXXX...");
+        assert!(row[1].contains("2024")); // Year should be in the timestamp
+        assert_eq!(row[2], "42");
+        assert_eq!(row[3], "manual");
+    }
+
+    #[test]
+    fn test_snapshot_row_no_timestamp() {
+        let snapshot = Snapshot {
+            snapshot_id: "SHORT".to_string(),
+            created_at: None,
+            entry_count: 0,
+            trigger: "rollback".to_string(),
+        };
+
+        let row = snapshot.row();
+        assert_eq!(row[0], "SHORT");
+        assert_eq!(row[1], ""); // No timestamp
+        assert_eq!(row[2], "0");
+        assert_eq!(row[3], "rollback");
     }
 
     #[test]

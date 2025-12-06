@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 use router_hosts_common::proto::{
     AddHostRequest, DeleteHostRequest, ExportHostsRequest, GetHostRequest, ImportHostsRequest,
     ListHostsRequest, SearchHostsRequest, UpdateHostRequest,
@@ -160,7 +160,21 @@ fn read_file_chunks(
     format: &str,
     conflict_mode: &str,
 ) -> Result<Vec<ImportHostsRequest>> {
-    let data = std::fs::read(path)?;
+    // Validate and canonicalize the path
+    let canonical_path = path
+        .canonicalize()
+        .with_context(|| format!("Cannot resolve path: {}", path.display()))?;
+
+    // Ensure it's a regular file (not a directory, symlink, or special file)
+    let metadata = std::fs::metadata(&canonical_path)
+        .with_context(|| format!("Cannot read file metadata: {}", canonical_path.display()))?;
+
+    if !metadata.is_file() {
+        bail!("Not a regular file: {}", canonical_path.display());
+    }
+
+    let data = std::fs::read(&canonical_path)
+        .with_context(|| format!("Failed to read file: {}", canonical_path.display()))?;
     let mut chunks = Vec::new();
     let total_chunks = data.len().div_ceil(CHUNK_SIZE);
 
@@ -183,4 +197,69 @@ fn read_file_chunks(
     }
 
     Ok(chunks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_read_file_chunks_valid_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "192.168.1.1 test.local").unwrap();
+
+        let chunks = read_file_chunks(file.path(), "hosts", "skip").unwrap();
+
+        assert_eq!(chunks.len(), 1);
+        assert!(chunks[0].last_chunk);
+        assert_eq!(chunks[0].format, Some("hosts".to_string()));
+        assert_eq!(chunks[0].conflict_mode, Some("skip".to_string()));
+    }
+
+    #[test]
+    fn test_read_file_chunks_nonexistent_file() {
+        let result = read_file_chunks(Path::new("/nonexistent/file.txt"), "hosts", "skip");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Cannot resolve path"));
+    }
+
+    #[test]
+    fn test_read_file_chunks_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = read_file_chunks(dir.path(), "hosts", "skip");
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Not a regular file"));
+    }
+
+    #[test]
+    fn test_read_file_chunks_large_file() {
+        let mut file = NamedTempFile::new().unwrap();
+        // Write more than CHUNK_SIZE bytes (64KB + 1)
+        let data = "x".repeat(CHUNK_SIZE + 1);
+        write!(file, "{}", data).unwrap();
+
+        let chunks = read_file_chunks(file.path(), "json", "replace").unwrap();
+
+        assert_eq!(chunks.len(), 2);
+        assert!(!chunks[0].last_chunk);
+        assert!(chunks[1].last_chunk);
+        // Only first chunk has format and conflict_mode
+        assert!(chunks[0].format.is_some());
+        assert!(chunks[1].format.is_none());
+    }
+
+    #[test]
+    fn test_read_file_chunks_empty_file() {
+        let file = NamedTempFile::new().unwrap();
+        // File is empty
+
+        let chunks = read_file_chunks(file.path(), "csv", "strict").unwrap();
+
+        // Empty file produces no chunks
+        assert!(chunks.is_empty());
+    }
 }

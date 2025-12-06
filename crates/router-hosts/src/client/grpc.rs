@@ -13,6 +13,9 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 
 use super::config::ClientConfig;
 
+/// Buffer size for import streaming channel
+const IMPORT_CHANNEL_BUFFER_SIZE: usize = 4;
+
 /// gRPC client wrapper with mTLS support
 pub struct Client {
     inner: HostsServiceClient<Channel>,
@@ -238,7 +241,7 @@ impl Client {
         F: FnMut(&ImportHostsResponse),
     {
         // Create channel for bidirectional streaming
-        let (tx, rx) = tokio::sync::mpsc::channel(4);
+        let (tx, rx) = tokio::sync::mpsc::channel(IMPORT_CHANNEL_BUFFER_SIZE);
 
         // Spawn task to send chunks
         tokio::spawn(async move {
