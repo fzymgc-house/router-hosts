@@ -15,6 +15,27 @@ use ulid::Ulid;
 pub struct EventStore;
 
 impl EventStore {
+    /// Rollback a transaction and return the provided error.
+    ///
+    /// If rollback fails, returns an error that includes both the original error
+    /// and the rollback failure. This ensures rollback failures are never silently ignored.
+    fn rollback_and_return(db: &Database, error: DatabaseError) -> DatabaseError {
+        if let Err(rollback_err) = db.conn().execute("ROLLBACK", []) {
+            error!(
+                "Transaction rollback failed after error '{}': {}",
+                error, rollback_err
+            );
+            DatabaseError::QueryFailed(format!(
+                "Original error: {}; Rollback also failed: {}",
+                error, rollback_err
+            ))
+        } else {
+            error
+        }
+    }
+}
+
+impl EventStore {
     /// Append a new event to the store
     ///
     /// # Optimistic Concurrency
@@ -55,41 +76,30 @@ impl EventStore {
         } = &event
         {
             if HostProjections::find_by_ip_and_hostname(db, ip_address, hostname)?.is_some() {
-                db.conn()
-                    .execute("ROLLBACK", [])
-                    .inspect_err(|e| {
-                        error!("Failed to rollback transaction: {}", e);
-                    })
-                    .ok();
-                return Err(DatabaseError::DuplicateEntry(format!(
-                    "Host with IP {} and hostname {} already exists",
-                    ip_address, hostname
-                )));
+                return Err(Self::rollback_and_return(
+                    db,
+                    DatabaseError::DuplicateEntry(format!(
+                        "Host with IP {} and hostname {} already exists",
+                        ip_address, hostname
+                    )),
+                ));
             }
         }
 
         // Get current version for this aggregate
-        let current_version = Self::get_current_version(db, aggregate_id).inspect_err(|_| {
-            db.conn()
-                .execute("ROLLBACK", [])
-                .inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                })
-                .ok();
+        let current_version = Self::get_current_version(db, aggregate_id).map_err(|e| {
+            Self::rollback_and_return(db, e)
         })?;
 
         // Verify expected version matches (optimistic concurrency control)
         if expected_version != current_version {
-            db.conn()
-                .execute("ROLLBACK", [])
-                .inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                })
-                .ok();
-            return Err(DatabaseError::ConcurrentWriteConflict(format!(
-                "Expected version {:?} but current version is {:?} for aggregate {}",
-                expected_version, current_version, aggregate_id
-            )));
+            return Err(Self::rollback_and_return(
+                db,
+                DatabaseError::ConcurrentWriteConflict(format!(
+                    "Expected version {:?} but current version is {:?} for aggregate {}",
+                    expected_version, current_version, aggregate_id
+                )),
+            ));
         }
 
         // Calculate next version
@@ -210,13 +220,10 @@ impl EventStore {
 
         // Serialize EventData to JSON
         let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
-            db.conn()
-                .execute("ROLLBACK", [])
-                .inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                })
-                .ok();
-            DatabaseError::InvalidData(format!("Failed to serialize event data: {}", e))
+            Self::rollback_and_return(
+                db,
+                DatabaseError::InvalidData(format!("Failed to serialize event data: {}", e)),
+            )
         })?;
 
         // Single INSERT statement for all event types
@@ -247,19 +254,17 @@ impl EventStore {
                 ],
             )
             .map_err(|e: duckdb::Error| {
-                db.conn().execute("ROLLBACK", []).inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                }).ok();
                 // Check if this was a uniqueness violation (concurrent write)
                 let error_str = e.to_string();
-                if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
+                let db_error = if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
                     DatabaseError::ConcurrentWriteConflict(format!(
                         "Concurrent write detected for aggregate {} at version {}",
                         aggregate_id, new_version
                     ))
                 } else {
                     DatabaseError::QueryFailed(format!("Failed to insert event: {}", e))
-                }
+                };
+                Self::rollback_and_return(db, db_error)
             })?;
 
         // Commit transaction
@@ -597,31 +602,19 @@ impl EventStore {
         })?;
 
         // Get current version for this aggregate
-        let current_version = match Self::get_current_version(db, aggregate_id) {
-            Ok(v) => v,
-            Err(e) => {
-                db.conn()
-                    .execute("ROLLBACK", [])
-                    .inspect_err(|e| {
-                        error!("Failed to rollback transaction: {}", e);
-                    })
-                    .ok();
-                return Err(e);
-            }
-        };
+        let current_version = Self::get_current_version(db, aggregate_id).map_err(|e| {
+            Self::rollback_and_return(db, e)
+        })?;
 
         // Verify expected version matches (optimistic concurrency control)
         if expected_version != current_version {
-            db.conn()
-                .execute("ROLLBACK", [])
-                .inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                })
-                .ok();
-            return Err(DatabaseError::ConcurrentWriteConflict(format!(
-                "Expected version {:?} but current version is {:?} for aggregate {}",
-                expected_version, current_version, aggregate_id
-            )));
+            return Err(Self::rollback_and_return(
+                db,
+                DatabaseError::ConcurrentWriteConflict(format!(
+                    "Expected version {:?} but current version is {:?} for aggregate {}",
+                    expected_version, current_version, aggregate_id
+                )),
+            ));
         }
 
         let mut envelopes = Vec::with_capacity(events.len());
@@ -739,16 +732,13 @@ impl EventStore {
             let event_data_json = match serde_json::to_string(&event_data) {
                 Ok(json) => json,
                 Err(e) => {
-                    db.conn()
-                        .execute("ROLLBACK", [])
-                        .inspect_err(|e| {
-                            error!("Failed to rollback transaction: {}", e);
-                        })
-                        .ok();
-                    return Err(DatabaseError::InvalidData(format!(
-                        "Failed to serialize event data: {}",
-                        e
-                    )));
+                    return Err(Self::rollback_and_return(
+                        db,
+                        DatabaseError::InvalidData(format!(
+                            "Failed to serialize event data: {}",
+                            e
+                        )),
+                    ));
                 }
             };
 
@@ -778,24 +768,16 @@ impl EventStore {
                     &expected_version,
                 ],
             ) {
-                db.conn()
-                    .execute("ROLLBACK", [])
-                    .inspect_err(|e| {
-                        error!("Failed to rollback transaction: {}", e);
-                    })
-                    .ok();
                 let error_str = e.to_string();
-                if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
-                    return Err(DatabaseError::ConcurrentWriteConflict(format!(
+                let db_error = if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
+                    DatabaseError::ConcurrentWriteConflict(format!(
                         "Concurrent write detected for aggregate {} at version {}",
                         aggregate_id, version
-                    )));
+                    ))
                 } else {
-                    return Err(DatabaseError::QueryFailed(format!(
-                        "Failed to insert event: {}",
-                        e
-                    )));
-                }
+                    DatabaseError::QueryFailed(format!("Failed to insert event: {}", e))
+                };
+                return Err(Self::rollback_and_return(db, db_error));
             }
 
             envelopes.push(EventEnvelope {

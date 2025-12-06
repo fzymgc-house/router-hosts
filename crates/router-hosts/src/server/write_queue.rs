@@ -34,6 +34,17 @@ const DEFAULT_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// Counter fields use `i32` for protobuf compatibility - the gRPC proto uses int32
 /// for these counters in ImportHostsResponse, and protobuf int32 maps to Rust i32.
+///
+/// # Overflow Safety
+///
+/// Counters are incremented using `saturating_add(1)` which caps at `i32::MAX` rather
+/// than panicking. This is safe because:
+/// - MAX_IMPORT_SIZE is 10 MiB (10,485,760 bytes)
+/// - Minimum viable entry is ~10 bytes (e.g., "1.1.1.1 a\n")
+/// - Maximum possible entries: ~1 million
+/// - i32::MAX is ~2.1 billion, providing a 2000x safety margin
+///
+/// The DoS limits structurally prevent overflow from ever occurring.
 #[derive(Debug, Clone)]
 pub struct ImportResult {
     /// Total entries parsed from input data
