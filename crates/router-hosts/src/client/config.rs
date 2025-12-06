@@ -224,4 +224,58 @@ ca_cert_path = "/file/ca.crt"
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Server address required"));
     }
+
+    #[test]
+    fn test_env_overrides_file() {
+        // Use temp_env crate pattern: save, set, test, restore
+        // Note: This test may fail when run in parallel with other tests that use ROUTER_HOSTS_SERVER
+        // Run with --test-threads=1 if needed
+
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(
+            file,
+            r#"
+[server]
+address = "file-server:50051"
+
+[tls]
+cert_path = "/file/cert.crt"
+key_path = "/file/key.key"
+ca_cert_path = "/file/ca.crt"
+"#
+        )
+        .unwrap();
+
+        // Set env var to override file (will be cleaned up after test)
+        std::env::set_var("ROUTER_HOSTS_SERVER", "env-server:9999");
+
+        let config = ClientConfig::load(
+            Some(&file.path().to_path_buf()),
+            None, // no CLI override
+            None,
+            None,
+            None,
+        );
+
+        // Clean up immediately after loading
+        std::env::remove_var("ROUTER_HOSTS_SERVER");
+
+        let config = config.unwrap();
+
+        // Env should override file
+        assert_eq!(config.server_address, "env-server:9999");
+        // File values should be used for TLS
+        assert_eq!(config.cert_path, PathBuf::from("/file/cert.crt"));
+    }
+
+    #[test]
+    fn test_tilde_expansion() {
+        let home = dirs::home_dir().expect("home dir should exist");
+        let expanded = ClientConfig::expand_tilde(PathBuf::from("~/test/path"));
+        assert_eq!(expanded, home.join("test/path"));
+
+        // Non-tilde path should be unchanged
+        let unchanged = ClientConfig::expand_tilde(PathBuf::from("/absolute/path"));
+        assert_eq!(unchanged, PathBuf::from("/absolute/path"));
+    }
 }
