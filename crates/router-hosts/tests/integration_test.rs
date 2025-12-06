@@ -605,3 +605,96 @@ async fn test_import_export_roundtrip() {
     assert_eq!(count, 1);
     assert_eq!(restored_hostname, Some("roundtrip.local".to_string()));
 }
+
+#[tokio::test]
+async fn test_import_hosts_json_format() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Import hosts using JSON Lines format
+    let import_data = br#"{"ip_address": "10.0.0.1", "hostname": "json1.local", "comment": "JSON import 1", "tags": ["test", "json"]}
+{"ip_address": "10.0.0.2", "hostname": "json2.local"}"#;
+
+    let requests = vec![ImportHostsRequest {
+        chunk: import_data.to_vec(),
+        last_chunk: true,
+        format: Some("json".to_string()),
+        conflict_mode: Some("skip".to_string()),
+    }];
+
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
+        .await
+        .unwrap();
+
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
+
+    assert_eq!(progress.processed, 2);
+    assert_eq!(progress.created, 2);
+    assert_eq!(progress.failed, 0);
+
+    // Verify hosts were created
+    let list_response = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap();
+
+    let mut stream = list_response.into_inner();
+    let mut count = 0;
+    while stream.message().await.unwrap().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 2);
+}
+
+#[tokio::test]
+async fn test_import_hosts_csv_format() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Import hosts using CSV format
+    let import_data = b"ip_address,hostname,comment,tags
+10.1.0.1,csv1.local,CSV import 1,test;csv
+10.1.0.2,csv2.local,,";
+
+    let requests = vec![ImportHostsRequest {
+        chunk: import_data.to_vec(),
+        last_chunk: true,
+        format: Some("csv".to_string()),
+        conflict_mode: Some("skip".to_string()),
+    }];
+
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
+        .await
+        .unwrap();
+
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
+
+    assert_eq!(progress.processed, 2);
+    assert_eq!(progress.created, 2);
+    assert_eq!(progress.failed, 0);
+
+    // Verify hosts were created
+    let list_response = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap();
+
+    let mut stream = list_response.into_inner();
+    let mut count = 0;
+    while stream.message().await.unwrap().is_some() {
+        count += 1;
+    }
+    assert_eq!(count, 2);
+}

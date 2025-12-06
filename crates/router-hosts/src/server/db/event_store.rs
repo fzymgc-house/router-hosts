@@ -100,94 +100,113 @@ impl EventStore {
         let now = Utc::now();
 
         // Build event data and extract typed columns
-        // EventData (JSON metadata): tags, comments, previous values
-        // Typed columns: ip_address, hostname (for queryability)
-        let (ip_address_opt, hostname_opt, event_timestamp, event_data) = match &event {
-            HostEvent::HostCreated {
-                ip_address,
-                hostname,
-                comment,
-                tags,
-                created_at,
-            } => (
-                Some(ip_address.clone()),
-                Some(hostname.clone()),
-                *created_at,
-                EventData {
-                    comment: comment.clone(),
-                    tags: Some(tags.clone()),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::IpAddressChanged {
-                old_ip,
-                new_ip,
-                changed_at,
-            } => (
-                Some(new_ip.clone()),
-                None,
-                *changed_at,
-                EventData {
-                    previous_ip: Some(old_ip.clone()),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::HostnameChanged {
-                old_hostname,
-                new_hostname,
-                changed_at,
-            } => (
-                None,
-                Some(new_hostname.clone()),
-                *changed_at,
-                EventData {
-                    previous_hostname: Some(old_hostname.clone()),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::CommentUpdated {
-                old_comment,
-                new_comment,
-                updated_at,
-            } => (
-                None,
-                None,
-                *updated_at,
-                EventData {
-                    comment: new_comment.clone(),
-                    previous_comment: old_comment.clone(),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::TagsModified {
-                old_tags,
-                new_tags,
-                modified_at,
-            } => (
-                None,
-                None,
-                *modified_at,
-                EventData {
-                    tags: Some(new_tags.clone()),
-                    previous_tags: Some(old_tags.clone()),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::HostDeleted {
-                ip_address,
-                hostname,
-                deleted_at,
-                reason,
-            } => (
-                Some(ip_address.clone()),
-                Some(hostname.clone()),
-                *deleted_at,
-                EventData {
-                    deleted_reason: reason.clone(),
-                    ..Default::default()
-                },
-            ),
-        };
+        // Typed columns: ip_address, hostname, comment, tags (for queryability via LAST_VALUE IGNORE NULLS)
+        // EventData (JSON metadata): previous values and extension data
+        //
+        // IMPORTANT: comment and tags columns are only set for events that change them.
+        // NULL means "no change", enabling LAST_VALUE(... IGNORE NULLS) to properly merge state.
+        let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
+            match &event {
+                HostEvent::HostCreated {
+                    ip_address,
+                    hostname,
+                    comment,
+                    tags,
+                    created_at,
+                } => (
+                    Some(ip_address.clone()),
+                    Some(hostname.clone()),
+                    // For HostCreated: store comment even if None (establishes initial state)
+                    // Use empty string "" to represent "no comment" vs NULL which means "no change"
+                    Some(comment.clone().unwrap_or_default()),
+                    Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())),
+                    *created_at,
+                    EventData {
+                        comment: comment.clone(),
+                        tags: Some(tags.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::IpAddressChanged {
+                    old_ip,
+                    new_ip,
+                    changed_at,
+                } => (
+                    Some(new_ip.clone()),
+                    None,
+                    None, // comment unchanged
+                    None, // tags unchanged
+                    *changed_at,
+                    EventData {
+                        previous_ip: Some(old_ip.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::HostnameChanged {
+                    old_hostname,
+                    new_hostname,
+                    changed_at,
+                } => (
+                    None,
+                    Some(new_hostname.clone()),
+                    None, // comment unchanged
+                    None, // tags unchanged
+                    *changed_at,
+                    EventData {
+                        previous_hostname: Some(old_hostname.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::CommentUpdated {
+                    old_comment,
+                    new_comment,
+                    updated_at,
+                } => (
+                    None,
+                    None,
+                    // Store new comment (empty string if cleared)
+                    Some(new_comment.clone().unwrap_or_default()),
+                    None, // tags unchanged
+                    *updated_at,
+                    EventData {
+                        comment: new_comment.clone(),
+                        previous_comment: old_comment.clone(),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::TagsModified {
+                    old_tags,
+                    new_tags,
+                    modified_at,
+                } => (
+                    None,
+                    None,
+                    None, // comment unchanged
+                    Some(serde_json::to_string(new_tags).unwrap_or_else(|_| "[]".to_string())),
+                    *modified_at,
+                    EventData {
+                        tags: Some(new_tags.clone()),
+                        previous_tags: Some(old_tags.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::HostDeleted {
+                    ip_address,
+                    hostname,
+                    deleted_at,
+                    reason,
+                } => (
+                    Some(ip_address.clone()),
+                    Some(hostname.clone()),
+                    None, // comment unchanged
+                    None, // tags unchanged
+                    *deleted_at,
+                    EventData {
+                        deleted_reason: reason.clone(),
+                        ..Default::default()
+                    },
+                ),
+            };
 
         // Serialize EventData to JSON
         let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
@@ -206,9 +225,10 @@ impl EventStore {
                 r#"
                 INSERT INTO host_events (
                     event_id, aggregate_id, event_type, event_version,
-                    ip_address, hostname, event_timestamp, metadata,
+                    ip_address, hostname, comment, tags,
+                    event_timestamp, metadata,
                     created_at, created_by, expected_version
-                ) VALUES (?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
                 "#,
                 [
                     &event_id.to_string() as &dyn duckdb::ToSql,
@@ -217,6 +237,8 @@ impl EventStore {
                     &new_version,
                     &ip_address_opt as &dyn duckdb::ToSql,
                     &hostname_opt as &dyn duckdb::ToSql,
+                    &comment_opt as &dyn duckdb::ToSql,
+                    &tags_opt as &dyn duckdb::ToSql,
                     &event_timestamp.timestamp_micros(),
                     &event_data_json as &dyn duckdb::ToSql,
                     &now.timestamp_micros(),
@@ -611,92 +633,107 @@ impl EventStore {
             let event_id = Ulid::new();
 
             // Build event data and extract typed columns
-            let (ip_address_opt, hostname_opt, event_timestamp, event_data) = match &event {
-                HostEvent::HostCreated {
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags,
-                    created_at,
-                } => (
-                    Some(ip_address.clone()),
-                    Some(hostname.clone()),
-                    *created_at,
-                    EventData {
-                        comment: comment.clone(),
-                        tags: Some(tags.clone()),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::IpAddressChanged {
-                    old_ip,
-                    new_ip,
-                    changed_at,
-                } => (
-                    Some(new_ip.clone()),
-                    None,
-                    *changed_at,
-                    EventData {
-                        previous_ip: Some(old_ip.clone()),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::HostnameChanged {
-                    old_hostname,
-                    new_hostname,
-                    changed_at,
-                } => (
-                    None,
-                    Some(new_hostname.clone()),
-                    *changed_at,
-                    EventData {
-                        previous_hostname: Some(old_hostname.clone()),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::CommentUpdated {
-                    old_comment,
-                    new_comment,
-                    updated_at,
-                } => (
-                    None,
-                    None,
-                    *updated_at,
-                    EventData {
-                        comment: new_comment.clone(),
-                        previous_comment: old_comment.clone(),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::TagsModified {
-                    old_tags,
-                    new_tags,
-                    modified_at,
-                } => (
-                    None,
-                    None,
-                    *modified_at,
-                    EventData {
-                        tags: Some(new_tags.clone()),
-                        previous_tags: Some(old_tags.clone()),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::HostDeleted {
-                    ip_address,
-                    hostname,
-                    deleted_at,
-                    reason,
-                } => (
-                    Some(ip_address.clone()),
-                    Some(hostname.clone()),
-                    *deleted_at,
-                    EventData {
-                        deleted_reason: reason.clone(),
-                        ..Default::default()
-                    },
-                ),
-            };
+            // comment and tags columns are only set for events that change them.
+            // NULL means "no change", enabling LAST_VALUE(... IGNORE NULLS) to properly merge state.
+            let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
+                match &event {
+                    HostEvent::HostCreated {
+                        ip_address,
+                        hostname,
+                        comment,
+                        tags,
+                        created_at,
+                    } => (
+                        Some(ip_address.clone()),
+                        Some(hostname.clone()),
+                        Some(comment.clone().unwrap_or_default()),
+                        Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())),
+                        *created_at,
+                        EventData {
+                            comment: comment.clone(),
+                            tags: Some(tags.clone()),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::IpAddressChanged {
+                        old_ip,
+                        new_ip,
+                        changed_at,
+                    } => (
+                        Some(new_ip.clone()),
+                        None,
+                        None,
+                        None,
+                        *changed_at,
+                        EventData {
+                            previous_ip: Some(old_ip.clone()),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::HostnameChanged {
+                        old_hostname,
+                        new_hostname,
+                        changed_at,
+                    } => (
+                        None,
+                        Some(new_hostname.clone()),
+                        None,
+                        None,
+                        *changed_at,
+                        EventData {
+                            previous_hostname: Some(old_hostname.clone()),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::CommentUpdated {
+                        old_comment,
+                        new_comment,
+                        updated_at,
+                    } => (
+                        None,
+                        None,
+                        Some(new_comment.clone().unwrap_or_default()),
+                        None,
+                        *updated_at,
+                        EventData {
+                            comment: new_comment.clone(),
+                            previous_comment: old_comment.clone(),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::TagsModified {
+                        old_tags,
+                        new_tags,
+                        modified_at,
+                    } => (
+                        None,
+                        None,
+                        None,
+                        Some(serde_json::to_string(new_tags).unwrap_or_else(|_| "[]".to_string())),
+                        *modified_at,
+                        EventData {
+                            tags: Some(new_tags.clone()),
+                            previous_tags: Some(old_tags.clone()),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::HostDeleted {
+                        ip_address,
+                        hostname,
+                        deleted_at,
+                        reason,
+                    } => (
+                        Some(ip_address.clone()),
+                        Some(hostname.clone()),
+                        None,
+                        None,
+                        *deleted_at,
+                        EventData {
+                            deleted_reason: reason.clone(),
+                            ..Default::default()
+                        },
+                    ),
+                };
 
             // Serialize EventData to JSON
             let event_data_json = match serde_json::to_string(&event_data) {
@@ -720,9 +757,10 @@ impl EventStore {
                 r#"
                 INSERT INTO host_events (
                     event_id, aggregate_id, event_type, event_version,
-                    ip_address, hostname, event_timestamp, metadata,
+                    ip_address, hostname, comment, tags,
+                    event_timestamp, metadata,
                     created_at, created_by, expected_version
-                ) VALUES (?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
                 "#,
                 [
                     &event_id.to_string() as &dyn duckdb::ToSql,
@@ -731,6 +769,8 @@ impl EventStore {
                     &version,
                     &ip_address_opt as &dyn duckdb::ToSql,
                     &hostname_opt as &dyn duckdb::ToSql,
+                    &comment_opt as &dyn duckdb::ToSql,
+                    &tags_opt as &dyn duckdb::ToSql,
                     &event_timestamp.timestamp_micros(),
                     &event_data_json as &dyn duckdb::ToSql,
                     &now.timestamp_micros(),

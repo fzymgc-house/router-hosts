@@ -355,6 +355,9 @@ impl CommandHandler {
                     // 2. Outcome would be non-deterministic (which entry's values win?)
                     // 3. Fail-fast with clear error is better than silent last-wins behavior
                     // Users should deduplicate their import data before sending.
+                    //
+                    // Note: Cross-batch duplicates (same host in concurrent imports) are safe
+                    // because WriteQueue serializes all imports - they never interleave.
                     if events_by_aggregate.contains_key(&existing_entry.id) {
                         return Err(CommandError::ValidationFailed(format!(
                             "Line {}: Multiple updates to same host in import batch (IP {} hostname {})",
@@ -1035,13 +1038,9 @@ mod tests {
         assert_eq!(result.skipped, 0);
         assert_eq!(result.failed, 0);
 
-        // Verify host was updated
-        // NOTE: We must use get_by_id which rebuilds from events, not list_hosts which uses SQL view
-        // The SQL view has a bug where LAST_VALUE(metadata) doesn't properly merge partial updates
-        // See: https://github.com/fzymgc-house/router-hosts/issues/35
+        // Verify host was updated via list_hosts (fixed in #35)
         let hosts = handler.list_hosts().await.unwrap();
-        let host_id = hosts[0].id;
-        let updated = handler.get_host(host_id).await.unwrap().unwrap();
+        let updated = &hosts[0];
         assert_eq!(updated.comment, Some("Updated comment".to_string()));
         assert_eq!(updated.tags, vec!["updated".to_string()]);
     }

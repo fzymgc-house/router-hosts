@@ -94,8 +94,9 @@ impl Database {
         // Event store - append-only immutable log of all domain events
         // This is the source of truth for all state changes
         //
-        // Design: First-class typed columns for current state (ip_address, hostname)
-        // Metadata stored as VARCHAR (JSON string) - parsed in Rust to avoid DuckDB JSON extension
+        // Design: First-class typed columns for current state (ip_address, hostname, comment, tags)
+        // These columns enable LAST_VALUE(... IGNORE NULLS) in views for proper state merging.
+        // Metadata stored as VARCHAR (JSON string) for previous values and extension data.
         conn.execute(
             r#"
                 CREATE TABLE IF NOT EXISTS host_events (
@@ -106,8 +107,12 @@ impl Database {
                     -- Current state in typed columns for queryability
                     ip_address VARCHAR,
                     hostname VARCHAR,
+                    -- Comment field (nullable - NULL means "no change" for proper LAST_VALUE IGNORE NULLS)
+                    comment VARCHAR,
+                    -- Tags as JSON array string (nullable - NULL means "no change")
+                    tags VARCHAR,
                     event_timestamp TIMESTAMP NOT NULL,
-                    -- Event metadata: tags, comments, previous values (stored as JSON string)
+                    -- Event metadata: previous values and extension data (stored as JSON string)
                     metadata VARCHAR NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     created_by VARCHAR,
@@ -146,6 +151,10 @@ impl Database {
         // Uses window functions to carry forward the most recent non-null value for each field,
         // since update events only set the fields they change (e.g., IpAddressChanged
         // only sets ip_address, not hostname).
+        //
+        // FIX for #35: Use LAST_VALUE(... IGNORE NULLS) on comment and tags columns
+        // to properly merge partial updates. Previously used LAST_VALUE(metadata) which
+        // only returned the last event's metadata, losing other fields.
         conn.execute(
                 r#"
                 CREATE VIEW IF NOT EXISTS host_entries_current AS
@@ -165,11 +174,17 @@ impl Database {
                             ORDER BY event_version
                             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
                         ) as hostname,
-                        LAST_VALUE(metadata) OVER (
+                        -- FIX #35: Use dedicated columns with IGNORE NULLS for proper merging
+                        LAST_VALUE(comment IGNORE NULLS) OVER (
                             PARTITION BY aggregate_id
                             ORDER BY event_version
                             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-                        ) as latest_metadata,
+                        ) as comment,
+                        LAST_VALUE(tags IGNORE NULLS) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as tags,
                         FIRST_VALUE(event_timestamp) OVER (
                             PARTITION BY aggregate_id
                             ORDER BY event_version
@@ -192,8 +207,8 @@ impl Database {
                     aggregate_id as id,
                     CAST(ip_address AS VARCHAR) as ip_address,
                     hostname,
-                    -- Return raw metadata (already VARCHAR); Rust will parse JSON
-                    latest_metadata as metadata,
+                    comment,
+                    tags,
                     CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) as created_at,
                     CAST(EXTRACT(EPOCH FROM updated_at) * 1000000 AS BIGINT) as updated_at,
                     event_version
@@ -333,7 +348,11 @@ mod tests {
         assert!(cols.contains(&"hostname".to_string()));
         assert!(cols.contains(&"event_timestamp".to_string()));
 
-        // JSON metadata column (tags, comments, previous values)
+        // First-class columns for comment and tags (fix for #35)
+        assert!(cols.contains(&"comment".to_string()));
+        assert!(cols.contains(&"tags".to_string()));
+
+        // JSON metadata column (previous values and extension data)
         assert!(cols.contains(&"metadata".to_string()));
     }
 }
