@@ -254,6 +254,181 @@ impl CommandHandler {
         Ok(HostProjections::search(&self.db, pattern)?)
     }
 
+    /// Import multiple hosts with conflict handling
+    ///
+    /// Unlike add_host, this commits all events in a batch and
+    /// only regenerates the hosts file once at the end.
+    ///
+    /// # Fail-Fast Behavior
+    ///
+    /// This function uses fail-fast semantics for certain error conditions:
+    ///
+    /// - **Duplicate aggregate updates**: If the same IP+hostname appears multiple
+    ///   times in the import batch (when `conflict_mode` is `Replace`), the entire
+    ///   operation fails with `ValidationFailed`. No partial results are preserved.
+    ///   This prevents non-deterministic outcomes where the "winner" depends on
+    ///   iteration order.
+    ///
+    /// - **Strict mode duplicates**: If `conflict_mode` is `Strict` and any entry
+    ///   already exists, the operation fails immediately with `DuplicateEntry`.
+    ///
+    /// Validation failures (invalid IP/hostname) do NOT trigger fail-fast. Instead,
+    /// they are counted in `failed` and recorded in `validation_errors`, allowing
+    /// the import to continue with valid entries.
+    ///
+    /// # Design Rationale
+    ///
+    /// Fail-fast on duplicate aggregates ensures deterministic behavior and surfaces
+    /// malformed import data early. Users should deduplicate their import data before
+    /// sending. The alternative (last-wins or first-wins) would silently discard data.
+    pub async fn import_hosts(
+        &self,
+        entries: Vec<crate::server::write_queue::ParsedEntry>,
+        conflict_mode: crate::server::write_queue::ConflictMode,
+    ) -> CommandResult<crate::server::write_queue::ImportResult> {
+        use crate::server::db::{EventStore, HostEvent, HostProjections};
+        use crate::server::write_queue::{ConflictMode, ImportResult};
+        use std::collections::HashMap;
+
+        let mut result = ImportResult {
+            processed: 0,
+            created: 0,
+            updated: 0,
+            skipped: 0,
+            failed: 0,
+            validation_errors: Vec::new(),
+        };
+
+        // Group events by aggregate_id: (aggregate_id, events, expected_version)
+        let mut events_by_aggregate: HashMap<Ulid, (Vec<HostEvent>, Option<i64>)> = HashMap::new();
+
+        for entry in entries {
+            result.processed = result.processed.saturating_add(1);
+
+            // Validate
+            if let Err(e) = validate_ip_address(&entry.ip_address) {
+                let error_msg = format!(
+                    "Line {}: Invalid IP '{}': {}",
+                    entry.line_number, entry.ip_address, e
+                );
+                tracing::warn!(
+                    line = entry.line_number,
+                    ip = %entry.ip_address,
+                    error = %e,
+                    "Import validation failed"
+                );
+                result.validation_errors.push(error_msg);
+                result.failed = result.failed.saturating_add(1);
+                continue;
+            }
+            if let Err(e) = validate_hostname(&entry.hostname) {
+                let error_msg = format!(
+                    "Line {}: Invalid hostname '{}': {}",
+                    entry.line_number, entry.hostname, e
+                );
+                tracing::warn!(
+                    line = entry.line_number,
+                    hostname = %entry.hostname,
+                    error = %e,
+                    "Import validation failed"
+                );
+                result.validation_errors.push(error_msg);
+                result.failed = result.failed.saturating_add(1);
+                continue;
+            }
+
+            // Check for existing entry
+            let existing = HostProjections::find_by_ip_and_hostname(
+                &self.db,
+                &entry.ip_address,
+                &entry.hostname,
+            )?;
+
+            match (existing, conflict_mode) {
+                (Some(_), ConflictMode::Skip) => {
+                    result.skipped = result.skipped.saturating_add(1);
+                }
+                (Some(existing_entry), ConflictMode::Replace) => {
+                    // Reject duplicate aggregate updates within a single batch.
+                    // Rationale:
+                    // 1. Indicates malformed import data (same IP+hostname appears twice)
+                    // 2. Outcome would be non-deterministic (which entry's values win?)
+                    // 3. Fail-fast with clear error is better than silent last-wins behavior
+                    // Users should deduplicate their import data before sending.
+                    //
+                    // Note: Cross-batch duplicates (same host in concurrent imports) are safe
+                    // because WriteQueue serializes all imports - they never interleave.
+                    if events_by_aggregate.contains_key(&existing_entry.id) {
+                        return Err(CommandError::ValidationFailed(format!(
+                            "Line {}: Multiple updates to same host in import batch (IP {} hostname {})",
+                            entry.line_number, entry.ip_address, entry.hostname
+                        )));
+                    }
+
+                    // Generate update events
+                    let mut update_events = Vec::new();
+
+                    if entry.comment != existing_entry.comment {
+                        update_events.push(HostEvent::CommentUpdated {
+                            old_comment: existing_entry.comment.clone(),
+                            new_comment: entry.comment.clone(),
+                            updated_at: Utc::now(),
+                        });
+                    }
+                    if entry.tags != existing_entry.tags {
+                        update_events.push(HostEvent::TagsModified {
+                            old_tags: existing_entry.tags.clone(),
+                            new_tags: entry.tags.clone(),
+                            modified_at: Utc::now(),
+                        });
+                    }
+
+                    if !update_events.is_empty() {
+                        events_by_aggregate.insert(
+                            existing_entry.id,
+                            (update_events, Some(existing_entry.version)),
+                        );
+                        result.updated = result.updated.saturating_add(1);
+                    } else {
+                        // No changes needed, count as skipped
+                        result.skipped = result.skipped.saturating_add(1);
+                    }
+                }
+                (Some(_), ConflictMode::Strict) => {
+                    return Err(CommandError::DuplicateEntry(format!(
+                        "Line {}: Host with IP {} and hostname {} already exists",
+                        entry.line_number, entry.ip_address, entry.hostname
+                    )));
+                }
+                (None, _) => {
+                    // Create new entry
+                    let aggregate_id = Ulid::new();
+                    let event = HostEvent::HostCreated {
+                        ip_address: entry.ip_address,
+                        hostname: entry.hostname,
+                        comment: entry.comment,
+                        tags: entry.tags,
+                        created_at: Utc::now(),
+                    };
+                    events_by_aggregate.insert(aggregate_id, (vec![event], None));
+                    result.created = result.created.saturating_add(1);
+                }
+            }
+        }
+
+        // Commit all events grouped by aggregate
+        for (aggregate_id, (events, expected_version)) in events_by_aggregate {
+            EventStore::append_events(&self.db, &aggregate_id, events, expected_version, None)?;
+        }
+
+        // Regenerate hosts file once at end if any changes were made
+        if result.created > 0 || result.updated > 0 {
+            self.regenerate_hosts_file().await?;
+        }
+
+        Ok(result)
+    }
+
     async fn regenerate_hosts_file(&self) -> CommandResult<()> {
         match self.hosts_file.regenerate(&self.db).await {
             Ok(count) => {
@@ -772,5 +947,273 @@ mod tests {
             "Expected VersionConflict error for stale version, got {:?}",
             result
         );
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_skip_mode() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Add existing host
+        handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "existing.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        let entries = vec![
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "existing.local".to_string(),
+                comment: Some("New comment".to_string()),
+                tags: vec![],
+                line_number: 1,
+            },
+            ParsedEntry {
+                ip_address: "192.168.1.2".to_string(),
+                hostname: "new.local".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 2,
+            },
+        ];
+
+        let result = handler
+            .import_hosts(entries, ConflictMode::Skip)
+            .await
+            .unwrap();
+
+        assert_eq!(result.processed, 2);
+        assert_eq!(result.created, 1);
+        assert_eq!(result.skipped, 1);
+        assert_eq!(result.failed, 0);
+
+        // Verify existing host unchanged
+        let hosts = handler.list_hosts().await.unwrap();
+        let existing = hosts
+            .iter()
+            .find(|h| h.ip_address == "192.168.1.1")
+            .unwrap();
+        assert!(existing.comment.is_none()); // Original had no comment
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_replace_mode() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Add existing host
+        handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "existing.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        let entries = vec![ParsedEntry {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "existing.local".to_string(),
+            comment: Some("Updated comment".to_string()),
+            tags: vec!["updated".to_string()],
+            line_number: 1,
+        }];
+
+        let result = handler
+            .import_hosts(entries, ConflictMode::Replace)
+            .await
+            .unwrap();
+
+        assert_eq!(result.processed, 1);
+        assert_eq!(result.created, 0);
+        assert_eq!(result.updated, 1); // Replace mode: updated existing entry
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.failed, 0);
+
+        // Verify host was updated via list_hosts (fixed in #35)
+        let hosts = handler.list_hosts().await.unwrap();
+        let updated = &hosts[0];
+        assert_eq!(updated.comment, Some("Updated comment".to_string()));
+        assert_eq!(updated.tags, vec!["updated".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_strict_mode() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Add existing host
+        handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "existing.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        let entries = vec![ParsedEntry {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "existing.local".to_string(),
+            comment: None,
+            tags: vec![],
+            line_number: 1,
+        }];
+
+        let result = handler.import_hosts(entries, ConflictMode::Strict).await;
+
+        assert!(matches!(result, Err(CommandError::DuplicateEntry(_))));
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_duplicate_aggregate_in_batch() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Add existing host
+        handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "existing.local".to_string(),
+                Some("Original comment".to_string()),
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        // Try to import two updates to the same host in one batch
+        let entries = vec![
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "existing.local".to_string(),
+                comment: Some("First update".to_string()),
+                tags: vec![],
+                line_number: 1,
+            },
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "existing.local".to_string(),
+                comment: Some("Second update".to_string()),
+                tags: vec![],
+                line_number: 2,
+            },
+        ];
+
+        let result = handler.import_hosts(entries, ConflictMode::Replace).await;
+
+        assert!(
+            matches!(&result, Err(CommandError::ValidationFailed(msg)) if msg.contains("Multiple updates to same host")),
+            "Expected ValidationFailed error about duplicate aggregate updates, got {:?}",
+            result
+        );
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_replace_mode_no_changes() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Add existing host
+        handler
+            .add_host(
+                "192.168.1.1".to_string(),
+                "existing.local".to_string(),
+                Some("Same comment".to_string()),
+                vec!["tag1".to_string()],
+            )
+            .await
+            .unwrap();
+
+        // Import same values (no actual changes)
+        let entries = vec![ParsedEntry {
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "existing.local".to_string(),
+            comment: Some("Same comment".to_string()),
+            tags: vec!["tag1".to_string()],
+            line_number: 1,
+        }];
+
+        let result = handler
+            .import_hosts(entries, ConflictMode::Replace)
+            .await
+            .unwrap();
+
+        assert_eq!(result.processed, 1);
+        assert_eq!(result.created, 0);
+        assert_eq!(result.updated, 0);
+        assert_eq!(result.skipped, 1); // No changes needed, counted as skipped
+        assert_eq!(result.failed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_validation_failures() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup();
+
+        // Mix of valid and invalid entries
+        let entries = vec![
+            // Valid entry
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "valid.local".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 1,
+            },
+            // Invalid IP address
+            ParsedEntry {
+                ip_address: "not-an-ip".to_string(),
+                hostname: "badip.local".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 2,
+            },
+            // Invalid hostname (contains underscore, which is invalid per RFC)
+            ParsedEntry {
+                ip_address: "192.168.1.3".to_string(),
+                hostname: "bad_hostname".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 3,
+            },
+            // Another valid entry
+            ParsedEntry {
+                ip_address: "192.168.1.4".to_string(),
+                hostname: "valid2.local".to_string(),
+                comment: None,
+                tags: vec![],
+                line_number: 4,
+            },
+        ];
+
+        let result = handler
+            .import_hosts(entries, ConflictMode::Skip)
+            .await
+            .unwrap();
+
+        // Should process all 4, create 2 valid ones, fail 2 invalid ones
+        assert_eq!(result.processed, 4);
+        assert_eq!(result.created, 2);
+        assert_eq!(result.skipped, 0);
+        assert_eq!(result.failed, 2);
+
+        // Verify only valid entries were created
+        let hosts = handler.list_hosts().await.unwrap();
+        assert_eq!(hosts.len(), 2);
+        assert!(hosts.iter().any(|h| h.hostname == "valid.local"));
+        assert!(hosts.iter().any(|h| h.hostname == "valid2.local"));
     }
 }

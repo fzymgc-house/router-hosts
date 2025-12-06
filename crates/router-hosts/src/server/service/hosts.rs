@@ -19,7 +19,7 @@ impl HostsServiceImpl {
         let req = request.into_inner();
 
         let entry = self
-            .commands
+            .write_queue
             .add_host(req.ip_address, req.hostname, req.comment, req.tags)
             .await
             .map_err(Status::from)?;
@@ -76,7 +76,7 @@ impl HostsServiceImpl {
         };
 
         let entry = self
-            .commands
+            .write_queue
             .update_host(
                 id,
                 req.ip_address, // Already Option<String> from proto
@@ -103,7 +103,7 @@ impl HostsServiceImpl {
         let id = Ulid::from_string(&req.id)
             .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
 
-        self.commands
+        self.write_queue
             .delete_host(id, None)
             .await
             .map_err(Status::from)?;

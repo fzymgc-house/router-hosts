@@ -12,7 +12,48 @@ use ulid::Ulid;
 /// - Optimistic concurrency control via event versioning
 /// - Sequential event ordering per aggregate
 /// - Efficient event replay for rebuilding state
+///
+/// # NULL vs Empty String Semantics for Comment/Tags
+///
+/// The `comment` and `tags` columns use specific semantics to enable
+/// `LAST_VALUE(... IGNORE NULLS)` in the SQL view for proper state merging:
+///
+/// - **NULL**: Means "no change" - the field was not modified by this event.
+///   Used by partial update events (e.g., `IpAddressChanged` doesn't touch comment).
+///
+/// - **Empty string `""`**: Means "cleared/no value" - the field was explicitly
+///   set to have no comment. Used when a user clears their comment.
+///
+/// This distinction is critical for the SQL view to correctly merge partial
+/// updates using `LAST_VALUE(comment IGNORE NULLS)`. Without it, an update
+/// to just the IP address would incorrectly "clear" the comment.
+///
+/// Example event sequence:
+/// 1. `HostCreated { comment: "server", ... }` → comment column = "server"
+/// 2. `IpAddressChanged { ... }` → comment column = NULL (no change)
+/// 3. View shows comment = "server" (LAST_VALUE IGNORE NULLS finds event 1)
 pub struct EventStore;
+
+impl EventStore {
+    /// Rollback a transaction and return the provided error.
+    ///
+    /// If rollback fails, returns an error that includes both the original error
+    /// and the rollback failure. This ensures rollback failures are never silently ignored.
+    fn rollback_and_return(db: &Database, error: DatabaseError) -> DatabaseError {
+        if let Err(rollback_err) = db.conn().execute("ROLLBACK", []) {
+            error!(
+                "Transaction rollback failed after error '{}': {}",
+                error, rollback_err
+            );
+            DatabaseError::QueryFailed(format!(
+                "Original error: {}; Rollback also failed: {}",
+                error, rollback_err
+            ))
+        } else {
+            error
+        }
+    }
+}
 
 impl EventStore {
     /// Append a new event to the store
@@ -55,41 +96,29 @@ impl EventStore {
         } = &event
         {
             if HostProjections::find_by_ip_and_hostname(db, ip_address, hostname)?.is_some() {
-                db.conn()
-                    .execute("ROLLBACK", [])
-                    .inspect_err(|e| {
-                        error!("Failed to rollback transaction: {}", e);
-                    })
-                    .ok();
-                return Err(DatabaseError::DuplicateEntry(format!(
-                    "Host with IP {} and hostname {} already exists",
-                    ip_address, hostname
-                )));
+                return Err(Self::rollback_and_return(
+                    db,
+                    DatabaseError::DuplicateEntry(format!(
+                        "Host with IP {} and hostname {} already exists",
+                        ip_address, hostname
+                    )),
+                ));
             }
         }
 
         // Get current version for this aggregate
-        let current_version = Self::get_current_version(db, aggregate_id).inspect_err(|_| {
-            db.conn()
-                .execute("ROLLBACK", [])
-                .inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                })
-                .ok();
-        })?;
+        let current_version = Self::get_current_version(db, aggregate_id)
+            .map_err(|e| Self::rollback_and_return(db, e))?;
 
         // Verify expected version matches (optimistic concurrency control)
         if expected_version != current_version {
-            db.conn()
-                .execute("ROLLBACK", [])
-                .inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                })
-                .ok();
-            return Err(DatabaseError::ConcurrentWriteConflict(format!(
-                "Expected version {:?} but current version is {:?} for aggregate {}",
-                expected_version, current_version, aggregate_id
-            )));
+            return Err(Self::rollback_and_return(
+                db,
+                DatabaseError::ConcurrentWriteConflict(format!(
+                    "Expected version {:?} but current version is {:?} for aggregate {}",
+                    expected_version, current_version, aggregate_id
+                )),
+            ));
         }
 
         // Calculate next version
@@ -100,104 +129,120 @@ impl EventStore {
         let now = Utc::now();
 
         // Build event data and extract typed columns
-        // EventData (JSON metadata): tags, comments, previous values
-        // Typed columns: ip_address, hostname (for queryability)
-        let (ip_address_opt, hostname_opt, event_timestamp, event_data) = match &event {
-            HostEvent::HostCreated {
-                ip_address,
-                hostname,
-                comment,
-                tags,
-                created_at,
-            } => (
-                Some(ip_address.clone()),
-                Some(hostname.clone()),
-                *created_at,
-                EventData {
-                    comment: comment.clone(),
-                    tags: Some(tags.clone()),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::IpAddressChanged {
-                old_ip,
-                new_ip,
-                changed_at,
-            } => (
-                Some(new_ip.clone()),
-                None,
-                *changed_at,
-                EventData {
-                    previous_ip: Some(old_ip.clone()),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::HostnameChanged {
-                old_hostname,
-                new_hostname,
-                changed_at,
-            } => (
-                None,
-                Some(new_hostname.clone()),
-                *changed_at,
-                EventData {
-                    previous_hostname: Some(old_hostname.clone()),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::CommentUpdated {
-                old_comment,
-                new_comment,
-                updated_at,
-            } => (
-                None,
-                None,
-                *updated_at,
-                EventData {
-                    comment: new_comment.clone(),
-                    previous_comment: old_comment.clone(),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::TagsModified {
-                old_tags,
-                new_tags,
-                modified_at,
-            } => (
-                None,
-                None,
-                *modified_at,
-                EventData {
-                    tags: Some(new_tags.clone()),
-                    previous_tags: Some(old_tags.clone()),
-                    ..Default::default()
-                },
-            ),
-            HostEvent::HostDeleted {
-                ip_address,
-                hostname,
-                deleted_at,
-                reason,
-            } => (
-                Some(ip_address.clone()),
-                Some(hostname.clone()),
-                *deleted_at,
-                EventData {
-                    deleted_reason: reason.clone(),
-                    ..Default::default()
-                },
-            ),
-        };
+        // Typed columns: ip_address, hostname, comment, tags (for queryability via LAST_VALUE IGNORE NULLS)
+        // EventData (JSON metadata): previous values and extension data
+        //
+        // IMPORTANT: comment and tags columns are only set for events that change them.
+        // NULL means "no change", enabling LAST_VALUE(... IGNORE NULLS) to properly merge state.
+        let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
+            match &event {
+                HostEvent::HostCreated {
+                    ip_address,
+                    hostname,
+                    comment,
+                    tags,
+                    created_at,
+                } => (
+                    Some(ip_address.clone()),
+                    Some(hostname.clone()),
+                    // For HostCreated: store comment even if None (establishes initial state)
+                    // Use empty string "" to represent "no comment" vs NULL which means "no change"
+                    Some(comment.clone().unwrap_or_default()),
+                    Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())),
+                    *created_at,
+                    EventData {
+                        comment: comment.clone(),
+                        tags: Some(tags.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::IpAddressChanged {
+                    old_ip,
+                    new_ip,
+                    changed_at,
+                } => (
+                    Some(new_ip.clone()),
+                    None,
+                    None, // comment unchanged
+                    None, // tags unchanged
+                    *changed_at,
+                    EventData {
+                        previous_ip: Some(old_ip.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::HostnameChanged {
+                    old_hostname,
+                    new_hostname,
+                    changed_at,
+                } => (
+                    None,
+                    Some(new_hostname.clone()),
+                    None, // comment unchanged
+                    None, // tags unchanged
+                    *changed_at,
+                    EventData {
+                        previous_hostname: Some(old_hostname.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::CommentUpdated {
+                    old_comment,
+                    new_comment,
+                    updated_at,
+                } => (
+                    None,
+                    None,
+                    // Store new comment (empty string if cleared)
+                    Some(new_comment.clone().unwrap_or_default()),
+                    None, // tags unchanged
+                    *updated_at,
+                    EventData {
+                        comment: new_comment.clone(),
+                        previous_comment: old_comment.clone(),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::TagsModified {
+                    old_tags,
+                    new_tags,
+                    modified_at,
+                } => (
+                    None,
+                    None,
+                    None, // comment unchanged
+                    Some(serde_json::to_string(new_tags).unwrap_or_else(|_| "[]".to_string())),
+                    *modified_at,
+                    EventData {
+                        tags: Some(new_tags.clone()),
+                        previous_tags: Some(old_tags.clone()),
+                        ..Default::default()
+                    },
+                ),
+                HostEvent::HostDeleted {
+                    ip_address,
+                    hostname,
+                    deleted_at,
+                    reason,
+                } => (
+                    Some(ip_address.clone()),
+                    Some(hostname.clone()),
+                    None, // comment unchanged
+                    None, // tags unchanged
+                    *deleted_at,
+                    EventData {
+                        deleted_reason: reason.clone(),
+                        ..Default::default()
+                    },
+                ),
+            };
 
         // Serialize EventData to JSON
         let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
-            db.conn()
-                .execute("ROLLBACK", [])
-                .inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                })
-                .ok();
-            DatabaseError::InvalidData(format!("Failed to serialize event data: {}", e))
+            Self::rollback_and_return(
+                db,
+                DatabaseError::InvalidData(format!("Failed to serialize event data: {}", e)),
+            )
         })?;
 
         // Single INSERT statement for all event types
@@ -206,9 +251,10 @@ impl EventStore {
                 r#"
                 INSERT INTO host_events (
                     event_id, aggregate_id, event_type, event_version,
-                    ip_address, hostname, event_timestamp, metadata,
+                    ip_address, hostname, comment, tags,
+                    event_timestamp, metadata,
                     created_at, created_by, expected_version
-                ) VALUES (?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
                 "#,
                 [
                     &event_id.to_string() as &dyn duckdb::ToSql,
@@ -217,6 +263,8 @@ impl EventStore {
                     &new_version,
                     &ip_address_opt as &dyn duckdb::ToSql,
                     &hostname_opt as &dyn duckdb::ToSql,
+                    &comment_opt as &dyn duckdb::ToSql,
+                    &tags_opt as &dyn duckdb::ToSql,
                     &event_timestamp.timestamp_micros(),
                     &event_data_json as &dyn duckdb::ToSql,
                     &now.timestamp_micros(),
@@ -225,19 +273,17 @@ impl EventStore {
                 ],
             )
             .map_err(|e: duckdb::Error| {
-                db.conn().execute("ROLLBACK", []).inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                }).ok();
                 // Check if this was a uniqueness violation (concurrent write)
                 let error_str = e.to_string();
-                if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
+                let db_error = if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
                     DatabaseError::ConcurrentWriteConflict(format!(
                         "Concurrent write detected for aggregate {} at version {}",
                         aggregate_id, new_version
                     ))
                 } else {
                     DatabaseError::QueryFailed(format!("Failed to insert event: {}", e))
-                }
+                };
+                Self::rollback_and_return(db, db_error)
             })?;
 
         // Commit transaction
@@ -575,31 +621,18 @@ impl EventStore {
         })?;
 
         // Get current version for this aggregate
-        let current_version = match Self::get_current_version(db, aggregate_id) {
-            Ok(v) => v,
-            Err(e) => {
-                db.conn()
-                    .execute("ROLLBACK", [])
-                    .inspect_err(|e| {
-                        error!("Failed to rollback transaction: {}", e);
-                    })
-                    .ok();
-                return Err(e);
-            }
-        };
+        let current_version = Self::get_current_version(db, aggregate_id)
+            .map_err(|e| Self::rollback_and_return(db, e))?;
 
         // Verify expected version matches (optimistic concurrency control)
         if expected_version != current_version {
-            db.conn()
-                .execute("ROLLBACK", [])
-                .inspect_err(|e| {
-                    error!("Failed to rollback transaction: {}", e);
-                })
-                .ok();
-            return Err(DatabaseError::ConcurrentWriteConflict(format!(
-                "Expected version {:?} but current version is {:?} for aggregate {}",
-                expected_version, current_version, aggregate_id
-            )));
+            return Err(Self::rollback_and_return(
+                db,
+                DatabaseError::ConcurrentWriteConflict(format!(
+                    "Expected version {:?} but current version is {:?} for aggregate {}",
+                    expected_version, current_version, aggregate_id
+                )),
+            ));
         }
 
         let mut envelopes = Vec::with_capacity(events.len());
@@ -611,107 +644,119 @@ impl EventStore {
             let event_id = Ulid::new();
 
             // Build event data and extract typed columns
-            let (ip_address_opt, hostname_opt, event_timestamp, event_data) = match &event {
-                HostEvent::HostCreated {
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags,
-                    created_at,
-                } => (
-                    Some(ip_address.clone()),
-                    Some(hostname.clone()),
-                    *created_at,
-                    EventData {
-                        comment: comment.clone(),
-                        tags: Some(tags.clone()),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::IpAddressChanged {
-                    old_ip,
-                    new_ip,
-                    changed_at,
-                } => (
-                    Some(new_ip.clone()),
-                    None,
-                    *changed_at,
-                    EventData {
-                        previous_ip: Some(old_ip.clone()),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::HostnameChanged {
-                    old_hostname,
-                    new_hostname,
-                    changed_at,
-                } => (
-                    None,
-                    Some(new_hostname.clone()),
-                    *changed_at,
-                    EventData {
-                        previous_hostname: Some(old_hostname.clone()),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::CommentUpdated {
-                    old_comment,
-                    new_comment,
-                    updated_at,
-                } => (
-                    None,
-                    None,
-                    *updated_at,
-                    EventData {
-                        comment: new_comment.clone(),
-                        previous_comment: old_comment.clone(),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::TagsModified {
-                    old_tags,
-                    new_tags,
-                    modified_at,
-                } => (
-                    None,
-                    None,
-                    *modified_at,
-                    EventData {
-                        tags: Some(new_tags.clone()),
-                        previous_tags: Some(old_tags.clone()),
-                        ..Default::default()
-                    },
-                ),
-                HostEvent::HostDeleted {
-                    ip_address,
-                    hostname,
-                    deleted_at,
-                    reason,
-                } => (
-                    Some(ip_address.clone()),
-                    Some(hostname.clone()),
-                    *deleted_at,
-                    EventData {
-                        deleted_reason: reason.clone(),
-                        ..Default::default()
-                    },
-                ),
-            };
+            // comment and tags columns are only set for events that change them.
+            // NULL means "no change", enabling LAST_VALUE(... IGNORE NULLS) to properly merge state.
+            let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
+                match &event {
+                    HostEvent::HostCreated {
+                        ip_address,
+                        hostname,
+                        comment,
+                        tags,
+                        created_at,
+                    } => (
+                        Some(ip_address.clone()),
+                        Some(hostname.clone()),
+                        Some(comment.clone().unwrap_or_default()),
+                        Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())),
+                        *created_at,
+                        EventData {
+                            comment: comment.clone(),
+                            tags: Some(tags.clone()),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::IpAddressChanged {
+                        old_ip,
+                        new_ip,
+                        changed_at,
+                    } => (
+                        Some(new_ip.clone()),
+                        None,
+                        None,
+                        None,
+                        *changed_at,
+                        EventData {
+                            previous_ip: Some(old_ip.clone()),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::HostnameChanged {
+                        old_hostname,
+                        new_hostname,
+                        changed_at,
+                    } => (
+                        None,
+                        Some(new_hostname.clone()),
+                        None,
+                        None,
+                        *changed_at,
+                        EventData {
+                            previous_hostname: Some(old_hostname.clone()),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::CommentUpdated {
+                        old_comment,
+                        new_comment,
+                        updated_at,
+                    } => (
+                        None,
+                        None,
+                        Some(new_comment.clone().unwrap_or_default()),
+                        None,
+                        *updated_at,
+                        EventData {
+                            comment: new_comment.clone(),
+                            previous_comment: old_comment.clone(),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::TagsModified {
+                        old_tags,
+                        new_tags,
+                        modified_at,
+                    } => (
+                        None,
+                        None,
+                        None,
+                        Some(serde_json::to_string(new_tags).unwrap_or_else(|_| "[]".to_string())),
+                        *modified_at,
+                        EventData {
+                            tags: Some(new_tags.clone()),
+                            previous_tags: Some(old_tags.clone()),
+                            ..Default::default()
+                        },
+                    ),
+                    HostEvent::HostDeleted {
+                        ip_address,
+                        hostname,
+                        deleted_at,
+                        reason,
+                    } => (
+                        Some(ip_address.clone()),
+                        Some(hostname.clone()),
+                        None,
+                        None,
+                        *deleted_at,
+                        EventData {
+                            deleted_reason: reason.clone(),
+                            ..Default::default()
+                        },
+                    ),
+                };
 
             // Serialize EventData to JSON
             let event_data_json = match serde_json::to_string(&event_data) {
                 Ok(json) => json,
                 Err(e) => {
-                    db.conn()
-                        .execute("ROLLBACK", [])
-                        .inspect_err(|e| {
-                            error!("Failed to rollback transaction: {}", e);
-                        })
-                        .ok();
-                    return Err(DatabaseError::InvalidData(format!(
-                        "Failed to serialize event data: {}",
-                        e
-                    )));
+                    return Err(Self::rollback_and_return(
+                        db,
+                        DatabaseError::InvalidData(format!(
+                            "Failed to serialize event data: {}",
+                            e
+                        )),
+                    ));
                 }
             };
 
@@ -720,9 +765,10 @@ impl EventStore {
                 r#"
                 INSERT INTO host_events (
                     event_id, aggregate_id, event_type, event_version,
-                    ip_address, hostname, event_timestamp, metadata,
+                    ip_address, hostname, comment, tags,
+                    event_timestamp, metadata,
                     created_at, created_by, expected_version
-                ) VALUES (?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
                 "#,
                 [
                     &event_id.to_string() as &dyn duckdb::ToSql,
@@ -731,6 +777,8 @@ impl EventStore {
                     &version,
                     &ip_address_opt as &dyn duckdb::ToSql,
                     &hostname_opt as &dyn duckdb::ToSql,
+                    &comment_opt as &dyn duckdb::ToSql,
+                    &tags_opt as &dyn duckdb::ToSql,
                     &event_timestamp.timestamp_micros(),
                     &event_data_json as &dyn duckdb::ToSql,
                     &now.timestamp_micros(),
@@ -738,24 +786,16 @@ impl EventStore {
                     &expected_version,
                 ],
             ) {
-                db.conn()
-                    .execute("ROLLBACK", [])
-                    .inspect_err(|e| {
-                        error!("Failed to rollback transaction: {}", e);
-                    })
-                    .ok();
                 let error_str = e.to_string();
-                if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
-                    return Err(DatabaseError::ConcurrentWriteConflict(format!(
+                let db_error = if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
+                    DatabaseError::ConcurrentWriteConflict(format!(
                         "Concurrent write detected for aggregate {} at version {}",
                         aggregate_id, version
-                    )));
+                    ))
                 } else {
-                    return Err(DatabaseError::QueryFailed(format!(
-                        "Failed to insert event: {}",
-                        e
-                    )));
-                }
+                    DatabaseError::QueryFailed(format!("Failed to insert event: {}", e))
+                };
+                return Err(Self::rollback_and_return(db, db_error));
             }
 
             envelopes.push(EventEnvelope {

@@ -165,6 +165,25 @@ message ImportHostsRequest {
 }
 
 // Response for host import operation (streamed progress updates)
+//
+// Example counter values for importing 5 entries where 2 already exist:
+//
+// With conflict_mode = "skip":
+//   processed=5, created=3, updated=0, skipped=2, failed=0
+//   (existing entries left unchanged, counted as skipped)
+//
+// With conflict_mode = "replace":
+//   processed=5, created=3, updated=2, skipped=0, failed=0
+//   (existing entries updated with new values)
+//
+// Example with validation failures (2 invalid entries):
+//   processed=5, created=2, updated=0, skipped=0, failed=3
+//   validation_errors=["Line 1: Invalid IP '999.0.0.1': ...",
+//                      "Line 3: Invalid hostname 'bad_host': ...",
+//                      "Line 5: Invalid IP 'not-an-ip': ..."]
+//
+// Note: In replace mode, if existing entry has identical values, it counts
+// as skipped (no-op), not updated.
 message ImportHostsResponse {
   // Total entries processed so far
   int32 processed = 1;
@@ -172,14 +191,22 @@ message ImportHostsResponse {
   // Successfully created entries
   int32 created = 2;
 
+  // Existing entries updated. Only non-zero when conflict_mode = "replace".
+  // In skip mode, duplicates increment skipped instead.
+  int32 updated = 3;
+
   // Duplicates skipped (when conflict_mode = "skip")
-  int32 skipped = 3;
+  int32 skipped = 4;
 
   // Validation failures
-  int32 failed = 4;
+  int32 failed = 5;
 
   // Error message if import operation encountered an issue
-  optional string error = 5;
+  optional string error = 6;
+
+  // Details of validation failures (line number and reason)
+  // Only populated when failed > 0
+  repeated string validation_errors = 7;
 }
 
 // Request to export all hosts in a specified format

@@ -9,6 +9,7 @@ mod snapshots;
 
 use crate::server::commands::CommandHandler;
 use crate::server::db::Database;
+use crate::server::write_queue::WriteQueue;
 use router_hosts_common::proto::hosts_service_server::HostsService;
 use router_hosts_common::proto::{
     AddHostRequest, AddHostResponse, CreateSnapshotRequest, CreateSnapshotResponse,
@@ -25,7 +26,9 @@ use tonic::{Request, Response, Status, Streaming};
 
 /// Main gRPC service implementation
 pub struct HostsServiceImpl {
-    /// Command handler for business logic
+    /// Write queue for serialized mutation operations
+    pub(crate) write_queue: WriteQueue,
+    /// Command handler for read operations and snapshot management
     pub(crate) commands: Arc<CommandHandler>,
     /// Database connection (used by export and snapshot handlers)
     pub(crate) db: Arc<Database>,
@@ -33,8 +36,12 @@ pub struct HostsServiceImpl {
 
 impl HostsServiceImpl {
     /// Create a new service instance
-    pub fn new(commands: Arc<CommandHandler>, db: Arc<Database>) -> Self {
-        Self { commands, db }
+    pub fn new(write_queue: WriteQueue, commands: Arc<CommandHandler>, db: Arc<Database>) -> Self {
+        Self {
+            write_queue,
+            commands,
+            db,
+        }
     }
 }
 

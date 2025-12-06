@@ -45,6 +45,9 @@ impl HostProjections {
     ///
     /// Uses the `host_entries_current` materialized view for O(n) performance
     /// instead of N+1 queries. The view is automatically maintained by DuckDB.
+    ///
+    /// FIX #35: View now uses LAST_VALUE(... IGNORE NULLS) for comment and tags
+    /// columns, ensuring partial updates are properly merged.
     pub fn list_all(db: &Database) -> DatabaseResult<Vec<HostEntry>> {
         let conn = db.conn();
         let mut stmt = conn
@@ -54,7 +57,8 @@ impl HostProjections {
                     id,
                     ip_address,
                     hostname,
-                    metadata,
+                    comment,
+                    tags,
                     created_at,
                     updated_at,
                     event_version
@@ -69,13 +73,14 @@ impl HostProjections {
         let rows = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?, // id
-                    row.get::<_, String>(1)?, // ip_address
-                    row.get::<_, String>(2)?, // hostname
-                    row.get::<_, String>(3)?, // metadata (JSON)
-                    row.get::<_, i64>(4)?,    // created_at
-                    row.get::<_, i64>(5)?,    // updated_at
-                    row.get::<_, i64>(6)?,    // event_version
+                    row.get::<_, String>(0)?,         // id
+                    row.get::<_, String>(1)?,         // ip_address
+                    row.get::<_, String>(2)?,         // hostname
+                    row.get::<_, Option<String>>(3)?, // comment (nullable)
+                    row.get::<_, Option<String>>(4)?, // tags (JSON array, nullable)
+                    row.get::<_, i64>(5)?,            // created_at
+                    row.get::<_, i64>(6)?,            // updated_at
+                    row.get::<_, i64>(7)?,            // event_version
                 ))
             })
             .map_err(|e| {
@@ -88,7 +93,8 @@ impl HostProjections {
                 id_str,
                 ip_address,
                 hostname,
-                metadata_json,
+                comment_str,
+                tags_json,
                 created_at_micros,
                 updated_at_micros,
                 version,
@@ -98,13 +104,13 @@ impl HostProjections {
             let id = Ulid::from_string(&id_str)
                 .map_err(|e| DatabaseError::InvalidData(format!("Invalid ULID: {}", e)))?;
 
-            // Parse metadata JSON to extract comment and tags
-            let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
-                DatabaseError::InvalidData(format!("Failed to parse metadata: {}", e))
-            })?;
+            // Parse comment: empty string means no comment
+            let comment = comment_str.filter(|s| !s.is_empty());
 
-            let comment = event_data.comment;
-            let tags = event_data.tags.unwrap_or_default();
+            // Parse tags from JSON array
+            let tags: Vec<String> = tags_json
+                .and_then(|s| serde_json::from_str(&s).ok())
+                .unwrap_or_default();
 
             let created_at =
                 DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
@@ -156,6 +162,8 @@ impl HostProjections {
     }
 
     /// Find host by exact IP and hostname match
+    ///
+    /// FIX #35: Uses new view columns for comment and tags.
     pub fn find_by_ip_and_hostname(
         db: &Database,
         ip_address: &str,
@@ -169,7 +177,8 @@ impl HostProjections {
                     id,
                     ip_address,
                     hostname,
-                    metadata,
+                    comment,
+                    tags,
                     created_at,
                     updated_at,
                     event_version
@@ -181,16 +190,18 @@ impl HostProjections {
                     let id_str: String = row.get(0)?;
                     let ip_address: String = row.get(1)?;
                     let hostname: String = row.get(2)?;
-                    let metadata_json: String = row.get(3)?;
-                    let created_at_micros: i64 = row.get(4)?;
-                    let updated_at_micros: i64 = row.get(5)?;
-                    let version: i64 = row.get(6)?;
+                    let comment_str: Option<String> = row.get(3)?;
+                    let tags_json: Option<String> = row.get(4)?;
+                    let created_at_micros: i64 = row.get(5)?;
+                    let updated_at_micros: i64 = row.get(6)?;
+                    let version: i64 = row.get(7)?;
 
                     Ok((
                         id_str,
                         ip_address,
                         hostname,
-                        metadata_json,
+                        comment_str,
+                        tags_json,
                         created_at_micros,
                         updated_at_micros,
                         version,
@@ -206,7 +217,8 @@ impl HostProjections {
                 id_str,
                 ip_address,
                 hostname,
-                metadata_json,
+                comment_str,
+                tags_json,
                 created_at_micros,
                 updated_at_micros,
                 version,
@@ -214,9 +226,13 @@ impl HostProjections {
                 let id = Ulid::from_string(&id_str)
                     .map_err(|e| DatabaseError::InvalidData(format!("Invalid UUID: {}", e)))?;
 
-                let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
-                    DatabaseError::InvalidData(format!("Failed to parse metadata: {}", e))
-                })?;
+                // Parse comment: empty string means no comment
+                let comment = comment_str.filter(|s| !s.is_empty());
+
+                // Parse tags from JSON array
+                let tags: Vec<String> = tags_json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
 
                 let created_at =
                     DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
@@ -238,8 +254,8 @@ impl HostProjections {
                     id,
                     ip_address,
                     hostname,
-                    comment: event_data.comment,
-                    tags: event_data.tags.unwrap_or_default(),
+                    comment,
+                    tags,
                     created_at,
                     updated_at,
                     version,
@@ -815,5 +831,171 @@ mod tests {
         let state_now = HostProjections::get_at_time(&db, &aggregate_id, Utc::now()).unwrap();
         assert!(state_now.is_some());
         assert_eq!(state_now.unwrap().hostname, "updated.local");
+    }
+
+    /// Regression test for issue #35: SQL view doesn't properly merge partial metadata updates
+    ///
+    /// This test verifies that updating only comment doesn't lose tags, and vice versa.
+    /// Previously, the view used LAST_VALUE(metadata) which took the entire metadata JSON
+    /// from the last event, losing fields that weren't updated.
+    #[test]
+    fn test_list_all_preserves_metadata_after_partial_update_issue_35() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // Create host with comment and tags
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "test.local".to_string(),
+                comment: Some("Initial comment".to_string()),
+                tags: vec!["production".to_string(), "critical".to_string()],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Verify initial state via list_all
+        let entries = HostProjections::list_all(&db).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].comment, Some("Initial comment".to_string()));
+        assert_eq!(
+            entries[0].tags,
+            vec!["production".to_string(), "critical".to_string()]
+        );
+
+        // Update ONLY the comment (not tags)
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::CommentUpdated {
+                old_comment: Some("Initial comment".to_string()),
+                new_comment: Some("Updated comment".to_string()),
+                updated_at: Utc::now(),
+            },
+            Some(1),
+            None,
+        )
+        .unwrap();
+
+        // CRITICAL: list_all should preserve tags after comment-only update
+        // This was the bug in issue #35 - LAST_VALUE(metadata) lost the tags
+        let entries = HostProjections::list_all(&db).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].comment,
+            Some("Updated comment".to_string()),
+            "Comment should be updated"
+        );
+        assert_eq!(
+            entries[0].tags,
+            vec!["production".to_string(), "critical".to_string()],
+            "REGRESSION #35: Tags lost after comment-only update!"
+        );
+
+        // Now update ONLY the tags (not comment)
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::TagsModified {
+                old_tags: vec!["production".to_string(), "critical".to_string()],
+                new_tags: vec!["staging".to_string()],
+                modified_at: Utc::now(),
+            },
+            Some(2),
+            None,
+        )
+        .unwrap();
+
+        // CRITICAL: list_all should preserve comment after tags-only update
+        let entries = HostProjections::list_all(&db).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(
+            entries[0].comment,
+            Some("Updated comment".to_string()),
+            "REGRESSION #35: Comment lost after tags-only update!"
+        );
+        assert_eq!(
+            entries[0].tags,
+            vec!["staging".to_string()],
+            "Tags should be updated"
+        );
+
+        // Also verify find_by_ip_and_hostname works correctly
+        let entry =
+            HostProjections::find_by_ip_and_hostname(&db, "192.168.1.1", "test.local").unwrap();
+        assert!(entry.is_some());
+        let entry = entry.unwrap();
+        assert_eq!(entry.comment, Some("Updated comment".to_string()));
+        assert_eq!(entry.tags, vec!["staging".to_string()]);
+    }
+
+    /// Test clearing comment and tags works correctly
+    #[test]
+    fn test_list_all_handles_cleared_metadata() {
+        let db = Database::in_memory().unwrap();
+        let aggregate_id = Ulid::new();
+
+        // Create host with comment and tags
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.2".to_string(),
+                hostname: "test2.local".to_string(),
+                comment: Some("Has comment".to_string()),
+                tags: vec!["tagged".to_string()],
+                created_at: Utc::now(),
+            },
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Clear comment (set to None)
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::CommentUpdated {
+                old_comment: Some("Has comment".to_string()),
+                new_comment: None,
+                updated_at: Utc::now(),
+            },
+            Some(1),
+            None,
+        )
+        .unwrap();
+
+        let entries = HostProjections::list_all(&db).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].comment, None, "Comment should be cleared");
+        assert_eq!(
+            entries[0].tags,
+            vec!["tagged".to_string()],
+            "Tags should be preserved"
+        );
+
+        // Clear tags
+        EventStore::append_event(
+            &db,
+            &aggregate_id,
+            HostEvent::TagsModified {
+                old_tags: vec!["tagged".to_string()],
+                new_tags: vec![],
+                modified_at: Utc::now(),
+            },
+            Some(2),
+            None,
+        )
+        .unwrap();
+
+        let entries = HostProjections::list_all(&db).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].comment, None, "Comment should remain cleared");
+        assert!(entries[0].tags.is_empty(), "Tags should be cleared");
     }
 }
