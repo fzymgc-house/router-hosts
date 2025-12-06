@@ -61,41 +61,45 @@ impl Client {
 
     /// Add a new host entry
     pub async fn add_host(&mut self, request: AddHostRequest) -> Result<AddHostResponse> {
+        let hostname = request.hostname.clone();
         let response = self
             .inner
             .add_host(request)
             .await
-            .context("Failed to add host")?;
+            .with_context(|| format!("Failed to add host: {}", hostname))?;
         Ok(response.into_inner())
     }
 
     /// Get a host entry by ID
     pub async fn get_host(&mut self, request: GetHostRequest) -> Result<GetHostResponse> {
+        let id = request.id.clone();
         let response = self
             .inner
             .get_host(request)
             .await
-            .context("Failed to get host")?;
+            .with_context(|| format!("Failed to get host: {}", id))?;
         Ok(response.into_inner())
     }
 
     /// Update an existing host entry
     pub async fn update_host(&mut self, request: UpdateHostRequest) -> Result<UpdateHostResponse> {
+        let id = request.id.clone();
         let response = self
             .inner
             .update_host(request)
             .await
-            .context("Failed to update host")?;
+            .with_context(|| format!("Failed to update host: {}", id))?;
         Ok(response.into_inner())
     }
 
     /// Delete a host entry
     pub async fn delete_host(&mut self, request: DeleteHostRequest) -> Result<DeleteHostResponse> {
+        let id = request.id.clone();
         let response = self
             .inner
             .delete_host(request)
             .await
-            .context("Failed to delete host")?;
+            .with_context(|| format!("Failed to delete host: {}", id))?;
         Ok(response.into_inner())
     }
 
@@ -188,11 +192,12 @@ impl Client {
         &mut self,
         request: RollbackToSnapshotRequest,
     ) -> Result<RollbackToSnapshotResponse> {
+        let snapshot_id = request.snapshot_id.clone();
         let response = self
             .inner
             .rollback_to_snapshot(request)
             .await
-            .context("Failed to rollback to snapshot")?;
+            .with_context(|| format!("Failed to rollback to snapshot: {}", snapshot_id))?;
         Ok(response.into_inner())
     }
 
@@ -201,11 +206,12 @@ impl Client {
         &mut self,
         request: DeleteSnapshotRequest,
     ) -> Result<DeleteSnapshotResponse> {
+        let snapshot_id = request.snapshot_id.clone();
         let response = self
             .inner
             .delete_snapshot(request)
             .await
-            .context("Failed to delete snapshot")?;
+            .with_context(|| format!("Failed to delete snapshot: {}", snapshot_id))?;
         Ok(response.into_inner())
     }
 

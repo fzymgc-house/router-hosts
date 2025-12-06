@@ -1,3 +1,9 @@
+//! Client CLI for router-hosts gRPC server.
+//!
+//! This module provides a complete CLI client for managing host entries and snapshots
+//! via gRPC with mTLS authentication. Configuration is loaded from CLI args, environment
+//! variables, or config file with proper precedence (CLI > env > file).
+
 mod commands;
 mod config;
 mod error;
