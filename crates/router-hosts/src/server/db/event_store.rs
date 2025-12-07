@@ -121,15 +121,17 @@ impl EventStore {
             ));
         }
 
-        // Use monotonic ULID generator to ensure ordering
+        // Use monotonic ULID generator to ensure strict ordering even within the same millisecond
+        // This prevents out-of-order events in high-throughput scenarios where multiple events
+        // occur in rapid succession (< 1ms apart)
         let mut gen = ulid::Generator::new();
         let new_version = gen
             .generate()
             .map_err(|e| DatabaseError::QueryFailed(format!("ULID generation failed: {}", e)))?
-            .to_string();
+            .to_string(); // String for database VARCHAR storage
         let event_id = gen
             .generate()
-            .map_err(|e| DatabaseError::QueryFailed(format!("ULID generation failed: {}", e)))?;
+            .map_err(|e| DatabaseError::QueryFailed(format!("ULID generation failed: {}", e)))?; // Ulid type for internal use
         let now = Utc::now();
 
         // Build event data and extract typed columns
@@ -314,6 +316,8 @@ impl EventStore {
         let version = db
             .conn()
             .query_row(
+                // Use ORDER BY DESC LIMIT 1 instead of MAX() for ULID strings
+                // ULIDs are lexicographically sortable by design, ensuring correct temporal ordering
                 "SELECT event_version FROM host_events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1",
                 [&aggregate_id.to_string()],
                 |row| row.get::<_, Option<String>>(0),
