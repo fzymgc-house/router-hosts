@@ -152,7 +152,7 @@ mod tests {
             tags: tags.into_iter().map(|s| s.to_string()).collect(),
             created_at: Utc::now(),
             updated_at: Utc::now(),
-            version: 1,
+            version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
         }
     }
 

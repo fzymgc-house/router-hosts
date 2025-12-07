@@ -89,7 +89,7 @@ pub struct EventEnvelope {
     /// Aggregate root identifier
     pub aggregate_id: Ulid,
     pub event: HostEvent,
-    pub event_version: i64,
+    pub event_version: String,
     pub created_at: DateTime<Utc>,
     pub created_by: Option<String>,
     pub metadata: Option<EventMetadata>,
