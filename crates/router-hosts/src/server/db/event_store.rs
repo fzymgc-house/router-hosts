@@ -640,11 +640,27 @@ impl EventStore {
         let mut envelopes = Vec::with_capacity(events.len());
         let now = Utc::now();
 
-        // Generate ULIDs for each event
-        // ULIDs provide natural ordering via timestamp + randomness
+        // Generate ULIDs for each event with monotonic ordering
+        // Use a thread-local generator to ensure monotonic ULIDs within the same millisecond
+        use std::cell::RefCell;
+        use std::time::SystemTime;
+        thread_local! {
+            static ULID_GEN: RefCell<ulid::Generator> = const { RefCell::new(ulid::Generator::new()) };
+        }
+
         for event in events {
-            let version = Ulid::new().to_string();
-            let event_id = Ulid::new();
+            let (version, event_id) = ULID_GEN.with(|gen| -> DatabaseResult<(Ulid, Ulid)> {
+                let mut g = gen.borrow_mut();
+                let now = SystemTime::now();
+                let ver = g.generate_from_datetime(now).map_err(|e| {
+                    DatabaseError::InvalidData(format!("Failed to generate ULID version: {}", e))
+                })?;
+                let id = g.generate_from_datetime(now).map_err(|e| {
+                    DatabaseError::InvalidData(format!("Failed to generate ULID event_id: {}", e))
+                })?;
+                Ok((ver, id))
+            })?;
+            let version = version.to_string();
 
             // Build event data and extract typed columns
             // comment and tags columns are only set for events that change them.
