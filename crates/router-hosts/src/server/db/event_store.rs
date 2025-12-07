@@ -641,21 +641,25 @@ impl EventStore {
         let now = Utc::now();
 
         // Generate ULIDs for each event with monotonic ordering
-        // Use a thread-local generator to ensure monotonic ULIDs within the same millisecond
+        // Use a thread-local generator with a single timestamp to ensure strict monotonic
+        // ordering within the batch. The generator increments its internal counter when
+        // generating multiple ULIDs with the same timestamp, guaranteeing lexicographic order.
         use std::cell::RefCell;
         use std::time::SystemTime;
         thread_local! {
             static ULID_GEN: RefCell<ulid::Generator> = const { RefCell::new(ulid::Generator::new()) };
         }
 
+        // Capture timestamp once for entire batch to enable monotonic generation
+        let batch_timestamp = SystemTime::now();
+
         for event in events {
             let (version, event_id) = ULID_GEN.with(|gen| -> DatabaseResult<(Ulid, Ulid)> {
                 let mut g = gen.borrow_mut();
-                let now = SystemTime::now();
-                let ver = g.generate_from_datetime(now).map_err(|e| {
+                let ver = g.generate_from_datetime(batch_timestamp).map_err(|e| {
                     DatabaseError::InvalidData(format!("Failed to generate ULID version: {}", e))
                 })?;
-                let id = g.generate_from_datetime(now).map_err(|e| {
+                let id = g.generate_from_datetime(batch_timestamp).map_err(|e| {
                     DatabaseError::InvalidData(format!("Failed to generate ULID event_id: {}", e))
                 })?;
                 Ok((ver, id))
