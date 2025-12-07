@@ -121,10 +121,20 @@ impl EventStore {
             ));
         }
 
-        // Generate new ULID version
-        // ULIDs provide natural ordering via timestamp + randomness, sufficient for typical throughput
-        let new_version = Ulid::new().to_string(); // String for database VARCHAR storage
-        let event_id = Ulid::new(); // Ulid type for internal use
+        // Generate new ULID version using monotonic generator
+        // This ensures version < event_id lexicographically through monotonic counter increment
+        use std::time::SystemTime;
+        let mut gen = ulid::Generator::new();
+        let timestamp = SystemTime::now();
+        let new_version = gen
+            .generate_from_datetime(timestamp)
+            .map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to generate ULID version: {}", e))
+            })?
+            .to_string();
+        let event_id = gen.generate_from_datetime(timestamp).map_err(|e| {
+            DatabaseError::InvalidData(format!("Failed to generate ULID event_id: {}", e))
+        })?;
         let now = Utc::now();
 
         // Build event data and extract typed columns
@@ -641,30 +651,25 @@ impl EventStore {
         let now = Utc::now();
 
         // Generate ULIDs for each event with monotonic ordering
-        // Use a thread-local generator with a single timestamp to ensure strict monotonic
+        // Use a per-invocation generator with a single timestamp to ensure strict monotonic
         // ordering within the batch. The generator increments its internal counter when
         // generating multiple ULIDs with the same timestamp, guaranteeing lexicographic order.
-        use std::cell::RefCell;
+        // Note: Per-invocation generator (not thread-local) is required for async safety,
+        // as Tokio may migrate tasks between threads during .await points.
         use std::time::SystemTime;
-        thread_local! {
-            static ULID_GEN: RefCell<ulid::Generator> = const { RefCell::new(ulid::Generator::new()) };
-        }
-
-        // Capture timestamp once for entire batch to enable monotonic generation
+        let mut gen = ulid::Generator::new();
         let batch_timestamp = SystemTime::now();
 
         for event in events {
-            let (version, event_id) = ULID_GEN.with(|gen| -> DatabaseResult<(Ulid, Ulid)> {
-                let mut g = gen.borrow_mut();
-                let ver = g.generate_from_datetime(batch_timestamp).map_err(|e| {
+            let version = gen
+                .generate_from_datetime(batch_timestamp)
+                .map_err(|e| {
                     DatabaseError::InvalidData(format!("Failed to generate ULID version: {}", e))
-                })?;
-                let id = g.generate_from_datetime(batch_timestamp).map_err(|e| {
-                    DatabaseError::InvalidData(format!("Failed to generate ULID event_id: {}", e))
-                })?;
-                Ok((ver, id))
+                })?
+                .to_string();
+            let event_id = gen.generate_from_datetime(batch_timestamp).map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to generate ULID event_id: {}", e))
             })?;
-            let version = version.to_string();
 
             // Build event data and extract typed columns
             // comment and tags columns are only set for events that change them.
