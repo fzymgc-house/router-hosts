@@ -121,17 +121,10 @@ impl EventStore {
             ));
         }
 
-        // Use monotonic ULID generator to ensure strict ordering even within the same millisecond
-        // This prevents out-of-order events in high-throughput scenarios where multiple events
-        // occur in rapid succession (< 1ms apart)
-        let mut gen = ulid::Generator::new();
-        let new_version = gen
-            .generate()
-            .map_err(|e| DatabaseError::QueryFailed(format!("ULID generation failed: {}", e)))?
-            .to_string(); // String for database VARCHAR storage
-        let event_id = gen
-            .generate()
-            .map_err(|e| DatabaseError::QueryFailed(format!("ULID generation failed: {}", e)))?; // Ulid type for internal use
+        // Generate new ULID version
+        // ULIDs provide natural ordering via timestamp + randomness, sufficient for typical throughput
+        let new_version = Ulid::new().to_string(); // String for database VARCHAR storage
+        let event_id = Ulid::new(); // Ulid type for internal use
         let now = Utc::now();
 
         // Build event data and extract typed columns
@@ -647,24 +640,11 @@ impl EventStore {
         let mut envelopes = Vec::with_capacity(events.len());
         let now = Utc::now();
 
-        // Use monotonic ULID generator to ensure ordering within same millisecond
-        let mut gen = ulid::Generator::new();
+        // Generate ULIDs for each event
+        // ULIDs provide natural ordering via timestamp + randomness
         for event in events {
-            let version = gen
-                .generate()
-                .map_err(|e| {
-                    Self::rollback_and_return(
-                        db,
-                        DatabaseError::QueryFailed(format!("ULID generation failed: {}", e)),
-                    )
-                })?
-                .to_string();
-            let event_id = gen.generate().map_err(|e| {
-                Self::rollback_and_return(
-                    db,
-                    DatabaseError::QueryFailed(format!("ULID generation failed: {}", e)),
-                )
-            })?;
+            let version = Ulid::new().to_string();
+            let event_id = Ulid::new();
 
             // Build event data and extract typed columns
             // comment and tags columns are only set for events that change them.
