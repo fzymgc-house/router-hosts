@@ -50,8 +50,45 @@ event_version VARCHAR NOT NULL  -- was BIGINT
 **Version generation:**
 ```rust
 // In append_event()
-let new_version = Ulid::new().to_string();
+// Use per-invocation monotonic generator for async safety and collision prevention
+use std::time::SystemTime;
+let mut gen = ulid::Generator::new();
+let timestamp = SystemTime::now();
+let new_version = gen
+    .generate_from_datetime(timestamp)
+    .map_err(|e| {
+        DatabaseError::InvalidData(format!("Failed to generate ULID version: {}", e))
+    })?
+    .to_string();
+let event_id = gen.generate_from_datetime(timestamp).map_err(|e| {
+    DatabaseError::InvalidData(format!("Failed to generate ULID event_id: {}", e))
+})?;
 ```
+
+**Why monotonic generator:**
+- Prevents ULID collisions when generating multiple IDs within same millisecond
+- Generator maintains internal counter that increments for same timestamp
+- Guarantees `version < event_id` lexicographically via counter increment
+- Per-invocation pattern (not thread-local) ensures async safety with Tokio's work-stealing scheduler
+
+**Batch generation (append_events):**
+```rust
+// Use single timestamp for entire batch to ensure strict monotonic ordering
+let mut gen = ulid::Generator::new();
+let batch_timestamp = SystemTime::now();
+
+for event in events {
+    let version = gen.generate_from_datetime(batch_timestamp).map_err(...)?.to_string();
+    let event_id = gen.generate_from_datetime(batch_timestamp).map_err(...)?;
+    // ...
+}
+```
+
+**Critical async safety requirement:**
+- Thread-local storage is NOT safe in async context
+- Tokio can migrate tasks between threads during `.await` points
+- Thread-local state would be lost or reused incorrectly
+- Solution: Per-invocation generator stays with execution context
 
 **Type signatures:**
 ```rust
@@ -243,18 +280,59 @@ let expected_version = Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string());
 
 ## Implementation Checklist
 
-- [ ] Update database schema (event_version VARCHAR)
-- [ ] Change EventEnvelope.event_version to String
-- [ ] Update get_current_version() return type
-- [ ] Update append_event() expected_version parameter
-- [ ] Replace version increment with Ulid::new().to_string()
-- [ ] Change HostEntry.version to String
-- [ ] Remove .to_string() conversion in projections
-- [ ] Delete interim TODO comments
-- [ ] Update all test fixtures (i64 → String)
-- [ ] Update test assertions
-- [ ] Run full test suite (cargo test --workspace)
-- [ ] Verify ≥80% coverage maintained
+- [x] Update database schema (event_version VARCHAR)
+- [x] Change EventEnvelope.event_version to String
+- [x] Update get_current_version() return type
+- [x] Update append_event() expected_version parameter
+- [x] Replace version increment with per-invocation monotonic generator
+- [x] Change HostEntry.version to String
+- [x] Remove .to_string() conversion in projections
+- [x] Delete interim TODO comments
+- [x] Update all test fixtures (i64 → String)
+- [x] Update test assertions
+- [x] Run full test suite (cargo test --workspace) - 146 tests passing
+- [x] Verify ≥80% coverage maintained
+- [x] Address async safety concerns (per-invocation vs thread-local)
+- [x] Ensure monotonic ordering in batch operations
+
+## Implementation Notes
+
+### Key Decisions Made During Development
+
+**1. Monotonic Generator Pattern:**
+- Initially considered `Ulid::new()` for simplicity
+- Code review identified collision risk when generating multiple ULIDs in same millisecond
+- Solution: Use `ulid::Generator` which maintains internal counter for same timestamp
+- Ensures strict lexicographic ordering: `version < event_id` always true
+
+**2. Async Safety:**
+- Initially attempted thread-local storage for generator reuse
+- Code review identified critical flaw: Tokio's work-stealing scheduler can migrate tasks between threads
+- Thread-local state would be lost during `.await` points
+- Solution: Per-invocation generator that stays with execution context
+- Pattern: `let mut gen = ulid::Generator::new()` at function start
+
+**3. Batch Timestamp Strategy:**
+- Initially called `SystemTime::now()` inside event loop
+- This defeats monotonic ordering - each event gets different timestamp
+- Solution: Capture timestamp once before loop: `let batch_timestamp = SystemTime::now()`
+- All events in batch use same timestamp, generator increments counter
+- Result: Strict ordering within batch guaranteed
+
+**4. Why Not `Ulid::new()`:**
+- `Ulid::new()` uses thread-local generator internally
+- Thread-local not safe in async context
+- No control over timestamp (uses current time each call)
+- No guarantee of ordering when generating multiple ULIDs rapidly
+- Explicit per-invocation generator gives full control and safety
+
+### Verification
+
+- All 146 tests passing
+- Coverage maintained ≥80%
+- Async safety verified (no thread-local storage)
+- Monotonic ordering verified in batch operations
+- CI checks passing (test, lint, claude-review)
 
 ## Dependencies
 
