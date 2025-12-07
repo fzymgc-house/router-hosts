@@ -639,9 +639,11 @@ impl EventStore {
         let mut envelopes = Vec::with_capacity(events.len());
         let now = Utc::now();
 
+        // Use monotonic ULID generator to ensure ordering within same millisecond
+        let mut gen = ulid::Generator::new();
         for event in events {
-            let version = Ulid::new().to_string();
-            let event_id = Ulid::new();
+            let version = gen.generate().expect("ULID generation failed").to_string();
+            let event_id = gen.generate().expect("ULID generation failed");
 
             // Build event data and extract typed columns
             // comment and tags columns are only set for events that change them.
