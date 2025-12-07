@@ -103,7 +103,7 @@ impl Database {
                     event_id VARCHAR PRIMARY KEY,
                     aggregate_id VARCHAR NOT NULL,
                     event_type VARCHAR NOT NULL,
-                    event_version INTEGER NOT NULL,
+                    event_version VARCHAR NOT NULL,
                     -- Current state in typed columns for queryability
                     ip_address VARCHAR,
                     hostname VARCHAR,
@@ -117,7 +117,7 @@ impl Database {
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     created_by VARCHAR,
                     -- Optimistic concurrency control
-                    expected_version INTEGER,
+                    expected_version VARCHAR,
                     -- Ensure events are sequential per aggregate
                     UNIQUE(aggregate_id, event_version)
                 )

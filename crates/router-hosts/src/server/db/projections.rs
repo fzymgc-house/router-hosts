@@ -20,7 +20,8 @@ pub struct HostEntry {
     pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    pub version: i64,
+    /// ULID version identifier (opaque string for optimistic locking)
+    pub version: String,
 }
 
 /// Repository for querying host projections
@@ -80,7 +81,7 @@ impl HostProjections {
                     row.get::<_, Option<String>>(4)?, // tags (JSON array, nullable)
                     row.get::<_, i64>(5)?,            // created_at
                     row.get::<_, i64>(6)?,            // updated_at
-                    row.get::<_, i64>(7)?,            // event_version
+                    row.get::<_, String>(7)?,         // event_version
                 ))
             })
             .map_err(|e| {
@@ -194,7 +195,7 @@ impl HostProjections {
                     let tags_json: Option<String> = row.get(4)?;
                     let created_at_micros: i64 = row.get(5)?;
                     let updated_at_micros: i64 = row.get(6)?;
-                    let version: i64 = row.get(7)?;
+                    let version: String = row.get(7)?;
 
                     Ok((
                         id_str,
@@ -292,35 +293,35 @@ impl HostProjections {
                         tags: tags.clone(),
                         created_at: *created_at,
                         updated_at: envelope.created_at,
-                        version: envelope.event_version,
+                        version: envelope.event_version.clone(),
                     });
                 }
                 HostEvent::IpAddressChanged { new_ip, .. } => {
                     if let Some(ref mut entry) = state {
                         entry.ip_address = new_ip.clone();
                         entry.updated_at = envelope.created_at;
-                        entry.version = envelope.event_version;
+                        entry.version = envelope.event_version.clone();
                     }
                 }
                 HostEvent::HostnameChanged { new_hostname, .. } => {
                     if let Some(ref mut entry) = state {
                         entry.hostname = new_hostname.clone();
                         entry.updated_at = envelope.created_at;
-                        entry.version = envelope.event_version;
+                        entry.version = envelope.event_version.clone();
                     }
                 }
                 HostEvent::CommentUpdated { new_comment, .. } => {
                     if let Some(ref mut entry) = state {
                         entry.comment = new_comment.clone();
                         entry.updated_at = envelope.created_at;
-                        entry.version = envelope.event_version;
+                        entry.version = envelope.event_version.clone();
                     }
                 }
                 HostEvent::TagsModified { new_tags, .. } => {
                     if let Some(ref mut entry) = state {
                         entry.tags = new_tags.clone();
                         entry.updated_at = envelope.created_at;
-                        entry.version = envelope.event_version;
+                        entry.version = envelope.event_version.clone();
                     }
                 }
                 HostEvent::HostDeleted { .. } => {
@@ -377,7 +378,7 @@ impl HostProjections {
                         row.get::<_, String>(0)?,         // event_id
                         row.get::<_, String>(1)?,         // aggregate_id
                         row.get::<_, String>(2)?,         // event_type
-                        row.get::<_, i64>(3)?,            // event_version
+                        row.get::<_, String>(3)?,         // event_version
                         row.get::<_, Option<String>>(4)?, // ip_address
                         row.get::<_, Option<String>>(5)?, // hostname
                         row.get::<_, String>(6)?,         // metadata
@@ -543,10 +544,7 @@ impl From<HostEntry> for proto::HostEntry {
                 seconds: entry.updated_at.timestamp(),
                 nanos: entry.updated_at.timestamp_subsec_nanos() as i32,
             }),
-            // INTERIM: Using event_version (i64) converted to string until ULID implementation.
-            // Clients should treat as opaque version identifier, not parse as ULID.
-            // TODO: Full ULID-based versioning needs event store changes.
-            version: entry.version.to_string(),
+            version: entry.version,
         }
     }
 }
@@ -571,7 +569,7 @@ mod tests {
                     tags: vec![],
                     created_at: now,
                 },
-                event_version: 1,
+                event_version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
                 created_at: now,
                 created_by: None,
                 metadata: None,
@@ -584,7 +582,7 @@ mod tests {
                     new_comment: Some("Test server".to_string()),
                     updated_at: now,
                 },
-                event_version: 2,
+                event_version: "01ARZ3NDEKTSV4RRFFQ69G5FAQ".to_string(),
                 created_at: now,
                 created_by: None,
                 metadata: None,
@@ -598,7 +596,7 @@ mod tests {
         assert_eq!(entry.ip_address, "192.168.1.10");
         assert_eq!(entry.hostname, "server.local");
         assert_eq!(entry.comment, Some("Test server".to_string()));
-        assert_eq!(entry.version, 2);
+        assert_eq!(entry.version, "01ARZ3NDEKTSV4RRFFQ69G5FAQ");
     }
 
     #[test]
@@ -617,7 +615,7 @@ mod tests {
                     tags: vec![],
                     created_at: now,
                 },
-                event_version: 1,
+                event_version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
                 created_at: now,
                 created_by: None,
                 metadata: None,
@@ -631,7 +629,7 @@ mod tests {
                     deleted_at: now,
                     reason: None,
                 },
-                event_version: 2,
+                event_version: "01ARZ3NDEKTSV4RRFFQ69G5FAQ".to_string(),
                 created_at: now,
                 created_by: None,
                 metadata: None,
@@ -798,6 +796,12 @@ mod tests {
         )
         .unwrap();
 
+        // Get the version from the first event
+        let first_version = HostProjections::get_by_id(&db, &aggregate_id)
+            .unwrap()
+            .unwrap()
+            .version;
+
         // Capture time after first event but before second event
         std::thread::sleep(std::time::Duration::from_millis(10));
         let between_time = Utc::now();
@@ -814,7 +818,7 @@ mod tests {
                 new_hostname: "updated.local".to_string(),
                 changed_at: Utc::now(),
             },
-            Some(1),
+            Some(first_version),
             None,
         )
         .unwrap();
@@ -867,6 +871,7 @@ mod tests {
             entries[0].tags,
             vec!["production".to_string(), "critical".to_string()]
         );
+        let version_after_create = entries[0].version.clone();
 
         // Update ONLY the comment (not tags)
         EventStore::append_event(
@@ -877,7 +882,7 @@ mod tests {
                 new_comment: Some("Updated comment".to_string()),
                 updated_at: Utc::now(),
             },
-            Some(1),
+            Some(version_after_create),
             None,
         )
         .unwrap();
@@ -896,6 +901,7 @@ mod tests {
             vec!["production".to_string(), "critical".to_string()],
             "REGRESSION #35: Tags lost after comment-only update!"
         );
+        let version_after_comment_update = entries[0].version.clone();
 
         // Now update ONLY the tags (not comment)
         EventStore::append_event(
@@ -906,7 +912,7 @@ mod tests {
                 new_tags: vec!["staging".to_string()],
                 modified_at: Utc::now(),
             },
-            Some(2),
+            Some(version_after_comment_update),
             None,
         )
         .unwrap();
@@ -956,6 +962,12 @@ mod tests {
         )
         .unwrap();
 
+        // Get version after create
+        let version_after_create = HostProjections::get_by_id(&db, &aggregate_id)
+            .unwrap()
+            .unwrap()
+            .version;
+
         // Clear comment (set to None)
         EventStore::append_event(
             &db,
@@ -965,7 +977,7 @@ mod tests {
                 new_comment: None,
                 updated_at: Utc::now(),
             },
-            Some(1),
+            Some(version_after_create),
             None,
         )
         .unwrap();
@@ -978,6 +990,7 @@ mod tests {
             vec!["tagged".to_string()],
             "Tags should be preserved"
         );
+        let version_after_comment_clear = entries[0].version.clone();
 
         // Clear tags
         EventStore::append_event(
@@ -988,7 +1001,7 @@ mod tests {
                 new_tags: vec![],
                 modified_at: Utc::now(),
             },
-            Some(2),
+            Some(version_after_comment_clear),
             None,
         )
         .unwrap();

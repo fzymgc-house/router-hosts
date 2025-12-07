@@ -62,7 +62,7 @@ impl EventStore {
     ///
     /// The `expected_version` parameter implements optimistic locking:
     /// - Pass `None` when creating a new aggregate (first event)
-    /// - Pass `Some(n)` where `n` is the last known version number
+    /// - Pass `Some(ulid_string)` where ulid_string is the last known version
     /// - Returns `ConcurrentWriteConflict` if another write occurred
     ///
     /// # Arguments
@@ -80,7 +80,7 @@ impl EventStore {
         db: &Database,
         aggregate_id: &Ulid,
         event: HostEvent,
-        expected_version: Option<i64>,
+        expected_version: Option<String>,
         created_by: Option<String>,
     ) -> DatabaseResult<EventEnvelope> {
         // Begin transaction for atomic version check + insert
@@ -121,11 +121,20 @@ impl EventStore {
             ));
         }
 
-        // Calculate next version
-        let new_version = current_version.unwrap_or(0) + 1;
-
-        // Generate event ID
-        let event_id = Ulid::new();
+        // Generate new ULID version using monotonic generator
+        // This ensures version < event_id lexicographically through monotonic counter increment
+        use std::time::SystemTime;
+        let mut gen = ulid::Generator::new();
+        let timestamp = SystemTime::now();
+        let new_version = gen
+            .generate_from_datetime(timestamp)
+            .map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to generate ULID version: {}", e))
+            })?
+            .to_string();
+        let event_id = gen.generate_from_datetime(timestamp).map_err(|e| {
+            DatabaseError::InvalidData(format!("Failed to generate ULID event_id: {}", e))
+        })?;
         let now = Utc::now();
 
         // Build event data and extract typed columns
@@ -302,16 +311,19 @@ impl EventStore {
         })
     }
 
-    /// Get the current version number for an aggregate
+    /// Get the current ULID version for an aggregate
     ///
-    /// Returns `None` if the aggregate doesn't exist yet (no events)
-    fn get_current_version(db: &Database, aggregate_id: &Ulid) -> DatabaseResult<Option<i64>> {
+    /// Returns the most recent event's ULID version, or `None` if no events exist yet.
+    /// Used for optimistic concurrency control during append operations.
+    fn get_current_version(db: &Database, aggregate_id: &Ulid) -> DatabaseResult<Option<String>> {
         let version = db
             .conn()
             .query_row(
-                "SELECT MAX(event_version) FROM host_events WHERE aggregate_id = ?",
+                // Use ORDER BY DESC LIMIT 1 instead of MAX() for ULID strings
+                // ULIDs are lexicographically sortable by design, ensuring correct temporal ordering
+                "SELECT event_version FROM host_events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1",
                 [&aggregate_id.to_string()],
-                |row| row.get::<_, Option<i64>>(0),
+                |row| row.get::<_, Option<String>>(0),
             )
             .optional()
             .map_err(|e| {
@@ -358,7 +370,7 @@ impl EventStore {
                     row.get::<_, String>(0)?,         // event_id
                     row.get::<_, String>(1)?,         // aggregate_id
                     row.get::<_, String>(2)?,         // event_type
-                    row.get::<_, i64>(3)?,            // event_version
+                    row.get::<_, String>(3)?,         // event_version
                     row.get::<_, Option<String>>(4)?, // ip_address
                     row.get::<_, Option<String>>(5)?, // hostname
                     row.get::<_, String>(6)?,         // metadata
@@ -589,9 +601,9 @@ impl EventStore {
     ///
     /// The `expected_version` parameter implements optimistic locking for the first event:
     /// - Pass `None` when creating a new aggregate (first event)
-    /// - Pass `Some(n)` where `n` is the last known version number
+    /// - Pass `Some(ulid_string)` where ulid_string is the last known version
     /// - Returns `ConcurrentWriteConflict` if another write occurred
-    /// - Subsequent events use incremented versions automatically
+    /// - Subsequent events use new ULID versions automatically
     ///
     /// # Arguments
     ///
@@ -608,7 +620,7 @@ impl EventStore {
         db: &Database,
         aggregate_id: &Ulid,
         events: Vec<HostEvent>,
-        expected_version: Option<i64>,
+        expected_version: Option<String>,
         created_by: Option<String>,
     ) -> DatabaseResult<Vec<EventEnvelope>> {
         if events.is_empty() {
@@ -636,12 +648,28 @@ impl EventStore {
         }
 
         let mut envelopes = Vec::with_capacity(events.len());
-        let mut version = current_version.unwrap_or(0);
         let now = Utc::now();
 
+        // Generate ULIDs for each event with monotonic ordering
+        // Use a per-invocation generator with a single timestamp to ensure strict monotonic
+        // ordering within the batch. The generator increments its internal counter when
+        // generating multiple ULIDs with the same timestamp, guaranteeing lexicographic order.
+        // Note: Per-invocation generator (not thread-local) is required for async safety,
+        // as Tokio may migrate tasks between threads during .await points.
+        use std::time::SystemTime;
+        let mut gen = ulid::Generator::new();
+        let batch_timestamp = SystemTime::now();
+
         for event in events {
-            version += 1;
-            let event_id = Ulid::new();
+            let version = gen
+                .generate_from_datetime(batch_timestamp)
+                .map_err(|e| {
+                    DatabaseError::InvalidData(format!("Failed to generate ULID version: {}", e))
+                })?
+                .to_string();
+            let event_id = gen.generate_from_datetime(batch_timestamp).map_err(|e| {
+                DatabaseError::InvalidData(format!("Failed to generate ULID event_id: {}", e))
+            })?;
 
             // Build event data and extract typed columns
             // comment and tags columns are only set for events that change them.
@@ -840,7 +868,7 @@ mod tests {
 
         let envelope = result.unwrap();
         assert_eq!(envelope.aggregate_id, aggregate_id);
-        assert_eq!(envelope.event_version, 1);
+        assert_eq!(envelope.event_version.len(), 26); // ULID is 26 chars
     }
 
     #[test]
@@ -857,7 +885,9 @@ mod tests {
             created_at: Utc::now(),
         };
         let envelope1 = EventStore::append_event(&db, &aggregate_id, event1, None, None).unwrap();
-        assert_eq!(envelope1.event_version, 1);
+        assert_eq!(envelope1.event_version.len(), 26); // ULID is 26 chars
+
+        let version1 = envelope1.event_version.clone();
 
         // Second event
         let event2 = HostEvent::IpAddressChanged {
@@ -866,8 +896,8 @@ mod tests {
             changed_at: Utc::now(),
         };
         let envelope2 =
-            EventStore::append_event(&db, &aggregate_id, event2, Some(1), None).unwrap();
-        assert_eq!(envelope2.event_version, 2);
+            EventStore::append_event(&db, &aggregate_id, event2, Some(version1), None).unwrap();
+        assert_eq!(envelope2.event_version.len(), 26); // ULID is 26 chars
     }
 
     #[test]
@@ -891,7 +921,13 @@ mod tests {
             new_ip: "192.168.1.11".to_string(),
             changed_at: Utc::now(),
         };
-        let result = EventStore::append_event(&db, &aggregate_id, event2, Some(5), None);
+        let result = EventStore::append_event(
+            &db,
+            &aggregate_id,
+            event2,
+            Some("01INVALID0000000000000000".to_string()),
+            None,
+        );
 
         assert!(result.is_err());
         assert!(matches!(
@@ -906,7 +942,7 @@ mod tests {
         let aggregate_id = Ulid::new();
 
         // Add multiple events
-        EventStore::append_event(
+        let env1 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::HostCreated {
@@ -921,6 +957,8 @@ mod tests {
         )
         .unwrap();
 
+        let version1 = env1.event_version.clone();
+
         EventStore::append_event(
             &db,
             &aggregate_id,
@@ -929,7 +967,7 @@ mod tests {
                 new_comment: Some("Updated".to_string()),
                 updated_at: Utc::now(),
             },
-            Some(1),
+            Some(version1),
             None,
         )
         .unwrap();
@@ -937,8 +975,8 @@ mod tests {
         // Load all events
         let events = EventStore::load_events(&db, &aggregate_id).unwrap();
         assert_eq!(events.len(), 2);
-        assert_eq!(events[0].event_version, 1);
-        assert_eq!(events[1].event_version, 2);
+        assert_eq!(events[0].event_version.len(), 26); // ULID is 26 chars
+        assert_eq!(events[1].event_version.len(), 26); // ULID is 26 chars
     }
 
     #[test]
@@ -1023,7 +1061,7 @@ mod tests {
         let aggregate_id = Ulid::new();
 
         // HostCreated
-        EventStore::append_event(
+        let v1 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::HostCreated {
@@ -1036,10 +1074,11 @@ mod tests {
             None,
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         // IpAddressChanged
-        EventStore::append_event(
+        let v2 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::IpAddressChanged {
@@ -1047,13 +1086,14 @@ mod tests {
                 new_ip: "10.0.0.2".to_string(),
                 changed_at: Utc::now(),
             },
-            Some(1),
+            Some(v1),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         // HostnameChanged
-        EventStore::append_event(
+        let v3 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::HostnameChanged {
@@ -1061,13 +1101,14 @@ mod tests {
                 new_hostname: "test2.local".to_string(),
                 changed_at: Utc::now(),
             },
-            Some(2),
+            Some(v2),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         // CommentUpdated
-        EventStore::append_event(
+        let v4 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::CommentUpdated {
@@ -1075,13 +1116,14 @@ mod tests {
                 new_comment: Some("Updated".to_string()),
                 updated_at: Utc::now(),
             },
-            Some(3),
+            Some(v3),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         // TagsModified
-        EventStore::append_event(
+        let v5 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::TagsModified {
@@ -1089,10 +1131,11 @@ mod tests {
                 new_tags: vec!["dev".to_string(), "production".to_string()],
                 modified_at: Utc::now(),
             },
-            Some(4),
+            Some(v4),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         // HostDeleted
         EventStore::append_event(
@@ -1104,7 +1147,7 @@ mod tests {
                 deleted_at: Utc::now(),
                 reason: Some("Decommissioned".to_string()),
             },
-            Some(5),
+            Some(v5),
             None,
         )
         .unwrap();
@@ -1124,8 +1167,8 @@ mod tests {
         assert!(matches!(events[4].event, HostEvent::TagsModified { .. }));
         assert!(matches!(events[5].event, HostEvent::HostDeleted { .. }));
 
-        for (i, event) in events.iter().enumerate() {
-            assert_eq!(event.event_version, (i + 1) as i64);
+        for event in events.iter() {
+            assert_eq!(event.event_version.len(), 26); // ULID is 26 chars
         }
     }
 
@@ -1135,7 +1178,7 @@ mod tests {
         let aggregate_id = Ulid::new();
 
         // Empty comment and tags
-        EventStore::append_event(
+        let env1 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::HostCreated {
@@ -1151,7 +1194,7 @@ mod tests {
         .unwrap();
 
         // Comment cleared (Some -> None)
-        EventStore::append_event(
+        let v1 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::CommentUpdated {
@@ -1159,10 +1202,11 @@ mod tests {
                 new_comment: None,
                 updated_at: Utc::now(),
             },
-            Some(1),
+            Some(env1.event_version.clone()),
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         // Tags cleared ([] -> [])
         EventStore::append_event(
@@ -1173,7 +1217,7 @@ mod tests {
                 new_tags: vec![],
                 modified_at: Utc::now(),
             },
-            Some(2),
+            Some(v1),
             None,
         )
         .unwrap();
@@ -1367,7 +1411,7 @@ mod tests {
         let agg2 = Ulid::new();
 
         // Add events to first aggregate
-        EventStore::append_event(
+        let v1 = EventStore::append_event(
             &db,
             &agg1,
             HostEvent::HostCreated {
@@ -1380,7 +1424,8 @@ mod tests {
             None,
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         EventStore::append_event(
             &db,
@@ -1390,7 +1435,7 @@ mod tests {
                 new_comment: Some("Updated".to_string()),
                 updated_at: Utc::now(),
             },
-            Some(1),
+            Some(v1),
             None,
         )
         .unwrap();
@@ -1436,9 +1481,9 @@ mod tests {
         let aggregate_id = Ulid::new();
 
         // Add 10 events
+        let mut current_version: Option<String> = None;
         for i in 0..10 {
-            let expected_version = if i == 0 { None } else { Some(i) };
-            EventStore::append_event(
+            let env = EventStore::append_event(
                 &db,
                 &aggregate_id,
                 HostEvent::CommentUpdated {
@@ -1446,17 +1491,18 @@ mod tests {
                     new_comment: Some(format!("Version {}", i + 1)),
                     updated_at: Utc::now(),
                 },
-                expected_version,
+                current_version,
                 None,
             )
             .unwrap();
+            current_version = Some(env.event_version);
         }
 
         let events = EventStore::load_events(&db, &aggregate_id).unwrap();
         assert_eq!(events.len(), 10);
 
-        for (i, event) in events.iter().enumerate() {
-            assert_eq!(event.event_version, (i + 1) as i64);
+        for event in events.iter() {
+            assert_eq!(event.event_version.len(), 26); // ULID is 26 chars
         }
     }
 
@@ -1466,7 +1512,7 @@ mod tests {
         let aggregate_id = Ulid::new();
 
         // First event
-        EventStore::append_event(
+        let v1 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::HostCreated {
@@ -1479,7 +1525,8 @@ mod tests {
             None,
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         // Second event with correct version
         let result = EventStore::append_event(
@@ -1490,7 +1537,7 @@ mod tests {
                 new_comment: Some("First".to_string()),
                 updated_at: Utc::now(),
             },
-            Some(1),
+            Some(v1.clone()),
             None,
         );
         assert!(result.is_ok());
@@ -1504,7 +1551,7 @@ mod tests {
                 new_comment: Some("Second".to_string()),
                 updated_at: Utc::now(),
             },
-            Some(1), // Same expected version - conflict!
+            Some(v1), // Same expected version - conflict!
             None,
         );
         assert!(result2.is_err());
@@ -1586,7 +1633,7 @@ mod tests {
 
         let envelopes = result.unwrap();
         assert_eq!(envelopes.len(), 1);
-        assert_eq!(envelopes[0].event_version, 1);
+        assert_eq!(envelopes[0].event_version.len(), 26); // ULID is 26 chars
     }
 
     #[test]
@@ -1595,7 +1642,7 @@ mod tests {
         let aggregate_id = Ulid::new();
 
         // First create the host
-        EventStore::append_event(
+        let v1 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::HostCreated {
@@ -1608,7 +1655,8 @@ mod tests {
             None,
             None,
         )
-        .unwrap();
+        .unwrap()
+        .event_version;
 
         // Now update multiple fields atomically
         let events = vec![
@@ -1629,14 +1677,14 @@ mod tests {
             },
         ];
 
-        let result = EventStore::append_events(&db, &aggregate_id, events, Some(1), None);
+        let result = EventStore::append_events(&db, &aggregate_id, events, Some(v1), None);
         assert!(result.is_ok());
 
         let envelopes = result.unwrap();
         assert_eq!(envelopes.len(), 3);
-        assert_eq!(envelopes[0].event_version, 2);
-        assert_eq!(envelopes[1].event_version, 3);
-        assert_eq!(envelopes[2].event_version, 4);
+        assert_eq!(envelopes[0].event_version.len(), 26); // ULID is 26 chars
+        assert_eq!(envelopes[1].event_version.len(), 26); // ULID is 26 chars
+        assert_eq!(envelopes[2].event_version.len(), 26); // ULID is 26 chars
 
         // Verify all events were stored
         let loaded = EventStore::load_events(&db, &aggregate_id).unwrap();
@@ -1671,7 +1719,13 @@ mod tests {
             updated_at: Utc::now(),
         }];
 
-        let result = EventStore::append_events(&db, &aggregate_id, events, Some(5), None);
+        let result = EventStore::append_events(
+            &db,
+            &aggregate_id,
+            events,
+            Some("01INVALID0000000000000000".to_string()),
+            None,
+        );
         assert!(result.is_err());
         assert!(matches!(
             result.unwrap_err(),
@@ -1689,7 +1743,7 @@ mod tests {
         let aggregate_id = Ulid::new();
 
         // Create host
-        EventStore::append_event(
+        let env1 = EventStore::append_event(
             &db,
             &aggregate_id,
             HostEvent::HostCreated {
@@ -1718,7 +1772,8 @@ mod tests {
             },
         ];
 
-        let result = EventStore::append_events(&db, &aggregate_id, events, Some(1), None);
+        let v1 = env1.event_version.clone();
+        let result = EventStore::append_events(&db, &aggregate_id, events, Some(v1), None);
         assert!(result.is_ok());
 
         // Verify both events were stored atomically

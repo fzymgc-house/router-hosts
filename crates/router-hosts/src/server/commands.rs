@@ -120,7 +120,7 @@ impl CommandHandler {
         let current = HostProjections::get_by_id(&self.db, &id)?
             .ok_or_else(|| CommandError::NotFound(format!("Host {} not found", id)))?;
 
-        let current_version = current.version;
+        let current_version = current.version.clone();
 
         // Check expected version if provided (optimistic concurrency)
         if let Some(expected) = expected_version {
@@ -129,9 +129,11 @@ impl CommandHandler {
                     "expected_version cannot be empty".to_string(),
                 ));
             }
-            let actual = current_version.to_string();
-            if expected != actual {
-                return Err(CommandError::VersionConflict { expected, actual });
+            if expected != current_version {
+                return Err(CommandError::VersionConflict {
+                    expected,
+                    actual: current_version,
+                });
             }
         }
         let mut events = Vec::new();
@@ -231,7 +233,7 @@ impl CommandHandler {
         };
 
         // Commit immediately
-        EventStore::append_event(&self.db, &id, event, Some(current.version), None)?;
+        EventStore::append_event(&self.db, &id, event, Some(current.version.clone()), None)?;
 
         // Regenerate hosts file
         self.regenerate_hosts_file().await?;
@@ -300,7 +302,8 @@ impl CommandHandler {
         };
 
         // Group events by aggregate_id: (aggregate_id, events, expected_version)
-        let mut events_by_aggregate: HashMap<Ulid, (Vec<HostEvent>, Option<i64>)> = HashMap::new();
+        let mut events_by_aggregate: HashMap<Ulid, (Vec<HostEvent>, Option<String>)> =
+            HashMap::new();
 
         for entry in entries {
             result.processed = result.processed.saturating_add(1);

@@ -147,7 +147,7 @@ mod tests {
                 tags: vec![],
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
-                version: 1,
+                version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
             },
             HostEntry {
                 id: ulid::Ulid::new(),
@@ -157,7 +157,7 @@ mod tests {
                 tags: vec!["homelab".to_string()],
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
-                version: 1,
+                version: "01ARZ3NDEKTSV4RRFFQ69G5FAQ".to_string(),
             },
         ];
 
