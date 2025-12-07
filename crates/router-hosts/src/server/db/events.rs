@@ -89,6 +89,7 @@ pub struct EventEnvelope {
     /// Aggregate root identifier
     pub aggregate_id: Ulid,
     pub event: HostEvent,
+    /// ULID version of this event (for optimistic concurrency control)
     pub event_version: String,
     pub created_at: DateTime<Utc>,
     pub created_by: Option<String>,

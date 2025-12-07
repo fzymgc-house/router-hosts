@@ -20,6 +20,7 @@ pub struct HostEntry {
     pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// ULID version identifier (opaque string for optimistic locking)
     pub version: String,
 }
 

@@ -302,14 +302,15 @@ impl EventStore {
         })
     }
 
-    /// Get the current version number for an aggregate
+    /// Get the current ULID version for an aggregate
     ///
-    /// Returns `None` if the aggregate doesn't exist yet (no events)
+    /// Returns the most recent event's ULID version, or `None` if no events exist yet.
+    /// Used for optimistic concurrency control during append operations.
     fn get_current_version(db: &Database, aggregate_id: &Ulid) -> DatabaseResult<Option<String>> {
         let version = db
             .conn()
             .query_row(
-                "SELECT MAX(event_version) FROM host_events WHERE aggregate_id = ?",
+                "SELECT event_version FROM host_events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1",
                 [&aggregate_id.to_string()],
                 |row| row.get::<_, Option<String>>(0),
             )
