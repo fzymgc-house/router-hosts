@@ -95,12 +95,33 @@ impl HostsServiceImpl {
     /// Rollback to a previous snapshot
     pub async fn handle_rollback_to_snapshot(
         &self,
-        _request: Request<RollbackToSnapshotRequest>,
+        request: Request<RollbackToSnapshotRequest>,
     ) -> Result<Response<RollbackToSnapshotResponse>, Status> {
-        // TODO: Implement snapshot rollback (out of scope for v1)
-        Err(Status::unimplemented(
-            "RollbackToSnapshot not yet implemented",
-        ))
+        let req = request.into_inner();
+
+        if req.snapshot_id.is_empty() {
+            return Err(Status::invalid_argument("snapshot_id is required"));
+        }
+
+        let result = self
+            .commands
+            .rollback_to_snapshot(&req.snapshot_id)
+            .await
+            .map_err(|e| match e {
+                crate::server::commands::CommandError::NotFound(_) => {
+                    Status::not_found(e.to_string())
+                }
+                crate::server::commands::CommandError::ValidationFailed(msg) => {
+                    Status::invalid_argument(msg)
+                }
+                _ => Status::internal(e.to_string()),
+            })?;
+
+        Ok(Response::new(RollbackToSnapshotResponse {
+            success: result.success,
+            new_snapshot_id: result.backup_snapshot_id,
+            restored_entry_count: result.restored_entry_count,
+        }))
     }
 
     /// Delete a snapshot
