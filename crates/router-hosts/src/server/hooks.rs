@@ -192,4 +192,63 @@ mod tests {
         executor.run_failure(0, "test error").await;
         // Should complete immediately with no hooks
     }
+
+    #[tokio::test]
+    async fn test_success_hook_failure() {
+        let executor = HookExecutor::new(vec!["exit 1".to_string()], vec![], 5);
+        let failures = executor.run_success(10).await;
+        assert_eq!(failures, 1, "Should report 1 failed hook");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_success_hooks_partial_failure() {
+        let executor = HookExecutor::new(
+            vec![
+                "echo success1".to_string(),
+                "exit 1".to_string(),
+                "echo success3".to_string(),
+                "exit 2".to_string(),
+            ],
+            vec![],
+            5,
+        );
+        let failures = executor.run_success(10).await;
+        assert_eq!(failures, 2, "Should report 2 failed hooks out of 4");
+    }
+
+    #[tokio::test]
+    async fn test_run_failure_hooks() {
+        let executor = HookExecutor::new(
+            vec![],
+            vec!["test \"$ROUTER_HOSTS_ERROR\" = \"test error\"".to_string()],
+            5,
+        );
+        let failures = executor.run_failure(10, "test error").await;
+        assert_eq!(
+            failures, 0,
+            "Failure hook should succeed with correct error env var"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_failure_hook_failure() {
+        let executor = HookExecutor::new(vec![], vec!["exit 1".to_string()], 5);
+        let failures = executor.run_failure(10, "original error").await;
+        assert_eq!(failures, 1, "Should report 1 failed failure hook");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_failure_hooks_partial_failure() {
+        let executor = HookExecutor::new(
+            vec![],
+            vec![
+                "echo failure1".to_string(),
+                "exit 1".to_string(),
+                "echo failure3".to_string(),
+            ],
+            5,
+        );
+        let failures = executor.run_failure(10, "test error").await;
+        assert_eq!(failures, 1, "Should report 1 failed hook out of 3");
+    }
 }
