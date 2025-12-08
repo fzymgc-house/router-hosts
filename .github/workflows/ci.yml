@@ -43,7 +43,8 @@ jobs:
               run: cargo build --verbose
 
             - name: Run tests
-              run: cargo test --verbose
+              # Exclude E2E crate - it runs in dedicated e2e-tests job with Docker
+              run: cargo test --verbose --workspace --exclude router-hosts-e2e
 
             # TODO: Enable test coverage enforcement once implementation begins
             # CLAUDE.md mandates ≥80% coverage, but deferred for skeleton PR
