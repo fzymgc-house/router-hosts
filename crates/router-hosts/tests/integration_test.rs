@@ -32,7 +32,7 @@ use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
 use router_hosts_common::proto::{
     AddHostRequest, CreateSnapshotRequest, DeleteHostRequest, DeleteSnapshotRequest,
     ExportHostsRequest, GetHostRequest, ImportHostsRequest, ListHostsRequest, ListSnapshotsRequest,
-    SearchHostsRequest, UpdateHostRequest,
+    RollbackToSnapshotRequest, SearchHostsRequest, UpdateHostRequest,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -1443,4 +1443,115 @@ async fn test_delete_nonexistent_snapshot() {
     assert!(result.is_err());
     let status = result.unwrap_err();
     assert_eq!(status.code(), tonic::Code::NotFound);
+}
+
+// ============================================================================
+// Rollback Integration Tests (Issue #58)
+// ============================================================================
+
+#[tokio::test]
+async fn test_rollback_to_snapshot_basic() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Initial state: Create host1
+    let host1 = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.210.1".to_string(),
+            hostname: "rollback-test-1.local".to_string(),
+            comment: Some("Initial state".to_string()),
+            tags: vec!["test".to_string()],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let host1_id = host1.id.clone();
+
+    // Create snapshot of initial state
+    let snapshot = client
+        .create_snapshot(CreateSnapshotRequest {
+            name: "before-changes".to_string(),
+            trigger: "manual".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let snapshot_id = snapshot.snapshot_id;
+
+    // Modify state: Update host1 and add host2
+    client
+        .update_host(UpdateHostRequest {
+            id: host1_id.clone(),
+            ip_address: Some("192.168.210.99".to_string()),
+            hostname: None,
+            comment: Some("Modified after snapshot".to_string()),
+            tags: vec![],
+            expected_version: None,
+        })
+        .await
+        .unwrap();
+
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.210.2".to_string(),
+            hostname: "rollback-test-2.local".to_string(),
+            comment: Some("Added after snapshot".to_string()),
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Verify modified state has 2 hosts
+    let mut list_stream = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut hosts_before = vec![];
+    while let Some(response) = list_stream.message().await.unwrap() {
+        hosts_before.push(response.entry.unwrap());
+    }
+    assert_eq!(hosts_before.len(), 2);
+
+    // Rollback to initial snapshot
+    let rollback_response = client
+        .rollback_to_snapshot(RollbackToSnapshotRequest {
+            snapshot_id: snapshot_id.clone(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(rollback_response.success);
+    assert!(!rollback_response.new_snapshot_id.is_empty());
+
+    // Verify restored state has 1 host with original values
+    let mut list_stream = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut hosts_after = vec![];
+    while let Some(response) = list_stream.message().await.unwrap() {
+        hosts_after.push(response.entry.unwrap());
+    }
+
+    assert_eq!(hosts_after.len(), 1);
+    let restored = &hosts_after[0];
+    assert_eq!(restored.ip_address, "192.168.210.1");
+    assert_eq!(restored.hostname, "rollback-test-1.local");
+    assert_eq!(restored.comment.as_deref().unwrap(), "Initial state");
+    assert_eq!(restored.tags, vec!["test"]);
 }
