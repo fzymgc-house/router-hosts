@@ -23,6 +23,11 @@ tasks:
     cmds:
       - cargo test --workspace
 
+  test:unit:
+    desc: Run unit and integration tests (excludes E2E)
+    cmds:
+      - cargo test --workspace --exclude router-hosts-e2e
+
   test:coverage:
     desc: Run tests with coverage report
     cmds:

@@ -29,6 +29,9 @@ jobs:
               with:
                   github_token: ${{ github.token }}
 
+            - name: Install Task
+              uses: arduino/setup-task@v2
+
             # Use Swatinem/rust-cache for better Rust caching
             # This caches ~/.cargo and target/ with smart invalidation
             - name: Cache Rust dependencies
@@ -40,19 +43,16 @@ jobs:
                   key: ${{ runner.os }}-rust
 
             - name: Build
-              run: cargo build --verbose
+              run: task build
 
             - name: Run tests
-              # Exclude E2E crate - it runs in dedicated e2e-tests job with Docker
-              run: cargo test --verbose --workspace --exclude router-hosts-e2e
+              run: task test:unit
 
             # TODO: Enable test coverage enforcement once implementation begins
             # CLAUDE.md mandates ≥80% coverage, but deferred for skeleton PR
             # Uncomment when ready:
             # - name: Check test coverage
-            #   run: |
-            #     cargo install cargo-tarpaulin
-            #     cargo tarpaulin --workspace --fail-under 80
+            #   run: task test:coverage
 
     e2e-tests:
         needs: [test]
@@ -79,20 +79,6 @@ jobs:
                   # Use same key as test job to share the build cache
                   key: ${{ runner.os }}-rust
 
-            - name: Build release binary
-              run: cargo build --release --bin router-hosts
-
-            - name: Verify binary exists
-              run: |
-                  ls -la target/release/router-hosts
-                  file target/release/router-hosts
-
-            - name: Build Docker image
-              run: docker build -t router-hosts:e2e .
-
             - name: Run E2E tests
-              env:
-                  ROUTER_HOSTS_IMAGE: router-hosts:e2e
-                  # Use absolute path to ensure binary is found
-                  ROUTER_HOSTS_BINARY: ${{ github.workspace }}/target/release/router-hosts
-              run: cargo test -p router-hosts-e2e --release -- --test-threads=2
+              # Override image name/tag to use local CI image
+              run: task e2e IMAGE_NAME=router-hosts IMAGE_TAG=e2e
