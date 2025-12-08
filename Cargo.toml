@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "crates/router-hosts-common",
     "crates/router-hosts",
+    "crates/router-hosts-e2e",
 ]
 
 [workspace.package]
