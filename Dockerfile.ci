@@ -1,8 +1,8 @@
 # Minimal Dockerfile for CI/E2E tests
-# Expects pre-built binary at ./target/release/router-hosts
+# Expects pre-built binary copied to ./router-hosts (outside target/ to avoid .dockerignore)
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
-COPY target/release/router-hosts /usr/local/bin/
+COPY router-hosts /usr/local/bin/
 EXPOSE 50051
 ENTRYPOINT ["router-hosts"]
 CMD ["server", "--config", "/config/server.toml"]

@@ -59,7 +59,10 @@ tasks:
     desc: Build Docker image using pre-built binary (for CI/E2E)
     deps: ["build:release"]
     cmds:
+      # Copy binary to root to avoid .dockerignore excluding target/
+      - cp target/release/router-hosts router-hosts
       - docker build -f Dockerfile.ci -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} .
+      - rm router-hosts
 
   docker:run:
     desc: Run server container (requires certs in ./dev/certs/)
