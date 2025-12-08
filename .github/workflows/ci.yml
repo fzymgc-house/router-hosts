@@ -52,3 +52,39 @@ jobs:
             #   run: |
             #     cargo install cargo-tarpaulin
             #     cargo tarpaulin --workspace --fail-under 80
+
+    e2e-tests:
+        needs: [test]
+        runs-on:
+            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=100gb
+
+        steps:
+            - uses: runs-on/action@v2
+              with:
+                  metrics: cpu,network,memory,disk,io
+
+            - uses: actions/checkout@v6
+
+            - name: Install Rust
+              uses: dtolnay/rust-toolchain@stable
+
+            - name: Install Task
+              uses: arduino/setup-task@v2
+
+            - name: Cache Rust dependencies
+              uses: Swatinem/rust-cache@v2
+              with:
+                  cache-all-crates: "true"
+                  key: ${{ runner.os }}-rust-e2e
+
+            - name: Build release binary
+              run: cargo build --release --bin router-hosts
+
+            - name: Build Docker image
+              run: docker build -t router-hosts:e2e .
+
+            - name: Run E2E tests
+              env:
+                  ROUTER_HOSTS_IMAGE: router-hosts:e2e
+                  ROUTER_HOSTS_BINARY: ./target/release/router-hosts
+              run: cargo test -p router-hosts-e2e --release -- --test-threads=2
