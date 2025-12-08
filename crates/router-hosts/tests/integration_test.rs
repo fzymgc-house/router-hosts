@@ -1515,8 +1515,12 @@ async fn test_rollback_to_snapshot_basic() {
         .into_inner();
 
     let mut hosts_before = vec![];
-    while let Some(response) = list_stream.message().await.unwrap() {
-        hosts_before.push(response.entry.unwrap());
+    while let Some(response) = list_stream
+        .message()
+        .await
+        .expect("Failed to read stream message")
+    {
+        hosts_before.push(response.entry.expect("Missing entry in response"));
     }
     assert_eq!(hosts_before.len(), 2);
 
@@ -1532,6 +1536,10 @@ async fn test_rollback_to_snapshot_basic() {
     assert!(rollback_response.success);
     assert!(!rollback_response.new_snapshot_id.is_empty());
 
+    // Validate backup snapshot ID is a valid ULID
+    ulid::Ulid::from_string(&rollback_response.new_snapshot_id)
+        .expect("Backup snapshot ID should be a valid ULID");
+
     // Verify restored state has 1 host with original values
     let mut list_stream = client
         .list_hosts(ListHostsRequest {
@@ -1544,8 +1552,12 @@ async fn test_rollback_to_snapshot_basic() {
         .into_inner();
 
     let mut hosts_after = vec![];
-    while let Some(response) = list_stream.message().await.unwrap() {
-        hosts_after.push(response.entry.unwrap());
+    while let Some(response) = list_stream
+        .message()
+        .await
+        .expect("Failed to read stream message")
+    {
+        hosts_after.push(response.entry.expect("Missing entry in response"));
     }
 
     assert_eq!(hosts_after.len(), 1);
