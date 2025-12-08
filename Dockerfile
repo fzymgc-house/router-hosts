@@ -1,5 +1,5 @@
 # Stage 1: Chef - prepare recipe
-FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef
 WORKDIR /app
 
 # Stage 2: Planner - compute dependency graph
