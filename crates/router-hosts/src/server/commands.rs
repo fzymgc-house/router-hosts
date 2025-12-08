@@ -14,6 +14,17 @@ use std::sync::Arc;
 use thiserror::Error;
 use ulid::Ulid;
 
+/// Result of a snapshot rollback operation
+#[derive(Debug, Clone)]
+pub struct RollbackResult {
+    /// Whether the rollback succeeded
+    pub success: bool,
+    /// ID of the backup snapshot created before rollback
+    pub backup_snapshot_id: String,
+    /// Number of entries restored from the snapshot
+    pub restored_entry_count: i32,
+}
+
 #[derive(Debug, Error)]
 pub enum CommandError {
     #[error("Validation failed: {0}")]
