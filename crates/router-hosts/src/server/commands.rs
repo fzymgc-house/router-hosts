@@ -8,6 +8,7 @@ use crate::server::db::{
 };
 use crate::server::hooks::HookExecutor;
 use crate::server::hosts_file::HostsFileGenerator;
+use crate::server::import::{parse_import, ImportFormat};
 use chrono::Utc;
 use router_hosts_common::validation::{validate_hostname, validate_ip_address};
 use std::sync::Arc;
@@ -592,6 +593,69 @@ impl CommandHandler {
             trigger,
             name: Some(snapshot_name),
             event_log_position: None,
+        })
+    }
+
+    /// Rollback to a previous snapshot
+    ///
+    /// Creates a backup snapshot before rollback, then restores the database
+    /// to the state captured in the target snapshot by parsing its hosts file
+    /// content and recreating entries.
+    pub async fn rollback_to_snapshot(&self, snapshot_id: &str) -> CommandResult<RollbackResult> {
+        // 1. Fetch snapshot from database
+        let hosts_content = {
+            let conn = self.db.conn();
+            let (content, _entry_count): (String, i32) = conn
+                .query_row(
+                    "SELECT hosts_content, entry_count FROM snapshots WHERE snapshot_id = ?",
+                    [snapshot_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .map_err(|_| {
+                    CommandError::NotFound(format!("Snapshot not found: {}", snapshot_id))
+                })?;
+            content
+        }; // Drop conn before any await points
+
+        // 2. Create pre-rollback backup snapshot
+        let backup = self.create_snapshot(None, "pre-rollback".to_string())?;
+        let backup_snapshot_id = backup.snapshot_id;
+
+        // 3. Parse snapshot content
+        let parsed_entries =
+            parse_import(hosts_content.as_bytes(), ImportFormat::Hosts).map_err(|e| {
+                CommandError::ValidationFailed(format!("Failed to parse snapshot content: {}", e))
+            })?;
+
+        // 4. Clear current state (delete all existing hosts)
+        let current_hosts = HostProjections::list_all(&self.db)?;
+        for host in &current_hosts {
+            self.delete_host(host.id, Some("Deleted during rollback".to_string()))
+                .await?;
+        }
+
+        // 5. Import parsed entries from snapshot
+        let mut restored_count = 0;
+        for entry in parsed_entries {
+            match self
+                .add_host(entry.ip_address, entry.hostname, entry.comment, entry.tags)
+                .await
+            {
+                Ok(_) => restored_count += 1,
+                Err(e) => {
+                    // Log but don't fail entire rollback for individual entry failures
+                    tracing::warn!("Failed to restore entry during rollback: {}", e);
+                }
+            }
+        }
+
+        // Note: regenerate_hosts_file is called by each add_host/delete_host
+        // so the final state is already persisted to disk
+
+        Ok(RollbackResult {
+            success: true,
+            backup_snapshot_id,
+            restored_entry_count: restored_count,
         })
     }
 
