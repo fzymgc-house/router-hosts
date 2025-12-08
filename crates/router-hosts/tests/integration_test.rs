@@ -1567,3 +1567,202 @@ async fn test_rollback_to_snapshot_basic() {
     assert_eq!(restored.comment.as_deref().unwrap(), "Initial state");
     assert_eq!(restored.tags, vec!["test"]);
 }
+
+#[tokio::test]
+async fn test_rollback_to_nonexistent_snapshot() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    let result = client
+        .rollback_to_snapshot(RollbackToSnapshotRequest {
+            snapshot_id: "nonexistent-id".to_string(),
+        })
+        .await;
+
+    assert!(result.is_err());
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::NotFound);
+    assert!(status.message().contains("Snapshot not found"));
+}
+
+#[tokio::test]
+async fn test_rollback_creates_backup_snapshot() {
+    use tonic::Streaming;
+
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create initial state
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.211.1".to_string(),
+            hostname: "backup-test.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Create snapshot1
+    let snap1 = client
+        .create_snapshot(CreateSnapshotRequest {
+            name: "snapshot1".to_string(),
+            trigger: "manual".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Modify state
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.211.2".to_string(),
+            hostname: "modified.local".to_string(),
+            comment: Some("After snapshot".to_string()),
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Count snapshots before rollback
+    let mut stream: Streaming<_> = client
+        .list_snapshots(ListSnapshotsRequest {
+            limit: 0,
+            offset: 0,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut count_before = 0;
+    while let Some(_) = stream.message().await.unwrap() {
+        count_before += 1;
+    }
+    assert_eq!(count_before, 1); // Only snapshot1
+
+    // Rollback to snapshot1
+    let rollback = client
+        .rollback_to_snapshot(RollbackToSnapshotRequest {
+            snapshot_id: snap1.snapshot_id,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(rollback.success);
+
+    // Verify backup snapshot was created
+    let mut stream: Streaming<_> = client
+        .list_snapshots(ListSnapshotsRequest {
+            limit: 0,
+            offset: 0,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut snapshots = vec![];
+    while let Some(response) = stream.message().await.unwrap() {
+        snapshots.push(response.snapshot.unwrap());
+    }
+
+    assert_eq!(snapshots.len(), 2); // snapshot1 + pre-rollback backup
+
+    // Find pre-rollback snapshot
+    let backup_snap = snapshots
+        .iter()
+        .find(|s| s.trigger == "pre-rollback")
+        .expect("Backup snapshot should exist");
+
+    assert_eq!(backup_snap.snapshot_id, rollback.new_snapshot_id);
+    assert_eq!(backup_snap.entry_count, 2); // Had 2 hosts before rollback
+}
+
+#[tokio::test]
+async fn test_rollback_preserves_tags_and_comments() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create hosts with tags and comments
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.212.1".to_string(),
+            hostname: "tags-test.local".to_string(),
+            comment: Some("Important comment".to_string()),
+            tags: vec!["production".to_string(), "critical".to_string()],
+        })
+        .await
+        .unwrap();
+
+    // Create snapshot
+    let snapshot = client
+        .create_snapshot(CreateSnapshotRequest {
+            name: "with-tags".to_string(),
+            trigger: "manual".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    // Delete the host
+    let mut hosts = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let host = hosts.message().await.unwrap().unwrap().entry.unwrap();
+    client
+        .delete_host(DeleteHostRequest { id: host.id })
+        .await
+        .unwrap();
+
+    // Verify empty
+    let mut stream = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut count = 0;
+    while let Some(_) = stream.message().await.unwrap() {
+        count += 1;
+    }
+    assert_eq!(count, 0);
+
+    // Rollback
+    client
+        .rollback_to_snapshot(RollbackToSnapshotRequest {
+            snapshot_id: snapshot.snapshot_id,
+        })
+        .await
+        .unwrap();
+
+    // Verify tags and comment restored
+    let mut stream = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let restored = stream.message().await.unwrap().unwrap().entry.unwrap();
+    assert_eq!(restored.ip_address, "192.168.212.1");
+    assert_eq!(restored.hostname, "tags-test.local");
+    assert_eq!(restored.comment.as_deref().unwrap(), "Important comment");
+    assert_eq!(
+        restored.tags,
+        vec!["production".to_string(), "critical".to_string()]
+    );
+}
