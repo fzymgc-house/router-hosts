@@ -63,6 +63,10 @@ pub struct Cli {
     #[arg(long, global = true, default_value = "table")]
     pub format: OutputFormat,
 
+    /// Non-interactive mode: fail immediately on conflicts without prompting
+    #[arg(long, global = true)]
+    pub non_interactive: bool,
+
     #[command(subcommand)]
     pub command: Commands,
 }
@@ -244,7 +248,14 @@ pub async fn run() -> Result<ExitCode> {
     // Execute command
     let result = match cli.command {
         Commands::Host(args) => {
-            commands::host::handle(&mut client, args.command, cli.format, cli.quiet).await
+            commands::host::handle(
+                &mut client,
+                args.command,
+                cli.format,
+                cli.quiet,
+                cli.non_interactive,
+            )
+            .await
         }
         Commands::Snapshot(args) => {
             commands::snapshot::handle(&mut client, args.command, cli.format, cli.quiet).await
