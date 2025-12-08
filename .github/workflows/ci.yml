@@ -8,11 +8,20 @@ on:
 
 env:
     CARGO_TERM_COLOR: always
+    REGISTRY: ghcr.io
+    IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-    test:
+    build:
         runs-on:
-            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price/volume=100gb
+            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=100gb
+
+        permissions:
+            contents: read
+            packages: write
+
+        outputs:
+            image-tag: ${{ steps.meta.outputs.tags }}
 
         steps:
             - uses: runs-on/action@v2
@@ -48,6 +57,30 @@ jobs:
             - name: Run tests
               run: task test:unit
 
+            # Docker build and push
+            - name: Log in to GHCR
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            - name: Extract metadata for Docker
+              id: meta
+              uses: docker/metadata-action@v5
+              with:
+                  images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+                  tags: |
+                      type=sha,prefix=sha-
+
+            - name: Build and push Docker image
+              uses: docker/build-push-action@v6
+              with:
+                  context: .
+                  push: true
+                  tags: ${{ steps.meta.outputs.tags }}
+                  labels: ${{ steps.meta.outputs.labels }}
+
             # TODO: Enable test coverage enforcement once implementation begins
             # CLAUDE.md mandates ≥80% coverage, but deferred for skeleton PR
             # Uncomment when ready:
@@ -55,9 +88,13 @@ jobs:
             #   run: task test:coverage
 
     e2e-tests:
-        needs: [test]
+        needs: [build]
         runs-on:
             - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=100gb
+
+        permissions:
+            contents: read
+            packages: read
 
         steps:
             - uses: runs-on/action@v2
@@ -76,9 +113,16 @@ jobs:
               uses: Swatinem/rust-cache@v2
               with:
                   cache-all-crates: "true"
-                  # Use same key as test job to share the build cache
+                  # Use same key as build job to share the build cache
                   key: ${{ runner.os }}-rust
 
+            - name: Log in to GHCR
+              uses: docker/login-action@v3
+              with:
+                  registry: ${{ env.REGISTRY }}
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
             - name: Run E2E tests
-              # Override image name/tag to use local CI image
-              run: task e2e IMAGE_NAME=router-hosts IMAGE_TAG=e2e
+              # Use short SHA to match docker/metadata-action format
+              run: task e2e IMAGE_TAG=sha-${GITHUB_SHA::7}
