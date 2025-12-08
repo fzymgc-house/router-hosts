@@ -61,13 +61,36 @@ async fn start_test_server() -> SocketAddr {
     // directory still gets cleaned up when the test process exits.
     let temp_dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
     let hosts_path = temp_dir.path().join("hosts");
+    let hosts_path_str = hosts_path.to_string_lossy().to_string();
     let hosts_file = Arc::new(HostsFileGenerator::new(hosts_path));
+
+    // Create test config
+    let config = Arc::new(router_hosts::server::config::Config {
+        server: router_hosts::server::config::ServerConfig {
+            bind_address: format!("127.0.0.1:{}", addr.port()),
+            hosts_file_path: hosts_path_str,
+        },
+        database: router_hosts::server::config::DatabaseConfig {
+            path: std::path::PathBuf::from(":memory:"),
+        },
+        tls: router_hosts::server::config::TlsConfig {
+            cert_path: std::path::PathBuf::from("/tmp/cert.pem"),
+            key_path: std::path::PathBuf::from("/tmp/key.pem"),
+            ca_cert_path: std::path::PathBuf::from("/tmp/ca.pem"),
+        },
+        retention: router_hosts::server::config::RetentionConfig {
+            max_snapshots: 50,
+            max_age_days: 30,
+        },
+        hooks: router_hosts::server::config::HooksConfig::default(),
+    });
 
     // Create command handler
     let commands = Arc::new(CommandHandler::new(
         Arc::clone(&db),
         Arc::clone(&hosts_file),
         Arc::clone(&hooks),
+        config,
     ));
 
     // Create write queue for serialized mutation operations

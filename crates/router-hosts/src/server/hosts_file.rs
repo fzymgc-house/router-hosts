@@ -45,7 +45,7 @@ impl HostsFileGenerator {
     }
 
     /// Format entries as /etc/hosts content
-    fn format_hosts_file(&self, entries: &[HostEntry]) -> String {
+    pub fn format_hosts_file(&self, entries: &[HostEntry]) -> String {
         let mut lines = Vec::new();
 
         // Header

@@ -29,3 +29,15 @@ pub use event_store::EventStore;
 pub use events::{EventData, EventEnvelope, EventMetadata, HostEvent};
 pub use projections::{HostEntry, HostProjections};
 pub use schema::{Database, DatabaseError, DatabaseResult};
+
+/// Snapshot of hosts file at a point in time
+#[derive(Debug, Clone, PartialEq)]
+pub struct Snapshot {
+    pub snapshot_id: String,
+    pub created_at: i64, // Unix timestamp in microseconds
+    pub hosts_content: String,
+    pub entry_count: i32,
+    pub trigger: String,
+    pub name: Option<String>,
+    pub event_log_position: Option<i64>,
+}

@@ -117,6 +117,7 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
         Arc::clone(&db),
         Arc::clone(&hosts_file),
         Arc::clone(&hooks),
+        Arc::new(config.clone()),
     ));
 
     // Create write queue for serialized mutation operations

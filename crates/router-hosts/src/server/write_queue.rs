@@ -472,7 +472,33 @@ mod tests {
         let db = Arc::new(Database::new(&db_path).unwrap());
         let hosts_file = Arc::new(HostsFileGenerator::new(hosts_path));
         let hooks = Arc::new(HookExecutor::new(vec![], vec![], 30));
-        let commands = Arc::new(CommandHandler::new(Arc::clone(&db), hosts_file, hooks));
+
+        let config = Arc::new(crate::server::config::Config {
+            server: crate::server::config::ServerConfig {
+                bind_address: "127.0.0.1:50051".to_string(),
+                hosts_file_path: "/tmp/test_hosts".to_string(),
+            },
+            database: crate::server::config::DatabaseConfig {
+                path: std::path::PathBuf::from("/tmp/test.db"),
+            },
+            tls: crate::server::config::TlsConfig {
+                cert_path: std::path::PathBuf::from("/tmp/cert.pem"),
+                key_path: std::path::PathBuf::from("/tmp/key.pem"),
+                ca_cert_path: std::path::PathBuf::from("/tmp/ca.pem"),
+            },
+            retention: crate::server::config::RetentionConfig {
+                max_snapshots: 50,
+                max_age_days: 30,
+            },
+            hooks: crate::server::config::HooksConfig::default(),
+        });
+
+        let commands = Arc::new(CommandHandler::new(
+            Arc::clone(&db),
+            hosts_file,
+            hooks,
+            config,
+        ));
 
         let write_queue = WriteQueue::new(Arc::clone(&commands));
         (write_queue, commands, temp_dir)

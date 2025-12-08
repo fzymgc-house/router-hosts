@@ -13,7 +13,10 @@ pub async fn handle(
 ) -> Result<()> {
     match command {
         SnapshotCommand::Create => {
-            let request = CreateSnapshotRequest {};
+            let request = CreateSnapshotRequest {
+                name: String::new(),    // Empty = auto-generate
+                trigger: String::new(), // Empty = "manual"
+            };
             let response = client.create_snapshot(request).await?;
             if !quiet {
                 eprintln!("Created snapshot: {}", response.snapshot_id);
@@ -21,7 +24,10 @@ pub async fn handle(
         }
 
         SnapshotCommand::List => {
-            let request = ListSnapshotsRequest {};
+            let request = ListSnapshotsRequest {
+                limit: 0,  // 0 = no limit
+                offset: 0, // 0 = no offset
+            };
             let responses = client.list_snapshots(request).await?;
             let snapshots: Vec<_> = responses.into_iter().filter_map(|r| r.snapshot).collect();
             print_items(&snapshots, format);
