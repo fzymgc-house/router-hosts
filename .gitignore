@@ -16,3 +16,4 @@ target/
 
 # Build artifacts
 *.pdb
+.worktrees/
