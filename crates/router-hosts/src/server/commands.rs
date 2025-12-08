@@ -44,6 +44,7 @@ pub struct CommandHandler {
     db: Arc<Database>,
     hosts_file: Arc<HostsFileGenerator>,
     hooks: Arc<HookExecutor>,
+    config: Arc<crate::server::config::Config>,
 }
 
 impl CommandHandler {
@@ -51,11 +52,13 @@ impl CommandHandler {
         db: Arc<Database>,
         hosts_file: Arc<HostsFileGenerator>,
         hooks: Arc<HookExecutor>,
+        config: Arc<crate::server::config::Config>,
     ) -> Self {
         Self {
             db,
             hosts_file,
             hooks,
+            config,
         }
     }
 
@@ -432,6 +435,231 @@ impl CommandHandler {
         Ok(result)
     }
 
+    /// Delete a snapshot by ID
+    ///
+    /// Returns true if snapshot was deleted, false if not found
+    pub fn delete_snapshot(&self, snapshot_id: &str) -> CommandResult<bool> {
+        let conn = self.db.conn();
+
+        let deleted = conn
+            .execute("DELETE FROM snapshots WHERE snapshot_id = ?", [snapshot_id])
+            .map_err(|e| {
+                CommandError::Database(DatabaseError::QueryFailed(format!(
+                    "Failed to delete snapshot: {}",
+                    e
+                )))
+            })?;
+
+        Ok(deleted > 0)
+    }
+
+    /// List snapshots with optional pagination
+    ///
+    /// Returns snapshots ordered by created_at DESC (newest first)
+    pub fn list_snapshots(
+        &self,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> CommandResult<Vec<crate::server::db::Snapshot>> {
+        let conn = self.db.conn();
+
+        let limit_clause = limit.map(|l| format!("LIMIT {}", l)).unwrap_or_default();
+        let offset_clause = offset.map(|o| format!("OFFSET {}", o)).unwrap_or_default();
+
+        let query = format!(
+            "SELECT snapshot_id, created_at, hosts_content, entry_count, trigger, name, event_log_position
+             FROM snapshots
+             ORDER BY created_at DESC
+             {} {}",
+            limit_clause, offset_clause
+        );
+
+        let mut stmt = conn.prepare(&query).map_err(|e| {
+            CommandError::Database(DatabaseError::QueryFailed(format!(
+                "Failed to prepare list query: {}",
+                e
+            )))
+        })?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(crate::server::db::Snapshot {
+                    snapshot_id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    hosts_content: row.get(2)?,
+                    entry_count: row.get(3)?,
+                    trigger: row.get(4)?,
+                    name: row.get(5)?,
+                    event_log_position: row.get(6)?,
+                })
+            })
+            .map_err(|e| {
+                CommandError::Database(DatabaseError::QueryFailed(format!(
+                    "Failed to query snapshots: {}",
+                    e
+                )))
+            })?;
+
+        let mut snapshots = Vec::new();
+        for row in rows {
+            snapshots.push(row.map_err(|e| {
+                CommandError::Database(DatabaseError::QueryFailed(format!(
+                    "Failed to fetch snapshot row: {}",
+                    e
+                )))
+            })?);
+        }
+
+        Ok(snapshots)
+    }
+
+    /// Create a snapshot of the current hosts file state
+    ///
+    /// Generates snapshot from current database projections, not from reading /etc/hosts
+    pub fn create_snapshot(
+        &self,
+        name: Option<String>,
+        trigger: String,
+    ) -> CommandResult<crate::server::db::Snapshot> {
+        // Query all active hosts
+        let hosts = HostProjections::list_all(&self.db)?;
+        let entry_count = hosts.len() as i32;
+
+        // Generate hosts file content
+        let hosts_content = self.hosts_file.format_hosts_file(&hosts);
+
+        // Generate snapshot name if not provided
+        let snapshot_name =
+            name.unwrap_or_else(|| format!("snapshot-{}", Utc::now().format("%Y%m%d-%H%M%S")));
+
+        // Generate ULID for snapshot_id
+        let snapshot_id = Ulid::new().to_string();
+
+        // Insert snapshot (created_at uses DEFAULT CURRENT_TIMESTAMP)
+        let conn = self.db.conn();
+        conn.execute(
+            "INSERT INTO snapshots (snapshot_id, hosts_content, entry_count, trigger, name, event_log_position)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            duckdb::params![
+                &snapshot_id,
+                &hosts_content,
+                &entry_count,
+                &trigger,
+                &snapshot_name,
+                &None::<i64>, // event_log_position not used in v1
+            ],
+        )
+        .map_err(|e| {
+            CommandError::Database(DatabaseError::QueryFailed(format!(
+                "Failed to insert snapshot: {}",
+                e
+            )))
+        })?;
+
+        // Read back the created_at timestamp as microseconds
+        let created_at: i64 = conn
+            .query_row(
+                "SELECT CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) FROM snapshots WHERE snapshot_id = ?",
+                [&snapshot_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| {
+                CommandError::Database(DatabaseError::QueryFailed(format!(
+                    "Failed to read snapshot timestamp: {}",
+                    e
+                )))
+            })?;
+
+        // Run retention cleanup synchronously
+        let _deleted = self.cleanup_old_snapshots()?;
+
+        Ok(crate::server::db::Snapshot {
+            snapshot_id,
+            created_at,
+            hosts_content,
+            entry_count,
+            trigger,
+            name: Some(snapshot_name),
+            event_log_position: None,
+        })
+    }
+
+    /// Clean up old snapshots based on retention policy
+    ///
+    /// Deletes snapshots that violate either max_snapshots OR max_age_days
+    fn cleanup_old_snapshots(&self) -> CommandResult<usize> {
+        let max_snapshots = self.config.retention.max_snapshots;
+        let max_age_days = self.config.retention.max_age_days;
+
+        // Retention disabled if both limits are 0
+        if max_snapshots == 0 && max_age_days == 0 {
+            return Ok(0);
+        }
+
+        // Query all snapshots ordered newest first
+        let conn = self.db.conn();
+        let mut stmt = conn
+            .prepare("SELECT snapshot_id, created_at FROM snapshots ORDER BY created_at DESC")
+            .map_err(|e| {
+                CommandError::Database(DatabaseError::QueryFailed(format!(
+                    "Failed to query snapshots for cleanup: {}",
+                    e
+                )))
+            })?;
+
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })
+            .map_err(|e| {
+                CommandError::Database(DatabaseError::QueryFailed(format!(
+                    "Failed to query snapshots for cleanup: {}",
+                    e
+                )))
+            })?;
+
+        let mut snapshots = Vec::new();
+        for row in rows {
+            snapshots.push(row.map_err(|e| {
+                CommandError::Database(DatabaseError::QueryFailed(format!(
+                    "Failed to fetch snapshot for cleanup: {}",
+                    e
+                )))
+            })?);
+        }
+
+        let mut to_delete: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        // Delete by count (keep max_snapshots most recent)
+        if max_snapshots > 0 {
+            for (id, _) in snapshots.iter().skip(max_snapshots) {
+                to_delete.insert(id.clone());
+            }
+        }
+
+        // Delete by age
+        if max_age_days > 0 {
+            let cutoff_timestamp = Utc::now()
+                .checked_sub_signed(chrono::Duration::days(max_age_days as i64))
+                .unwrap()
+                .timestamp_micros();
+
+            for (id, created_at) in &snapshots {
+                if *created_at < cutoff_timestamp {
+                    to_delete.insert(id.clone());
+                }
+            }
+        }
+
+        // Delete all snapshots in delete list
+        let count = to_delete.len();
+        for id in to_delete {
+            self.delete_snapshot(&id)?;
+        }
+
+        Ok(count)
+    }
+
     async fn regenerate_hosts_file(&self) -> CommandResult<()> {
         match self.hosts_file.regenerate(&self.db).await {
             Ok(count) => {
@@ -463,6 +691,29 @@ impl CommandHandler {
 mod tests {
     use super::*;
     use std::env::temp_dir;
+    use std::path::PathBuf;
+
+    fn test_config() -> crate::server::config::Config {
+        crate::server::config::Config {
+            server: crate::server::config::ServerConfig {
+                bind_address: "127.0.0.1:50051".to_string(),
+                hosts_file_path: "/tmp/test_hosts".to_string(),
+            },
+            database: crate::server::config::DatabaseConfig {
+                path: PathBuf::from("/tmp/test.db"),
+            },
+            tls: crate::server::config::TlsConfig {
+                cert_path: PathBuf::from("/tmp/cert.pem"),
+                key_path: PathBuf::from("/tmp/key.pem"),
+                ca_cert_path: PathBuf::from("/tmp/ca.pem"),
+            },
+            retention: crate::server::config::RetentionConfig {
+                max_snapshots: 50,
+                max_age_days: 30,
+            },
+            hooks: crate::server::config::HooksConfig::default(),
+        }
+    }
 
     fn setup() -> CommandHandler {
         let db = Arc::new(Database::in_memory().unwrap());
@@ -472,7 +723,9 @@ mod tests {
         let hosts_file = Arc::new(HostsFileGenerator::new(temp_file));
 
         let hooks = Arc::new(HookExecutor::default());
-        CommandHandler::new(db, hosts_file, hooks)
+        let config = Arc::new(test_config());
+
+        CommandHandler::new(db, hosts_file, hooks, config)
     }
 
     #[tokio::test]
@@ -1218,5 +1471,137 @@ mod tests {
         assert_eq!(hosts.len(), 2);
         assert!(hosts.iter().any(|h| h.hostname == "valid.local"));
         assert!(hosts.iter().any(|h| h.hostname == "valid2.local"));
+    }
+
+    // Snapshot tests
+
+    #[test]
+    fn test_delete_snapshot_not_found() {
+        let handler = setup();
+
+        let result = handler.delete_snapshot("01JDTEST000000000000000000");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[tokio::test]
+    async fn test_delete_snapshot() {
+        let handler = setup();
+
+        // First create a snapshot
+        let snapshot = handler.create_snapshot(None, "manual".to_string()).unwrap();
+
+        // Delete it
+        let result = handler.delete_snapshot(&snapshot.snapshot_id);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), true);
+
+        // Verify it's gone
+        let result = handler.delete_snapshot(&snapshot.snapshot_id);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), false);
+    }
+
+    #[test]
+    fn test_list_snapshots_empty() {
+        let handler = setup();
+
+        let snapshots = handler.list_snapshots(None, None).unwrap();
+        assert_eq!(snapshots.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_snapshot_with_custom_name() {
+        let handler = setup();
+
+        let snapshot = handler
+            .create_snapshot(Some("test-snapshot".to_string()), "manual".to_string())
+            .unwrap();
+
+        assert!(!snapshot.snapshot_id.is_empty());
+        assert_eq!(snapshot.name, Some("test-snapshot".to_string()));
+        assert_eq!(snapshot.trigger, "manual");
+        assert_eq!(snapshot.entry_count, 0); // Empty database
+        assert!(snapshot.created_at > 0);
+    }
+
+    #[tokio::test]
+    async fn test_create_snapshot_auto_generated_name() {
+        let handler = setup();
+
+        let snapshot = handler.create_snapshot(None, "manual".to_string()).unwrap();
+
+        // Verify auto-generated name has correct format
+        let name = snapshot.name.unwrap();
+        assert!(name.starts_with("snapshot-"));
+        assert!(name.len() > 15); // snapshot-YYYYMMDD-HHMMSS
+    }
+
+    #[tokio::test]
+    async fn test_create_snapshot_captures_hosts() {
+        let handler = setup();
+
+        // Add a host
+        handler
+            .add_host(
+                "192.168.1.10".to_string(),
+                "test.local".to_string(),
+                None,
+                vec![],
+            )
+            .await
+            .unwrap();
+
+        // Create snapshot
+        let snapshot = handler.create_snapshot(None, "manual".to_string()).unwrap();
+
+        assert_eq!(snapshot.entry_count, 1);
+        assert!(snapshot.hosts_content.contains("192.168.1.10"));
+        assert!(snapshot.hosts_content.contains("test.local"));
+    }
+
+    #[test]
+    fn test_cleanup_retention_disabled() {
+        let mut handler = setup();
+        // Set both limits to 0 (disabled)
+        let config = Arc::get_mut(&mut handler.config).unwrap();
+        config.retention.max_snapshots = 0;
+        config.retention.max_age_days = 0;
+
+        // Create multiple snapshots
+        for i in 0..5 {
+            handler
+                .create_snapshot(Some(format!("s{}", i)), "manual".to_string())
+                .unwrap();
+        }
+
+        // Verify all snapshots still exist (cleanup was disabled during create)
+        let snapshots = handler.list_snapshots(None, None).unwrap();
+        assert_eq!(snapshots.len(), 5);
+    }
+
+    #[test]
+    fn test_cleanup_by_count_only() {
+        let mut handler = setup();
+        let config = Arc::get_mut(&mut handler.config).unwrap();
+        config.retention.max_snapshots = 3;
+        config.retention.max_age_days = 0; // Disabled
+
+        // Create 5 snapshots
+        for i in 0..5 {
+            handler
+                .create_snapshot(Some(format!("s{}", i)), "manual".to_string())
+                .unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // Cleanup runs automatically in create_snapshot, so verify final state
+        let snapshots = handler.list_snapshots(None, None).unwrap();
+        assert_eq!(snapshots.len(), 3);
+
+        // Verify we kept the 3 most recent (s2, s3, s4)
+        assert_eq!(snapshots[0].name, Some("s4".to_string()));
+        assert_eq!(snapshots[1].name, Some("s3".to_string()));
+        assert_eq!(snapshots[2].name, Some("s2".to_string()));
     }
 }

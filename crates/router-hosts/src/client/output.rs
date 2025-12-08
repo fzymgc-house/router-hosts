@@ -222,6 +222,7 @@ mod tests {
             }),
             entry_count: 42,
             trigger: "manual".to_string(),
+            name: "test-snapshot".to_string(),
         };
 
         let row = snapshot.row();
@@ -239,6 +240,7 @@ mod tests {
             created_at: None,
             entry_count: 0,
             trigger: "rollback".to_string(),
+            name: String::new(),
         };
 
         let row = snapshot.row();
