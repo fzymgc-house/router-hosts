@@ -1,12 +1,43 @@
 # E2E Acceptance Testing Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status:** ✅ COMPLETED - 2025-12-08
 
 **Goal:** Implement Docker-based E2E acceptance tests that validate router-hosts works end-to-end with real mTLS authentication.
 
 **Architecture:** Server runs in Docker container with mounted certs. CLI runs as subprocess on host. Tests generate fresh mTLS certificates at runtime using rcgen. testcontainers-rs manages Docker lifecycle.
 
 **Tech Stack:** Rust, Docker, cargo-chef, testcontainers, rcgen, assert_cmd, GitHub Actions
+
+## Completion Summary
+
+| Task | Status | Commit |
+|------|--------|--------|
+| Task 1: Dockerfile | ✅ Complete | b0c49fa |
+| Task 2: Taskfile | ✅ Complete | b0c49fa |
+| Task 3: E2E crate | ✅ Complete | bcdb90c |
+| Task 4: Cert generation | ✅ Complete | 3a45119 |
+| Task 5: Container management | ✅ Complete | 2b4a09b |
+| Task 6: CLI wrapper | ✅ Complete | f2d4392 |
+| Task 7: Test scenarios | ✅ Complete | 7bf0308 |
+| Task 8: Docker workflow | ✅ Complete | 10b5a02 |
+| Task 9: CI workflow | ✅ Complete | 5c15545 |
+| Task 10: Documentation | ✅ Complete | c69a84c |
+| Task 11: Verification | ✅ Complete | f6dae8f |
+
+### CLI Bugs Discovered During Testing
+
+The E2E tests revealed several CLI bugs that need fixing:
+
+| Issue | Description |
+|-------|-------------|
+| #69 | CLI import command has clap type mismatch for 'format' argument |
+| #70 | CLI JSON output missing 'id' field for host operations |
+| #71 | CLI snapshot create --format json returns empty output |
+
+### Test Results
+
+- **4 tests passing:** initial_setup, auth_failures (2), search_and_filter
+- **4 tests ignored:** Blocked pending CLI bug fixes (see issues above)
 
 ---
 
