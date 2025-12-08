@@ -120,6 +120,7 @@ impl HostsServiceImpl {
         Ok(Response::new(RollbackToSnapshotResponse {
             success: result.success,
             new_snapshot_id: result.backup_snapshot_id,
+            restored_entry_count: result.restored_entry_count,
         }))
     }
 

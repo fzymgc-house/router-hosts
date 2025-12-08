@@ -290,6 +290,9 @@ message RollbackToSnapshotResponse {
 
   // ID of the auto-created snapshot taken before rollback (for undo capability)
   string new_snapshot_id = 2;
+
+  // Number of host entries restored from the snapshot
+  int32 restored_entry_count = 3;
 }
 
 // Request to delete a snapshot
