@@ -55,6 +55,12 @@ tasks:
     cmds:
       - docker build -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} .
 
+  docker:build-ci:
+    desc: Build Docker image using pre-built binary (for CI/E2E)
+    deps: ["build:release"]
+    cmds:
+      - docker build -f Dockerfile.ci -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} .
+
   docker:run:
     desc: Run server container (requires certs in ./dev/certs/)
     cmds:
@@ -71,7 +77,7 @@ tasks:
   # ─────────────────────────────────────────────────────────────
   e2e:
     desc: Run E2E acceptance tests
-    deps: ["build:release", "docker:build"]
+    deps: ["docker:build-ci"]
     env:
       ROUTER_HOSTS_IMAGE: '{{.IMAGE_NAME}}:{{.IMAGE_TAG}}'
       ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
