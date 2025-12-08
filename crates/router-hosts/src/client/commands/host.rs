@@ -263,6 +263,14 @@ struct UpdateFields {
 /// - `retry_count`: Number of retries attempted (used to prevent infinite loops)
 /// - `max_retries`: Maximum number of retry attempts (default: 3)
 ///
+/// # Concurrency Notes
+/// This function does not hold locks. If the entry is modified between
+/// fetching current state and retry, another conflict will occur,
+/// incrementing the retry counter. This is acceptable because:
+/// - MAX_RETRIES (3) prevents infinite loops
+/// - Optimistic concurrency is designed for low-contention scenarios
+/// - The alternative (pessimistic locking) would hurt scalability
+///
 /// # Errors
 /// Returns error if:
 /// - Entry not found on server
@@ -307,7 +315,11 @@ async fn handle_version_conflict(
 
     // 3. Prompt or fail
     if non_interactive {
-        bail!("Version conflict detected. Entry was modified on server. Run without --non-interactive to see diff and retry.");
+        bail!(
+            "Version conflict for entry '{}'. Entry was modified on server.\n\
+             Re-run without --non-interactive to see changes and retry interactively.",
+            id
+        );
     }
 
     if !prompt_retry()? {
