@@ -14,6 +14,25 @@ pub struct TestCli {
     config_path: PathBuf,
 }
 
+/// Output format for CLI commands
+#[derive(Debug, Clone, Copy, Default)]
+pub enum OutputFormat {
+    #[default]
+    Table,
+    Json,
+    Csv,
+}
+
+impl OutputFormat {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OutputFormat::Table => "table",
+            OutputFormat::Json => "json",
+            OutputFormat::Csv => "csv",
+        }
+    }
+}
+
 impl TestCli {
     /// Create a new CLI wrapper
     pub fn new(server_address: String, cert_paths: CertPaths, temp_dir: &std::path::Path) -> Self {
@@ -60,27 +79,28 @@ ca_cert_path = "{}"
             hostname: hostname.to_string(),
             comment: None,
             tags: Vec::new(),
+            format: OutputFormat::Table,
         }
     }
 
     /// List all hosts
     pub fn list_hosts(&self) -> Command {
         let mut cmd = self.cmd();
-        cmd.arg("list");
+        cmd.args(["host", "list"]);
         cmd
     }
 
     /// Get a specific host by ID
     pub fn get_host(&self, id: &str) -> Command {
         let mut cmd = self.cmd();
-        cmd.args(["get", id]);
+        cmd.args(["host", "get", id]);
         cmd
     }
 
     /// Delete a host
     pub fn delete_host(&self, id: &str) -> Command {
         let mut cmd = self.cmd();
-        cmd.args(["delete", id]);
+        cmd.args(["host", "delete", id]);
         cmd
     }
 
@@ -99,14 +119,21 @@ ca_cert_path = "{}"
     /// Search hosts
     pub fn search(&self, query: &str) -> Command {
         let mut cmd = self.cmd();
-        cmd.args(["search", query]);
+        cmd.args(["host", "search", query]);
         cmd
     }
 
-    /// Create a snapshot
-    pub fn create_snapshot(&self, name: &str) -> Command {
+    /// Create a snapshot (automatically named by server)
+    pub fn create_snapshot(&self) -> Command {
         let mut cmd = self.cmd();
-        cmd.args(["snapshot", "create", "--name", name]);
+        cmd.args(["snapshot", "create"]);
+        cmd
+    }
+
+    /// Create a snapshot with JSON output for ID extraction
+    pub fn create_snapshot_json(&self) -> Command {
+        let mut cmd = self.cmd();
+        cmd.args(["snapshot", "create", "--format", "json"]);
         cmd
     }
 
@@ -127,7 +154,7 @@ ca_cert_path = "{}"
     /// Export hosts
     pub fn export(&self, format: &str) -> Command {
         let mut cmd = self.cmd();
-        cmd.args(["export", "--format", format]);
+        cmd.args(["host", "export", "--format", format]);
         cmd
     }
 
@@ -159,6 +186,7 @@ pub struct AddHostBuilder<'a> {
     hostname: String,
     comment: Option<String>,
     tags: Vec<String>,
+    format: OutputFormat,
 }
 
 impl<'a> AddHostBuilder<'a> {
@@ -172,9 +200,23 @@ impl<'a> AddHostBuilder<'a> {
         self
     }
 
+    pub fn format(mut self, format: OutputFormat) -> Self {
+        self.format = format;
+        self
+    }
+
     pub fn build(self) -> Command {
         let mut cmd = self.cli.cmd();
-        cmd.args(["add", "--ip", &self.ip, "--hostname", &self.hostname]);
+        cmd.args([
+            "host",
+            "add",
+            "--format",
+            self.format.as_str(),
+            "--ip",
+            &self.ip,
+            "--hostname",
+            &self.hostname,
+        ]);
         if let Some(comment) = &self.comment {
             cmd.args(["--comment", comment]);
         }
@@ -218,7 +260,7 @@ impl<'a> UpdateHostBuilder<'a> {
 
     pub fn build(self) -> Command {
         let mut cmd = self.cli.cmd();
-        cmd.args(["update", &self.id]);
+        cmd.args(["host", "update", &self.id]);
         if let Some(ip) = &self.ip {
             cmd.args(["--ip", ip]);
         }
@@ -258,7 +300,7 @@ impl<'a> ImportBuilder<'a> {
 
     pub fn build(self) -> Command {
         let mut cmd = self.cli.cmd();
-        cmd.args(["import", self.file.to_str().unwrap()]);
+        cmd.args(["host", "import", self.file.to_str().unwrap()]);
         if let Some(format) = &self.format {
             cmd.args(["--format", format]);
         }

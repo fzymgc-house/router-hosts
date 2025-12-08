@@ -103,11 +103,16 @@ impl TestServer {
         std::fs::write(&config_path, config.to_toml()).expect("Failed to write config");
 
         // Create and start container
+        // Note: tracing-subscriber outputs to stdout by default
+        // RUST_LOG is required for tracing to output anything
+        // API ordering: GenericImage methods first (with_wait_for, with_exposed_port),
+        // then ContainerRequest methods (with_env_var, with_mount, with_cmd)
         let image = GenericImage::new(image, tag)
-            .with_wait_for(WaitFor::message_on_stderr("gRPC server listening"));
+            .with_exposed_port(ContainerPort::Tcp(50051))
+            .with_wait_for(WaitFor::message_on_stdout("Starting gRPC server on"));
 
         let container = image
-            .with_exposed_port(ContainerPort::Tcp(50051))
+            .with_env_var("RUST_LOG", "info")
             .with_mount(Mount::bind_mount(
                 certs_dir.to_string_lossy().to_string(),
                 "/certs",
@@ -134,9 +139,9 @@ impl TestServer {
         }
     }
 
-    /// Get the server address for client connections
+    /// Get the server address for client connections (host:port format)
     pub fn address(&self) -> String {
-        format!("https://127.0.0.1:{}", self.port)
+        format!("127.0.0.1:{}", self.port)
     }
 
     /// Stop the container

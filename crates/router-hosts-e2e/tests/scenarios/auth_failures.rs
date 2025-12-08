@@ -22,10 +22,12 @@ async fn test_wrong_ca_rejected() {
     let cli = TestCli::new(server.address(), mixed_paths, server.temp_dir.path());
 
     // Should fail - client cert not signed by server's CA
-    cli.list_hosts()
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("certificate").or(predicate::str::contains("TLS")));
+    // Error can be "certificate", "TLS", or "transport error" depending on where failure occurs
+    cli.list_hosts().assert().failure().stderr(
+        predicate::str::contains("certificate")
+            .or(predicate::str::contains("TLS"))
+            .or(predicate::str::contains("transport error")),
+    );
 
     server.stop().await;
 }
@@ -47,10 +49,12 @@ async fn test_self_signed_client_rejected() {
     let cli = TestCli::new(server.address(), mixed_paths, server.temp_dir.path());
 
     // Should fail
-    cli.list_hosts()
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("certificate").or(predicate::str::contains("TLS")));
+    // Error can be "certificate", "TLS", or "transport error" depending on where failure occurs
+    cli.list_hosts().assert().failure().stderr(
+        predicate::str::contains("certificate")
+            .or(predicate::str::contains("TLS"))
+            .or(predicate::str::contains("transport error")),
+    );
 
     server.stop().await;
 }
