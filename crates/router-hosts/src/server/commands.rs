@@ -596,68 +596,58 @@ impl CommandHandler {
             return Ok(0);
         }
 
-        // Query all snapshots ordered newest first
+        // Use database-side deletion to avoid loading all snapshots into memory
         let conn = self.db.conn();
-        let mut stmt = conn
-            .prepare("SELECT snapshot_id, created_at FROM snapshots ORDER BY created_at DESC")
-            .map_err(|e| {
-                CommandError::Database(DatabaseError::QueryFailed(format!(
-                    "Failed to query snapshots for cleanup: {}",
-                    e
-                )))
-            })?;
+        let mut deleted_count = 0;
 
-        let rows = stmt
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })
-            .map_err(|e| {
-                CommandError::Database(DatabaseError::QueryFailed(format!(
-                    "Failed to query snapshots for cleanup: {}",
-                    e
-                )))
-            })?;
-
-        let mut snapshots = Vec::new();
-        for row in rows {
-            snapshots.push(row.map_err(|e| {
-                CommandError::Database(DatabaseError::QueryFailed(format!(
-                    "Failed to fetch snapshot for cleanup: {}",
-                    e
-                )))
-            })?);
-        }
-
-        let mut to_delete: std::collections::HashSet<String> = std::collections::HashSet::new();
-
-        // Delete by count (keep max_snapshots most recent)
-        if max_snapshots > 0 {
-            for (id, _) in snapshots.iter().skip(max_snapshots) {
-                to_delete.insert(id.clone());
-            }
-        }
-
-        // Delete by age
+        // Delete snapshots older than max_age_days (if configured)
         if max_age_days > 0 {
             let cutoff_timestamp = Utc::now()
                 .checked_sub_signed(chrono::Duration::days(max_age_days as i64))
                 .unwrap()
                 .timestamp_micros();
 
-            for (id, created_at) in &snapshots {
-                if *created_at < cutoff_timestamp {
-                    to_delete.insert(id.clone());
-                }
-            }
+            let age_deleted = conn
+                .execute(
+                    "DELETE FROM snapshots WHERE CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) < ?",
+                    duckdb::params![cutoff_timestamp],
+                )
+                .map_err(|e| {
+                    CommandError::Database(DatabaseError::QueryFailed(format!(
+                        "Failed to delete old snapshots: {}",
+                        e
+                    )))
+                })?;
+
+            deleted_count += age_deleted;
         }
 
-        // Delete all snapshots in delete list
-        let count = to_delete.len();
-        for id in to_delete {
-            self.delete_snapshot(&id)?;
+        // Delete snapshots beyond max_count limit (if configured)
+        // Keep the newest snapshots up to max_count
+        if max_snapshots > 0 {
+            let count_deleted = conn
+                .execute(
+                    r#"
+                    DELETE FROM snapshots
+                    WHERE snapshot_id IN (
+                        SELECT snapshot_id FROM snapshots
+                        ORDER BY created_at DESC
+                        OFFSET ?
+                    )
+                    "#,
+                    duckdb::params![max_snapshots],
+                )
+                .map_err(|e| {
+                    CommandError::Database(DatabaseError::QueryFailed(format!(
+                        "Failed to delete excess snapshots: {}",
+                        e
+                    )))
+                })?;
+
+            deleted_count += count_deleted;
         }
 
-        Ok(count)
+        Ok(deleted_count)
     }
 
     async fn regenerate_hosts_file(&self) -> CommandResult<()> {
