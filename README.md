@@ -28,29 +28,80 @@ router-hosts/
 
 ## Development
 
-### Build
+### Prerequisites
+
+- Rust 1.75+
+- Docker
+- [Task](https://taskfile.dev/) (recommended)
+- [buf](https://buf.build/) (for protobuf)
+
+### Quick Start
+
+```bash
+# Install Task (macOS)
+brew install go-task
+
+# Build
+task build
+
+# Run tests
+task test
+
+# Run E2E tests (requires Docker)
+task e2e
+
+# Full CI pipeline locally
+task ci
+```
+
+### Available Tasks
+
+| Task | Description |
+|------|-------------|
+| `task build` | Build all crates (debug) |
+| `task build:release` | Build all crates (release) |
+| `task test` | Run unit and integration tests |
+| `task lint` | Run all linters |
+| `task fmt` | Format all code |
+| `task docker:build` | Build server Docker image |
+| `task e2e` | Run E2E acceptance tests |
+| `task ci` | Run full CI pipeline locally |
+
+### Manual Commands
+
+#### Build
 
 ```bash
 cargo build
 ```
 
-### Test
+#### Test
 
 ```bash
 cargo test
 ```
 
-### Run in Client Mode (default)
+#### Run in Client Mode (default)
 
 ```bash
 cargo run -- --help
 cargo run -- add --ip 192.168.1.10 --hostname server.local
 ```
 
-### Run in Server Mode
+#### Run in Server Mode
 
 ```bash
 cargo run -- server --config server.toml
+```
+
+### Docker
+
+```bash
+# Build server image
+task docker:build
+
+# Run specific E2E scenario
+task e2e:scenario -- daily_operations
 ```
 
 ## Status

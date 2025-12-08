@@ -199,6 +199,20 @@ To temporarily disable Renovate, set `"enabled": false` in `renovate.json` or cl
 
 ## Build and Development Commands
 
+### Using Task (Recommended)
+
+This project uses [Taskfile](https://taskfile.dev/) to orchestrate builds:
+
+```bash
+task build          # Build all crates (debug)
+task build:release  # Build all crates (release)
+task test           # Unit + integration tests
+task lint           # All linters (clippy, fmt, buf)
+task fmt            # Format all code
+task e2e            # E2E acceptance tests
+task ci             # Full CI pipeline locally
+```
+
 ### Build
 ```bash
 # Build all crates
@@ -236,6 +250,26 @@ cargo tarpaulin --workspace --fail-under 80
 # Run tests in release mode (for performance testing)
 cargo test --release
 ```
+
+### E2E Tests
+
+E2E tests validate the full stack with real mTLS authentication:
+
+```bash
+# Run all E2E tests
+task e2e
+
+# Run specific scenario
+task e2e:scenario -- disaster_recovery
+
+# Quick run (skip rebuild)
+task e2e:quick
+```
+
+Required environment:
+- Docker running
+- `ROUTER_HOSTS_IMAGE`: Docker image (default: `ghcr.io/fzymgc-house/router-hosts:latest`)
+- `ROUTER_HOSTS_BINARY`: Path to CLI binary (default: `router-hosts` in PATH)
 
 ### Linting and Formatting
 ```bash
