@@ -154,7 +154,7 @@ ca_cert_path = "{}"
     /// Export hosts
     pub fn export(&self, format: &str) -> Command {
         let mut cmd = self.cmd();
-        cmd.args(["host", "export", "--format", format]);
+        cmd.args(["host", "export", "--export-format", format]);
         cmd
     }
 
@@ -306,7 +306,7 @@ impl<'a> ImportBuilder<'a> {
             .expect("Import file path must be valid UTF-8");
         cmd.args(["host", "import", file_str]);
         if let Some(format) = &self.format {
-            cmd.args(["--format", format]);
+            cmd.args(["--input-format", format]);
         }
         if let Some(mode) = &self.mode {
             cmd.args(["--mode", mode]);

@@ -70,10 +70,8 @@ async fn test_crud_workflow() {
 }
 
 /// Test import/export roundtrip
-/// NOTE: Currently ignored due to clap type mismatch bug in CLI import command
-/// See: https://github.com/fzymgc-house/router-hosts/issues/69
+/// Verifies that hosts can be imported from a file and exported to different formats
 #[tokio::test]
-#[ignore = "CLI has clap type mismatch bug in import command - see issue #69"]
 async fn test_import_export_roundtrip() {
     let server = TestServer::start().await;
     let cli = TestCli::new(
@@ -89,7 +87,7 @@ async fn test_import_export_roundtrip() {
     writeln!(f, "192.168.1.10    server1.test.local").unwrap();
     writeln!(f, "192.168.1.20    server2.test.local # Database").unwrap();
 
-    // Import (hosts format is default, don't specify to avoid CLI bug with --format)
+    // Import (hosts format is default)
     cli.import(&import_file).build().assert().success();
 
     // Verify imported
