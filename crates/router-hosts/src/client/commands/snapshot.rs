@@ -3,7 +3,11 @@ use router_hosts_common::proto::{
     CreateSnapshotRequest, DeleteSnapshotRequest, ListSnapshotsRequest, RollbackToSnapshotRequest,
 };
 
-use crate::client::{grpc::Client, output::print_items, OutputFormat, SnapshotCommand};
+use crate::client::{
+    grpc::Client,
+    output::{print_item, print_items},
+    OutputFormat, SnapshotCommand,
+};
 
 pub async fn handle(
     client: &mut Client,
@@ -19,7 +23,7 @@ pub async fn handle(
             };
             let response = client.create_snapshot(request).await?;
             if !quiet {
-                eprintln!("Created snapshot: {}", response.snapshot_id);
+                print_item(&response, format);
             }
         }
 
