@@ -74,12 +74,32 @@ where
     }
 }
 
+/// Format a single item as JSON string
+fn format_item_json<T>(item: &T) -> Result<String, serde_json::Error>
+where
+    T: Serialize,
+{
+    serde_json::to_string_pretty(item)
+}
+
 /// Print a single item
 pub fn print_item<T>(item: &T, format: OutputFormat)
 where
     T: TableDisplay + Serialize,
 {
-    print_items(std::slice::from_ref(item), format);
+    match format {
+        OutputFormat::Json => {
+            // Print single item as object (not array) for easier parsing
+            match format_item_json(item) {
+                Ok(json) => println!("{}", json),
+                Err(e) => eprintln!("Error serializing to JSON: {}", e),
+            }
+        }
+        _ => {
+            // For table/CSV, reuse print_items with single-element slice
+            print_items(std::slice::from_ref(item), format);
+        }
+    }
 }
 
 fn print_table<T: TableDisplay>(items: &[T]) {
@@ -266,5 +286,94 @@ mod tests {
         let row = entry.row();
         // The comment should be escaped when printed
         assert!(row[3].contains(','));
+    }
+
+    #[test]
+    fn test_format_item_json_produces_object() {
+        // Verify that format_item_json outputs an object structure (not array)
+        // This is critical for E2E tests that need to extract the 'id' field
+        let entry = HostEntry {
+            id: "01JXXXXXXXXXXXXXXXXX".to_string(),
+            ip_address: "10.0.0.1".to_string(),
+            hostname: "test.local".to_string(),
+            comment: Some("Test".to_string()),
+            tags: vec!["tag1".to_string()],
+            created_at: None,
+            updated_at: None,
+            version: "v1".to_string(),
+        };
+
+        let json_str = format_item_json(&entry).expect("Failed to format JSON");
+        let value: serde_json::Value =
+            serde_json::from_str(&json_str).expect("Failed to parse JSON output");
+
+        // Verify it's an object with 'id' field at top level (not wrapped in array)
+        assert!(value.is_object(), "Single item should be an object");
+        assert_eq!(
+            value.get("id").and_then(|v| v.as_str()),
+            Some("01JXXXXXXXXXXXXXXXXX")
+        );
+        assert_eq!(
+            value.get("ip_address").and_then(|v| v.as_str()),
+            Some("10.0.0.1")
+        );
+        assert_eq!(
+            value.get("hostname").and_then(|v| v.as_str()),
+            Some("test.local")
+        );
+    }
+
+    #[test]
+    fn test_print_item_json_no_panic() {
+        // Smoke test: verify print_item with JSON format doesn't panic
+        let entry = HostEntry {
+            id: "test-id".to_string(),
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "test.local".to_string(),
+            comment: None,
+            tags: vec![],
+            created_at: None,
+            updated_at: None,
+            version: "v1".to_string(),
+        };
+
+        // Should not panic
+        print_item(&entry, OutputFormat::Json);
+    }
+
+    #[test]
+    fn test_print_item_table_no_panic() {
+        // Smoke test: verify print_item with Table format doesn't panic
+        let entry = HostEntry {
+            id: "test-id".to_string(),
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "test.local".to_string(),
+            comment: Some("Test".to_string()),
+            tags: vec!["tag1".to_string()],
+            created_at: None,
+            updated_at: None,
+            version: "v1".to_string(),
+        };
+
+        // Should not panic
+        print_item(&entry, OutputFormat::Table);
+    }
+
+    #[test]
+    fn test_print_item_csv_no_panic() {
+        // Smoke test: verify print_item with CSV format doesn't panic
+        let entry = HostEntry {
+            id: "test-id".to_string(),
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "test.local".to_string(),
+            comment: None,
+            tags: vec![],
+            created_at: None,
+            updated_at: None,
+            version: "v1".to_string(),
+        };
+
+        // Should not panic
+        print_item(&entry, OutputFormat::Csv);
     }
 }
