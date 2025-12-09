@@ -10,9 +10,9 @@ env:
     CARGO_TERM_COLOR: always
 
 jobs:
-    test:
+    build:
         runs-on:
-            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price/volume=100gb
+            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=100gb
 
         steps:
             - uses: runs-on/action@v2
@@ -29,6 +29,9 @@ jobs:
               with:
                   github_token: ${{ github.token }}
 
+            - name: Install Task
+              uses: arduino/setup-task@v2
+
             # Use Swatinem/rust-cache for better Rust caching
             # This caches ~/.cargo and target/ with smart invalidation
             - name: Cache Rust dependencies
@@ -40,15 +43,22 @@ jobs:
                   key: ${{ runner.os }}-rust
 
             - name: Build
-              run: cargo build --verbose
+              run: task build
 
             - name: Run tests
-              run: cargo test --verbose
+              run: task test:unit
+
+            - name: Build release binary
+              run: task build:release
+
+            - name: Build CI Docker image
+              run: task docker:build-ci IMAGE_NAME=router-hosts IMAGE_TAG=ci
+
+            - name: Run E2E tests
+              run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
             # TODO: Enable test coverage enforcement once implementation begins
             # CLAUDE.md mandates ≥80% coverage, but deferred for skeleton PR
             # Uncomment when ready:
             # - name: Check test coverage
-            #   run: |
-            #     cargo install cargo-tarpaulin
-            #     cargo tarpaulin --workspace --fail-under 80
+            #   run: task test:coverage

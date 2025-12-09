@@ -1,0 +1,9 @@
+# Minimal Dockerfile for CI/E2E tests
+# Uses Ubuntu to match CI runner's glibc version
+# Expects pre-built binary copied to ./router-hosts (outside target/ to avoid .dockerignore)
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY router-hosts /usr/local/bin/
+EXPOSE 50051
+ENTRYPOINT ["router-hosts"]
+CMD ["server", "--config", "/config/server.toml"]

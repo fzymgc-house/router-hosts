@@ -1,0 +1,121 @@
+version: '3'
+
+vars:
+  IMAGE_NAME: ghcr.io/fzymgc-house/router-hosts
+  IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
+
+tasks:
+  # ─────────────────────────────────────────────────────────────
+  # Development
+  # ─────────────────────────────────────────────────────────────
+  build:
+    desc: Build all crates in debug mode
+    cmds:
+      - cargo build --workspace
+
+  build:release:
+    desc: Build all crates in release mode
+    cmds:
+      - cargo build --workspace --release
+
+  test:
+    desc: Run unit and integration tests
+    cmds:
+      - cargo test --workspace
+
+  test:unit:
+    desc: Run unit and integration tests (excludes E2E)
+    cmds:
+      - cargo test --workspace --exclude router-hosts-e2e
+
+  test:coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - cargo tarpaulin --workspace --out Html --output-dir coverage
+
+  lint:
+    desc: Run all linters (clippy, fmt, buf)
+    cmds:
+      - cargo fmt --check
+      - cargo clippy --workspace -- -D warnings
+      - buf lint
+      - buf format --diff --exit-code
+
+  fmt:
+    desc: Format all code
+    cmds:
+      - cargo fmt
+      - buf format -w
+
+  # ─────────────────────────────────────────────────────────────
+  # Docker
+  # ─────────────────────────────────────────────────────────────
+  docker:build:
+    desc: Build server Docker image for local architecture
+    cmds:
+      - docker build -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} .
+
+  docker:build-ci:
+    desc: Build Docker image using pre-built binary (for CI/E2E)
+    deps: ["build:release"]
+    cmds:
+      # Copy binary to root to avoid .dockerignore excluding target/
+      - cp target/release/router-hosts router-hosts
+      - docker build -f Dockerfile.ci -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} .
+      - rm router-hosts
+
+  docker:run:
+    desc: Run server container (requires certs in ./dev/certs/)
+    cmds:
+      - |
+        docker run --rm -it \
+          -v {{.USER_WORKING_DIR}}/dev/certs:/certs:ro \
+          -v {{.USER_WORKING_DIR}}/dev/data:/data \
+          -p 50051:50051 \
+          {{.IMAGE_NAME}}:{{.IMAGE_TAG}} \
+          server --config /certs/server.toml
+
+  # ─────────────────────────────────────────────────────────────
+  # E2E Tests
+  # ─────────────────────────────────────────────────────────────
+  e2e:
+    desc: Run E2E acceptance tests
+    deps: ["docker:build-ci"]
+    env:
+      ROUTER_HOSTS_IMAGE: '{{.IMAGE_NAME}}:{{.IMAGE_TAG}}'
+      ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
+    cmds:
+      - cargo test -p router-hosts-e2e --release -- --test-threads=2
+
+  e2e:quick:
+    desc: Run E2E tests (skip rebuild, assumes image exists)
+    env:
+      ROUTER_HOSTS_IMAGE: '{{.IMAGE_NAME}}:{{.IMAGE_TAG}}'
+      ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
+    cmds:
+      - cargo test -p router-hosts-e2e --release -- --test-threads=2
+
+  e2e:scenario:
+    desc: Run specific E2E scenario (e.g., task e2e:scenario -- daily_operations)
+    env:
+      ROUTER_HOSTS_IMAGE: '{{.IMAGE_NAME}}:{{.IMAGE_TAG}}'
+      ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
+    cmds:
+      - cargo test -p router-hosts-e2e --release -- {{.CLI_ARGS}}
+
+  # ─────────────────────────────────────────────────────────────
+  # CI Shortcuts
+  # ─────────────────────────────────────────────────────────────
+  ci:
+    desc: Run full CI pipeline locally
+    cmds:
+      - task: lint
+      - task: test
+      - task: e2e
+
+  pre-commit:
+    desc: Quick checks before committing
+    cmds:
+      - task: fmt
+      - task: lint
+      - task: test
