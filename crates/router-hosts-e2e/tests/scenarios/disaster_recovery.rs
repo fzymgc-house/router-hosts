@@ -5,10 +5,7 @@ use router_hosts_e2e::cli::TestCli;
 use router_hosts_e2e::container::TestServer;
 
 /// Test snapshot creation and rollback to restore state
-/// NOTE: Currently ignored due to CLI snapshot create --format json returning empty output
-/// See: https://github.com/fzymgc-house/router-hosts/issues/71
 #[tokio::test]
-#[ignore = "CLI snapshot create --format json returns empty output - see issue #71"]
 async fn test_snapshot_and_rollback() {
     let server = TestServer::start().await;
     let cli = TestCli::new(
@@ -35,17 +32,22 @@ async fn test_snapshot_and_rollback() {
     let stdout = String::from_utf8_lossy(&snapshot_output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("Failed to parse JSON");
     let snapshot_id = json
-        .get("id")
+        .get("snapshot_id")
         .and_then(|v| v.as_str())
-        .expect("Failed to extract snapshot ID from JSON");
+        .expect("Failed to extract snapshot_id from JSON");
 
-    // Make breaking changes
-    let list_output = cli.list_hosts().output().expect("Failed to list");
+    // Make breaking changes - get full host ID via JSON to avoid truncation
+    let mut list_cmd = cli.list_hosts();
+    list_cmd.args(["--format", "json"]);
+    let list_output = list_cmd.output().expect("Failed to list");
     let list_stdout = String::from_utf8_lossy(&list_output.stdout);
-    let host_id = list_stdout
-        .lines()
-        .find(|l| l.contains("original.local"))
-        .and_then(|l| l.split_whitespace().next())
+    let hosts: Vec<serde_json::Value> =
+        serde_json::from_str(&list_stdout).expect("Failed to parse JSON");
+    let host_id = hosts
+        .iter()
+        .find(|h| h.get("hostname").and_then(|v| v.as_str()) == Some("original.local"))
+        .and_then(|h| h.get("id"))
+        .and_then(|v| v.as_str())
         .expect("Failed to find host ID");
 
     cli.delete_host(host_id).assert().success();
@@ -77,10 +79,7 @@ async fn test_snapshot_and_rollback() {
 }
 
 /// Test that rollback creates automatic backup snapshot
-/// NOTE: Currently ignored due to CLI snapshot create --format json returning empty output
-/// See: https://github.com/fzymgc-house/router-hosts/issues/71
 #[tokio::test]
-#[ignore = "CLI snapshot create --format json returns empty output - see issue #71"]
 async fn test_rollback_creates_backup() {
     let server = TestServer::start().await;
     let cli = TestCli::new(
@@ -103,9 +102,9 @@ async fn test_rollback_creates_backup() {
     let stdout = String::from_utf8_lossy(&snapshot_output.stdout);
     let json: serde_json::Value = serde_json::from_str(&stdout).expect("Failed to parse JSON");
     let snapshot_id = json
-        .get("id")
+        .get("snapshot_id")
         .and_then(|v| v.as_str())
-        .expect("Failed to extract snapshot ID from JSON");
+        .expect("Failed to extract snapshot_id from JSON");
 
     // Modify
     cli.add_host("10.10.10.2", "extra.local")
