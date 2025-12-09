@@ -32,8 +32,17 @@ pub struct TestCertificates {
 
 impl TestCertificates {
     /// Generate a fresh set of test certificates
+    ///
+    /// Certificate validity defaults to 1 hour but can be overridden via
+    /// `E2E_CERT_VALIDITY_HOURS` environment variable (useful for long debug sessions).
     pub fn generate() -> Self {
-        Self::generate_with_validity(Duration::from_secs(3600)) // 1 hour
+        let validity = std::env::var("E2E_CERT_VALIDITY_HOURS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|hours| Duration::from_secs(hours * 3600))
+            .unwrap_or(Duration::from_secs(3600)); // Default: 1 hour
+
+        Self::generate_with_validity(validity)
     }
 
     /// Generate certificates with specific validity period
@@ -183,5 +192,25 @@ mod tests {
         assert!(paths.server_key.exists());
         assert!(paths.client_cert.exists());
         assert!(paths.client_key.exists());
+    }
+
+    #[test]
+    fn test_generate_expired() {
+        let certs = TestCertificates::generate_expired();
+
+        // Verify CA cert is generated and contains PEM markers
+        assert!(certs.ca_cert_pem.contains("BEGIN CERTIFICATE"));
+        assert!(certs.ca_cert_pem.contains("END CERTIFICATE"));
+        assert!(!certs.ca_cert_pem.is_empty());
+
+        // Verify client cert is generated and contains PEM markers
+        assert!(certs.client_cert_pem.contains("BEGIN CERTIFICATE"));
+        assert!(certs.client_cert_pem.contains("END CERTIFICATE"));
+        assert!(certs.client_key_pem.contains("BEGIN PRIVATE KEY"));
+        assert!(certs.client_key_pem.contains("END PRIVATE KEY"));
+
+        // Verify server cert/key are empty (not needed for auth failure tests)
+        assert!(certs.server_cert_pem.is_empty());
+        assert!(certs.server_key_pem.is_empty());
     }
 }

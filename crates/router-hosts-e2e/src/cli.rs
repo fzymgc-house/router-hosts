@@ -300,7 +300,11 @@ impl<'a> ImportBuilder<'a> {
 
     pub fn build(self) -> Command {
         let mut cmd = self.cli.cmd();
-        cmd.args(["host", "import", self.file.to_str().unwrap()]);
+        let file_str = self
+            .file
+            .to_str()
+            .expect("Import file path must be valid UTF-8");
+        cmd.args(["host", "import", file_str]);
         if let Some(format) = &self.format {
             cmd.args(["--format", format]);
         }

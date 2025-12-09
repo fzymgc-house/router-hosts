@@ -107,6 +107,10 @@ impl TestServer {
         // RUST_LOG is required for tracing to output anything
         // API ordering: GenericImage methods first (with_wait_for, with_exposed_port),
         // then ContainerRequest methods (with_env_var, with_mount, with_cmd)
+        //
+        // Port 50051: Hardcoded inside containers, but testcontainers maps it to a
+        // random available host port (retrieved via get_host_port_ipv4).
+        // This prevents conflicts when running tests in parallel.
         let image = GenericImage::new(image, tag)
             .with_exposed_port(ContainerPort::Tcp(50051))
             .with_wait_for(WaitFor::message_on_stdout("Starting gRPC server on"));
@@ -130,6 +134,11 @@ impl TestServer {
             .get_host_port_ipv4(50051)
             .await
             .expect("Failed to get port");
+
+        // Small delay to ensure server is actually accepting connections
+        // The wait message confirms server started logging, but doesn't guarantee
+        // the gRPC server is fully initialized and ready to accept connections
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         Self {
             container,
