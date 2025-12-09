@@ -135,9 +135,7 @@ pub async fn handle(
             print_items(&entries, format);
         }
 
-        HostCommand::Export {
-            format: export_format,
-        } => {
+        HostCommand::Export { export_format } => {
             let request = ExportHostsRequest {
                 format: export_format,
             };
@@ -147,10 +145,10 @@ pub async fn handle(
 
         HostCommand::Import {
             file,
-            format: import_format,
+            input_format,
             conflict_mode,
         } => {
-            let chunks = read_file_chunks(&file, &import_format, &conflict_mode)?;
+            let chunks = read_file_chunks(&file, &input_format, &conflict_mode)?;
 
             let final_response = client
                 .import_hosts(chunks, |progress| {

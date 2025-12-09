@@ -155,18 +155,18 @@ pub enum HostCommand {
     Import {
         /// Path to import file
         file: PathBuf,
-        /// Import format: hosts, json, csv
+        /// Input file format: hosts, json, csv
         #[arg(long, default_value = "hosts")]
-        format: String,
+        input_format: String,
         /// Conflict mode: skip, replace, strict
         #[arg(long, default_value = "skip")]
         conflict_mode: String,
     },
     /// Export hosts to stdout
     Export {
-        /// Export format: hosts, json, csv
+        /// Output format for export: hosts, json, csv
         #[arg(long, default_value = "hosts")]
-        format: String,
+        export_format: String,
     },
 }
 
@@ -370,5 +370,73 @@ mod tests {
     fn test_cli_parse_config_command() {
         let cli = Cli::try_parse_from(["router-hosts", "config"]).unwrap();
         assert!(matches!(cli.command, Commands::Config));
+    }
+
+    #[test]
+    fn test_cli_parse_host_import_with_format() {
+        // Regression test for issue #69: format argument conflict
+        let cli = Cli::try_parse_from([
+            "router-hosts",
+            "host",
+            "import",
+            "/tmp/test.txt",
+            "--input-format",
+            "json",
+        ])
+        .unwrap();
+
+        match cli.command {
+            Commands::Host(args) => match args.command {
+                HostCommand::Import { input_format, .. } => {
+                    assert_eq!(input_format, "json");
+                }
+                _ => panic!("Expected Import command"),
+            },
+            _ => panic!("Expected Host command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_parse_host_export_with_format() {
+        // Regression test for issue #69: format argument conflict
+        let cli = Cli::try_parse_from(["router-hosts", "host", "export", "--export-format", "csv"])
+            .unwrap();
+
+        match cli.command {
+            Commands::Host(args) => match args.command {
+                HostCommand::Export { export_format } => {
+                    assert_eq!(export_format, "csv");
+                }
+                _ => panic!("Expected Export command"),
+            },
+            _ => panic!("Expected Host command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_global_format_does_not_conflict() {
+        // Verify global --format (output) and command-specific formats coexist
+        let cli = Cli::try_parse_from([
+            "router-hosts",
+            "--format",
+            "json",
+            "host",
+            "import",
+            "/tmp/test.txt",
+            "--input-format",
+            "hosts",
+        ])
+        .unwrap();
+
+        assert!(matches!(cli.format, OutputFormat::Json));
+        match cli.command {
+            Commands::Host(args) => match args.command {
+                HostCommand::Import { input_format, .. } => {
+                    assert_eq!(input_format, "hosts");
+                }
+                _ => panic!("Expected Import command"),
+            },
+            _ => panic!("Expected Host command"),
+        }
     }
 }

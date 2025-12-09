@@ -606,3 +606,29 @@ Server executes shell commands after /etc/hosts updates:
 - `on_failure` hooks - after failed regeneration (e.g., alerting)
 - Hooks run with 30s timeout, failures logged but don't fail operation
 - Environment variables provide context (event type, entry count, snapshot ID)
+
+#### macOS E2E Testing
+
+**Issue:** `task e2e` fails on macOS with "Exec format error" because it uses host binary (macOS) in Linux container.
+
+**Solution:**
+
+```bash
+# 1. Build Docker image with Linux binary (multi-stage Docker build)
+task docker:build
+
+# 2. Run E2E tests
+ROUTER_HOSTS_IMAGE=ghcr.io/fzymgc-house/router-hosts:dev \
+ROUTER_HOSTS_BINARY=$(pwd)/target/release/router-hosts \
+cargo test -p router-hosts-e2e --release
+
+# Or run specific test
+ROUTER_HOSTS_IMAGE=ghcr.io/fzymgc-house/router-hosts:dev \
+ROUTER_HOSTS_BINARY=$(pwd)/target/release/router-hosts \
+cargo test -p router-hosts-e2e --release test_import_export_roundtrip
+```
+
+**Why:**
+- `docker:build` compiles Linux binary inside Docker (works cross-platform)
+- `docker:build-ci` copies host binary (fast on Linux CI, broken on macOS)
+- Tests need `ROUTER_HOSTS_IMAGE=...dev` to use locally built image
