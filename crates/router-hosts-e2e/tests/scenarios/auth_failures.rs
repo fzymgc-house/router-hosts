@@ -22,10 +22,13 @@ async fn test_wrong_ca_rejected() {
     let cli = TestCli::new(server.address(), mixed_paths, server.temp_dir.path());
 
     // Should fail with certificate verification error - client cert not signed by server's CA
-    cli.list_hosts()
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("certificate").or(predicate::str::contains("tls")));
+    // Note: Error message can be "certificate", "tls", or generic "transport error"
+    // depending on where in the TLS handshake the failure occurs
+    cli.list_hosts().assert().failure().stderr(
+        predicate::str::contains("certificate")
+            .or(predicate::str::contains("tls"))
+            .or(predicate::str::contains("transport error")),
+    );
 
     server.stop().await;
 }
@@ -47,10 +50,13 @@ async fn test_self_signed_client_rejected() {
     let cli = TestCli::new(server.address(), mixed_paths, server.temp_dir.path());
 
     // Should fail with certificate verification error
-    cli.list_hosts()
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains("certificate").or(predicate::str::contains("tls")));
+    // Note: Error message can be "certificate", "tls", or generic "transport error"
+    // depending on where in the TLS handshake the failure occurs
+    cli.list_hosts().assert().failure().stderr(
+        predicate::str::contains("certificate")
+            .or(predicate::str::contains("tls"))
+            .or(predicate::str::contains("transport error")),
+    );
 
     server.stop().await;
 }
