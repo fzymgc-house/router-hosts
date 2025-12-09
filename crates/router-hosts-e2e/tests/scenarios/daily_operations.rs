@@ -6,10 +6,7 @@ use router_hosts_e2e::container::TestServer;
 use std::io::Write;
 
 /// Test CRUD workflow with host operations
-/// NOTE: Currently ignored due to CLI JSON output not containing expected 'id' field
-/// See: https://github.com/fzymgc-house/router-hosts/issues/70
 #[tokio::test]
-#[ignore = "CLI JSON output missing 'id' field - see issue #70"]
 async fn test_crud_workflow() {
     let server = TestServer::start().await;
     let cli = TestCli::new(
