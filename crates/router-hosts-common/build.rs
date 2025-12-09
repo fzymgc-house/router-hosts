@@ -9,6 +9,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Only derive serde for specific types we need to serialize
         .type_attribute("router_hosts.v1.HostEntry", "#[derive(serde::Serialize)]")
         .type_attribute("router_hosts.v1.Snapshot", "#[derive(serde::Serialize)]")
+        .type_attribute(
+            "router_hosts.v1.CreateSnapshotResponse",
+            "#[derive(serde::Serialize)]",
+        )
+        .type_attribute(
+            "router_hosts.v1.RollbackToSnapshotResponse",
+            "#[derive(serde::Serialize)]",
+        )
+        .type_attribute(
+            "router_hosts.v1.DeleteSnapshotResponse",
+            "#[derive(serde::Serialize)]",
+        )
         // Skip timestamp fields when serializing
         .field_attribute("router_hosts.v1.HostEntry.created_at", "#[serde(skip)]")
         .field_attribute("router_hosts.v1.HostEntry.updated_at", "#[serde(skip)]")

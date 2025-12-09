@@ -1,4 +1,6 @@
-use router_hosts_common::proto::{HostEntry, Snapshot};
+use router_hosts_common::proto::{
+    CreateSnapshotResponse, DeleteSnapshotResponse, HostEntry, RollbackToSnapshotResponse, Snapshot,
+};
 use serde::Serialize;
 
 use super::OutputFormat;
@@ -59,6 +61,57 @@ impl TableDisplay for Snapshot {
             self.entry_count.to_string(),
             self.trigger.clone(),
         ]
+    }
+}
+
+impl TableDisplay for CreateSnapshotResponse {
+    fn headers() -> Vec<&'static str> {
+        vec!["SNAPSHOT_ID", "CREATED_AT", "ENTRY_COUNT"]
+    }
+
+    fn row(&self) -> Vec<String> {
+        let id_display = if self.snapshot_id.len() > 12 {
+            format!("{}...", &self.snapshot_id[..12])
+        } else {
+            self.snapshot_id.clone()
+        };
+
+        // created_at is microseconds since epoch (i64)
+        let created = chrono::DateTime::from_timestamp_micros(self.created_at)
+            .map(|dt| format!("{} UTC", dt.format("%Y-%m-%d %H:%M")))
+            .unwrap_or_else(|| "invalid".to_string());
+
+        vec![id_display, created, self.entry_count.to_string()]
+    }
+}
+
+impl TableDisplay for RollbackToSnapshotResponse {
+    fn headers() -> Vec<&'static str> {
+        vec!["SUCCESS", "BACKUP_SNAPSHOT_ID", "RESTORED_ENTRIES"]
+    }
+
+    fn row(&self) -> Vec<String> {
+        let backup_id_display = if self.new_snapshot_id.len() > 12 {
+            format!("{}...", &self.new_snapshot_id[..12])
+        } else {
+            self.new_snapshot_id.clone()
+        };
+
+        vec![
+            self.success.to_string(),
+            backup_id_display,
+            self.restored_entry_count.to_string(),
+        ]
+    }
+}
+
+impl TableDisplay for DeleteSnapshotResponse {
+    fn headers() -> Vec<&'static str> {
+        vec!["SUCCESS"]
+    }
+
+    fn row(&self) -> Vec<String> {
+        vec![self.success.to_string()]
     }
 }
 
@@ -268,6 +321,140 @@ mod tests {
         assert_eq!(row[1], ""); // No timestamp
         assert_eq!(row[2], "0");
         assert_eq!(row[3], "rollback");
+    }
+
+    #[test]
+    fn test_create_snapshot_response_headers() {
+        let headers = CreateSnapshotResponse::headers();
+        assert_eq!(headers, vec!["SNAPSHOT_ID", "CREATED_AT", "ENTRY_COUNT"]);
+    }
+
+    #[test]
+    fn test_create_snapshot_response_row() {
+        let response = CreateSnapshotResponse {
+            snapshot_id: "01JXXXXXXXXXXXXXXXXX".to_string(),
+            created_at: 1733500000000000, // microseconds since epoch
+            entry_count: 42,
+        };
+
+        let row = response.row();
+        assert_eq!(row[0], "01JXXXXXXXXX...");
+        assert!(row[1].contains("2024")); // Year should be in the timestamp
+        assert!(row[1].ends_with(" UTC")); // Timezone indicator
+        assert_eq!(row[2], "42");
+    }
+
+    #[test]
+    fn test_create_snapshot_response_row_short_id() {
+        let response = CreateSnapshotResponse {
+            snapshot_id: "SHORT".to_string(),
+            created_at: 0,
+            entry_count: 0,
+        };
+
+        let row = response.row();
+        assert_eq!(row[0], "SHORT");
+        assert_eq!(row[2], "0");
+    }
+
+    #[test]
+    fn test_create_snapshot_response_json_format() {
+        // Verify that CreateSnapshotResponse can be serialized to JSON
+        // This is critical for E2E tests that parse JSON output
+        let response = CreateSnapshotResponse {
+            snapshot_id: "01JXXXXXXXXXXXXXXXXX".to_string(),
+            created_at: 1733500000000000,
+            entry_count: 10,
+        };
+
+        let json_str = format_item_json(&response).expect("Failed to format JSON");
+        let value: serde_json::Value =
+            serde_json::from_str(&json_str).expect("Failed to parse JSON output");
+
+        // Verify it's an object with expected fields
+        assert!(value.is_object(), "Should be a JSON object");
+        assert_eq!(
+            value.get("snapshot_id").and_then(|v| v.as_str()),
+            Some("01JXXXXXXXXXXXXXXXXX")
+        );
+        assert_eq!(
+            value.get("created_at").and_then(|v| v.as_i64()),
+            Some(1733500000000000)
+        );
+        assert_eq!(value.get("entry_count").and_then(|v| v.as_i64()), Some(10));
+    }
+
+    #[test]
+    fn test_rollback_response_headers() {
+        let headers = RollbackToSnapshotResponse::headers();
+        assert_eq!(
+            headers,
+            vec!["SUCCESS", "BACKUP_SNAPSHOT_ID", "RESTORED_ENTRIES"]
+        );
+    }
+
+    #[test]
+    fn test_rollback_response_row() {
+        let response = RollbackToSnapshotResponse {
+            success: true,
+            new_snapshot_id: "01JXXXXXXXXXXXXXXXXX".to_string(),
+            restored_entry_count: 42,
+        };
+
+        let row = response.row();
+        assert_eq!(row[0], "true");
+        assert_eq!(row[1], "01JXXXXXXXXX...");
+        assert_eq!(row[2], "42");
+    }
+
+    #[test]
+    fn test_rollback_response_json_format() {
+        let response = RollbackToSnapshotResponse {
+            success: true,
+            new_snapshot_id: "backup-snapshot-id".to_string(),
+            restored_entry_count: 10,
+        };
+
+        let json_str = format_item_json(&response).expect("Failed to format JSON");
+        let value: serde_json::Value =
+            serde_json::from_str(&json_str).expect("Failed to parse JSON output");
+
+        assert!(value.is_object());
+        assert_eq!(value.get("success").and_then(|v| v.as_bool()), Some(true));
+        assert_eq!(
+            value.get("new_snapshot_id").and_then(|v| v.as_str()),
+            Some("backup-snapshot-id")
+        );
+        assert_eq!(
+            value.get("restored_entry_count").and_then(|v| v.as_i64()),
+            Some(10)
+        );
+    }
+
+    #[test]
+    fn test_delete_response_headers() {
+        let headers = DeleteSnapshotResponse::headers();
+        assert_eq!(headers, vec!["SUCCESS"]);
+    }
+
+    #[test]
+    fn test_delete_response_row() {
+        let response = DeleteSnapshotResponse { success: true };
+
+        let row = response.row();
+        assert_eq!(row[0], "true");
+    }
+
+    #[test]
+    fn test_delete_response_json_format() {
+        let response = DeleteSnapshotResponse { success: true };
+
+        let json_str = format_item_json(&response).expect("Failed to format JSON");
+        let value: serde_json::Value =
+            serde_json::from_str(&json_str).expect("Failed to parse JSON output");
+
+        assert!(value.is_object());
+        assert_eq!(value.get("success").and_then(|v| v.as_bool()), Some(true));
     }
 
     #[test]
