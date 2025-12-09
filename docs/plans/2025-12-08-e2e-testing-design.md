@@ -1,8 +1,28 @@
 # E2E Acceptance Testing Design
 
 **Date:** 2025-12-08
-**Status:** Approved
+**Status:** Implemented (PR #72)
 **Related:** Pre-v1.0 hardening, security audit preparation
+
+## Implementation Status
+
+**Merged:** 2025-12-08 via PR #72
+
+**What Works:**
+- ✅ testcontainers-based server orchestration
+- ✅ Runtime certificate generation with rcgen
+- ✅ Initial setup scenario (test_initial_deployment)
+- ✅ Auth failure scenarios (test_wrong_ca_rejected, test_self_signed_client_rejected)
+- ✅ Daily operations: search/filter (test_search_and_filter)
+- ✅ Docker CI/E2E integration with Dockerfile.ci
+
+**Ignored Tests (blocked by CLI bugs):**
+- ⏸️ test_crud_workflow - Issue #70 (missing 'id' field in JSON output)
+- ⏸️ test_import_export_roundtrip - Issue #69 (import command clap type mismatch)
+- ⏸️ test_snapshot_and_rollback - Issue #71 (snapshot create returns empty output)
+- ⏸️ test_rollback_creates_backup - Issue #71 (snapshot create returns empty output)
+
+**Next Steps:** Fix issues #69, #70, #71 to enable all E2E scenarios.
 
 ## Overview
 
