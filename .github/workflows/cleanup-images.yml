@@ -30,3 +30,15 @@ jobs:
           ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
           delete-only-untagged-versions: false
           version-pattern: '^[0-9a-f]{40}$'
+
+      - name: Delete old amd64 images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: 'router-hosts'
+          package-type: 'container'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          min-versions-to-keep: 3
+          older-than: 7
+          ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
+          delete-only-untagged-versions: false
+          version-pattern: '^[0-9a-f]{40}-amd64$'
