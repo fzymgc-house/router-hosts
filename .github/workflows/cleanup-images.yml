@@ -5,6 +5,12 @@ on:
     - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
   workflow_dispatch:  # Allow manual triggering for testing
 
+# IMPORTANT: The ignore-versions pattern (^latest$|^v\d+\.\d+\.\d+) protects
+# 'latest' and basic semver tags (v1.0.0, v0.5.0) but does NOT protect
+# pre-release tags (v1.0.0-beta.1, v1.0.0-rc.2) or build metadata tags
+# (v1.0.0+build.123). If using pre-release tags in production, expand the
+# pattern to include them.
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest
