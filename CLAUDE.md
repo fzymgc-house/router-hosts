@@ -632,3 +632,5 @@ cargo test -p router-hosts-e2e --release test_import_export_roundtrip
 - `docker:build` compiles Linux binary inside Docker (works cross-platform)
 - `docker:build-ci` copies host binary (fast on Linux CI, broken on macOS)
 - Tests need `ROUTER_HOSTS_IMAGE=...dev` to use locally built image
+
+**Important:** Never push commits directly to Renovate-originated branches. Renovate manages these branches automatically and will force-push updates. Always create a separate branch for any manual fixes.
