@@ -4,7 +4,7 @@
 **Status:** DEPRECATED - Superseded by 2025-12-01-router-hosts-v1-design.md
 
 > **Note:** This document is kept for historical reference only. The current design
-> removes edit sessions and uses event sourcing. See the v1.0 design document.
+> removes edit sessions and uses event sourcing. See the v0.5.0 design document.
 
 ## Overview
 
