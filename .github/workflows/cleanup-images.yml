@@ -39,6 +39,14 @@ on:
 #    - See docs/workarounds/ghcr-cleanup.md for detailed explanation
 #
 # ============================================================================
+# ACTION VERSION MANAGEMENT
+# ============================================================================
+# This workflow uses snok/container-retention-policy@v3.0.1 (pinned).
+# Renovate automatically updates pinned GitHub Actions (see .github/renovate.json).
+#
+# Migration path: If actions/delete-package-versions adds support for
+# older-than, version-pattern, and dry-run, evaluate switching back.
+# ============================================================================
 # PRE-RELEASE TAG PROTECTION
 # ============================================================================
 # The protected tag list below covers:

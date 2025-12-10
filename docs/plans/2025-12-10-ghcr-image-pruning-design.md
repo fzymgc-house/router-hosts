@@ -234,11 +234,12 @@ See `docs/workarounds/ghcr-cleanup.md` for detailed explanations.
 ## Implementation Checklist
 
 - [x] Create `.github/workflows/cleanup-images.yml`
-- [x] Configure three deletion steps (manifest, amd64, arm64)
+- [x] Replace broken action with snok/container-retention-policy
+- [x] Configure inverted protection model via image-tags
 - [x] Set weekly cron schedule (Sunday 2 AM UTC)
 - [x] Enable `workflow_dispatch` for manual testing
 - [x] Test with `dry-run: true` enabled
-- [ ] Review dry-run logs for correctness
+- [ ] **CRITICAL:** Review dry-run logs for correctness (DO NOT SKIP)
 - [ ] Disable dry-run and merge to main
 - [ ] Monitor first production run
 - [ ] Verify storage usage decreases over time
