@@ -106,7 +106,7 @@ task e2e:scenario -- daily_operations
 
 ## Status
 
-✅ **v1.0 Core Complete** - All features implemented, 8/8 E2E tests passing
+✅ **v0.5.0 Core Complete** - All features implemented, 8/8 E2E tests passing
 
 **Ready for testing:**
 - ✅ Client CLI with all commands (host, snapshot, config)
@@ -116,9 +116,9 @@ task e2e:scenario -- daily_operations
 - ✅ mTLS authentication
 - ✅ Full E2E test coverage
 
-See [v1.0 Task List](docs/plans/2025-12-01-v1-tasks.md) for implementation details.
+See [v0.5.0 Task List](docs/plans/2025-12-01-v1-tasks.md) for implementation details.
 
-> **Note:** v1.0 not yet tagged for release. See GitHub Issues for remaining polish items.
+> **Note:** v0.5.0 not yet tagged for release. See GitHub Issues for remaining polish items.
 
 ## License
 
