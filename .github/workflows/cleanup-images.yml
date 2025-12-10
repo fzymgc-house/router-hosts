@@ -30,6 +30,7 @@ jobs:
           ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
           delete-only-untagged-versions: false
           version-pattern: '^[0-9a-f]{40}$'
+          dry-run: true
 
       - name: Delete old amd64 images
         uses: actions/delete-package-versions@v5
@@ -42,6 +43,7 @@ jobs:
           ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
           delete-only-untagged-versions: false
           version-pattern: '^[0-9a-f]{40}-amd64$'
+          dry-run: true
 
       - name: Delete old arm64 images
         uses: actions/delete-package-versions@v5
@@ -54,3 +56,4 @@ jobs:
           ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
           delete-only-untagged-versions: false
           version-pattern: '^[0-9a-f]{40}-arm64$'
+          dry-run: true
