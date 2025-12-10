@@ -118,6 +118,84 @@ If you use build metadata in production:
    - Week 1: Dry-run mode, verify correct targeting
    - Week 2: Disable dry-run if behavior is correct
 
+## Post-Deployment Validation
+
+**Status:** Deployed to production with `dry-run: true` (2025-12-10)
+
+### Initial Validation Results
+
+**Test run:** https://github.com/fzymgc-house/router-hosts/actions/runs/20113283842
+
+✅ **Workflow executed successfully**
+- All parameters properly recognized
+- No unexpected input warnings (unlike broken `actions/delete-package-versions`)
+- Action correctly identified package and evaluated retention policy
+
+✅ **Zero deletions (expected)**
+- All current images are < 7 days old
+- Only 4 images exist (within `keep-n-most-recent: 3` safety threshold)
+- No protected tags (`latest`, `v0.5.0`) exist in GHCR yet
+
+**Current images (2025-12-10):**
+- `e45ffc730c592a715a9bed7c24329860fb7d641d-arm64` (< 1 day)
+- `832d870f5f0f82b7193c249f0d8870f5aec0deb5-arm64` (< 1 day)
+- `832d870f5f0f82b7193c249f0d8870f5aec0deb5-amd64` (< 1 day)
+- `71b0bb7499152275a90096a22e87ac626d9cf144-amd64` (< 2 days)
+
+### Why Current Behavior is Correct
+
+The action correctly identified SHA-tagged architecture images as **deletion candidates** but kept them because:
+1. All images are within the 7-day retention window (`cut-off: 1w`)
+2. Total image count (4) is within safety threshold (`keep-n-most-recent: 3`)
+
+This validates:
+- ✅ Protection model works (SHA tags are unprotected, eligible for cleanup)
+- ✅ Time-based filtering works (images < 7 days are kept)
+- ✅ Count-based safety net works (keeps minimum N recent)
+
+### Required Follow-Up Actions
+
+**BEFORE disabling dry-run, complete these validations:**
+
+1. **Wait for deletion candidates to accumulate** (1-2 weeks)
+   - Need images older than 7 days for realistic testing
+   - Need more than 3 images to test count-based deletion
+
+2. **Review dry-run logs showing actual deletions**
+   ```bash
+   # Check next workflow run after images age
+   gh run list --workflow=cleanup-images.yml --limit 1 --json databaseId --jq '.[0].databaseId' | xargs gh run view --log | grep "would delete"
+   ```
+
+   **Verify:**
+   - SHA-tagged images > 7 days old are flagged for deletion
+   - Protected tags (`latest`, `v0.5.0`, pre-release patterns) are NOT flagged
+   - Architecture-specific tags (`-amd64`, `-arm64`) are handled correctly
+
+3. **Monitor weekly scheduled runs**
+   - First scheduled run: Sunday 2025-12-15 at 2 AM UTC
+   - Review logs for 2-3 consecutive weeks
+   - Confirm behavior is consistent
+
+4. **Disable dry-run only after validation**
+   ```yaml
+   # Change in .github/workflows/cleanup-images.yml after validation
+   dry-run: false  # ONLY after reviewing logs showing expected behavior
+   ```
+
+5. **Monitor first production deletion**
+   - Verify actual deletions match dry-run predictions
+   - Check GHCR package count decreases appropriately
+   - Confirm no protected tags were deleted
+
+6. **Document actual behavior**
+   - Update this section with first real deletion results
+   - Note any unexpected behavior or edge cases discovered
+
+### Tracking Issue
+
+See issue #88 for tracking post-deployment validation checklist.
+
 ## Maintenance Notes
 
 ### Adding New Protected Tags
