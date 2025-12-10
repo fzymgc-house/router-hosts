@@ -1,4 +1,4 @@
-# router-hosts v1.0 Design Document
+# router-hosts v0.5.0 Design Document
 
 **Date:** 2025-12-01
 **Status:** Active
@@ -315,7 +315,7 @@ Enforced on snapshot creation - both limits apply (whichever triggers first).
 
 ### Event Store Compaction
 
-The event store grows unbounded as events accumulate. For v1.0, compaction is manual:
+The event store grows unbounded as events accumulate. For v0.5.0, compaction is manual:
 
 ```bash
 # Export current state, compact events
@@ -545,7 +545,7 @@ The hosts file is regenerated after every successful write operation:
 | Server Startup | Done | Graceful shutdown on SIGTERM/SIGINT |
 | Basic Server Config | Done | TOML parsing for current features |
 
-### Remaining for v1.0
+### Remaining for v0.5.0
 
 | Component | Priority | Effort |
 |-----------|----------|--------|
@@ -558,7 +558,7 @@ The hosts file is regenerated after every successful write operation:
 | Systemd Unit | Low | Low |
 | Proto cleanup (remove BulkAddHosts) | Low | Low |
 
-### Out of Scope for v1.0
+### Out of Scope for v0.5.0
 
 - Web UI
 - Multi-server replication
@@ -630,7 +630,7 @@ Single binary with mode selection:
 
 ### Authorization
 
-- v1.0: All authenticated clients have full access
+- v0.5.0: All authenticated clients have full access
 - Future: Role-based access control via certificate attributes
 
 ### Data Protection
