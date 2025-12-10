@@ -1,0 +1,63 @@
+name: Cleanup Docker Images
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
+  workflow_dispatch:  # Allow manual triggering for testing
+
+# IMPORTANT: The ignore-versions pattern (^latest$|^v\d+\.\d+\.\d+) protects
+# 'latest' and basic semver tags (v1.0.0, v0.5.0) but does NOT protect
+# pre-release tags (v1.0.0-beta.1, v1.0.0-rc.2) or build metadata tags
+# (v1.0.0+build.123). If using pre-release tags in production, expand the
+# pattern to include them.
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    # Note: Steps run independently. If manifest deletion fails but
+    # architecture steps succeed, orphaned tags will be cleaned up
+    # in the next weekly run.
+
+    permissions:
+      packages: write  # Required to delete package versions
+      contents: read   # Standard read access
+
+    steps:
+      - name: Delete old manifest images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: 'router-hosts'
+          package-type: 'container'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          min-versions-to-keep: 3
+          older-than: 7
+          ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
+          delete-only-untagged-versions: false
+          version-pattern: '^[0-9a-f]{40}$'
+          dry-run: true
+
+      - name: Delete old amd64 images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: 'router-hosts'
+          package-type: 'container'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          min-versions-to-keep: 3
+          older-than: 7
+          ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
+          delete-only-untagged-versions: false
+          version-pattern: '^[0-9a-f]{40}-amd64$'
+          dry-run: true
+
+      - name: Delete old arm64 images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: 'router-hosts'
+          package-type: 'container'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          min-versions-to-keep: 3
+          older-than: 7
+          ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
+          delete-only-untagged-versions: false
+          version-pattern: '^[0-9a-f]{40}-arm64$'
+          dry-run: true
