@@ -1,0 +1,23 @@
+name: Cleanup Docker Images
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
+  workflow_dispatch:  # Allow manual triggering for testing
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  PACKAGE_NAME: router-hosts
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    permissions:
+      packages: write  # Required to delete package versions
+      contents: read   # Standard read access
+
+    steps:
+      - name: Placeholder
+        run: echo "Cleanup steps will be added next"
