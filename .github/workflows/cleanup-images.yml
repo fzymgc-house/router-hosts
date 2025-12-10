@@ -5,59 +5,96 @@ on:
     - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
   workflow_dispatch:  # Allow manual triggering for testing
 
-# IMPORTANT: The ignore-versions pattern (^latest$|^v\d+\.\d+\.\d+) protects
-# 'latest' and basic semver tags (v1.0.0, v0.5.0) but does NOT protect
-# pre-release tags (v1.0.0-beta.1, v1.0.0-rc.2) or build metadata tags
-# (v1.0.0+build.123). If using pre-release tags in production, expand the
-# pattern to include them.
+# ============================================================================
+# ACTION SELECTION RATIONALE
+# ============================================================================
+# This workflow uses snok/container-retention-policy instead of the official
+# actions/delete-package-versions action for the following reasons:
+#
+# 1. UNSUPPORTED PARAMETERS IN OFFICIAL ACTION:
+#    - actions/delete-package-versions@v5 does NOT support:
+#      - `older-than`: Time-based retention (we need 7 days)
+#      - `version-pattern`: Regex filtering (we need to target SHA tags)
+#      - `dry-run`: Safe testing mode
+#    - These parameters are silently ignored, making the workflow ineffective
+#
+# 2. ALTERNATIVE ACTION EVALUATION:
+#    - snok/container-retention-policy@v3.0.1:
+#      ✓ Supports time-based retention via `cut-off`
+#      ✓ Supports dry-run mode
+#      ✓ Active maintenance (235 stars, commits within last month)
+#      ✓ Issues get resolved promptly
+#      ✓ Clean, focused feature set
+#
+#    - dataaxiom/ghcr-cleanup-action (REJECTED):
+#      ✗ Critical bugs in core features (issues #99, #101)
+#      ✗ No maintainer response for 2+ months
+#      ✗ Last release 11 months ago
+#      ✗ Shows signs of abandonment
+#
+# 3. TRADE-OFFS AND WORKAROUNDS:
+#    - snok does NOT support regex pattern matching for tag selection
+#    - Workaround: Use `image-tags` to explicitly protect production tags
+#    - Unprotected tags (SHA-based dev images) are cleaned by `cut-off`
+#    - See docs/workarounds/ghcr-cleanup.md for detailed explanation
+#
+# ============================================================================
+# ACTION VERSION MANAGEMENT
+# ============================================================================
+# This workflow uses snok/container-retention-policy@v3.0.1 (pinned).
+# Renovate automatically updates pinned GitHub Actions (see .github/renovate.json).
+#
+# Migration path: If actions/delete-package-versions adds support for
+# older-than, version-pattern, and dry-run, evaluate switching back.
+# ============================================================================
+# PRE-RELEASE TAG PROTECTION
+# ============================================================================
+# The protected tag list below covers:
+# - 'latest' tag
+# - Basic semver tags (v1.0.0, v0.5.0)
+# - Pre-release tags (v1.0.0-beta.1, v1.0.0-rc.2)
+#
+# NOTE: Build metadata tags (v1.0.0+build.123) are NOT protected.
+# If you use build metadata in production, add them to `image-tags`.
+# ============================================================================
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
-    # Note: Steps run independently. If manifest deletion fails but
-    # architecture steps succeed, orphaned tags will be cleaned up
-    # in the next weekly run.
 
     permissions:
       packages: write  # Required to delete package versions
       contents: read   # Standard read access
 
     steps:
-      - name: Delete old manifest images
-        uses: actions/delete-package-versions@v5
+      - name: Clean up old container images
+        uses: snok/container-retention-policy@v3.0.1
         with:
-          package-name: 'router-hosts'
-          package-type: 'container'
+          account: fzymgc-house
           token: ${{ secrets.GITHUB_TOKEN }}
-          min-versions-to-keep: 3
-          older-than: 7
-          ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
-          delete-only-untagged-versions: false
-          version-pattern: '^[0-9a-f]{40}$'
-          dry-run: true
 
-      - name: Delete old amd64 images
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: 'router-hosts'
-          package-type: 'container'
-          token: ${{ secrets.GITHUB_TOKEN }}
-          min-versions-to-keep: 3
-          older-than: 7
-          ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
-          delete-only-untagged-versions: false
-          version-pattern: '^[0-9a-f]{40}-amd64$'
-          dry-run: true
+          # Target the router-hosts package
+          image-names: router-hosts
 
-      - name: Delete old arm64 images
-        uses: actions/delete-package-versions@v5
-        with:
-          package-name: 'router-hosts'
-          package-type: 'container'
-          token: ${{ secrets.GITHUB_TOKEN }}
-          min-versions-to-keep: 3
-          older-than: 7
-          ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
-          delete-only-untagged-versions: false
-          version-pattern: '^[0-9a-f]{40}-arm64$'
+          # Delete images older than 7 days (equivalent to older-than: 7)
+          cut-off: 1w
+
+          # Keep at least 3 most recent images (equivalent to min-versions-to-keep: 3)
+          keep-n-most-recent: 3
+
+          # Target only tagged images (equivalent to delete-only-untagged-versions: false)
+          # This ensures we clean SHA-tagged images (e.g., abc123def456)
+          tag-selection: tagged
+
+          # Explicitly protect production tags
+          # This is the workaround for lack of version-pattern support
+          # All tags NOT in this list will be deleted if they meet cut-off criteria
+          image-tags: |
+            latest
+            v0.5.0
+            v*.*.*-alpha.*
+            v*.*.*-beta.*
+            v*.*.*-rc.*
+
+          # Enable dry-run for safe testing (change to false for production)
           dry-run: true

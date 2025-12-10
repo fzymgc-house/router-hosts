@@ -1,12 +1,32 @@
 # GHCR Image Pruning Design
 
 **Date:** 2025-12-10
-**Status:** Ready for implementation
-**Related:** Issue #73
+**Status:** Corrective implementation (replaced actions/delete-package-versions with snok/container-retention-policy)
+**Related:** Issue #73, Issue #87
+**Corrective PR:** #86
 
 ## Overview
 
 Implement automatic cleanup of old Docker images in GitHub Container Registry (GHCR) to prevent storage bloat while preserving images needed for deployment.
+
+## Corrective Action (2025-12-10)
+
+**Problem Discovered:** Post-merge dry-run testing revealed that `actions/delete-package-versions@v5` **does NOT support** critical parameters used in the original design:
+- ❌ `older-than`: Silently ignored (time-based retention broken)
+- ❌ `version-pattern`: Silently ignored (SHA tag filtering broken)
+- ❌ `dry-run`: Silently ignored (no safe testing mode)
+
+**Impact:** The workflow was completely ineffective and potentially dangerous without dry-run protection.
+
+**Resolution:** Replaced `actions/delete-package-versions` with `snok/container-retention-policy@v3.0.1` which:
+- ✅ Supports time-based retention via `cut-off: 1w`
+- ✅ Supports dry-run mode
+- ✅ Active maintenance and responsive issue resolution
+- ⚠️ Requires workaround for regex filtering (use inverted `image-tags` protection model)
+
+**Alternative Rejected:** `dataaxiom/ghcr-cleanup-action` was evaluated but rejected due to critical bugs in core features (issues #99, #101) and signs of project abandonment.
+
+**Documentation:** See `docs/workarounds/ghcr-cleanup.md` for detailed workaround explanations.
 
 ## Problem
 
@@ -56,14 +76,6 @@ Delete manifest and architecture-specific tags as a unit. When removing SHA `abc
 - Standard GitHub-hosted runner (ubuntu-latest)
 - Minimal resource requirements (API calls only)
 
-**Environment variables:**
-```yaml
-env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
-  PACKAGE_NAME: router-hosts
-```
-
 ### Permissions
 
 ```yaml
@@ -74,83 +86,75 @@ permissions:
 
 Uses `GITHUB_TOKEN` for authentication. No additional secrets required.
 
-### Cleanup Steps
+### Cleanup Step (Corrected Implementation)
 
-Three separate deletion steps handle manifest and architecture tags:
-
-#### Step 1: Delete Manifest Tags
+**Single step** using `snok/container-retention-policy@v3.0.1`:
 
 ```yaml
-- name: Delete old manifest images
-  uses: actions/delete-package-versions@v5
+- name: Clean up old container images
+  uses: snok/container-retention-policy@v3.0.1
   with:
-    package-name: 'router-hosts'
-    package-type: 'container'
+    account: fzymgc-house
     token: ${{ secrets.GITHUB_TOKEN }}
-    min-versions-to-keep: 3
-    older-than: 7
-    ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
-    delete-only-untagged-versions: false
-    version-pattern: '^[0-9a-f]{40}$'
+    image-names: router-hosts
+    cut-off: 1w
+    keep-n-most-recent: 3
+    tag-selection: tagged
+    image-tags: |
+      latest
+      v0.5.0
+      v*.*.*-alpha.*
+      v*.*.*-beta.*
+      v*.*.*-rc.*
+    dry-run: true
 ```
 
-#### Step 2: Delete AMD64 Tags
-
-```yaml
-- name: Delete old amd64 images
-  uses: actions/delete-package-versions@v5
-  with:
-    package-name: 'router-hosts'
-    package-type: 'container'
-    token: ${{ secrets.GITHUB_TOKEN }}
-    min-versions-to-keep: 3
-    older-than: 7
-    ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
-    delete-only-untagged-versions: false
-    version-pattern: '^[0-9a-f]{40}-amd64$'
-```
-
-#### Step 3: Delete ARM64 Tags
-
-```yaml
-- name: Delete old arm64 images
-  uses: actions/delete-package-versions@v5
-  with:
-    package-name: 'router-hosts'
-    package-type: 'container'
-    token: ${{ secrets.GITHUB_TOKEN }}
-    min-versions-to-keep: 3
-    older-than: 7
-    ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
-    delete-only-untagged-versions: false
-    version-pattern: '^[0-9a-f]{40}-arm64$'
-```
+**Key difference from original design:** One step replaces three. The inverted protection model (explicit tag protection via `image-tags`) automatically handles manifest and architecture tags without separate steps.
 
 ### Configuration Parameters
 
-**`min-versions-to-keep: 3`**
-- Safety net: preserves 3 most recent versions even if older than 7 days
-- Prevents complete deletion if no recent builds exist
-- Applied per tag type (manifest, amd64, arm64)
-
-**`older-than: 7`**
-- Time-based retention in days
+**`cut-off: 1w`** (replaces `older-than: 7`)
+- Time-based retention: 1 week
 - Aligns with weekly cleanup schedule
-- More predictable than count-based retention
+- More predictable than count-based retention alone
 
-**`ignore-versions: '^latest$|^v\d+\.\d+\.\d+'`**
-- Protects `latest` tag via exact match
-- Protects semantic versions via pattern match
-- Applied before other filters
-- **Note:** Matches basic semver tags only (v1.0.0). Pre-release tags (v1.0.0-beta.1) and build metadata (v1.0.0+build.123) are NOT protected. Expand pattern if using pre-release tags.
+**`keep-n-most-recent: 3`** (replaces `min-versions-to-keep: 3`)
+- Safety net: preserves 3 most recent versions even if older than 1 week
+- Prevents complete deletion if no recent builds exist
+- Applied globally (not per tag type)
 
-**`version-pattern`**
-- Conceptual pattern: `'^[0-9a-f]{40}(-amd64|-arm64)?$'`
-- Implemented as three separate regexes in workflow:
-  - Manifest: `'^[0-9a-f]{40}$'` (exact 40-char SHA)
-  - AMD64: `'^[0-9a-f]{40}-amd64$'` (SHA with amd64 suffix)
-  - ARM64: `'^[0-9a-f]{40}-arm64$'` (SHA with arm64 suffix)
-- Prevents accidental deletion of non-SHA tags
+**`tag-selection: tagged`** (replaces `delete-only-untagged-versions: false`)
+- Targets only tagged images for cleanup
+- Excludes untagged images from consideration
+- SHA-tagged dev images (e.g., `abc123def456`) are "tagged" and eligible
+
+**`image-tags`** (replaces `ignore-versions` regex)
+- **Inverted model:** Lists tags to PROTECT, not patterns to match
+- Protected tags are excluded from cleanup consideration
+- Supports glob-style wildcards for pattern matching:
+  - `v*.*.*-alpha.*` matches pre-release alpha tags
+  - `v*.*.*-beta.*` matches pre-release beta tags
+  - `v*.*.*-rc.*` matches release candidate tags
+- Unprotected tags (SHA-based dev images) cleaned based on `cut-off`
+
+**`dry-run: true`**
+- **CRITICAL FEATURE:** Actually supported (unlike original action)
+- Safe testing mode logs what WOULD be deleted without deleting
+- Required for validation before disabling
+
+### Workarounds Required
+
+**No regex pattern matching:**
+- Cannot use `version-pattern: '^[0-9a-f]{40}$'` to SELECT which images to delete
+- Workaround: Use `image-tags` to explicitly protect production tags
+- Consequence: Must maintain explicit protection list for releases
+
+**Build metadata tags not protected:**
+- Pattern `v*.*.*+*` doesn't work in glob syntax
+- Tags like `v1.0.0+build.123` are NOT protected
+- Mitigation: Use pre-release syntax instead: `v1.0.0-build.123`
+
+See `docs/workarounds/ghcr-cleanup.md` for detailed explanations.
 
 ## Safety Mechanisms
 
@@ -230,11 +234,12 @@ Three separate deletion steps handle manifest and architecture tags:
 ## Implementation Checklist
 
 - [x] Create `.github/workflows/cleanup-images.yml`
-- [x] Configure three deletion steps (manifest, amd64, arm64)
+- [x] Replace broken action with snok/container-retention-policy
+- [x] Configure inverted protection model via image-tags
 - [x] Set weekly cron schedule (Sunday 2 AM UTC)
 - [x] Enable `workflow_dispatch` for manual testing
 - [x] Test with `dry-run: true` enabled
-- [ ] Review dry-run logs for correctness
+- [ ] **CRITICAL:** Review dry-run logs for correctness (DO NOT SKIP)
 - [ ] Disable dry-run and merge to main
 - [ ] Monitor first production run
 - [ ] Verify storage usage decreases over time
@@ -242,26 +247,66 @@ Three separate deletion steps handle manifest and architecture tags:
 
 ## Alternative Approaches Considered
 
+### GitHub Actions Evaluated
+
+**actions/delete-package-versions@v5 (BROKEN - original choice):**
+- ❌ `older-than`, `version-pattern`, `dry-run` parameters NOT supported
+- ❌ Parameters silently ignored without warnings
+- ❌ No time-based retention capability
+- ✅ Official GitHub action
+- **Verdict:** Completely ineffective for our requirements
+
+**snok/container-retention-policy@v3.0.1 (SELECTED):**
+- ✅ Time-based retention via `cut-off`
+- ✅ Dry-run mode for safe testing
+- ✅ Active maintenance (235 stars, recent commits)
+- ✅ Issues get resolved promptly
+- ⚠️ No regex pattern matching (workaround via `image-tags`)
+- **Verdict:** Best available option with manageable trade-offs
+
+**dataaxiom/ghcr-cleanup-action (REJECTED):**
+- ✅ Feature-rich (has `older-than`, `keep-n-tagged`, extensive options)
+- ❌ Critical bugs in core features:
+  - Issue #99: `older-than + keep-n-tagged` deletes wrong images (3 months unresolved)
+  - Issue #101: Multi-tagged images unconditionally deleted (2 months no response)
+- ❌ Signs of abandonment (last commit 3.5 months ago, last release 11 months ago)
+- **Verdict:** Too risky despite feature completeness
+
+### Implementation Patterns Evaluated
+
 **Count-based retention (rejected):**
 - Keep last N builds instead of time-based
 - More complex: "last N per branch" vs "last N total"
 - Less predictable with varying commit frequency
 - Time-based retention simpler and clearer
 
-**Single-step cleanup (rejected):**
-- Use one action call with complex regex
-- Harder to debug and maintain
-- Less explicit handling of architecture tags
-- Three-step approach clearer and more maintainable
+**Multi-step cleanup (original design, now obsolete):**
+- Three separate steps for manifest, amd64, arm64
+- More explicit but more verbose
+- Required when using pattern matching per tag type
+- Single-step approach (snok) simpler and equally effective
 
 **Custom script (rejected):**
 - Write bash/Python script using `gh api`
 - More control but more code to maintain
-- `actions/delete-package-versions` well-maintained and tested
-- Action provides safety features built-in
+- Third-party actions provide safety features built-in
+- Maintenance burden not justified
 
 ## References
 
-- [actions/delete-package-versions](https://github.com/actions/delete-package-versions)
-- [GitHub Packages API](https://docs.github.com/en/rest/packages)
+### GitHub Actions
+- [snok/container-retention-policy](https://github.com/snok/container-retention-policy) - **Current implementation**
+- [actions/delete-package-versions](https://github.com/actions/delete-package-versions) - Original choice (broken)
+- [dataaxiom/ghcr-cleanup-action](https://github.com/dataaxiom/ghcr-cleanup-action) - Evaluated and rejected
+
+### Project Documentation
+- Workaround documentation: `docs/workarounds/ghcr-cleanup.md`
 - Current Docker workflow: `.github/workflows/docker.yml`
+- Cleanup workflow: `.github/workflows/cleanup-images.yml`
+
+### GitHub APIs
+- [GitHub Packages API](https://docs.github.com/en/rest/packages)
+
+### Related Issues
+- [dataaxiom #99](https://github.com/dataaxiom/ghcr-cleanup-action/issues/99) - Broken `older-than + keep-n-tagged`
+- [dataaxiom #101](https://github.com/dataaxiom/ghcr-cleanup-action/issues/101) - Multi-tagged images bug
