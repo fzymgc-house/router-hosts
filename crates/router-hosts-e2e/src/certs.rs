@@ -3,7 +3,7 @@
 //! Generates CA, server, and client certificates at runtime using rcgen.
 
 use rcgen::{
-    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
+    BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
     KeyUsagePurpose, SanType,
 };
 use std::net::IpAddr;
@@ -82,7 +82,7 @@ impl TestCertificates {
         server_params.not_before = time::OffsetDateTime::now_utc();
         server_params.not_after = time::OffsetDateTime::now_utc() + validity;
         let server_cert = server_params
-            .signed_by(&server_key, &ca_cert, &ca_key)
+            .signed_by(&server_key, &Issuer::from_params(&ca_params, &ca_key))
             .expect("Failed to generate server cert");
 
         // 3. Generate client cert (signed by CA)
@@ -96,7 +96,7 @@ impl TestCertificates {
         client_params.not_before = time::OffsetDateTime::now_utc();
         client_params.not_after = time::OffsetDateTime::now_utc() + validity;
         let client_cert = client_params
-            .signed_by(&client_key, &ca_cert, &ca_key)
+            .signed_by(&client_key, &Issuer::from_params(&ca_params, &ca_key))
             .expect("Failed to generate client cert");
 
         Self {
@@ -131,7 +131,7 @@ impl TestCertificates {
         client_params.not_before = time::OffsetDateTime::now_utc() - time::Duration::days(2);
         client_params.not_after = time::OffsetDateTime::now_utc() - time::Duration::days(1);
         let client_cert = client_params
-            .signed_by(&client_key, &ca_cert, &ca_key)
+            .signed_by(&client_key, &Issuer::from_params(&ca_params, &ca_key))
             .expect("Failed to generate client cert");
 
         Self {

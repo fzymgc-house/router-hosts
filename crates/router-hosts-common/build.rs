@@ -3,7 +3,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // dlprotoc::download_protoc() sets PROTOC env var automatically
     dlprotoc::download_protoc()?;
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
         // Only derive serde for specific types we need to serialize
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .field_attribute("router_hosts.v1.HostEntry.created_at", "#[serde(skip)]")
         .field_attribute("router_hosts.v1.HostEntry.updated_at", "#[serde(skip)]")
         .field_attribute("router_hosts.v1.Snapshot.created_at", "#[serde(skip)]")
-        .compile(
+        .compile_protos(
             &["../../proto/router_hosts/v1/hosts.proto"],
             &["../../proto"],
         )?;

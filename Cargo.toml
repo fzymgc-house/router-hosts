@@ -19,7 +19,8 @@ repository = "https://github.com/fzymgc-house/router-hosts"
 tonic = "0.14"
 prost = "0.14"
 prost-types = "0.14"
-tonic-build = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
 
 # Download pre-built protoc binary (much faster than compiling from source)
 dlprotoc = "0.4"
