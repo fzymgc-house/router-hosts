@@ -106,7 +106,19 @@ task e2e:scenario -- daily_operations
 
 ## Status
 
-🚧 **In Development** - Initial setup phase
+✅ **v1.0 Core Complete** - All features implemented, 6/8 E2E tests passing (2 awaiting PR #80 merge)
+
+**Ready for testing:**
+- ✅ Client CLI with all commands (host, snapshot, config)
+- ✅ Server with event sourcing (DuckDB/CQRS)
+- ✅ Import/Export (hosts, JSON, CSV formats)
+- ✅ Snapshots with rollback and retention
+- ✅ mTLS authentication
+- ✅ E2E test coverage (disaster recovery tests pending PR #80)
+
+See [v1.0 Task List](docs/plans/2025-12-01-v1-tasks.md) for implementation details.
+
+> **Note:** v1.0 not yet tagged for release. See GitHub Issues for remaining polish items.
 
 ## License
 
