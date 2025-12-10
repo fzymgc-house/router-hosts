@@ -106,7 +106,7 @@ task e2e:scenario -- daily_operations
 
 ## Status
 
-✅ **v1.0 Core Complete** - All features implemented, 6/8 E2E tests passing (2 awaiting PR #80 merge)
+✅ **v1.0 Core Complete** - All features implemented, 8/8 E2E tests passing
 
 **Ready for testing:**
 - ✅ Client CLI with all commands (host, snapshot, config)
@@ -114,7 +114,7 @@ task e2e:scenario -- daily_operations
 - ✅ Import/Export (hosts, JSON, CSV formats)
 - ✅ Snapshots with rollback and retention
 - ✅ mTLS authentication
-- ✅ E2E test coverage (disaster recovery tests pending PR #80)
+- ✅ Full E2E test coverage
 
 See [v1.0 Task List](docs/plans/2025-12-01-v1-tasks.md) for implementation details.
 
