@@ -2671,7 +2671,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2701,7 +2701,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts-common"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "chrono",
  "dlprotoc",
@@ -2717,7 +2717,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts-e2e"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "assert_cmd",
  "predicates",
