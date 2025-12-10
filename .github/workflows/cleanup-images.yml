@@ -19,5 +19,14 @@ jobs:
       contents: read   # Standard read access
 
     steps:
-      - name: Placeholder
-        run: echo "Cleanup steps will be added next"
+      - name: Delete old manifest images
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: 'router-hosts'
+          package-type: 'container'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          min-versions-to-keep: 3
+          older-than: 7
+          ignore-versions: '^latest$|^v\d+\.\d+\.\d+'
+          delete-only-untagged-versions: false
+          version-pattern: '^[0-9a-f]{40}$'
