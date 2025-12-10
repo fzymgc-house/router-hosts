@@ -16,10 +16,11 @@ repository = "https://github.com/fzymgc-house/router-hosts"
 
 [workspace.dependencies]
 # gRPC and protobuf
-tonic = "0.11"
-prost = "0.12"
-prost-types = "0.12"
-tonic-build = "0.11"
+tonic = "0.14"
+prost = "0.14"
+prost-types = "0.14"
+tonic-prost = "0.14"
+tonic-prost-build = "0.14"
 
 # Download pre-built protoc binary (much faster than compiling from source)
 dlprotoc = "0.4"
@@ -38,7 +39,7 @@ clap = { version = "4.4", features = ["derive"] }
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.8"
+toml = "0.9"
 
 # TLS
 rustls = "0.23"

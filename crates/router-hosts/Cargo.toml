@@ -17,7 +17,7 @@ futures.workspace = true
 anyhow.workspace = true
 
 # gRPC
-tonic = { workspace = true, features = ["tls"] }
+tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
 prost.workspace = true
 prost-types.workspace = true
 
