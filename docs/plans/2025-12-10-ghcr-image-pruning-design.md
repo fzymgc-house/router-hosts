@@ -229,11 +229,11 @@ Three separate deletion steps handle manifest and architecture tags:
 
 ## Implementation Checklist
 
-- [ ] Create `.github/workflows/cleanup-images.yml`
-- [ ] Configure three deletion steps (manifest, amd64, arm64)
-- [ ] Set weekly cron schedule (Sunday 2 AM UTC)
-- [ ] Enable `workflow_dispatch` for manual testing
-- [ ] Test with `dry-run: true` enabled
+- [x] Create `.github/workflows/cleanup-images.yml`
+- [x] Configure three deletion steps (manifest, amd64, arm64)
+- [x] Set weekly cron schedule (Sunday 2 AM UTC)
+- [x] Enable `workflow_dispatch` for manual testing
+- [x] Test with `dry-run: true` enabled
 - [ ] Review dry-run logs for correctness
 - [ ] Disable dry-run and merge to main
 - [ ] Monitor first production run
