@@ -142,10 +142,14 @@ Three separate deletion steps handle manifest and architecture tags:
 - Protects `latest` tag via exact match
 - Protects semantic versions via pattern match
 - Applied before other filters
+- **Note:** Matches basic semver tags only (v1.0.0). Pre-release tags (v1.0.0-beta.1) and build metadata (v1.0.0+build.123) are NOT protected. Expand pattern if using pre-release tags.
 
-**`version-pattern: '^[0-9a-f]{40}(-amd64|-arm64)?$'`**
-- Matches 40-character hexadecimal SHA tags
-- Architecture suffix variants for platform-specific tags
+**`version-pattern`**
+- Conceptual pattern: `'^[0-9a-f]{40}(-amd64|-arm64)?$'`
+- Implemented as three separate regexes in workflow:
+  - Manifest: `'^[0-9a-f]{40}$'` (exact 40-char SHA)
+  - AMD64: `'^[0-9a-f]{40}-amd64$'` (SHA with amd64 suffix)
+  - ARM64: `'^[0-9a-f]{40}-arm64$'` (SHA with arm64 suffix)
 - Prevents accidental deletion of non-SHA tags
 
 ## Safety Mechanisms
@@ -162,7 +166,8 @@ Three separate deletion steps handle manifest and architecture tags:
 **Individual step failures:**
 - Steps run independently
 - Failure in one step doesn't prevent others
-- Orphaned tags cleaned up in next weekly run
+- Orphaned architecture tags (if manifest deletion fails) cleaned up in next run
+- Trade-off prioritizes storage savings over perfect multi-arch consistency
 
 **No rollback mechanism:**
 - Deletions are permanent

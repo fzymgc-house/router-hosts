@@ -67,6 +67,11 @@ Addresses #73."
 **Files:**
 - Modify: `.github/workflows/cleanup-images.yml:23-24`
 
+**Step 0: Verify latest action version**
+
+Run: `gh api repos/actions/delete-package-versions/releases/latest --jq '.tag_name'`
+Expected: v5.0.0 or higher (update plan if newer version available)
+
 **Step 1: Replace placeholder with manifest cleanup step**
 
 Replace the placeholder step in `.github/workflows/cleanup-images.yml`:
@@ -493,6 +498,50 @@ If reviewer identifies issues:
 **Step 3: Get approval**
 
 Wait for reviewer approval before proceeding to merge.
+
+---
+
+## Task 13: Verify First Production Run
+
+**Files:**
+- None (monitoring task)
+
+**Timing:** After next Sunday 2 AM UTC or manual trigger
+
+**Step 1: Confirm workflow executed**
+
+Run: `gh run list --workflow=cleanup-images.yml --limit 5`
+Expected: At least one successful production run (after dry-run disabled)
+
+**Step 2: Check deletion count**
+
+Run: `gh run view --log | grep -i "deleted"`
+Expected: Shows number of versions deleted per step
+
+**Step 3: Verify protected tags intact**
+
+Run: `gh api /orgs/fzymgc-house/packages/container/router-hosts/versions --jq '[.[] | .name] | map(select(test("^(latest|v\\d+\\.\\d+\\.\\d+)$")))'`
+Expected: All `latest` and `v*` tags still present
+
+**Step 4: Measure storage impact**
+
+Run:
+```bash
+gh api /orgs/fzymgc-house/packages/container/router-hosts/versions --jq 'length'
+```
+Expected: Reduction in package count compared to pre-cleanup baseline
+
+**Step 5: Update issue #73**
+
+Run:
+```bash
+gh issue comment 73 --body "✅ First production run completed successfully.
+
+Workflow run: [paste URL from step 1]
+Deletions: [count from step 2]
+Storage impact: [reduction from step 4]"
+```
+Expected: Comment added to issue documenting results
 
 ---
 
