@@ -6,7 +6,7 @@
 
 ## Overview
 
-Replace sequential integer event versioning (i64) with ULID-based versioning to align with the v1.0 design specification. This change affects the event store, projections, and database schema.
+Replace sequential integer event versioning (i64) with ULID-based versioning to align with the v0.5.0 design specification. This change affects the event store, projections, and database schema.
 
 ## Current State
 
@@ -38,7 +38,7 @@ Generate a new ULID for each event as its version identifier. ULIDs provide natu
 event_version VARCHAR NOT NULL  -- was BIGINT
 ```
 
-**Migration:** None required (v1.0, no production data exists)
+**Migration:** None required (v0.5.0, no production data exists)
 
 **Query compatibility:**
 - `MAX(event_version)` works on VARCHAR (lexicographic order matches temporal order)
@@ -254,7 +254,7 @@ let expected_version = Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string());
 ### Backward Compatibility
 
 **No migration needed:**
-- v1.0 release (no production deployments)
+- v0.5.0 release (no production deployments)
 - Test databases can be deleted and recreated
 - Fresh databases use ULID versions from start
 

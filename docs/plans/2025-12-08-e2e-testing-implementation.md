@@ -1447,7 +1447,7 @@ async fn test_self_signed_client_rejected() {
 }
 
 // Note: Testing without client cert requires modifying the CLI to support
-// optional client certs, which is out of scope for v1.0. The current CLI
+// optional client certs, which is out of scope for v0.5.0. The current CLI
 // always requires client cert configuration.
 
 // Note: Testing expired certs is complex because the server also validates
