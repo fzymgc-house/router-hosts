@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2025-12-10
 
+### Breaking Changes
+
+#### CLI: Import/Export format argument renamed (#76, fixes #69)
+
+The `--format` argument for `host import` and `host export` commands has been renamed to avoid conflict with the global output format option.
+
+**Migration:**
+- `host import --format <fmt>` → `host import --input-format <fmt>`
+- `host export --format <fmt>` → `host export --export-format <fmt>`
+
+**Note:** These commands were previously broken (panicked on all invocations due to clap type conflicts), so this fix enables functionality rather than breaking existing usage.
+
 ### Added
 
 #### Core Features
@@ -89,4 +101,4 @@ N/A - Initial release
 
 ---
 
-**Full Changelog**: https://github.com/fzymgc-house/router-hosts/commits/v0.5.0
+**Full Changelog**: https://github.com/fzymgc-house/router-hosts/commits/main (link will be updated to v0.5.0 tag after release)
