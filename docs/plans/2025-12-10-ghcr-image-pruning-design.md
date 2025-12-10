@@ -2,8 +2,8 @@
 
 **Date:** 2025-12-10
 **Status:** Corrective implementation (replaced actions/delete-package-versions with snok/container-retention-policy)
-**Related:** Issue #73
-**Corrective PR:** TBD
+**Related:** Issue #73, Issue #87
+**Corrective PR:** #86
 
 ## Overview
 
