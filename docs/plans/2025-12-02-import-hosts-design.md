@@ -2,7 +2,7 @@
 
 **Date:** 2025-12-02
 **Status:** Complete
-**Related:** [v1.0 Design Document](2025-12-01-router-hosts-v1-design.md)
+**Related:** [v0.5.0 Design Document](2025-12-01-router-hosts-v1-design.md)
 **PR:** #33
 
 ## Overview

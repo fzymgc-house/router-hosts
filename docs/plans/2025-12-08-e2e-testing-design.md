@@ -2,7 +2,7 @@
 
 **Date:** 2025-12-08
 **Status:** Implemented (PR #72)
-**Related:** Pre-v1.0 hardening, security audit preparation
+**Related:** Pre-v0.5.0 hardening, security audit preparation
 
 ## Implementation Status
 
@@ -39,7 +39,7 @@ End-to-end acceptance tests to validate router-hosts works in realistic deployme
 
 - Performance benchmarking (separate effort)
 - Chaos/fault injection testing (future work)
-- Multi-node deployment testing (single server for v1.0)
+- Multi-node deployment testing (single server for v0.5.0)
 
 ## Architecture
 

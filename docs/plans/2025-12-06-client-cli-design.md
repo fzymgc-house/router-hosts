@@ -13,7 +13,7 @@ Implement the client CLI to interact with the router-hosts gRPC server. The serv
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Output format | Plain aligned columns | Simple, works everywhere, like kubectl/gh |
-| Version conflicts | Fail-and-retry | Simple for v1.0; interactive resolution can come later |
+| Version conflicts | Fail-and-retry | Simple for v0.5.0; interactive resolution can come later |
 | Import progress | Live progress line | Better UX for long operations |
 
 ## Architecture

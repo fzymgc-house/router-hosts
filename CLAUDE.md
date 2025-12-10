@@ -166,7 +166,7 @@ When completing work:
 - Create new issues for discovered work or follow-up tasks
 
 Key issue categories:
-- **High priority:** Core features blocking v1.0 release
+- **High priority:** Core features blocking v0.5.0 release
 - **Medium priority:** Important but not blocking
 - **Low priority:** Nice-to-have improvements
 
