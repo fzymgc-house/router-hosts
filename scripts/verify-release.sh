@@ -31,7 +31,7 @@ echo
 
 echo "3. Downloading binary for verification..."
 TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+trap 'rm -rf "$TMPDIR"' EXIT
 
 # Download based on current platform (handle multiple uname -m variants)
 case "$(uname -s)-$(uname -m)" in
