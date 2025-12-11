@@ -27,6 +27,31 @@ pub enum OutputFormat {
     Csv,
 }
 
+/// File format for import/export operations.
+///
+/// This enum provides compile-time validation for file formats,
+/// eliminating runtime string parsing errors.
+#[derive(Debug, Clone, Copy, ValueEnum, Default)]
+pub enum FileFormat {
+    /// Standard /etc/hosts format: `IP hostname [hostname...]`
+    #[default]
+    Hosts,
+    /// JSON array of host entry objects
+    Json,
+    /// CSV with columns: ip_address, hostname, comment, tags
+    Csv,
+}
+
+impl std::fmt::Display for FileFormat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileFormat::Hosts => write!(f, "hosts"),
+            FileFormat::Json => write!(f, "json"),
+            FileFormat::Csv => write!(f, "csv"),
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "router-hosts")]
 #[command(about = "Router hosts file management CLI", long_about = None)]
@@ -155,18 +180,18 @@ pub enum HostCommand {
     Import {
         /// Path to import file
         file: PathBuf,
-        /// Input file format: hosts, json, csv
-        #[arg(long, default_value = "hosts")]
-        input_format: String,
+        /// Input file format
+        #[arg(long, value_enum, default_value_t = FileFormat::Hosts)]
+        input_format: FileFormat,
         /// Conflict mode: skip, replace, strict
         #[arg(long, default_value = "skip")]
         conflict_mode: String,
     },
     /// Export hosts to stdout
     Export {
-        /// Output format for export: hosts, json, csv
-        #[arg(long, default_value = "hosts")]
-        export_format: String,
+        /// Output format for export
+        #[arg(long, value_enum, default_value_t = FileFormat::Hosts)]
+        export_format: FileFormat,
     },
 }
 
@@ -388,7 +413,7 @@ mod tests {
         match cli.command {
             Commands::Host(args) => match args.command {
                 HostCommand::Import { input_format, .. } => {
-                    assert_eq!(input_format, "json");
+                    assert!(matches!(input_format, FileFormat::Json));
                 }
                 _ => panic!("Expected Import command"),
             },
@@ -405,7 +430,7 @@ mod tests {
         match cli.command {
             Commands::Host(args) => match args.command {
                 HostCommand::Export { export_format } => {
-                    assert_eq!(export_format, "csv");
+                    assert!(matches!(export_format, FileFormat::Csv));
                 }
                 _ => panic!("Expected Export command"),
             },
@@ -432,7 +457,7 @@ mod tests {
         match cli.command {
             Commands::Host(args) => match args.command {
                 HostCommand::Import { input_format, .. } => {
-                    assert_eq!(input_format, "hosts");
+                    assert!(matches!(input_format, FileFormat::Hosts));
                 }
                 _ => panic!("Expected Import command"),
             },
