@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Automated multi-platform binary releases via cargo-dist (#93)
+- Shell installer script for quick installation
+- Homebrew formula generation for macOS/Linux
+- GitHub attestations for supply chain security
+- cargo-auditable integration for dependency auditing
+
 ## [0.5.0] - 2025-12-10
 
 ### Breaking Changes

@@ -14,11 +14,15 @@ installers = ["shell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
 # Note: Windows is not supported (server requires Unix signals, /etc/hosts, shell hooks)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu"]
-# Path that installers should place binaries in
-install-path = "CARGO_HOME"
+# Path that installers should place binaries in (default: ~/.local/bin on Unix)
+install-path = "~/.local/bin"
 # Whether to install an updater program
 install-updater = false
 # Build binaries with cargo-auditable for dependency auditing
 cargo-auditable = true
 # Enable GitHub Artifact Attestations for supply chain security
 github-attestations = true
+# Skip CI runs on pull requests (test locally with `dist plan` before tagging)
+pr-run-mode = "skip"
+# Require tags to start with "v" prefix (e.g., v0.5.0, not 0.5.0)
+tag-namespace = "v"

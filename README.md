@@ -123,9 +123,9 @@ curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/r
 brew install --formula ./router-hosts.rb
 ```
 
-> **Note:** Shell installer and Homebrew install binaries to `~/.cargo/bin/`. Ensure this directory is in your `PATH`:
+> **Note:** Shell installer and Homebrew install binaries to `~/.local/bin`. Ensure this directory is in your `PATH`:
 > ```bash
-> export PATH="$HOME/.cargo/bin:$PATH"
+> export PATH="$HOME/.local/bin:$PATH"
 > ```
 > Add this line to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to make it permanent.
 
