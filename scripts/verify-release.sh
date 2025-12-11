@@ -33,21 +33,36 @@ echo "3. Downloading binary for verification..."
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-# Download based on current platform
+# Download based on current platform (handle multiple uname -m variants)
 case "$(uname -s)-$(uname -m)" in
     Darwin-arm64) ARCHIVE="router-hosts-aarch64-apple-darwin.tar.xz" ;;
     Darwin-x86_64) ARCHIVE="router-hosts-x86_64-apple-darwin.tar.xz" ;;
-    Linux-aarch64) ARCHIVE="router-hosts-aarch64-unknown-linux-gnu.tar.xz" ;;
-    Linux-x86_64) ARCHIVE="router-hosts-x86_64-unknown-linux-gnu.tar.xz" ;;
-    *) echo "Unsupported platform"; exit 1 ;;
+    Linux-aarch64|Linux-arm64) ARCHIVE="router-hosts-aarch64-unknown-linux-gnu.tar.xz" ;;
+    Linux-x86_64|Linux-amd64) ARCHIVE="router-hosts-x86_64-unknown-linux-gnu.tar.xz" ;;
+    *) echo "Unsupported platform: $(uname -s)-$(uname -m)"; exit 1 ;;
 esac
 
-gh release download "$VERSION" --pattern "$ARCHIVE" --dir "$TMPDIR"
-tar -xf "$TMPDIR/$ARCHIVE" -C "$TMPDIR"
-echo "Downloaded and extracted: $ARCHIVE"
+gh release download "$VERSION" --pattern "$ARCHIVE" --pattern "${ARCHIVE}.sha256" --dir "$TMPDIR"
+echo "Downloaded: $ARCHIVE"
 echo
 
-echo "4. Verifying GitHub attestation..."
+echo "4. Verifying checksum..."
+EXPECTED_SHA=$(cat "$TMPDIR/${ARCHIVE}.sha256" | awk '{print $1}')
+ACTUAL_SHA=$(shasum -a 256 "$TMPDIR/$ARCHIVE" | awk '{print $1}')
+if [[ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]]; then
+    echo "❌ ERROR: Checksum mismatch!"
+    echo "Expected: $EXPECTED_SHA"
+    echo "Actual:   $ACTUAL_SHA"
+    exit 1
+fi
+echo "✅ Checksum verified: $EXPECTED_SHA"
+echo
+
+tar -xf "$TMPDIR/$ARCHIVE" -C "$TMPDIR"
+echo "Extracted: $ARCHIVE"
+echo
+
+echo "5. Verifying GitHub attestation..."
 if ! gh attestation verify "$TMPDIR/router-hosts" --repo fzymgc-house/router-hosts; then
     echo
     echo "❌ ERROR: Attestation verification failed!"
@@ -62,12 +77,12 @@ if ! gh attestation verify "$TMPDIR/router-hosts" --repo fzymgc-house/router-hos
 fi
 echo
 
-echo "5. Checking binary info..."
+echo "6. Checking binary info..."
 file "$TMPDIR/router-hosts"
 "$TMPDIR/router-hosts" --version
 echo
 
-echo "6. Checking embedded audit data..."
+echo "7. Checking embedded audit data..."
 if command -v cargo-auditable &> /dev/null; then
     cargo auditable info "$TMPDIR/router-hosts" | head -20
 else
