@@ -9,10 +9,26 @@ use std::path::Path;
 use crate::client::{
     grpc::Client,
     output::{print_item, print_items},
-    HostCommand, OutputFormat,
+    FileFormat, HostCommand, OutputFormat,
 };
 
-const CHUNK_SIZE: usize = 64 * 1024; // 64KB chunks
+/// Chunk size for streaming imports (64KB).
+///
+/// This value balances several considerations:
+/// - **Network efficiency**: Larger chunks reduce per-message overhead in gRPC streaming
+/// - **Memory usage**: Smaller chunks keep memory footprint low on both client and server
+/// - **Progress feedback**: More chunks = more frequent progress updates for large files
+/// - **Server buffer limits**: Must fit within gRPC's default 4MB message size limit
+///
+/// 64KB was chosen because:
+/// - It's large enough to amortize protobuf encoding overhead
+/// - It's small enough that progress updates remain responsive (every ~64KB)
+/// - A typical /etc/hosts file (<1KB) fits in a single chunk
+/// - Large imports (>1MB) get ~16 progress updates, providing good UX
+///
+/// The server reassembles chunks into a complete buffer before parsing,
+/// so chunk boundaries don't need to align with line boundaries.
+const CHUNK_SIZE: usize = 64 * 1024;
 
 pub async fn handle(
     client: &mut Client,
@@ -137,7 +153,7 @@ pub async fn handle(
 
         HostCommand::Export { export_format } => {
             let request = ExportHostsRequest {
-                format: export_format,
+                format: export_format.to_string(),
             };
             let data = client.export_hosts(request).await?;
             io::stdout().write_all(&data)?;
@@ -148,7 +164,7 @@ pub async fn handle(
             input_format,
             conflict_mode,
         } => {
-            let chunks = read_file_chunks(&file, &input_format, &conflict_mode)?;
+            let chunks = read_file_chunks(&file, input_format, &conflict_mode)?;
 
             let final_response = client
                 .import_hosts(chunks, |progress| {
@@ -193,7 +209,7 @@ pub async fn handle(
 /// - Directory traversal is prevented by verifying the resolved path is a regular file.
 fn read_file_chunks(
     path: &Path,
-    format: &str,
+    format: FileFormat,
     conflict_mode: &str,
 ) -> Result<Vec<ImportHostsRequest>> {
     // Validate and canonicalize the path (note: this follows symlinks)
@@ -219,13 +235,14 @@ fn read_file_chunks(
     let mut chunks = Vec::new();
     let total_chunks = data.len().div_ceil(CHUNK_SIZE);
 
+    let format_str = format.to_string();
     for (i, chunk_data) in data.chunks(CHUNK_SIZE).enumerate() {
         let is_last = i == total_chunks - 1;
         chunks.push(ImportHostsRequest {
             chunk: chunk_data.to_vec(),
             last_chunk: is_last,
             format: if i == 0 {
-                Some(format.to_string())
+                Some(format_str.clone())
             } else {
                 None
             },
@@ -499,7 +516,7 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "192.168.1.1 test.local").unwrap();
 
-        let chunks = read_file_chunks(file.path(), "hosts", "skip").unwrap();
+        let chunks = read_file_chunks(file.path(), FileFormat::Hosts, "skip").unwrap();
 
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].last_chunk);
@@ -509,7 +526,11 @@ mod tests {
 
     #[test]
     fn test_read_file_chunks_nonexistent_file() {
-        let result = read_file_chunks(Path::new("/nonexistent/file.txt"), "hosts", "skip");
+        let result = read_file_chunks(
+            Path::new("/nonexistent/file.txt"),
+            FileFormat::Hosts,
+            "skip",
+        );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Cannot resolve path"));
@@ -518,7 +539,7 @@ mod tests {
     #[test]
     fn test_read_file_chunks_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let result = read_file_chunks(dir.path(), "hosts", "skip");
+        let result = read_file_chunks(dir.path(), FileFormat::Hosts, "skip");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Not a regular file"));
@@ -531,7 +552,7 @@ mod tests {
         let data = "x".repeat(CHUNK_SIZE + 1);
         write!(file, "{}", data).unwrap();
 
-        let chunks = read_file_chunks(file.path(), "json", "replace").unwrap();
+        let chunks = read_file_chunks(file.path(), FileFormat::Json, "replace").unwrap();
 
         assert_eq!(chunks.len(), 2);
         assert!(!chunks[0].last_chunk);
@@ -546,7 +567,7 @@ mod tests {
         let file = NamedTempFile::new().unwrap();
         // File is empty
 
-        let result = read_file_chunks(file.path(), "csv", "strict");
+        let result = read_file_chunks(file.path(), FileFormat::Csv, "strict");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Import file is empty"));

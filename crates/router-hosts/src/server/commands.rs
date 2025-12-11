@@ -16,7 +16,8 @@ use thiserror::Error;
 use ulid::Ulid;
 
 /// Result of a snapshot rollback operation
-#[derive(Debug, Clone)]
+#[must_use = "rollback result should be checked for success and backup snapshot ID"]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RollbackResult {
     /// Whether the rollback succeeded
     pub success: bool,
