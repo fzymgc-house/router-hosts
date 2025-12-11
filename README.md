@@ -116,7 +116,11 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 ### Homebrew (macOS/Linux)
 
 ```bash
-brew install fzymgc-house/tap/router-hosts
+# Download Homebrew formula from release
+curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts.rb
+
+# Install from formula
+brew install --formula ./router-hosts.rb
 ```
 
 > **Note:** Shell installer and Homebrew install binaries to `~/.cargo/bin/`. Ensure this directory is in your `PATH`:

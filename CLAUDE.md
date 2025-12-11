@@ -371,6 +371,87 @@ buf format --diff --exit-code
 - No force pushes to `main`
 - Branches must be up to date before merge
 
+## Release Process
+
+### Testing Releases Locally
+
+Before creating a release tag, test the release build process locally:
+
+```bash
+# Test release build locally (without publishing)
+dist build --artifacts=local --output-format=json
+
+# Dry-run for a specific tag (shows what would be created)
+dist plan --tag=v0.5.0
+
+# Check what artifacts would be generated
+dist plan --tag=v0.5.0 --output-format=json | jq '.artifacts'
+
+# Test that binaries are stripped (for smaller size)
+cargo build --profile=dist -p router-hosts
+ls -lh target/dist/router-hosts
+file target/dist/router-hosts  # Should show "stripped"
+```
+
+### Creating a Release
+
+1. **Update version in `Cargo.toml`** (workspace root):
+   ```toml
+   [workspace.package]
+   version = "0.6.0"  # Update this
+   ```
+
+2. **Update CHANGELOG.md** with release notes
+
+3. **Commit version bump**:
+   ```bash
+   git commit -am "chore: bump version to v0.6.0"
+   git push origin main
+   ```
+
+4. **Create and push tag** (triggers release workflow):
+   ```bash
+   git tag v0.6.0
+   git push origin v0.6.0
+   ```
+
+5. **Monitor release workflow**:
+   - GitHub Actions will build binaries for all platforms
+   - Generate shell installer and Homebrew formula
+   - Create GitHub Release with all artifacts
+   - Generate GitHub attestations for supply chain security
+
+### Post-Release Verification
+
+After the release workflow completes:
+
+```bash
+# 1. Verify GitHub Release was created
+gh release view v0.6.0
+
+# 2. Test shell installer (in clean environment/container)
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/fzymgc-house/router-hosts/releases/download/v0.6.0/router-hosts-installer.sh | sh
+
+# 3. Verify binary attestations
+gh attestation verify router-hosts --repo fzymgc-house/router-hosts
+
+# 4. Test Homebrew formula
+curl -LO https://github.com/fzymgc-house/router-hosts/releases/download/v0.6.0/router-hosts.rb
+brew install --formula ./router-hosts.rb
+
+# 5. Test binary with audit data
+cargo auditable audit router-hosts
+```
+
+### Release Tag Format
+
+Use semantic versioning with `v` prefix:
+- ✅ `v0.5.0` - Standard release
+- ✅ `v0.5.1-rc.1` - Pre-release (marked as prerelease in GitHub)
+- ❌ `0.5.0` - Works but inconsistent with project convention
+- ❌ `release-0.5.0` - Won't trigger workflow
+
 ## Architecture Overview
 
 ### Workspace Structure
