@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Homebrew formula generation for macOS/Linux
 - GitHub attestations for supply chain security
 - cargo-auditable integration for dependency auditing
+- Release verification script (`scripts/verify-release.sh`)
+
+### Changed
+
+- Release workflow now uses cargo-dist instead of manual builds
 
 ## [0.5.0] - 2025-12-10
 

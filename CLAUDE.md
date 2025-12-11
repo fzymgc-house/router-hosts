@@ -465,7 +465,10 @@ Use semantic versioning with `v` prefix:
 
 **Note:** The release workflow is named `v-release.yml` (not `release.yml`) because
 cargo-dist uses this naming convention when `tag-namespace = "v"` is configured.
-Do not rename this file manually - it will be overwritten by `dist generate-ci`.
+
+**Warning:** Do not rename `v-release.yml` manually. Running `dist generate-ci` will
+recreate it with the original name, and any custom changes will be lost. Always use
+`dist generate-ci` to regenerate the workflow file after modifying `dist-workspace.toml`.
 
 ## Architecture Overview
 

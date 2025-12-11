@@ -48,7 +48,18 @@ echo "Downloaded and extracted: $ARCHIVE"
 echo
 
 echo "4. Verifying GitHub attestation..."
-gh attestation verify "$TMPDIR/router-hosts" --repo fzymgc-house/router-hosts || echo "Warning: Attestation verification failed or not available"
+if ! gh attestation verify "$TMPDIR/router-hosts" --repo fzymgc-house/router-hosts; then
+    echo
+    echo "❌ ERROR: Attestation verification failed!"
+    echo "This binary may not be authentic. Do not use in production."
+    echo
+    echo "If this is an older release before attestations were enabled, you may"
+    echo "skip this check by setting SKIP_ATTESTATION=1"
+    if [[ "${SKIP_ATTESTATION:-}" != "1" ]]; then
+        exit 1
+    fi
+    echo "Continuing due to SKIP_ATTESTATION=1..."
+fi
 echo
 
 echo "5. Checking binary info..."
