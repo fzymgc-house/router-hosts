@@ -119,6 +119,12 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 brew install fzymgc-house/tap/router-hosts
 ```
 
+> **Note:** Shell installer and Homebrew install binaries to `~/.cargo/bin/`. Ensure this directory is in your `PATH`:
+> ```bash
+> export PATH="$HOME/.cargo/bin:$PATH"
+> ```
+> Add this line to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to make it permanent.
+
 ### Pre-built Binaries
 
 Download from [GitHub Releases](https://github.com/fzymgc-house/router-hosts/releases/latest):
@@ -144,6 +150,30 @@ cargo auditable audit router-hosts
 git clone https://github.com/fzymgc-house/router-hosts.git
 cd router-hosts
 cargo build --release
+```
+
+### Distribution Methods
+
+**router-hosts** uses two complementary distribution workflows:
+
+**CLI Binaries (cargo-dist)**:
+- Published to [GitHub Releases](https://github.com/fzymgc-house/router-hosts/releases) on version tags (e.g., `v0.5.0`)
+- Multi-platform binaries: macOS (Intel/ARM), Linux (x64/ARM64), Windows (x64)
+- Includes shell installer and Homebrew formula
+- Use for: Installing CLI on workstations for remote management
+
+**Server Containers (Docker)**:
+- Published to [GitHub Container Registry](https://github.com/fzymgc-house/router-hosts/pkgs/container/router-hosts) on every main branch commit
+- Multi-arch images: `linux/amd64`, `linux/arm64`
+- Tagged with commit SHA and `latest`
+- Use for: Deploying server on routers, servers, or containers
+
+```bash
+# Pull latest server image
+docker pull ghcr.io/fzymgc-house/router-hosts:latest
+
+# Run server container
+docker run -v /path/to/config:/config ghcr.io/fzymgc-house/router-hosts:latest server --config /config/server.toml
 ```
 
 ## Status
