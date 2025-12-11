@@ -1,7 +1,9 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Download pre-built protoc binary (much faster than compiling from source)
-    // dlprotoc::download_protoc() sets PROTOC env var automatically
-    dlprotoc::download_protoc()?;
+    // Use system protoc if available (set by CI), otherwise download via dlprotoc
+    // This fallback avoids download failures when GitHub has availability issues
+    if std::env::var("PROTOC").is_err() {
+        dlprotoc::download_protoc()?;
+    }
 
     tonic_prost_build::configure()
         .build_server(true)

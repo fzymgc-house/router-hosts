@@ -13,6 +13,8 @@ edition = "2021"
 authors = ["fzymgc-house"]
 license = "MIT"
 repository = "https://github.com/fzymgc-house/router-hosts"
+homepage = "https://github.com/fzymgc-house/router-hosts"
+description = "Rust CLI tool for managing DNS host entries on routers via gRPC"
 
 [workspace.dependencies]
 # gRPC and protobuf
@@ -70,3 +72,10 @@ expect_used = "warn"        # Will be "deny" after skeleton phase
 panic = "deny"
 todo = "warn"               # Will be "deny" after skeleton phase
 unimplemented = "warn"      # Will be "deny" after skeleton phase
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"             # Thin LTO balances optimization vs build time
+codegen-units = 1        # Single codegen unit for better optimization
+strip = true             # Strip symbols to reduce binary size
