@@ -104,6 +104,48 @@ task docker:build
 task e2e:scenario -- daily_operations
 ```
 
+## Installation
+
+### Shell Installer (macOS/Linux)
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf \
+  https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-installer.sh | sh
+```
+
+### Homebrew (macOS/Linux)
+
+```bash
+brew install fzymgc-house/tap/router-hosts
+```
+
+### Pre-built Binaries
+
+Download from [GitHub Releases](https://github.com/fzymgc-house/router-hosts/releases/latest):
+- macOS (Intel & Apple Silicon)
+- Linux (x64 & ARM64)
+- Windows (x64)
+
+### Verifying Binaries
+
+All release binaries include GitHub attestations for supply chain security:
+
+```bash
+# Verify downloaded binary
+gh attestation verify router-hosts --repo fzymgc-house/router-hosts
+
+# Audit embedded dependency information
+cargo auditable audit router-hosts
+```
+
+### Build from Source
+
+```bash
+git clone https://github.com/fzymgc-house/router-hosts.git
+cd router-hosts
+cargo build --release
+```
+
 ## Status
 
 ✅ **v0.5.0 Core Complete** - All features implemented, 8/8 E2E tests passing
