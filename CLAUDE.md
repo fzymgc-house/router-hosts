@@ -391,6 +391,10 @@ dist plan --tag=v0.5.0 --output-format=json | jq '.artifacts'
 cargo build --profile=dist -p router-hosts
 ls -lh target/dist/router-hosts
 file target/dist/router-hosts  # Should show "stripped"
+
+# Verify the binary runs correctly
+./target/dist/router-hosts --version
+./target/dist/router-hosts --help
 ```
 
 ### Creating a Release
@@ -423,7 +427,14 @@ file target/dist/router-hosts  # Should show "stripped"
 
 ### Post-Release Verification
 
-After the release workflow completes:
+After the release workflow completes, use the automated verification script:
+
+```bash
+# Automated verification (downloads, verifies attestations, checks audit data)
+./scripts/verify-release.sh v0.6.0
+```
+
+Or manually verify each step:
 
 ```bash
 # 1. Verify GitHub Release was created
@@ -449,8 +460,12 @@ cargo auditable audit router-hosts
 Use semantic versioning with `v` prefix:
 - ✅ `v0.5.0` - Standard release
 - ✅ `v0.5.1-rc.1` - Pre-release (marked as prerelease in GitHub)
-- ❌ `0.5.0` - Works but inconsistent with project convention
+- ❌ `0.5.0` - Won't trigger workflow (v prefix required)
 - ❌ `release-0.5.0` - Won't trigger workflow
+
+**Note:** The release workflow is named `v-release.yml` (not `release.yml`) because
+cargo-dist uses this naming convention when `tag-namespace = "v"` is configured.
+Do not rename this file manually - it will be overwritten by `dist generate-ci`.
 
 ## Architecture Overview
 

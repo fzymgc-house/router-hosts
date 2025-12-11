@@ -129,12 +129,23 @@ brew install --formula ./router-hosts.rb
 > ```
 > Add this line to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to make it permanent.
 
+<details>
+<summary>Troubleshooting Installation</summary>
+
+If `router-hosts` command is not found after installation:
+
+1. **Verify installation:** `ls -la ~/.local/bin/router-hosts`
+2. **Check PATH:** `echo $PATH | grep -o ~/.local/bin`
+3. **Restart shell** or run: `source ~/.bashrc` (or `~/.zshrc`)
+4. **Manual PATH fix:** `export PATH="$HOME/.local/bin:$PATH"`
+
+</details>
+
 ### Pre-built Binaries
 
 Download from [GitHub Releases](https://github.com/fzymgc-house/router-hosts/releases/latest):
 - macOS (Intel & Apple Silicon)
 - Linux (x64 & ARM64)
-- Windows (x64)
 
 ### Verifying Binaries
 
@@ -164,7 +175,7 @@ cargo build --release
 
 **CLI Binaries (cargo-dist)**:
 - Published to [GitHub Releases](https://github.com/fzymgc-house/router-hosts/releases) on version tags (e.g., `v0.5.0`)
-- Multi-platform binaries: macOS (Intel/ARM), Linux (x64/ARM64), Windows (x64)
+- Multi-platform binaries: macOS (Intel/ARM), Linux (x64/ARM64)
 - Includes shell installer and Homebrew formula
 - Use for: Installing CLI on workstations for remote management
 

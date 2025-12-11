@@ -76,6 +76,6 @@ unimplemented = "warn"      # Will be "deny" after skeleton phase
 # The profile that 'dist' will build with
 [profile.dist]
 inherits = "release"
-lto = "fat"              # Full LTO for maximum optimization
+lto = "thin"             # Thin LTO balances optimization vs build time
 codegen-units = 1        # Single codegen unit for better optimization
 strip = true             # Strip symbols to reduce binary size
