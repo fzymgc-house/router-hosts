@@ -8,8 +8,8 @@ cargo-dist-version = "0.30.2"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-# Homebrew formula will be published to GitHub Releases (default behavior)
-# Users can install via: brew install fzymgc-house/router-hosts/router-hosts
+# Homebrew formula will be published to GitHub Releases
+# Users can install via: brew install fzymgc-house/tap/router-hosts
 installers = ["shell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"]
@@ -17,5 +17,7 @@ targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "x86_64-apple-da
 install-path = "CARGO_HOME"
 # Whether to install an updater program
 install-updater = false
-# Enable cargo-auditable for dependency auditing
+# Features to pass to cargo build
 features = ["cargo-auditable"]
+# Enable GitHub Artifact Attestations for supply chain security
+github-attestations = true
