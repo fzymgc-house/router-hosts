@@ -15,9 +15,7 @@
 
 name: Release
 permissions:
-  contents: write        # Create releases and upload artifacts
-  id-token: write        # Generate attestations
-  attestations: write    # Publish attestations
+  "contents": "write"
 
 # This task will run whenever you push a git tag that looks like a version
 # like "1.0.0", "v0.1.0-prerelease.1", "my-app/0.1.0", "releases/v1.0.0", etc.
@@ -41,12 +39,7 @@ permissions:
 # If there's a prerelease-style suffix to the version, then the release(s)
 # will be marked as a prerelease.
 on:
-  # Only run on release-related file changes in PRs to avoid wasting CI resources
   pull_request:
-    paths:
-      - 'dist-workspace.toml'
-      - '.github/workflows/release.yml'
-      - 'Cargo.toml'
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
