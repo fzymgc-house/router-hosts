@@ -397,6 +397,15 @@ file target/dist/router-hosts  # Should show "stripped"
 ./target/dist/router-hosts --help
 ```
 
+### Required GitHub Secrets
+
+The following secrets must be configured in the repository for releases to work:
+
+- **`HOMEBREW_TAP_TOKEN`**: Personal access token with `contents: write` permission for `fzymgc-house/homebrew-tap`
+  - Create at: https://github.com/settings/tokens/new
+  - Required scopes: `public_repo` (or `repo` if tap is private)
+  - Add at: https://github.com/fzymgc-house/router-hosts/settings/secrets/actions
+
 ### Creating a Release
 
 1. **Update version in `Cargo.toml`** (workspace root):
@@ -424,6 +433,7 @@ file target/dist/router-hosts  # Should show "stripped"
    - Generate shell installer and Homebrew formula
    - Create GitHub Release with all artifacts
    - Generate GitHub attestations for supply chain security
+   - Push Homebrew formula to `fzymgc-house/homebrew-tap`
 
 ### Post-Release Verification
 
@@ -447,7 +457,10 @@ curl --proto '=https' --tlsv1.2 -LsSf \
 # 3. Verify binary attestations
 gh attestation verify router-hosts --repo fzymgc-house/router-hosts
 
-# 4. Test Homebrew formula
+# 4. Test Homebrew tap installation (preferred method)
+brew install fzymgc-house/tap/router-hosts
+
+# Alternative: Direct formula install from release
 curl -LO https://github.com/fzymgc-house/router-hosts/releases/download/v0.6.0/router-hosts.rb
 brew install --formula ./router-hosts.rb
 
