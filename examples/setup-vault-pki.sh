@@ -99,7 +99,7 @@ vault write "${PKI_PATH}/roles/router-hosts-server" \
     server_flag=true \
     client_flag=false \
     key_type="rsa" \
-    key_bits=2048 \
+    key_bits=3072 \
     max_ttl="$DEFAULT_CERT_TTL" \
     ttl="$DEFAULT_CERT_TTL"
 
@@ -113,7 +113,7 @@ vault write "${PKI_PATH}/roles/router-hosts-client" \
     server_flag=false \
     client_flag=true \
     key_type="rsa" \
-    key_bits=2048 \
+    key_bits=3072 \
     max_ttl="$DEFAULT_CERT_TTL" \
     ttl="$DEFAULT_CERT_TTL"
 
