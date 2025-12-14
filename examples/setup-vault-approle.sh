@@ -13,15 +13,20 @@
 # Usage:
 #   export VAULT_ADDR=https://vault.example.com:8200
 #   vault login
-#   ./setup-vault-approle.sh [--wrapped]
+#   ./setup-vault-approle.sh [--no-wrap] [output-dir]
 #
 # Options:
-#   --wrapped  Use response wrapping for secret_id (production recommended)
-#              Secret ID will be wrapped with 5-minute TTL
+#   --no-wrap  Disable response wrapping (writes plaintext secret_id)
+#              Use only for development/testing environments
+#
+# Default behavior (production):
+#   Uses response wrapping - secret_id is wrapped with 5-minute TTL
+#   Must be unwrapped on target system before use
 #
 # Output:
 #   - vault-approle/role_id
-#   - vault-approle/secret_id (or wrapped_secret_id if --wrapped)
+#   - vault-approle/wrapped_secret_id (default, must be unwrapped)
+#   - vault-approle/secret_id (only with --no-wrap)
 
 set -euo pipefail
 
@@ -29,12 +34,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Parse arguments
-USE_WRAPPED=false
+# Default to wrapped (secure) - use --no-wrap to disable
+USE_WRAPPED=true
 OUTPUT_DIR="${SCRIPT_DIR}/vault-approle"
 
 for arg in "$@"; do
     case "$arg" in
+        --no-wrap)
+            USE_WRAPPED=false
+            echo "⚠️  WARNING: Using --no-wrap writes plaintext credentials to disk"
+            echo "   This is acceptable for development but NOT recommended for production"
+            echo ""
+            ;;
         --wrapped)
+            # Keep for backward compatibility, but it's now the default
             USE_WRAPPED=true
             ;;
         *)
@@ -131,6 +144,7 @@ echo "  2. Edit vault-agent-config.hcl with your Vault address and settings"
 echo "  3. Run: docker compose -f docker-compose.vault-agent.yml up -d"
 echo ""
 echo "Security notes:"
-echo "  - Keep secret_id secure (equivalent to a password)"
-echo "  - For production, use --wrapped option for response wrapping"
+echo "  - Keep credentials secure (equivalent to passwords)"
+echo "  - Response wrapping is enabled by default (use --no-wrap only for dev)"
 echo "  - Rotate secret_id periodically"
+echo "  - Consider using Vault Agent auto-auth with instance metadata in production"

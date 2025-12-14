@@ -18,6 +18,10 @@
 #   VAULT_SERVER_ROLE   - Role for server certs (default: router-hosts-server)
 #   VAULT_CLIENT_ROLE   - Role for client certs (default: router-hosts-client)
 #   CERT_TTL            - Certificate validity (default: 8760h = 1 year)
+#
+# NOTE: This script is for MANUAL certificate issuance. The 1-year default TTL
+# is appropriate for infrequent manual renewal. For automated renewal with
+# Vault Agent, use vault-agent-config.hcl which defaults to 24h TTL.
 
 set -euo pipefail
 
@@ -93,9 +97,16 @@ if ! vault write -format=json "${PKI_PATH}/issue/${SERVER_ROLE}" \
     common_name="$SERVER_CN" \
     alt_names="$SERVER_ALT_NAMES" \
     ip_sans="$SERVER_IP_SANS" \
-    ttl="$TTL" > server-response.json; then
+    ttl="$TTL" > server-response.json 2>&1; then
     echo "Error: Failed to issue server certificate from Vault"
-    cat server-response.json 2>/dev/null || true
+    if [[ -s server-response.json ]]; then
+        echo "Vault response:"
+        jq '.' server-response.json 2>/dev/null || cat server-response.json
+    else
+        echo "No response - check Vault connectivity and authentication"
+        echo "  VAULT_ADDR: $VAULT_ADDR"
+        echo "  PKI path: ${PKI_PATH}/issue/${SERVER_ROLE}"
+    fi
     exit 1
 fi
 
@@ -119,9 +130,16 @@ fi
 echo "Issuing client certificate (role: $CLIENT_ROLE)..."
 if ! vault write -format=json "${PKI_PATH}/issue/${CLIENT_ROLE}" \
     common_name="$CLIENT_CN" \
-    ttl="$TTL" > client-response.json; then
+    ttl="$TTL" > client-response.json 2>&1; then
     echo "Error: Failed to issue client certificate from Vault"
-    cat client-response.json 2>/dev/null || true
+    if [[ -s client-response.json ]]; then
+        echo "Vault response:"
+        jq '.' client-response.json 2>/dev/null || cat client-response.json
+    else
+        echo "No response - check Vault connectivity and authentication"
+        echo "  VAULT_ADDR: $VAULT_ADDR"
+        echo "  PKI path: ${PKI_PATH}/issue/${CLIENT_ROLE}"
+    fi
     exit 1
 fi
 
@@ -150,9 +168,42 @@ umask 022
 chmod 600 ./*-key.pem
 chmod 644 ./*.pem
 
+# Validate certificates
+echo ""
+echo "Validating certificates..."
+
+# Verify server certificate chain and key match
+if ! openssl verify -CAfile ca.pem server.pem >/dev/null 2>&1; then
+    echo "Error: Server certificate chain validation failed"
+    exit 1
+fi
+SERVER_CERT_MOD=$(openssl x509 -in server.pem -noout -modulus 2>/dev/null | openssl md5)
+SERVER_KEY_MOD=$(openssl rsa -in server-key.pem -noout -modulus 2>/dev/null | openssl md5)
+if [[ "$SERVER_CERT_MOD" != "$SERVER_KEY_MOD" ]]; then
+    echo "Error: Server certificate and key do not match"
+    exit 1
+fi
+
+# Verify client certificate chain and key match
+if ! openssl verify -CAfile ca.pem client.pem >/dev/null 2>&1; then
+    echo "Error: Client certificate chain validation failed"
+    exit 1
+fi
+CLIENT_CERT_MOD=$(openssl x509 -in client.pem -noout -modulus 2>/dev/null | openssl md5)
+CLIENT_KEY_MOD=$(openssl rsa -in client-key.pem -noout -modulus 2>/dev/null | openssl md5)
+if [[ "$CLIENT_CERT_MOD" != "$CLIENT_KEY_MOD" ]]; then
+    echo "Error: Client certificate and key do not match"
+    exit 1
+fi
+
+echo "✓ All certificates validated successfully"
+
 echo ""
 echo "Certificates generated successfully:"
 ls -la
+echo ""
+echo "Server certificate SANs:"
+openssl x509 -in server.pem -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1 | sed 's/^[[:space:]]*/  /'
 echo ""
 echo "Server certificate expires: $(openssl x509 -in server.pem -noout -enddate 2>/dev/null | cut -d= -f2)"
 echo "Client certificate expires: $(openssl x509 -in client.pem -noout -enddate 2>/dev/null | cut -d= -f2)"

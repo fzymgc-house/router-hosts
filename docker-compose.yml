@@ -5,8 +5,15 @@
 #   2. Create config file from template: cp examples/server.toml.example config/server.toml
 #   3. Create directories: mkdir -p config certs data
 #
+# Environment variables (optional):
+#   DOCKER_UID - User ID for container (default: 1000)
+#   DOCKER_GID - Group ID for container (default: 1000)
+#
 # Usage:
 #   docker compose up -d
+#
+# For non-default UID/GID (e.g., macOS):
+#   DOCKER_UID=$(id -u) DOCKER_GID=$(id -g) docker compose up -d
 #
 # Client connection:
 #   router-hosts --server localhost:50051 \
@@ -20,6 +27,10 @@ services:
     image: ghcr.io/fzymgc-house/router-hosts:latest
     container_name: router-hosts-server
     restart: unless-stopped
+    # Run as non-root user (customize via DOCKER_UID/DOCKER_GID env vars)
+    # Default 1000:1000 works for most Linux systems
+    # macOS users: DOCKER_UID=$(id -u) DOCKER_GID=$(id -g) docker compose up -d
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     ports:
       - "50051:50051"
     volumes:
@@ -38,6 +49,8 @@ services:
     # command: ["server", "--config", "/config/custom.toml"]
     healthcheck:
       # TCP port check using netcat (installed in container)
+      # Note: We use netcat because /dev/tcp is a bashism not available in
+      # Debian's default shell (dash). netcat adds ~270KB but is reliable.
       test: ["CMD", "nc", "-z", "localhost", "50051"]
       interval: 30s
       timeout: 5s

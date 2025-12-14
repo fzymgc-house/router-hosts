@@ -55,6 +55,13 @@ auto_auth {
 #
 # With share_dependencies enabled, the pkiCert function is called once and
 # its results (cert, key, CA chain) are shared across all templates.
+#
+# NOTE ON ATOMIC WRITES: Vault Agent writes files atomically (write to temp,
+# then rename). However, there's still a brief window between writing cert
+# and key files. Since router-hosts does NOT hot-reload certificates, this
+# is not a concern - the server reads certs once at startup. If you implement
+# hot reload in the future, consider writing to temp files first and using
+# an atomic rename, or signaling the server only after all files are written.
 # =============================================================================
 
 # Template for server certificate

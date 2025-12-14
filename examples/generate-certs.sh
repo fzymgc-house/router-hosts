@@ -17,7 +17,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${1:-${SCRIPT_DIR}/../certs}"
 
 DAYS_VALID=365
-KEY_SIZE=2048
+# NIST recommends 3072-bit RSA for security through 2030
+# See: https://nvlpubs.nist.gov/nistpubs/SpecialPublications/NIST.SP.800-57pt1r5.pdf
+KEY_SIZE=3072
 
 # =============================================================================
 # CUSTOMIZE THESE VALUES for your environment
@@ -95,10 +97,49 @@ umask 022
 chmod 600 ./*-key.pem
 chmod 644 ./*.pem
 
+# Validate certificates
+echo ""
+echo "Validating certificates..."
+
+# Verify CA
+if ! openssl x509 -in ca.pem -noout 2>/dev/null; then
+    echo "Error: CA certificate is invalid"
+    exit 1
+fi
+
+# Verify server certificate chain and key match
+if ! openssl verify -CAfile ca.pem server.pem >/dev/null 2>&1; then
+    echo "Error: Server certificate chain validation failed"
+    exit 1
+fi
+SERVER_CERT_MOD=$(openssl x509 -in server.pem -noout -modulus 2>/dev/null | openssl md5)
+SERVER_KEY_MOD=$(openssl rsa -in server-key.pem -noout -modulus 2>/dev/null | openssl md5)
+if [[ "$SERVER_CERT_MOD" != "$SERVER_KEY_MOD" ]]; then
+    echo "Error: Server certificate and key do not match"
+    exit 1
+fi
+
+# Verify client certificate chain and key match
+if ! openssl verify -CAfile ca.pem client.pem >/dev/null 2>&1; then
+    echo "Error: Client certificate chain validation failed"
+    exit 1
+fi
+CLIENT_CERT_MOD=$(openssl x509 -in client.pem -noout -modulus 2>/dev/null | openssl md5)
+CLIENT_KEY_MOD=$(openssl rsa -in client-key.pem -noout -modulus 2>/dev/null | openssl md5)
+if [[ "$CLIENT_CERT_MOD" != "$CLIENT_KEY_MOD" ]]; then
+    echo "Error: Client certificate and key do not match"
+    exit 1
+fi
+
+echo "✓ All certificates validated successfully"
+
 echo ""
 echo "Certificates generated in: $(pwd)"
 echo ""
 ls -la
+echo ""
+echo "Server certificate SANs:"
+openssl x509 -in server.pem -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1 | sed 's/^[[:space:]]*/  /'
 echo ""
 echo "Copy to your deployment:"
 echo "  Server: ca.pem, server.pem, server-key.pem"
