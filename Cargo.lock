@@ -2683,6 +2683,7 @@ dependencies = [
  "prost",
  "prost-types",
  "router-hosts-common",
+ "router-hosts-storage",
  "serde",
  "serde_json",
  "serial_test",
@@ -2731,6 +2732,23 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "router-hosts-storage"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "duckdb",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+ "url",
 ]
 
 [[package]]

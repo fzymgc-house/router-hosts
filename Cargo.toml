@@ -5,6 +5,7 @@ members = [
     "crates/router-hosts-common",
     "crates/router-hosts",
     "crates/router-hosts-e2e",
+    "crates/router-hosts-storage",
 ]
 
 [workspace.package]

@@ -1,0 +1,40 @@
+[package]
+name = "router-hosts-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Storage abstraction layer for router-hosts"
+
+[dependencies]
+# Async
+async-trait = "0.1"
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# IDs
+ulid = { workspace = true }
+
+# URL parsing
+url = "2"
+
+# DuckDB backend (always included)
+duckdb = { workspace = true }
+
+# Synchronization
+parking_lot = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
