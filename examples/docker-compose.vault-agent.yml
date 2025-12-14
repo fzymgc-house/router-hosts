@@ -23,6 +23,9 @@
 # For non-default UID/GID (e.g., macOS):
 #   DOCKER_UID=$(id -u) DOCKER_GID=$(id -g) docker compose -f docker-compose.vault-agent.yml up -d
 #
+# Or create .env file (see .env.example):
+#   cp .env.example .env && vim .env
+#
 # For client certificates, use generate-certs-vault.sh or configure
 # a separate Vault Agent on the client machine.
 
@@ -51,6 +54,9 @@ services:
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     healthcheck:
       # Check that Vault Agent has written certificates (what router-hosts needs)
+      # Note: We use file existence check instead of Vault Agent API (:8100) because
+      # the API health indicates Vault Agent status, not certificate availability.
+      # File check directly verifies what router-hosts requires to start.
       test: ["CMD", "sh", "-c", "test -f /certs/server.pem && test -f /certs/server-key.pem && test -f /certs/ca.pem"]
       interval: 30s
       timeout: 5s

@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Generate self-signed certificates for router-hosts mTLS
 #
-# Usage: ./generate-certs.sh [output-dir]
+# Usage: ./generate-certs.sh [--dry-run] [output-dir]
+#
+# Options:
+#   --dry-run  Show what would be created without writing files
 #
 # This creates:
 #   - ca.pem / ca-key.pem         - Certificate Authority
@@ -12,9 +15,24 @@
 
 set -euo pipefail
 
+# Parse arguments
+DRY_RUN=false
+OUTPUT_DIR=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        *)
+            OUTPUT_DIR="$arg"
+            ;;
+    esac
+done
+
 # Resolve script directory for reliable relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="${1:-${SCRIPT_DIR}/../certs}"
+OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/../certs}"
 
 DAYS_VALID=365
 # NIST recommends 3072-bit RSA for security through 2030
@@ -30,6 +48,31 @@ KEY_SIZE=3072
 # =============================================================================
 SERVER_CN="router-hosts"
 SERVER_SAN="DNS:localhost,DNS:router-hosts,DNS:router.local,IP:127.0.0.1"
+
+# Dry-run mode: show what would be created and exit
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "DRY RUN - Would create certificates with:"
+    echo ""
+    echo "Output directory: $OUTPUT_DIR"
+    echo "Key size: $KEY_SIZE bits (RSA)"
+    echo "Validity: $DAYS_VALID days"
+    echo ""
+    echo "CA Certificate:"
+    echo "  - CN: router-hosts-ca"
+    echo "  - Files: ca.pem, ca-key.pem"
+    echo ""
+    echo "Server Certificate:"
+    echo "  - CN: $SERVER_CN"
+    echo "  - SANs: $SERVER_SAN"
+    echo "  - Files: server.pem, server-key.pem"
+    echo ""
+    echo "Client Certificate:"
+    echo "  - CN: router-hosts-client"
+    echo "  - Files: client.pem, client-key.pem"
+    echo ""
+    echo "Run without --dry-run to generate certificates."
+    exit 0
+fi
 
 mkdir -p "$OUTPUT_DIR"
 cd "$OUTPUT_DIR"

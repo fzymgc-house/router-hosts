@@ -110,7 +110,7 @@ For production deployments with automatic certificate renewal:
 
 # 3. Configure Vault Agent
 cp vault-agent-config.hcl.example vault-agent-config.hcl
-chmod 600 vault-agent-config.hcl  # Contains no secrets but restrict anyway
+chmod 600 vault-agent-config.hcl  # Restrict on host (container mounts read-only)
 # Edit vault-agent-config.hcl:
 #   - Set correct Vault address
 #   - Adjust common_name and alt_names for your server
@@ -264,6 +264,16 @@ Note: The server container needs Docker socket access to run `docker exec`.
 
 ## Certificate Renewal
 
+**Quick Decision Guide:**
+
+| Certificate Method | Action Required |
+|-------------------|-----------------|
+| Self-signed (`generate-certs.sh`) | Regenerate annually, restart server |
+| Vault PKI (manual) | Regenerate before expiry, restart server |
+| Vault Agent (automated) | Configure scheduled restarts (daily/weekly) |
+
+For most deployments, Vault Agent with daily restarts provides the best balance of security and automation.
+
 ### Manual Certificate Renewal
 
 When using manually generated certificates (`generate-certs.sh` or `generate-certs-vault.sh`):
@@ -307,3 +317,24 @@ Vault Agent automatically renews certificates before expiration. However, **rout
 5. **AppRole credentials** - Keep `vault-approle/` secure; equivalent to passwords
 6. **Vault Agent config** - Set `vault-agent-config.hcl` to mode 600 (restrict read access)
 7. **Response wrapping** - Use `./setup-vault-approle.sh --wrapped` for production to avoid plaintext secret_id on disk
+
+### Verifying Docker Images
+
+Official router-hosts images are signed with GitHub attestations for supply chain security. Verify before deploying:
+
+```bash
+# Verify the latest image
+gh attestation verify oci://ghcr.io/fzymgc-house/router-hosts:latest \
+  --repo fzymgc-house/router-hosts
+
+# Verify a specific version
+gh attestation verify oci://ghcr.io/fzymgc-house/router-hosts:v0.5.0 \
+  --repo fzymgc-house/router-hosts
+
+# Example successful output:
+# Loaded digest sha256:abc123... for oci://ghcr.io/fzymgc-house/router-hosts:latest
+# Loaded 1 attestation from GitHub API
+# ✓ Verification succeeded!
+```
+
+This verifies the image was built by the official GitHub Actions workflow and hasn't been tampered with. See [GitHub's attestation documentation](https://docs.github.com/en/actions/security-guides/using-artifact-attestations-to-establish-provenance-for-builds) for details.

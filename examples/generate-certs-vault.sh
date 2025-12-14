@@ -9,7 +9,10 @@
 # Usage:
 #   export VAULT_ADDR=https://vault.example.com:8200
 #   export VAULT_TOKEN=hvs.xxxxx  # or use vault login
-#   ./generate-certs-vault.sh [output-dir]
+#   ./generate-certs-vault.sh [--dry-run] [output-dir]
+#
+# Options:
+#   --dry-run  Show what would be created without writing files
 #
 # Environment variables:
 #   VAULT_ADDR          - Vault server address (required)
@@ -25,9 +28,24 @@
 
 set -euo pipefail
 
+# Parse arguments
+DRY_RUN=false
+OUTPUT_DIR=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        *)
+            OUTPUT_DIR="$arg"
+            ;;
+    esac
+done
+
 # Resolve script directory for reliable relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="${1:-${SCRIPT_DIR}/../certs}"
+OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/../certs}"
 
 # Configuration
 PKI_PATH="${VAULT_PKI_PATH:-pki}"
@@ -48,6 +66,37 @@ SERVER_IP_SANS="127.0.0.1"
 
 # Client identity
 CLIENT_CN="router-hosts-client"
+
+# Dry-run mode: show what would be created and exit
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "DRY RUN - Would issue certificates from Vault PKI with:"
+    echo ""
+    echo "Vault Configuration:"
+    echo "  - VAULT_ADDR: ${VAULT_ADDR:-<not set>}"
+    echo "  - PKI Path: $PKI_PATH"
+    echo ""
+    echo "Output directory: $OUTPUT_DIR"
+    echo "Certificate TTL: $TTL"
+    echo ""
+    echo "Server Certificate:"
+    echo "  - Role: $SERVER_ROLE"
+    echo "  - CN: $SERVER_CN"
+    echo "  - Alt Names: $SERVER_ALT_NAMES"
+    echo "  - IP SANs: $SERVER_IP_SANS"
+    echo "  - Files: server.pem, server-key.pem"
+    echo ""
+    echo "Client Certificate:"
+    echo "  - Role: $CLIENT_ROLE"
+    echo "  - CN: $CLIENT_CN"
+    echo "  - Files: client.pem, client-key.pem"
+    echo ""
+    echo "CA Certificate:"
+    echo "  - Source: ${PKI_PATH}/cert/ca"
+    echo "  - File: ca.pem"
+    echo ""
+    echo "Run without --dry-run to generate certificates."
+    exit 0
+fi
 
 # Verify required tools are available
 for cmd in vault jq openssl; do
@@ -159,8 +208,8 @@ if jq -e '.data.ca_chain | length > 0' client-response.json &>/dev/null; then
     jq -r '.data.ca_chain[]' client-response.json >> client.pem
 fi
 
-# Cleanup is handled by trap, but be explicit
-rm -f server-response.json client-response.json
+# Note: Cleanup of server-response.json and client-response.json is handled
+# automatically by the EXIT trap defined at the start of the script
 
 # Restore default umask and set final permissions
 # (umask 077 already created keys with 600, but be explicit)

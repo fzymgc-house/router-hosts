@@ -144,3 +144,31 @@ path "pki/cert/ca" {
 }
 
 EOF
+
+# =============================================================================
+# INTERMEDIATE CA SETUP (Production)
+# =============================================================================
+# For production, use an intermediate CA signed by your organization's root.
+# Uncomment and modify the following commands:
+#
+# # 1. Generate intermediate CSR
+# vault write -format=json pki_int/intermediate/generate/internal \
+#     common_name="router-hosts-intermediate-ca" \
+#     organization="Your Organization" \
+#     | jq -r '.data.csr' > intermediate.csr
+#
+# # 2. Sign the CSR with your external root CA
+# #    (This step happens outside Vault, using your root CA)
+# #    Example with OpenSSL:
+# #    openssl ca -config root-ca.conf -in intermediate.csr -out intermediate.pem
+#
+# # 3. Import signed certificate
+# vault write pki_int/intermediate/set-signed certificate=@intermediate.pem
+#
+# # 4. Configure URLs for the intermediate CA
+# vault write pki_int/config/urls \
+#     issuing_certificates="${VAULT_ADDR}/v1/pki_int/ca" \
+#     crl_distribution_points="${VAULT_ADDR}/v1/pki_int/crl"
+#
+# See: https://developer.hashicorp.com/vault/tutorials/secrets-management/pki-engine-external-ca
+# =============================================================================

@@ -15,6 +15,9 @@
 # For non-default UID/GID (e.g., macOS):
 #   DOCKER_UID=$(id -u) DOCKER_GID=$(id -g) docker compose up -d
 #
+# Or create .env file (see examples/.env.example):
+#   cp examples/.env.example .env && vim .env
+#
 # Client connection:
 #   router-hosts --server localhost:50051 \
 #     --cert certs/client.pem \
