@@ -38,7 +38,8 @@ services:
       - certs:/certs
       # AppRole credentials (if using AppRole auth)
       - ./vault-approle:/vault-approle:ro
-    # Run as non-root user (must match router-hosts user for shared volume access)
+    # Run as non-root user for security (UID:GID must match between services
+    # for shared volume access - default 1000:1000 works for most setups)
     user: "1000:1000"
     healthcheck:
       # Check that Vault Agent has written certificates (what router-hosts needs)
@@ -65,7 +66,7 @@ services:
       - certs:/certs:ro
       # Persistent data
       - ./data:/data
-    # Run as non-root user (must match vault-agent for shared volume access)
+    # Run as non-root user (UID:GID must match vault-agent for shared volume)
     user: "1000:1000"
     environment:
       RUST_LOG: info

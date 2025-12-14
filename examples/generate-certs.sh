@@ -32,6 +32,9 @@ SERVER_SAN="DNS:localhost,DNS:router-hosts,DNS:router.local,IP:127.0.0.1"
 mkdir -p "$OUTPUT_DIR"
 cd "$OUTPUT_DIR"
 
+# Set restrictive umask for private key generation (prevents race condition)
+umask 077
+
 echo "Generating CA..."
 openssl genrsa -out ca-key.pem "$KEY_SIZE"
 openssl req -new -x509 -days "$DAYS_VALID" \
@@ -86,7 +89,9 @@ openssl x509 -req -days "$DAYS_VALID" \
 # Cleanup CSRs and temp files
 rm -f ./*.csr ./*.cnf ca.srl
 
-# Set restrictive permissions
+# Restore default umask and set final permissions
+# (umask 077 already created keys with 600, but be explicit)
+umask 022
 chmod 600 ./*-key.pem
 chmod 644 ./*.pem
 

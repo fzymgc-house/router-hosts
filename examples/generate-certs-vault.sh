@@ -72,6 +72,12 @@ fi
 mkdir -p "$OUTPUT_DIR"
 cd "$OUTPUT_DIR"
 
+# Set restrictive umask for private key generation (prevents race condition)
+umask 077
+
+# Cleanup temporary files on exit (contain private keys)
+trap 'rm -f server-response.json client-response.json' EXIT
+
 echo "Using Vault at: $VAULT_ADDR"
 echo "PKI path: $PKI_PATH"
 echo "Output directory: $(pwd)"
@@ -115,10 +121,12 @@ if jq -e '.data.ca_chain | length > 0' client-response.json &>/dev/null; then
     jq -r '.data.ca_chain[]' client-response.json >> client.pem
 fi
 
-# Cleanup temporary files
+# Cleanup is handled by trap, but be explicit
 rm -f server-response.json client-response.json
 
-# Set restrictive permissions on private keys
+# Restore default umask and set final permissions
+# (umask 077 already created keys with 600, but be explicit)
+umask 022
 chmod 600 ./*-key.pem
 chmod 644 ./*.pem
 
