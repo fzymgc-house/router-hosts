@@ -35,6 +35,32 @@ echo "Setting up Vault PKI at: $VAULT_ADDR"
 echo "PKI mount path: $PKI_PATH"
 echo ""
 
+# =============================================================================
+# PRODUCTION WARNING
+# =============================================================================
+# This script generates a NEW ROOT CA in Vault. For production environments:
+#   - Use an intermediate CA signed by your organization's existing root
+#   - Run: vault write pki/intermediate/generate/internal ...
+#   - Sign with your root CA
+#   - Import: vault write pki/intermediate/set-signed certificate=@signed.pem
+#
+# See: https://developer.hashicorp.com/vault/tutorials/secrets-management/pki-engine
+# =============================================================================
+
+if [[ "${SKIP_ROOT_CA_WARNING:-}" != "true" ]]; then
+    echo "⚠️  WARNING: This will generate a NEW ROOT CA"
+    echo "   For production, use an intermediate CA instead."
+    echo ""
+    echo "   Set SKIP_ROOT_CA_WARNING=true to skip this prompt."
+    echo ""
+    read -r -p "Continue with root CA generation? (yes/no): " confirm
+    if [[ "$confirm" != "yes" ]]; then
+        echo "Aborted. See comments in script for production setup."
+        exit 1
+    fi
+    echo ""
+fi
+
 # Enable PKI secrets engine (idempotent - will fail if already enabled)
 echo "Enabling PKI secrets engine..."
 vault secrets enable -path="$PKI_PATH" pki 2>/dev/null || echo "PKI already enabled at $PKI_PATH"
@@ -44,7 +70,6 @@ echo "Configuring PKI mount..."
 vault secrets tune -max-lease-ttl="$MAX_LEASE_TTL" "$PKI_PATH"
 
 # Generate root CA (for development/testing)
-# For production, use: vault write pki/intermediate/generate/internal
 echo "Generating root CA..."
 mkdir -p "$CA_OUTPUT_DIR"
 vault write -format=json "${PKI_PATH}/root/generate/internal" \

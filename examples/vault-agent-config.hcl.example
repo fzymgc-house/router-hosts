@@ -46,6 +46,17 @@ auto_auth {
   }
 }
 
+# =============================================================================
+# CERTIFICATE TEMPLATES
+# =============================================================================
+# IMPORTANT: The `share_dependencies = true` setting in template_config below
+# is CRITICAL. Without it, each template would issue a SEPARATE certificate
+# from Vault, resulting in mismatched cert/key pairs that break TLS.
+#
+# With share_dependencies enabled, the pkiCert function is called once and
+# its results (cert, key, CA chain) are shared across all templates.
+# =============================================================================
+
 # Template for server certificate
 template {
   contents = <<-EOF

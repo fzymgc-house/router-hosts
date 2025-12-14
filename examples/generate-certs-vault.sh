@@ -45,11 +45,18 @@ SERVER_IP_SANS="127.0.0.1"
 # Client identity
 CLIENT_CN="router-hosts-client"
 
-# Verify vault CLI is available and authenticated
-if ! command -v vault &> /dev/null; then
-    echo "Error: vault CLI not found. Install from https://developer.hashicorp.com/vault/install"
-    exit 1
-fi
+# Verify required tools are available
+for cmd in vault jq openssl; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo "Error: $cmd not found"
+        case "$cmd" in
+            vault) echo "Install from https://developer.hashicorp.com/vault/install" ;;
+            jq) echo "Install from https://jqlang.github.io/jq/download/" ;;
+            openssl) echo "Install via your package manager" ;;
+        esac
+        exit 1
+    fi
+done
 
 if [[ -z "${VAULT_ADDR:-}" ]]; then
     echo "Error: VAULT_ADDR not set"

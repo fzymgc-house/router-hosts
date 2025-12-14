@@ -244,7 +244,10 @@ Vault Agent automatically renews certificates before expiration. However, **rout
 
 2. **Short-lived containers** - Use orchestrator (Kubernetes, Nomad) that restarts pods on certificate change
 
-3. **Certificate validity buffer** - Use longer TTLs (e.g., 7 days) with 24h renewal, giving ample time for restarts
+3. **Certificate validity buffer** - Match TTL to your restart schedule:
+   - Daily restarts: Use 24h-48h TTL (vault-agent-config.hcl default)
+   - Weekly restarts: Use 7-day TTL
+   - Monthly maintenance: Use 30-day TTL with monitoring
 
 **Future enhancement:** Hot certificate reload via SIGHUP is planned but not yet implemented.
 

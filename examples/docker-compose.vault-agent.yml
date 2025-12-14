@@ -38,8 +38,8 @@ services:
       - certs:/certs
       # AppRole credentials (if using AppRole auth)
       - ./vault-approle:/vault-approle:ro
-    # Run as root to write to shared volume (adjust for your security requirements)
-    # user: "0:0"
+    # Run as non-root user (must match router-hosts user for shared volume access)
+    user: "1000:1000"
     healthcheck:
       # Check that Vault Agent has written certificates (what router-hosts needs)
       test: ["CMD", "sh", "-c", "test -f /certs/server.pem && test -f /certs/server-key.pem && test -f /certs/ca.pem"]
@@ -65,6 +65,8 @@ services:
       - certs:/certs:ro
       # Persistent data
       - ./data:/data
+    # Run as non-root user (must match vault-agent for shared volume access)
+    user: "1000:1000"
     environment:
       RUST_LOG: info
     healthcheck:
