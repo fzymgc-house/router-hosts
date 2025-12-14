@@ -213,65 +213,57 @@ impl EventStore for DuckDbStorage {
 
 #[async_trait]
 impl SnapshotStore for DuckDbStorage {
-    async fn save_snapshot(&self, _snapshot: Snapshot) -> Result<(), StorageError> {
-        // TODO: Implement in Task 3.4 (snapshot_store.rs)
-        panic!("not implemented: save_snapshot");
+    async fn save_snapshot(&self, snapshot: Snapshot) -> Result<(), StorageError> {
+        self.save_snapshot_impl(snapshot).await
     }
 
-    async fn get_snapshot(&self, _snapshot_id: &str) -> Result<Snapshot, StorageError> {
-        // TODO: Implement in Task 3.4 (snapshot_store.rs)
-        panic!("not implemented: get_snapshot");
+    async fn get_snapshot(&self, snapshot_id: &str) -> Result<Snapshot, StorageError> {
+        self.get_snapshot_impl(snapshot_id).await
     }
 
     async fn list_snapshots(&self) -> Result<Vec<SnapshotMetadata>, StorageError> {
-        // TODO: Implement in Task 3.4 (snapshot_store.rs)
-        panic!("not implemented: list_snapshots");
+        self.list_snapshots_impl().await
     }
 
-    async fn delete_snapshot(&self, _snapshot_id: &str) -> Result<(), StorageError> {
-        // TODO: Implement in Task 3.4 (snapshot_store.rs)
-        panic!("not implemented: delete_snapshot");
+    async fn delete_snapshot(&self, snapshot_id: &str) -> Result<(), StorageError> {
+        self.delete_snapshot_impl(snapshot_id).await
     }
 
     async fn apply_retention_policy(
         &self,
-        _max_count: Option<i32>,
-        _max_age_days: Option<i32>,
+        max_count: Option<i32>,
+        max_age_days: Option<i32>,
     ) -> Result<i32, StorageError> {
-        // TODO: Implement in Task 3.4 (snapshot_store.rs)
-        panic!("not implemented: apply_retention_policy");
+        self.apply_retention_policy_impl(max_count, max_age_days)
+            .await
     }
 }
 
 #[async_trait]
 impl HostProjection for DuckDbStorage {
     async fn list_all(&self) -> Result<Vec<HostEntry>, StorageError> {
-        // TODO: Implement in Task 3.5 (projection.rs)
-        panic!("not implemented: list_all");
+        self.list_all_impl().await
     }
 
-    async fn get_by_id(&self, _id: Ulid) -> Result<HostEntry, StorageError> {
-        // TODO: Implement in Task 3.5 (projection.rs)
-        panic!("not implemented: get_by_id");
+    async fn get_by_id(&self, id: Ulid) -> Result<HostEntry, StorageError> {
+        self.get_by_id_impl(id).await
     }
 
     async fn find_by_ip_and_hostname(
         &self,
-        _ip_address: &str,
-        _hostname: &str,
+        ip_address: &str,
+        hostname: &str,
     ) -> Result<Option<HostEntry>, StorageError> {
-        // TODO: Implement in Task 3.5 (projection.rs)
-        panic!("not implemented: find_by_ip_and_hostname");
+        self.find_by_ip_and_hostname_impl(ip_address, hostname)
+            .await
     }
 
-    async fn search(&self, _filter: HostFilter) -> Result<Vec<HostEntry>, StorageError> {
-        // TODO: Implement in Task 3.5 (projection.rs)
-        panic!("not implemented: search");
+    async fn search(&self, filter: HostFilter) -> Result<Vec<HostEntry>, StorageError> {
+        self.search_impl(filter).await
     }
 
-    async fn get_at_time(&self, _at_time: DateTime<Utc>) -> Result<Vec<HostEntry>, StorageError> {
-        // TODO: Implement in Task 3.5 (projection.rs)
-        panic!("not implemented: get_at_time");
+    async fn get_at_time(&self, at_time: DateTime<Utc>) -> Result<Vec<HostEntry>, StorageError> {
+        self.get_at_time_impl(at_time).await
     }
 }
 
