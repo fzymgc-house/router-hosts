@@ -177,40 +177,37 @@ impl DuckDbStorage {
 impl EventStore for DuckDbStorage {
     async fn append_event(
         &self,
-        _aggregate_id: Ulid,
-        _event: EventEnvelope,
-        _expected_version: Option<String>,
+        aggregate_id: Ulid,
+        event: EventEnvelope,
+        expected_version: Option<String>,
     ) -> Result<(), StorageError> {
-        // TODO: Implement in Task 3.2 (event_store.rs)
-        panic!("not implemented: append_event");
+        self.append_event_impl(aggregate_id, event, expected_version)
+            .await
     }
 
     async fn append_events(
         &self,
-        _aggregate_id: Ulid,
-        _events: Vec<EventEnvelope>,
-        _expected_version: Option<String>,
+        aggregate_id: Ulid,
+        events: Vec<EventEnvelope>,
+        expected_version: Option<String>,
     ) -> Result<(), StorageError> {
-        // TODO: Implement in Task 3.2 (event_store.rs)
-        panic!("not implemented: append_events");
+        self.append_events_impl(aggregate_id, events, expected_version)
+            .await
     }
 
-    async fn load_events(&self, _aggregate_id: Ulid) -> Result<Vec<EventEnvelope>, StorageError> {
-        // TODO: Implement in Task 3.2 (event_store.rs)
-        panic!("not implemented: load_events");
+    async fn load_events(&self, aggregate_id: Ulid) -> Result<Vec<EventEnvelope>, StorageError> {
+        self.load_events_impl(aggregate_id).await
     }
 
     async fn get_current_version(
         &self,
-        _aggregate_id: Ulid,
+        aggregate_id: Ulid,
     ) -> Result<Option<String>, StorageError> {
-        // TODO: Implement in Task 3.2 (event_store.rs)
-        panic!("not implemented: get_current_version");
+        self.get_current_version_impl(aggregate_id).await
     }
 
-    async fn count_events(&self, _aggregate_id: Ulid) -> Result<i64, StorageError> {
-        // TODO: Implement in Task 3.2 (event_store.rs)
-        panic!("not implemented: count_events");
+    async fn count_events(&self, aggregate_id: Ulid) -> Result<i64, StorageError> {
+        self.count_events_impl(aggregate_id).await
     }
 }
 
