@@ -6,6 +6,17 @@
 //! - Version management for conflict detection
 
 use chrono::{DateTime, Utc};
+
+/// Extracted event data for database insertion
+/// (ip_address, hostname, comment, tags, event_timestamp, event_data)
+type ExtractedEventData = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    DateTime<Utc>,
+    EventData,
+);
 use duckdb::OptionalExt;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
@@ -455,16 +466,7 @@ impl DuckDbStorage {
 /// Extract typed columns and metadata from a HostEvent
 ///
 /// Returns: (ip_address, hostname, comment, tags, event_timestamp, event_data)
-fn extract_event_data(
-    event: &HostEvent,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    DateTime<Utc>,
-    EventData,
-) {
+fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
     match event {
         HostEvent::HostCreated {
             ip_address,

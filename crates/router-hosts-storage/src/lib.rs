@@ -3,6 +3,8 @@
 //! Provides backend-agnostic traits for event sourcing storage.
 //! Supports DuckDB (default), with SQLite and PostgreSQL planned.
 
+// Config module is not yet exported - will be used in server integration PR
+#[allow(dead_code)]
 mod config;
 mod error;
 mod traits;
