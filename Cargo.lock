@@ -2683,6 +2683,7 @@ dependencies = [
  "prost",
  "prost-types",
  "router-hosts-common",
+ "router-hosts-storage",
  "serde",
  "serde_json",
  "serial_test",
