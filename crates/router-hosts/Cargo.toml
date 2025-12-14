@@ -10,6 +10,7 @@ description.workspace = true
 
 [dependencies]
 router-hosts-common = { path = "../router-hosts-common" }
+router-hosts-storage = { path = "../router-hosts-storage" }
 
 # CLI and async runtime
 clap.workspace = true
