@@ -89,14 +89,24 @@ vault read -field=certificate "${PKI_PATH}/cert/ca" > ca.pem
 
 # Issue server certificate
 echo "Issuing server certificate (role: $SERVER_ROLE)..."
-vault write -format=json "${PKI_PATH}/issue/${SERVER_ROLE}" \
+if ! vault write -format=json "${PKI_PATH}/issue/${SERVER_ROLE}" \
     common_name="$SERVER_CN" \
     alt_names="$SERVER_ALT_NAMES" \
     ip_sans="$SERVER_IP_SANS" \
-    ttl="$TTL" \
-    | tee server-response.json \
-    | jq -r '.data.certificate' > server.pem
+    ttl="$TTL" > server-response.json; then
+    echo "Error: Failed to issue server certificate from Vault"
+    cat server-response.json 2>/dev/null || true
+    exit 1
+fi
 
+# Validate response contains certificate data
+if ! jq -e '.data.certificate' server-response.json >/dev/null 2>&1; then
+    echo "Error: Vault response missing certificate data"
+    jq '.' server-response.json 2>/dev/null || cat server-response.json
+    exit 1
+fi
+
+jq -r '.data.certificate' server-response.json > server.pem
 jq -r '.data.private_key' server-response.json > server-key.pem
 
 # Append CA chain if present (intermediate CAs for proper validation)
@@ -107,12 +117,22 @@ fi
 
 # Issue client certificate
 echo "Issuing client certificate (role: $CLIENT_ROLE)..."
-vault write -format=json "${PKI_PATH}/issue/${CLIENT_ROLE}" \
+if ! vault write -format=json "${PKI_PATH}/issue/${CLIENT_ROLE}" \
     common_name="$CLIENT_CN" \
-    ttl="$TTL" \
-    | tee client-response.json \
-    | jq -r '.data.certificate' > client.pem
+    ttl="$TTL" > client-response.json; then
+    echo "Error: Failed to issue client certificate from Vault"
+    cat client-response.json 2>/dev/null || true
+    exit 1
+fi
 
+# Validate response contains certificate data
+if ! jq -e '.data.certificate' client-response.json >/dev/null 2>&1; then
+    echo "Error: Vault response missing certificate data"
+    jq '.' client-response.json 2>/dev/null || cat client-response.json
+    exit 1
+fi
+
+jq -r '.data.certificate' client-response.json > client.pem
 jq -r '.data.private_key' client-response.json > client-key.pem
 
 # Append CA chain if present (intermediate CAs for proper validation)

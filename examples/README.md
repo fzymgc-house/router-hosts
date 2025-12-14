@@ -86,6 +86,17 @@ Environment variables:
 - `VAULT_CLIENT_ROLE` - Client certificate role (default: `router-hosts-client`)
 - `CERT_TTL` - Certificate validity (default: `8760h` / 1 year)
 
+**Certificate TTL Recommendations:**
+
+| Environment | TTL | Renewal | Notes |
+|-------------|-----|---------|-------|
+| Development | 365 days (8760h) | Manual | Regenerate annually or when expired |
+| Staging | 7 days (168h) | Weekly restart | Matches typical release cycle |
+| Production (manual) | 30-90 days | Scheduled | Balance security vs. operational overhead |
+| Production (Vault Agent) | 24h | Automatic | Agent handles renewal every 5 minutes |
+
+Shorter TTLs improve security by limiting credential exposure time, but require reliable automation.
+
 ### Option 3: Vault Agent (Automated Renewal)
 
 For production deployments with automatic certificate renewal:
@@ -99,6 +110,7 @@ For production deployments with automatic certificate renewal:
 
 # 3. Configure Vault Agent
 cp vault-agent-config.hcl.example vault-agent-config.hcl
+chmod 600 vault-agent-config.hcl  # Contains no secrets but restrict anyway
 # Edit vault-agent-config.hcl:
 #   - Set correct Vault address
 #   - Adjust common_name and alt_names for your server
@@ -186,6 +198,41 @@ docker compose ps
 - Check server logs: `docker compose logs router-hosts`
 - Verify port binding: `docker compose exec router-hosts nc -z localhost 50051`
 
+### Volume permission errors (UID/GID mismatch)
+
+```
+Error: Permission denied writing to /certs or /data
+```
+
+The docker-compose files use `user: "1000:1000"` by default. If your system uses different UIDs/GIDs:
+
+1. Find your user's UID/GID:
+   ```bash
+   id -u    # Your UID (e.g., 501 on macOS)
+   id -g    # Your GID (e.g., 20 on macOS)
+   ```
+
+2. Update docker-compose.yml:
+   ```yaml
+   services:
+     router-hosts:
+       user: "501:20"  # Replace with your UID:GID
+   ```
+
+3. For Vault Agent setup, both services must use the same UID:GID for shared volume access:
+   ```yaml
+   services:
+     vault-agent:
+       user: "501:20"
+     router-hosts:
+       user: "501:20"
+   ```
+
+**Common UID/GID values:**
+- Linux (most distros): `1000:1000`
+- macOS: `501:20`
+- Docker Desktop: Check with `id` command inside container
+
 ## Multi-Container Setups
 
 ### With dnsmasq
@@ -258,3 +305,5 @@ Vault Agent automatically renews certificates before expiration. However, **rout
 3. **Network exposure** - Consider binding to localhost or private network only
 4. **Vault integration** - Use short-lived certificates with automated renewal
 5. **AppRole credentials** - Keep `vault-approle/` secure; equivalent to passwords
+6. **Vault Agent config** - Set `vault-agent-config.hcl` to mode 600 (restrict read access)
+7. **Response wrapping** - Use `./setup-vault-approle.sh --wrapped` for production to avoid plaintext secret_id on disk

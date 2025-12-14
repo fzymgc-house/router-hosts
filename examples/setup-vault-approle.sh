@@ -13,17 +13,35 @@
 # Usage:
 #   export VAULT_ADDR=https://vault.example.com:8200
 #   vault login
-#   ./setup-vault-approle.sh
+#   ./setup-vault-approle.sh [--wrapped]
+#
+# Options:
+#   --wrapped  Use response wrapping for secret_id (production recommended)
+#              Secret ID will be wrapped with 5-minute TTL
 #
 # Output:
 #   - vault-approle/role_id
-#   - vault-approle/secret_id
+#   - vault-approle/secret_id (or wrapped_secret_id if --wrapped)
 
 set -euo pipefail
 
 # Resolve script directory for reliable relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_DIR="${1:-${SCRIPT_DIR}/vault-approle}"
+
+# Parse arguments
+USE_WRAPPED=false
+OUTPUT_DIR="${SCRIPT_DIR}/vault-approle"
+
+for arg in "$@"; do
+    case "$arg" in
+        --wrapped)
+            USE_WRAPPED=true
+            ;;
+        *)
+            OUTPUT_DIR="$arg"
+            ;;
+    esac
+done
 
 PKI_PATH="${VAULT_PKI_PATH:-pki}"
 APPROLE_NAME="router-hosts-agent"
@@ -69,17 +87,43 @@ echo "Fetching AppRole credentials..."
 mkdir -p "$OUTPUT_DIR"
 
 vault read -field=role_id "auth/approle/role/${APPROLE_NAME}/role-id" > "${OUTPUT_DIR}/role_id"
-vault write -field=secret_id -f "auth/approle/role/${APPROLE_NAME}/secret-id" > "${OUTPUT_DIR}/secret_id"
 
-# Set restrictive permissions
-chmod 600 "${OUTPUT_DIR}/role_id" "${OUTPUT_DIR}/secret_id"
+if [[ "$USE_WRAPPED" == "true" ]]; then
+    echo "Using response wrapping for secret_id (5-minute TTL)..."
+    # Response wrapping returns a single-use token that can only be unwrapped once
+    # The wrapped token expires after 5 minutes - retrieve immediately on target system
+    vault write -wrap-ttl=5m -field=wrapping_token -f "auth/approle/role/${APPROLE_NAME}/secret-id" > "${OUTPUT_DIR}/wrapped_secret_id"
+    chmod 600 "${OUTPUT_DIR}/role_id" "${OUTPUT_DIR}/wrapped_secret_id"
+    echo ""
+    echo "AppRole setup complete (with response wrapping)!"
+    echo ""
+    echo "Credentials saved to:"
+    echo "  ${OUTPUT_DIR}/role_id"
+    echo "  ${OUTPUT_DIR}/wrapped_secret_id (expires in 5 minutes!)"
+    echo ""
+    echo "IMPORTANT: Unwrap the secret_id immediately on the target system:"
+    echo "  VAULT_TOKEN=\$(cat ${OUTPUT_DIR}/wrapped_secret_id) vault unwrap -field=secret_id > secret_id"
+    echo ""
+    echo "Or configure Vault Agent to use wrapped secret_id:"
+    echo "  auto_auth {"
+    echo "    method \"approle\" {"
+    echo "      config = {"
+    echo "        role_id_file_path = \"/vault-approle/role_id\""
+    echo "        secret_id_response_wrapping_path = \"auth/approle/role/${APPROLE_NAME}/secret-id\""
+    echo "      }"
+    echo "    }"
+    echo "  }"
+else
+    vault write -field=secret_id -f "auth/approle/role/${APPROLE_NAME}/secret-id" > "${OUTPUT_DIR}/secret_id"
+    chmod 600 "${OUTPUT_DIR}/role_id" "${OUTPUT_DIR}/secret_id"
+    echo ""
+    echo "AppRole setup complete!"
+    echo ""
+    echo "Credentials saved to:"
+    echo "  ${OUTPUT_DIR}/role_id"
+    echo "  ${OUTPUT_DIR}/secret_id"
+fi
 
-echo ""
-echo "AppRole setup complete!"
-echo ""
-echo "Credentials saved to:"
-echo "  ${OUTPUT_DIR}/role_id"
-echo "  ${OUTPUT_DIR}/secret_id"
 echo ""
 echo "Next steps:"
 echo "  1. Copy vault-agent-config.hcl.example to vault-agent-config.hcl"
@@ -88,5 +132,5 @@ echo "  3. Run: docker compose -f docker-compose.vault-agent.yml up -d"
 echo ""
 echo "Security notes:"
 echo "  - Keep secret_id secure (equivalent to a password)"
-echo "  - For production, consider using response wrapping"
+echo "  - For production, use --wrapped option for response wrapping"
 echo "  - Rotate secret_id periodically"
