@@ -10,10 +10,12 @@ mod types;
 
 pub mod backends;
 
-// Re-exports (commented out until types are implemented)
-// pub use error::StorageError;
-// pub use types::{HostEvent, HostEntry, Snapshot, SnapshotMetadata, EventEnvelope};
-// pub use traits::{EventStore, SnapshotStore, HostProjection, Storage};
+// Re-exports
+pub use error::StorageError;
+pub use traits::{EventStore, HostProjection, SnapshotStore, Storage};
+pub use types::{EventEnvelope, HostEntry, HostEvent, Snapshot, SnapshotMetadata};
+
+// Config and create_storage (commented out until full implementation)
 // pub use config::{StorageConfig, BackendType};
 
 // Create storage from configuration (commented out until traits are implemented)
