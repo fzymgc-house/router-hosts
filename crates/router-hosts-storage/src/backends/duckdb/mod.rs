@@ -281,13 +281,23 @@ impl HostProjection for DuckDbStorage {
 #[async_trait]
 impl Storage for DuckDbStorage {
     async fn initialize(&self) -> Result<(), StorageError> {
-        // TODO: Implement in Task 3.2 (call schema::initialize)
-        panic!("not implemented: initialize");
+        schema::initialize_schema(self).await
     }
 
     async fn health_check(&self) -> Result<(), StorageError> {
-        // TODO: Implement in Task 3.2
-        panic!("not implemented: health_check");
+        let conn = self.conn();
+
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock();
+
+            // Simple health check: verify we can execute a query
+            conn.query_row("SELECT 1", [], |row| row.get::<_, i32>(0))
+                .map_err(|e| StorageError::connection("health check query failed", e))?;
+
+            Ok(())
+        })
+        .await
+        .map_err(|e| StorageError::connection("spawn_blocking panicked during health check", e))?
     }
 
     async fn close(&self) -> Result<(), StorageError> {
