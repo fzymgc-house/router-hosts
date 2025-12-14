@@ -1,0 +1,45 @@
+# Router-Hosts Server Configuration
+#
+# Copy this file to ../config/server.toml and adjust paths as needed.
+# SECURITY: This file must not be world-writable (chmod 600 recommended).
+
+[server]
+# Address to bind the gRPC server
+bind_address = "0.0.0.0:50051"
+
+# Path to the hosts file to manage
+# The server will atomically update this file when entries change
+hosts_file_path = "/data/hosts"
+
+[database]
+# DuckDB database file for event-sourced storage
+# All changes are stored as immutable events for audit trail
+path = "/data/router-hosts.db"
+
+[tls]
+# Server certificate (presented to clients)
+cert_path = "/certs/server.pem"
+
+# Server private key
+key_path = "/certs/server-key.pem"
+
+# CA certificate for validating client certificates (mTLS)
+# Only clients with certificates signed by this CA can connect
+ca_cert_path = "/certs/ca.pem"
+
+[retention]
+# Maximum number of snapshots to retain
+max_snapshots = 50
+
+# Maximum age of snapshots in days
+max_age_days = 30
+
+[hooks]
+# Commands to run after successful hosts file update
+# Use for reloading DNS services (dnsmasq, unbound, etc.)
+# Example: on_success = ["systemctl reload dnsmasq"]
+on_success = []
+
+# Commands to run after failed hosts file update
+# Use for alerting or logging
+on_failure = []

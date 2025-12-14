@@ -1,0 +1,81 @@
+# Router-Hosts with Vault Agent for Automated Certificate Management
+#
+# This setup uses HashiCorp Vault Agent to:
+#   - Automatically fetch server certificates from Vault PKI
+#   - Renew certificates before expiration
+#   - Deliver CA certificate for client validation
+#
+# Prerequisites:
+#   1. Vault PKI configured (run setup-vault-pki.sh)
+#   2. AppRole or other auth method configured for Vault Agent
+#   3. Create vault-agent-config.hcl from template
+#
+# Usage:
+#   cp vault-agent-config.hcl.example vault-agent-config.hcl
+#   # Edit vault-agent-config.hcl with your Vault details
+#   docker compose -f docker-compose.vault-agent.yml up -d
+#
+# For client certificates, use generate-certs-vault.sh or configure
+# a separate Vault Agent on the client machine.
+
+services:
+  # Vault Agent sidecar - manages certificate lifecycle
+  vault-agent:
+    # Check https://hub.docker.com/r/hashicorp/vault/tags for latest version
+    image: hashicorp/vault:1.18
+    container_name: router-hosts-vault-agent
+    restart: unless-stopped
+    command: ["agent", "-config=/config/vault-agent-config.hcl"]
+    environment:
+      # REQUIRED: Set your Vault server address
+      # Either: export VAULT_ADDR=https://your-vault.example.com:8200
+      # Or edit this default value
+      VAULT_ADDR: ${VAULT_ADDR:-https://vault.example.com:8200}
+    volumes:
+      # Vault Agent configuration
+      - ./vault-agent-config.hcl:/config/vault-agent-config.hcl:ro
+      # Shared volume for certificates (written by agent, read by server)
+      - certs:/certs
+      # AppRole credentials (if using AppRole auth)
+      - ./vault-approle:/vault-approle:ro
+    # Run as root to write to shared volume (adjust for your security requirements)
+    # user: "0:0"
+    healthcheck:
+      # Check that Vault Agent has written certificates (what router-hosts needs)
+      test: ["CMD", "sh", "-c", "test -f /certs/server.pem && test -f /certs/server-key.pem && test -f /certs/ca.pem"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Router-hosts server - waits for certificates from Vault Agent
+  router-hosts:
+    image: ghcr.io/fzymgc-house/router-hosts:latest
+    container_name: router-hosts-server
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_healthy
+    ports:
+      - "50051:50051"
+    volumes:
+      # Server configuration
+      - ./config:/config:ro
+      # Certificates from Vault Agent (shared volume)
+      - certs:/certs:ro
+      # Persistent data
+      - ./data:/data
+    environment:
+      RUST_LOG: info
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Wait for Vault Agent to provision certificates
+      start_period: 60s
+
+# Named volume for certificate sharing between containers
+volumes:
+  certs:
+    driver: local

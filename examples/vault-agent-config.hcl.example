@@ -1,0 +1,113 @@
+# Vault Agent Configuration for Router-Hosts
+#
+# Copy to vault-agent-config.hcl and customize for your environment.
+#
+# This configuration:
+#   - Authenticates to Vault using AppRole
+#   - Fetches server certificate from PKI secrets engine
+#   - Automatically renews certificates before expiration
+#   - Writes certificates to /certs volume for router-hosts to use
+
+# =============================================================================
+# CUSTOMIZE THESE VALUES
+# =============================================================================
+# VAULT_ADDR: Set via environment variable in docker-compose
+# role_id_file_path: Path to AppRole role_id
+# secret_id_file_path: Path to AppRole secret_id
+# common_name: Server hostname (must match PKI role allowed_domains)
+# alt_names: Additional DNS names for the certificate
+# ip_sans: IP addresses for the certificate
+# =============================================================================
+
+pid_file = "/tmp/vault-agent.pid"
+
+vault {
+  address = "https://vault.example.com:8200"
+  # Uncomment for self-signed Vault certificates (not recommended for production)
+  # tls_skip_verify = true
+}
+
+# Auto-auth using AppRole
+# See: https://developer.hashicorp.com/vault/docs/agent/autoauth/methods/approle
+auto_auth {
+  method "approle" {
+    config = {
+      role_id_file_path   = "/vault-approle/role_id"
+      secret_id_file_path = "/vault-approle/secret_id"
+      remove_secret_id_file_after_reading = false
+    }
+  }
+
+  sink "file" {
+    config = {
+      path = "/tmp/vault-token"
+      mode = 0600
+    }
+  }
+}
+
+# Template for server certificate
+template {
+  contents = <<-EOF
+    {{- with pkiCert "pki/issue/router-hosts-server"
+        "common_name=router-hosts"
+        "alt_names=localhost,router-hosts,router.local"
+        "ip_sans=127.0.0.1"
+        "ttl=24h" -}}
+    {{ .Cert }}
+    {{- if .CA }}
+    {{ .CA }}
+    {{- end }}
+    {{- end }}
+    EOF
+  destination = "/certs/server.pem"
+  perms       = 0644
+  # Trigger router-hosts restart when certificate changes
+  command     = "echo 'Server certificate updated'"
+}
+
+# Template for server private key
+template {
+  contents = <<-EOF
+    {{- with pkiCert "pki/issue/router-hosts-server"
+        "common_name=router-hosts"
+        "alt_names=localhost,router-hosts,router.local"
+        "ip_sans=127.0.0.1"
+        "ttl=24h" -}}
+    {{ .Key }}
+    {{- end }}
+    EOF
+  destination = "/certs/server-key.pem"
+  perms       = 0600
+}
+
+# Template for CA certificate
+template {
+  contents = <<-EOF
+    {{- with secret "pki/cert/ca" -}}
+    {{ .Data.certificate }}
+    {{- end }}
+    EOF
+  destination = "/certs/ca.pem"
+  perms       = 0644
+}
+
+# Template configuration
+template_config {
+  # Check for certificate renewal every 5 minutes
+  static_secret_render_interval = "5m"
+
+  # Exit on template rendering errors (container will restart)
+  exit_on_retry_failure = true
+
+  # CRITICAL: Share pkiCert results between templates
+  # Without this, each template issues a SEPARATE certificate,
+  # resulting in mismatched cert/key pairs that break TLS
+  share_dependencies = true
+}
+
+# API listener for health checks
+# Used by Docker health check to verify Vault Agent is running
+api {
+  address = "127.0.0.1:8100"
+}

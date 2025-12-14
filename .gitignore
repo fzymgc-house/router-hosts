@@ -20,3 +20,11 @@ target/
 
 # Temporary binary for CI Docker build
 /router-hosts
+
+# Docker Compose local directories (created by users following examples)
+/config/
+/certs/
+/data/
+
+# Vault AppRole credentials (sensitive - never commit)
+/examples/vault-approle/
