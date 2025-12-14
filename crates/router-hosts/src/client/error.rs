@@ -17,6 +17,11 @@ pub fn format_grpc_error(status: &Status) -> String {
         Code::PermissionDenied => "Permission denied: check TLS certificates".to_string(),
         Code::Unavailable => "Server unavailable: check address and connectivity".to_string(),
         Code::Unauthenticated => "Authentication failed: check TLS certificates".to_string(),
+        Code::Cancelled => {
+            // TLS handshake failures often appear as "cancelled" operations
+            // when the server rejects the client certificate
+            "TLS certificate rejected: server refused connection".to_string()
+        }
         _ => format!("Server error: {}", status.message()),
     }
 }
@@ -114,5 +119,12 @@ mod tests {
     fn test_exit_code_not_found() {
         let status = Status::not_found("missing");
         assert_eq!(exit_code_for_status(&status), EXIT_ERROR);
+    }
+
+    #[test]
+    fn test_format_cancelled_tls() {
+        let status = Status::cancelled("connection cancelled");
+        let msg = format_grpc_error(&status);
+        assert!(msg.contains("TLS") || msg.contains("certificate"));
     }
 }
