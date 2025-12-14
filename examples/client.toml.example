@@ -1,0 +1,30 @@
+# Router-Hosts Client Configuration
+#
+# Copy this file to ~/.config/router-hosts/client.toml
+# or specify with: router-hosts --config /path/to/client.toml
+#
+# All values can be overridden via:
+#   - CLI flags (highest priority)
+#   - Environment variables
+#   - This config file (lowest priority)
+#
+# Note: Tilde (~) paths are expanded to your home directory.
+# Example: ~/certs/client.pem -> /home/user/certs/client.pem
+
+[server]
+# Server address (host:port)
+# Override: --server or ROUTER_HOSTS_SERVER
+address = "router.local:50051"
+
+[tls]
+# Client certificate for mTLS authentication
+# Override: --cert or ROUTER_HOSTS_CERT
+cert_path = "~/.config/router-hosts/certs/client.pem"
+
+# Client private key
+# Override: --key or ROUTER_HOSTS_KEY
+key_path = "~/.config/router-hosts/certs/client-key.pem"
+
+# CA certificate for verifying server
+# Override: --ca or ROUTER_HOSTS_CA
+ca_cert_path = "~/.config/router-hosts/certs/ca.pem"

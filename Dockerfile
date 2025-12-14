@@ -16,7 +16,7 @@ RUN cargo build --release --bin router-hosts
 
 # Stage 4: Runtime - minimal image
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates netcat-openbsd && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/router-hosts /usr/local/bin/
 EXPOSE 50051
 ENTRYPOINT ["router-hosts"]

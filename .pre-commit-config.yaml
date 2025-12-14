@@ -44,6 +44,14 @@ repos:
         files: '\.proto$'
         pass_filenames: false
 
+      - id: shellcheck
+        name: shellcheck
+        entry: shellcheck
+        language: system
+        types: [shell]
+        # Run on all shell scripts in examples/
+        files: 'examples/.*\.sh$'
+
       # Expensive checks (run only on pre-push)
       # Note: Runs on entire workspace regardless of changed files
       # because Rust changes can affect other crates via dependencies

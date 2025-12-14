@@ -1,0 +1,262 @@
+#!/usr/bin/env bash
+# Generate certificates for router-hosts using HashiCorp Vault PKI
+#
+# Prerequisites:
+#   - vault CLI installed and authenticated (VAULT_ADDR and VAULT_TOKEN set)
+#   - PKI secrets engine mounted and configured (see setup-vault-pki.sh)
+#   - Roles created for server and client certificates
+#
+# Usage:
+#   export VAULT_ADDR=https://vault.example.com:8200
+#   export VAULT_TOKEN=hvs.xxxxx  # or use vault login
+#   ./generate-certs-vault.sh [--dry-run] [output-dir]
+#
+# Options:
+#   --dry-run  Show what would be created without writing files
+#
+# Environment variables:
+#   VAULT_ADDR          - Vault server address (required)
+#   VAULT_TOKEN         - Vault authentication token (or use vault login)
+#   VAULT_PKI_PATH      - PKI mount path (default: pki)
+#   VAULT_SERVER_ROLE   - Role for server certs (default: router-hosts-server)
+#   VAULT_CLIENT_ROLE   - Role for client certs (default: router-hosts-client)
+#   CERT_TTL            - Certificate validity (default: 8760h = 1 year)
+#
+# NOTE: This script is for MANUAL certificate issuance. The 1-year default TTL
+# is appropriate for infrequent manual renewal. For automated renewal with
+# Vault Agent, use vault-agent-config.hcl which defaults to 24h TTL.
+
+set -euo pipefail
+
+# Parse arguments
+DRY_RUN=false
+OUTPUT_DIR=""
+
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run)
+            DRY_RUN=true
+            ;;
+        *)
+            OUTPUT_DIR="$arg"
+            ;;
+    esac
+done
+
+# Resolve script directory for reliable relative paths
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="${OUTPUT_DIR:-${SCRIPT_DIR}/../certs}"
+
+# Configuration
+PKI_PATH="${VAULT_PKI_PATH:-pki}"
+SERVER_ROLE="${VAULT_SERVER_ROLE:-router-hosts-server}"
+CLIENT_ROLE="${VAULT_CLIENT_ROLE:-router-hosts-client}"
+TTL="${CERT_TTL:-8760h}"
+
+# =============================================================================
+# CUSTOMIZE THESE VALUES for your environment
+# =============================================================================
+# SERVER_CN: Common name for the server certificate
+# SERVER_ALT_NAMES: DNS names clients will use to connect (comma-separated)
+# SERVER_IP_SANS: IP addresses clients will use to connect (comma-separated)
+# =============================================================================
+SERVER_CN="router-hosts"
+SERVER_ALT_NAMES="localhost,router-hosts,router.local"
+SERVER_IP_SANS="127.0.0.1"
+
+# Client identity
+CLIENT_CN="router-hosts-client"
+
+# Dry-run mode: show what would be created and exit
+if [[ "$DRY_RUN" == "true" ]]; then
+    echo "DRY RUN - Would issue certificates from Vault PKI with:"
+    echo ""
+    echo "Vault Configuration:"
+    echo "  - VAULT_ADDR: ${VAULT_ADDR:-<not set>}"
+    echo "  - PKI Path: $PKI_PATH"
+    echo ""
+    echo "Output directory: $OUTPUT_DIR"
+    echo "Certificate TTL: $TTL"
+    echo ""
+    echo "Server Certificate:"
+    echo "  - Role: $SERVER_ROLE"
+    echo "  - CN: $SERVER_CN"
+    echo "  - Alt Names: $SERVER_ALT_NAMES"
+    echo "  - IP SANs: $SERVER_IP_SANS"
+    echo "  - Files: server.pem, server-key.pem"
+    echo ""
+    echo "Client Certificate:"
+    echo "  - Role: $CLIENT_ROLE"
+    echo "  - CN: $CLIENT_CN"
+    echo "  - Files: client.pem, client-key.pem"
+    echo ""
+    echo "CA Certificate:"
+    echo "  - Source: ${PKI_PATH}/cert/ca"
+    echo "  - File: ca.pem"
+    echo ""
+    echo "Run without --dry-run to generate certificates."
+    exit 0
+fi
+
+# Verify required tools are available
+for cmd in vault jq openssl; do
+    if ! command -v "$cmd" &> /dev/null; then
+        echo "Error: $cmd not found"
+        case "$cmd" in
+            vault) echo "Install from https://developer.hashicorp.com/vault/install" ;;
+            jq) echo "Install from https://jqlang.github.io/jq/download/" ;;
+            openssl) echo "Install via your package manager" ;;
+        esac
+        exit 1
+    fi
+done
+
+if [[ -z "${VAULT_ADDR:-}" ]]; then
+    echo "Error: VAULT_ADDR not set"
+    exit 1
+fi
+
+# Test authentication
+if ! vault token lookup &> /dev/null; then
+    echo "Error: Not authenticated to Vault. Run 'vault login' or set VAULT_TOKEN"
+    exit 1
+fi
+
+mkdir -p "$OUTPUT_DIR"
+cd "$OUTPUT_DIR"
+
+# Set restrictive umask for private key generation (prevents race condition)
+umask 077
+
+# Cleanup temporary files on exit (contain private keys)
+trap 'rm -f server-response.json client-response.json' EXIT
+
+echo "Using Vault at: $VAULT_ADDR"
+echo "PKI path: $PKI_PATH"
+echo "Output directory: $(pwd)"
+echo ""
+
+# Fetch CA certificate
+echo "Fetching CA certificate..."
+vault read -field=certificate "${PKI_PATH}/cert/ca" > ca.pem
+
+# Issue server certificate
+echo "Issuing server certificate (role: $SERVER_ROLE)..."
+if ! vault write -format=json "${PKI_PATH}/issue/${SERVER_ROLE}" \
+    common_name="$SERVER_CN" \
+    alt_names="$SERVER_ALT_NAMES" \
+    ip_sans="$SERVER_IP_SANS" \
+    ttl="$TTL" > server-response.json 2>&1; then
+    echo "Error: Failed to issue server certificate from Vault"
+    if [[ -s server-response.json ]]; then
+        echo "Vault response:"
+        jq '.' server-response.json 2>/dev/null || cat server-response.json
+    else
+        echo "No response - check Vault connectivity and authentication"
+        echo "  VAULT_ADDR: $VAULT_ADDR"
+        echo "  PKI path: ${PKI_PATH}/issue/${SERVER_ROLE}"
+    fi
+    exit 1
+fi
+
+# Validate response contains certificate data
+if ! jq -e '.data.certificate' server-response.json >/dev/null 2>&1; then
+    echo "Error: Vault response missing certificate data"
+    jq '.' server-response.json 2>/dev/null || cat server-response.json
+    exit 1
+fi
+
+jq -r '.data.certificate' server-response.json > server.pem
+jq -r '.data.private_key' server-response.json > server-key.pem
+
+# Append CA chain if present (intermediate CAs for proper validation)
+if jq -e '.data.ca_chain | length > 0' server-response.json &>/dev/null; then
+    echo "Appending CA chain to server certificate..."
+    jq -r '.data.ca_chain[]' server-response.json >> server.pem
+fi
+
+# Issue client certificate
+echo "Issuing client certificate (role: $CLIENT_ROLE)..."
+if ! vault write -format=json "${PKI_PATH}/issue/${CLIENT_ROLE}" \
+    common_name="$CLIENT_CN" \
+    ttl="$TTL" > client-response.json 2>&1; then
+    echo "Error: Failed to issue client certificate from Vault"
+    if [[ -s client-response.json ]]; then
+        echo "Vault response:"
+        jq '.' client-response.json 2>/dev/null || cat client-response.json
+    else
+        echo "No response - check Vault connectivity and authentication"
+        echo "  VAULT_ADDR: $VAULT_ADDR"
+        echo "  PKI path: ${PKI_PATH}/issue/${CLIENT_ROLE}"
+    fi
+    exit 1
+fi
+
+# Validate response contains certificate data
+if ! jq -e '.data.certificate' client-response.json >/dev/null 2>&1; then
+    echo "Error: Vault response missing certificate data"
+    jq '.' client-response.json 2>/dev/null || cat client-response.json
+    exit 1
+fi
+
+jq -r '.data.certificate' client-response.json > client.pem
+jq -r '.data.private_key' client-response.json > client-key.pem
+
+# Append CA chain if present (intermediate CAs for proper validation)
+if jq -e '.data.ca_chain | length > 0' client-response.json &>/dev/null; then
+    echo "Appending CA chain to client certificate..."
+    jq -r '.data.ca_chain[]' client-response.json >> client.pem
+fi
+
+# Note: Cleanup of server-response.json and client-response.json is handled
+# automatically by the EXIT trap defined at the start of the script
+
+# Restore default umask and set final permissions
+# (umask 077 already created keys with 600, but be explicit)
+umask 022
+chmod 600 ./*-key.pem
+chmod 644 ./*.pem
+
+# Validate certificates
+echo ""
+echo "Validating certificates..."
+
+# Verify server certificate chain and key match
+if ! openssl verify -CAfile ca.pem server.pem >/dev/null 2>&1; then
+    echo "Error: Server certificate chain validation failed"
+    exit 1
+fi
+SERVER_CERT_MOD=$(openssl x509 -in server.pem -noout -modulus 2>/dev/null | openssl md5)
+SERVER_KEY_MOD=$(openssl rsa -in server-key.pem -noout -modulus 2>/dev/null | openssl md5)
+if [[ "$SERVER_CERT_MOD" != "$SERVER_KEY_MOD" ]]; then
+    echo "Error: Server certificate and key do not match"
+    exit 1
+fi
+
+# Verify client certificate chain and key match
+if ! openssl verify -CAfile ca.pem client.pem >/dev/null 2>&1; then
+    echo "Error: Client certificate chain validation failed"
+    exit 1
+fi
+CLIENT_CERT_MOD=$(openssl x509 -in client.pem -noout -modulus 2>/dev/null | openssl md5)
+CLIENT_KEY_MOD=$(openssl rsa -in client-key.pem -noout -modulus 2>/dev/null | openssl md5)
+if [[ "$CLIENT_CERT_MOD" != "$CLIENT_KEY_MOD" ]]; then
+    echo "Error: Client certificate and key do not match"
+    exit 1
+fi
+
+echo "✓ All certificates validated successfully"
+
+echo ""
+echo "Certificates generated successfully:"
+ls -la
+echo ""
+echo "Server certificate SANs:"
+openssl x509 -in server.pem -noout -text 2>/dev/null | grep -A1 "Subject Alternative Name" | tail -1 | sed 's/^[[:space:]]*/  /'
+echo ""
+echo "Server certificate expires: $(openssl x509 -in server.pem -noout -enddate 2>/dev/null | cut -d= -f2)"
+echo "Client certificate expires: $(openssl x509 -in client.pem -noout -enddate 2>/dev/null | cut -d= -f2)"
+echo ""
+echo "Copy to your deployment:"
+echo "  Server: ca.pem, server.pem, server-key.pem"
+echo "  Client: ca.pem, client.pem, client-key.pem"

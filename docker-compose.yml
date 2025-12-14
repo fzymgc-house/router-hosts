@@ -1,0 +1,81 @@
+# Router-Hosts Docker Compose Example
+#
+# Prerequisites:
+#   1. Generate TLS certificates (see examples/generate-certs.sh)
+#   2. Create config file from template: cp examples/server.toml.example config/server.toml
+#   3. Create directories: mkdir -p config certs data
+#
+# Environment variables (optional):
+#   DOCKER_UID - User ID for container (default: 1000)
+#   DOCKER_GID - Group ID for container (default: 1000)
+#
+# Usage:
+#   docker compose up -d
+#
+# For non-default UID/GID (e.g., macOS):
+#   DOCKER_UID=$(id -u) DOCKER_GID=$(id -g) docker compose up -d
+#
+# Or create .env file (see examples/.env.example):
+#   cp examples/.env.example .env && vim .env
+#
+# Client connection:
+#   router-hosts --server localhost:50051 \
+#     --cert certs/client.pem \
+#     --key certs/client-key.pem \
+#     --ca certs/ca.pem \
+#     list
+
+services:
+  router-hosts:
+    image: ghcr.io/fzymgc-house/router-hosts:latest
+    container_name: router-hosts-server
+    restart: unless-stopped
+    # Run as non-root user (customize via DOCKER_UID/DOCKER_GID env vars)
+    # Default 1000:1000 works for most Linux systems
+    # macOS users: DOCKER_UID=$(id -u) DOCKER_GID=$(id -g) docker compose up -d
+    user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
+    ports:
+      - "50051:50051"
+    volumes:
+      # Server configuration (must not be world-writable)
+      - ./config:/config:ro
+      # TLS certificates for mTLS authentication
+      - ./certs:/certs:ro
+      # Persistent data: DuckDB database and generated hosts file
+      - ./data:/data
+    environment:
+      # Logging level: trace, debug, info, warn, error
+      RUST_LOG: info
+    # Default command from Dockerfile (shown for reference):
+    #   server --config /config/server.toml
+    # Uncomment to override config path:
+    # command: ["server", "--config", "/config/custom.toml"]
+    healthcheck:
+      # TCP port check using netcat (installed in container)
+      # Note: We use netcat because /dev/tcp is a bashism not available in
+      # Debian's default shell (dash). netcat adds ~270KB but is reliable.
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+# Example with custom network for multi-container setups:
+#
+# networks:
+#   dns-network:
+#     driver: bridge
+#
+# services:
+#   router-hosts:
+#     networks:
+#       - dns-network
+#     ...
+#
+#   dnsmasq:
+#     image: jpillora/dnsmasq
+#     networks:
+#       - dns-network
+#     volumes:
+#       - ./data/hosts:/etc/hosts.router-hosts:ro
+#     ...
