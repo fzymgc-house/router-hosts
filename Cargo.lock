@@ -2734,6 +2734,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "router-hosts-storage"
+version = "0.5.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "duckdb",
+ "parking_lot",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "ulid",
+ "url",
+]
+
+[[package]]
 name = "rust_decimal"
 version = "1.39.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
