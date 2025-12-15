@@ -20,7 +20,7 @@
 //! hangs. If an operation times out, it returns an error but the worker continues
 //! processing other commands.
 
-use crate::server::db::HostEntry;
+use router_hosts_storage::HostEntry;
 use std::time::Duration;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
@@ -458,18 +458,27 @@ async fn write_worker(mut rx: mpsc::Receiver<WriteCommand>, handler: Arc<Command
 mod tests {
     use super::*;
     use crate::server::commands::CommandHandler;
-    use crate::server::db::Database;
     use crate::server::hooks::HookExecutor;
     use crate::server::hosts_file::HostsFileGenerator;
+    use router_hosts_storage::backends::duckdb::DuckDbStorage;
+    use router_hosts_storage::Storage;
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    fn setup_write_queue() -> (WriteQueue, Arc<CommandHandler>, TempDir) {
+    async fn setup_write_queue() -> (WriteQueue, Arc<CommandHandler>, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.db");
         let hosts_path = temp_dir.path().join("hosts");
 
-        let db = Arc::new(Database::new(&db_path).unwrap());
+        // Use in-memory storage for tests
+        let storage = DuckDbStorage::new("duckdb://:memory:")
+            .await
+            .expect("failed to create in-memory storage");
+        storage
+            .initialize()
+            .await
+            .expect("failed to initialize storage");
+        let storage: Arc<dyn Storage> = Arc::new(storage);
+
         let hosts_file = Arc::new(HostsFileGenerator::new(hosts_path));
         let hooks = Arc::new(HookExecutor::new(vec![], vec![], 30));
 
@@ -479,7 +488,8 @@ mod tests {
                 hosts_file_path: "/tmp/test_hosts".to_string(),
             },
             database: crate::server::config::DatabaseConfig {
-                path: std::path::PathBuf::from("/tmp/test.db"),
+                path: None,
+                url: Some("duckdb://:memory:".to_string()),
             },
             tls: crate::server::config::TlsConfig {
                 cert_path: std::path::PathBuf::from("/tmp/cert.pem"),
@@ -493,12 +503,7 @@ mod tests {
             hooks: crate::server::config::HooksConfig::default(),
         });
 
-        let commands = Arc::new(CommandHandler::new(
-            Arc::clone(&db),
-            hosts_file,
-            hooks,
-            config,
-        ));
+        let commands = Arc::new(CommandHandler::new(storage, hosts_file, hooks, config));
 
         let write_queue = WriteQueue::new(Arc::clone(&commands));
         (write_queue, commands, temp_dir)
@@ -506,7 +511,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_add_host_operations() {
-        let (write_queue, commands, _temp_dir) = setup_write_queue();
+        let (write_queue, commands, _temp_dir) = setup_write_queue().await;
 
         // Spawn 20 concurrent add operations with unique IPs
         let mut handles = vec![];
@@ -552,7 +557,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_queue_serializes_duplicate_detection() {
-        let (write_queue, _commands, _temp_dir) = setup_write_queue();
+        let (write_queue, _commands, _temp_dir) = setup_write_queue().await;
 
         // Try to add the same host twice concurrently
         let wq1 = write_queue.clone();
@@ -600,7 +605,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_import_operations() {
-        let (write_queue, commands, _temp_dir) = setup_write_queue();
+        let (write_queue, commands, _temp_dir) = setup_write_queue().await;
 
         // Create two sets of entries for concurrent import
         let entries1: Vec<ParsedEntry> = (0..10)
@@ -667,7 +672,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_concurrent_imports_with_overlapping_entries() {
-        let (write_queue, commands, _temp_dir) = setup_write_queue();
+        let (write_queue, commands, _temp_dir) = setup_write_queue().await;
 
         // Create entries with some overlap
         let entries1: Vec<ParsedEntry> = (0..5)
@@ -722,7 +727,7 @@ mod tests {
     /// 3. No deadlocks or timeouts occur
     #[tokio::test]
     async fn test_backpressure_with_high_concurrency() {
-        let (write_queue, commands, _tempdir) = setup_write_queue();
+        let (write_queue, commands, _tempdir) = setup_write_queue().await;
 
         // Spawn 150 concurrent add_host operations (exceeds QUEUE_CAPACITY of 100)
         let mut handles = Vec::with_capacity(150);
@@ -784,7 +789,7 @@ mod tests {
     /// so there's no true race condition - each import sees the result of the previous.
     #[tokio::test]
     async fn test_concurrent_imports_same_host_replace_mode() {
-        let (write_queue, commands, _tempdir) = setup_write_queue();
+        let (write_queue, commands, _tempdir) = setup_write_queue().await;
 
         // Create an existing host that both imports will try to update
         write_queue
@@ -846,7 +851,7 @@ mod tests {
         assert_eq!(hosts.len(), 1, "Should have exactly 1 host");
 
         // The final comment should be from one of the imports (whichever ran last)
-        let host = commands.get_host(hosts[0].id).await.unwrap().unwrap();
+        let host = commands.get_host(hosts[0].id).await.unwrap();
         assert!(
             host.comment == Some("Comment from import 1".to_string())
                 || host.comment == Some("Comment from import 2".to_string()),
@@ -859,7 +864,7 @@ mod tests {
     async fn test_write_worker_graceful_shutdown() {
         use crate::server::commands::CommandError;
 
-        let (write_queue, _commands, _temp_dir) = setup_write_queue();
+        let (write_queue, _commands, _temp_dir) = setup_write_queue().await;
 
         // Clone for spawned task
         let wq = write_queue.clone();

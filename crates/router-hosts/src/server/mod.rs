@@ -2,7 +2,7 @@
 //!
 //! This module implements the server-side functionality including:
 //! - gRPC service with mTLS
-//! - Database management with event sourcing
+//! - Storage abstraction with event sourcing
 //! - /etc/hosts file generation
 
 pub mod commands;
@@ -17,7 +17,6 @@ pub mod write_queue;
 
 use crate::server::commands::CommandHandler;
 use crate::server::config::Config;
-use crate::server::db::Database;
 use crate::server::hooks::HookExecutor;
 use crate::server::hosts_file::HostsFileGenerator;
 use crate::server::service::HostsServiceImpl;
@@ -25,6 +24,7 @@ use crate::server::write_queue::WriteQueue;
 use anyhow::Result;
 use clap::Parser;
 use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
+use router_hosts_storage::{create_storage, StorageConfig, StorageError};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use thiserror::Error;
@@ -40,8 +40,8 @@ pub enum ServerError {
     #[error("TLS setup failed: {0}")]
     Tls(String),
 
-    #[error("Database initialization failed: {0}")]
-    Database(#[from] db::DatabaseError),
+    #[error("Storage initialization failed: {0}")]
+    Storage(#[from] StorageError),
 
     #[error("Server transport error: {0}")]
     Transport(#[from] tonic::transport::Error),
@@ -95,10 +95,22 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
         .parse()
         .map_err(|e| ServerError::Config(format!("Invalid bind address: {}", e)))?;
 
-    info!("Initializing database at {:?}", config.database.path);
+    // Get storage URL from config and parse into StorageConfig
+    let storage_url = config
+        .database
+        .storage_url()
+        .map_err(|e| ServerError::Config(format!("Invalid database config: {}", e)))?;
 
-    // Initialize database
-    let db = Arc::new(Database::new(&config.database.path)?);
+    let storage_config = StorageConfig::from_url(&storage_url)
+        .map_err(|e| ServerError::Config(format!("Invalid storage URL: {}", e)))?;
+
+    info!(
+        "Initializing storage: {:?} ({})",
+        storage_config.backend, storage_url
+    );
+
+    // Create storage using the factory function (handles initialization)
+    let storage = create_storage(&storage_config).await?;
 
     // Create hook executor (timeout in seconds, default 30s)
     let hooks = Arc::new(HookExecutor::new(
@@ -114,7 +126,7 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
 
     // Create command handler
     let commands = Arc::new(CommandHandler::new(
-        Arc::clone(&db),
+        Arc::clone(&storage),
         Arc::clone(&hosts_file),
         Arc::clone(&hooks),
         Arc::new(config.clone()),
@@ -124,7 +136,7 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
     let write_queue = WriteQueue::new(Arc::clone(&commands));
 
     // Create service implementation
-    let service = HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&db));
+    let service = HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&storage));
 
     // Load TLS certificates
     info!("Loading TLS certificates");

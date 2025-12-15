@@ -3,10 +3,11 @@
 use crate::server::commands::CommandError;
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
-    AddHostRequest, AddHostResponse, DeleteHostRequest, DeleteHostResponse, GetHostRequest,
+    self, AddHostRequest, AddHostResponse, DeleteHostRequest, DeleteHostResponse, GetHostRequest,
     GetHostResponse, ListHostsRequest, ListHostsResponse, SearchHostsRequest, SearchHostsResponse,
     UpdateHostRequest, UpdateHostResponse,
 };
+use router_hosts_storage::HostEntry;
 use tonic::{Request, Response, Status};
 use ulid::Ulid;
 
@@ -26,7 +27,7 @@ impl HostsServiceImpl {
 
         Ok(Response::new(AddHostResponse {
             id: entry.id.to_string(),
-            entry: Some(entry.into()),
+            entry: Some(host_entry_to_proto(entry)),
         }))
     }
 
@@ -40,15 +41,10 @@ impl HostsServiceImpl {
         let id = Ulid::from_string(&req.id)
             .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
 
-        let entry = self
-            .commands
-            .get_host(id)
-            .await
-            .map_err(Status::from)?
-            .ok_or_else(|| Status::not_found(format!("Host {} not found", req.id)))?;
+        let entry = self.commands.get_host(id).await.map_err(Status::from)?;
 
         Ok(Response::new(GetHostResponse {
-            entry: Some(entry.into()),
+            entry: Some(host_entry_to_proto(entry)),
         }))
     }
 
@@ -89,7 +85,7 @@ impl HostsServiceImpl {
             .map_err(Status::from)?;
 
         Ok(Response::new(UpdateHostResponse {
-            entry: Some(entry.into()),
+            entry: Some(host_entry_to_proto(entry)),
         }))
     }
 
@@ -121,7 +117,7 @@ impl HostsServiceImpl {
         let responses: Vec<ListHostsResponse> = entries
             .into_iter()
             .map(|entry| ListHostsResponse {
-                entry: Some(entry.into()),
+                entry: Some(host_entry_to_proto(entry)),
             })
             .collect();
 
@@ -144,7 +140,7 @@ impl HostsServiceImpl {
         let responses: Vec<SearchHostsResponse> = entries
             .into_iter()
             .map(|entry| SearchHostsResponse {
-                entry: Some(entry.into()),
+                entry: Some(host_entry_to_proto(entry)),
             })
             .collect();
 
@@ -167,11 +163,31 @@ impl From<CommandError> for Status {
                 "Version conflict: expected {}, actual {}",
                 expected, actual
             )),
-            CommandError::Database(e) => Status::internal(format!("Database error: {}", e)),
+            CommandError::Storage(e) => Status::internal(format!("Storage error: {}", e)),
             CommandError::FileGeneration(msg) => {
                 Status::internal(format!("File generation error: {}", msg))
             }
             CommandError::Internal(msg) => Status::internal(msg),
         }
+    }
+}
+
+/// Convert storage HostEntry to proto HostEntry
+fn host_entry_to_proto(entry: HostEntry) -> proto::HostEntry {
+    proto::HostEntry {
+        id: entry.id.to_string(),
+        ip_address: entry.ip_address,
+        hostname: entry.hostname,
+        comment: entry.comment,
+        tags: entry.tags,
+        created_at: Some(prost_types::Timestamp {
+            seconds: entry.created_at.timestamp(),
+            nanos: entry.created_at.timestamp_subsec_nanos() as i32,
+        }),
+        updated_at: Some(prost_types::Timestamp {
+            seconds: entry.updated_at.timestamp(),
+            nanos: entry.updated_at.timestamp_subsec_nanos() as i32,
+        }),
+        version: entry.version,
     }
 }

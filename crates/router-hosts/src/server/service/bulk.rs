@@ -1,7 +1,5 @@
 //! Import/Export operation handlers (streaming)
 
-use crate::server::db::Database;
-use crate::server::db::HostProjections;
 use crate::server::export::{
     format_csv_entry, format_csv_header, format_hosts_entry, format_hosts_header,
     format_json_entry, ExportFormat,
@@ -10,6 +8,7 @@ use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
     ExportHostsRequest, ExportHostsResponse, ImportHostsRequest, ImportHostsResponse,
 };
+use router_hosts_storage::Storage;
 use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -144,7 +143,7 @@ impl HostsServiceImpl {
     pub async fn handle_export_hosts(
         &self,
         request: Request<ExportHostsRequest>,
-        db: Arc<Database>,
+        storage: Arc<dyn Storage>,
     ) -> Result<Response<Vec<ExportHostsResponse>>, Status> {
         let req = request.into_inner();
 
@@ -156,8 +155,10 @@ impl HostsServiceImpl {
             ))
         })?;
 
-        // Query all hosts
-        let entries = HostProjections::list_all(&db)
+        // Query all hosts from storage
+        let entries = storage
+            .list_all()
+            .await
             .map_err(|e| Status::internal(format!("Failed to query hosts: {}", e)))?;
 
         let mut responses = Vec::new();

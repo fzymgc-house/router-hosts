@@ -1,3 +1,4 @@
+use router_hosts_storage::StorageError;
 use serde::Deserialize;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -19,6 +20,9 @@ pub enum ConfigError {
 
     #[error("Config file security: {0}")]
     InsecureConfig(String),
+
+    #[error("Storage configuration error: {0}")]
+    StorageConfig(#[from] StorageError),
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -27,9 +31,50 @@ pub struct ServerConfig {
     pub hosts_file_path: String,
 }
 
+/// Database/storage configuration
+///
+/// Supports two formats for backwards compatibility:
+/// - `path = "/path/to/db.duckdb"` - legacy format, converted to duckdb:// URL
+/// - `url = "duckdb:///path/to/db.duckdb"` - new URL format
+///
+/// If both are specified, `url` takes precedence.
 #[derive(Debug, Deserialize, Clone)]
 pub struct DatabaseConfig {
-    pub path: PathBuf,
+    /// Legacy path format (deprecated, use `url` instead)
+    #[serde(default)]
+    pub path: Option<PathBuf>,
+
+    /// Storage URL (e.g., "duckdb:///path/to/db.duckdb" or "duckdb://:memory:")
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+impl DatabaseConfig {
+    /// Get the storage URL, converting from legacy path format if needed
+    pub fn storage_url(&self) -> Result<String, ConfigError> {
+        // Prefer url if specified
+        if let Some(url) = &self.url {
+            return Ok(url.clone());
+        }
+
+        // Fall back to converting path to duckdb:// URL
+        if let Some(path) = &self.path {
+            let path_str = path.to_string_lossy();
+            // Convert absolute path to duckdb:// URL
+            if path_str.starts_with('/') {
+                return Ok(format!("duckdb://{}", path_str));
+            } else {
+                // Relative path
+                return Ok(format!("duckdb://./{}", path_str));
+            }
+        }
+
+        Err(ConfigError::StorageConfig(
+            StorageError::InvalidConnectionString(
+                "database configuration requires either 'path' or 'url'".into(),
+            ),
+        ))
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -410,5 +455,76 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
         // Verify loading succeeds
         let result = Config::from_file(path.to_str().unwrap());
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_database_config_legacy_path() {
+        let config = DatabaseConfig {
+            path: Some(PathBuf::from("/var/lib/router-hosts/hosts.db")),
+            url: None,
+        };
+        let url = config.storage_url().unwrap();
+        assert_eq!(url, "duckdb:///var/lib/router-hosts/hosts.db");
+    }
+
+    #[test]
+    fn test_database_config_legacy_relative_path() {
+        let config = DatabaseConfig {
+            path: Some(PathBuf::from("data/hosts.db")),
+            url: None,
+        };
+        let url = config.storage_url().unwrap();
+        assert_eq!(url, "duckdb://./data/hosts.db");
+    }
+
+    #[test]
+    fn test_database_config_url_format() {
+        let config = DatabaseConfig {
+            path: None,
+            url: Some("duckdb://:memory:".to_string()),
+        };
+        let url = config.storage_url().unwrap();
+        assert_eq!(url, "duckdb://:memory:");
+    }
+
+    #[test]
+    fn test_database_config_url_takes_precedence() {
+        let config = DatabaseConfig {
+            path: Some(PathBuf::from("/ignored/path")),
+            url: Some("duckdb://:memory:".to_string()),
+        };
+        let url = config.storage_url().unwrap();
+        assert_eq!(url, "duckdb://:memory:");
+    }
+
+    #[test]
+    fn test_database_config_missing_both() {
+        let config = DatabaseConfig {
+            path: None,
+            url: None,
+        };
+        let result = config.storage_url();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_config_with_url_format() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "duckdb://:memory:"
+
+            [tls]
+            cert_path = "/etc/router-hosts/server.crt"
+            key_path = "/etc/router-hosts/server.key"
+            ca_cert_path = "/etc/router-hosts/ca.crt"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let url = config.database.storage_url().unwrap();
+        assert_eq!(url, "duckdb://:memory:");
     }
 }

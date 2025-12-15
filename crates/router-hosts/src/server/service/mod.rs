@@ -8,7 +8,6 @@ mod hosts;
 mod snapshots;
 
 use crate::server::commands::CommandHandler;
-use crate::server::db::Database;
 use crate::server::write_queue::WriteQueue;
 use router_hosts_common::proto::hosts_service_server::HostsService;
 use router_hosts_common::proto::{
@@ -19,6 +18,7 @@ use router_hosts_common::proto::{
     ListSnapshotsResponse, RollbackToSnapshotRequest, RollbackToSnapshotResponse,
     SearchHostsRequest, SearchHostsResponse, UpdateHostRequest, UpdateHostResponse,
 };
+use router_hosts_storage::Storage;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio_stream::Stream;
@@ -30,17 +30,21 @@ pub struct HostsServiceImpl {
     pub(crate) write_queue: WriteQueue,
     /// Command handler for read operations and snapshot management
     pub(crate) commands: Arc<CommandHandler>,
-    /// Database connection (used by export and snapshot handlers)
-    pub(crate) db: Arc<Database>,
+    /// Storage backend (used by export and snapshot handlers)
+    pub(crate) storage: Arc<dyn Storage>,
 }
 
 impl HostsServiceImpl {
     /// Create a new service instance
-    pub fn new(write_queue: WriteQueue, commands: Arc<CommandHandler>, db: Arc<Database>) -> Self {
+    pub fn new(
+        write_queue: WriteQueue,
+        commands: Arc<CommandHandler>,
+        storage: Arc<dyn Storage>,
+    ) -> Self {
         Self {
             write_queue,
             commands,
-            db,
+            storage,
         }
     }
 }
@@ -120,7 +124,7 @@ impl HostsService for HostsServiceImpl {
         request: Request<ExportHostsRequest>,
     ) -> Result<Response<Self::ExportHostsStream>, Status> {
         let responses = self
-            .handle_export_hosts(request, Arc::clone(&self.db))
+            .handle_export_hosts(request, Arc::clone(&self.storage))
             .await?;
         let stream = futures::stream::iter(responses.into_inner().into_iter().map(Ok));
         Ok(Response::new(Box::pin(stream)))
