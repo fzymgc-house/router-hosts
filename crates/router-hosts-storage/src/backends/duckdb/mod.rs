@@ -221,8 +221,12 @@ impl SnapshotStore for DuckDbStorage {
         self.get_snapshot_impl(snapshot_id).await
     }
 
-    async fn list_snapshots(&self) -> Result<Vec<SnapshotMetadata>, StorageError> {
-        self.list_snapshots_impl().await
+    async fn list_snapshots(
+        &self,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<SnapshotMetadata>, StorageError> {
+        self.list_snapshots_impl(limit, offset).await
     }
 
     async fn delete_snapshot(&self, snapshot_id: &str) -> Result<(), StorageError> {
@@ -231,9 +235,9 @@ impl SnapshotStore for DuckDbStorage {
 
     async fn apply_retention_policy(
         &self,
-        max_count: Option<i32>,
-        max_age_days: Option<i32>,
-    ) -> Result<i32, StorageError> {
+        max_count: Option<usize>,
+        max_age_days: Option<u32>,
+    ) -> Result<usize, StorageError> {
         self.apply_retention_policy_impl(max_count, max_age_days)
             .await
     }

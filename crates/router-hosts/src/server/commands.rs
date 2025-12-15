@@ -295,6 +295,12 @@ impl CommandHandler {
     }
 
     /// Get a host by ID
+    ///
+    /// # Errors
+    ///
+    /// Returns `CommandError::NotFound` if the host doesn't exist.
+    /// This follows the storage trait design where missing entities
+    /// are errors rather than `Option::None`.
     pub async fn get_host(&self, id: Ulid) -> CommandResult<HostEntry> {
         match self.storage.get_by_id(id).await {
             Ok(entry) => Ok(entry),
@@ -511,26 +517,14 @@ impl CommandHandler {
 
     /// List snapshots with optional pagination
     ///
-    /// Returns snapshots ordered by created_at DESC (newest first)
-    /// Note: The storage layer doesn't support pagination directly,
-    /// so we apply limit/offset in memory if needed.
+    /// Returns snapshots ordered by created_at DESC (newest first).
+    /// Pagination is handled at the storage layer for efficiency.
     pub async fn list_snapshots(
         &self,
         limit: Option<u32>,
         offset: Option<u32>,
     ) -> CommandResult<Vec<SnapshotMetadata>> {
-        let all_snapshots = self.storage.list_snapshots().await?;
-
-        // Apply offset and limit in memory
-        let offset = offset.unwrap_or(0) as usize;
-        let snapshots: Vec<_> = all_snapshots.into_iter().skip(offset).collect();
-
-        let snapshots = if let Some(limit) = limit {
-            snapshots.into_iter().take(limit as usize).collect()
-        } else {
-            snapshots
-        };
-
+        let snapshots = self.storage.list_snapshots(limit, offset).await?;
         Ok(snapshots)
     }
 
@@ -651,7 +645,7 @@ impl CommandHandler {
     /// Clean up old snapshots based on retention policy
     ///
     /// Deletes snapshots that violate either max_snapshots OR max_age_days
-    async fn cleanup_old_snapshots(&self) -> CommandResult<i32> {
+    async fn cleanup_old_snapshots(&self) -> CommandResult<usize> {
         let max_snapshots = self.config.retention.max_snapshots;
         let max_age_days = self.config.retention.max_age_days;
 
@@ -660,14 +654,14 @@ impl CommandHandler {
             return Ok(0);
         }
 
-        // Use storage trait method for retention
+        // Pass config values directly to storage (types now match)
         let max_count = if max_snapshots > 0 {
-            Some(max_snapshots as i32)
+            Some(max_snapshots)
         } else {
             None
         };
         let max_age = if max_age_days > 0 {
-            Some(max_age_days as i32)
+            Some(max_age_days)
         } else {
             None
         };
