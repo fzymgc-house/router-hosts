@@ -1,6 +1,6 @@
 //! Export format helpers for ExportHosts RPC
 
-use crate::server::db::HostEntry;
+use router_hosts_storage::HostEntry;
 
 /// Supported export formats
 #[derive(Debug, Clone, Copy, PartialEq)]

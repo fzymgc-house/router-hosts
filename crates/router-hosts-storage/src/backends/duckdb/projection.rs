@@ -679,7 +679,7 @@ mod tests {
     use crate::{EventStore, Storage};
 
     async fn create_test_storage() -> DuckDbStorage {
-        let storage = DuckDbStorage::new("duckdb://:memory:")
+        let storage = DuckDbStorage::new(":memory:")
             .await
             .expect("failed to create in-memory storage");
         storage.initialize().await.expect("failed to initialize");

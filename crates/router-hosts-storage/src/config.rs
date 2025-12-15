@@ -83,10 +83,12 @@ impl StorageConfig {
                 let path = parsed.path();
                 if path == "/memory:" || path == "/:memory:" {
                     ":memory:".to_string()
-                } else if path.starts_with('/') && !path[1..].is_empty() {
-                    // Remove leading slash from path for file-based databases
-                    path[1..].to_string()
+                } else if path.is_empty() || path == "/" {
+                    return Err(ConfigError::UnsupportedScheme(
+                        "missing database path".to_string(),
+                    ));
                 } else {
+                    // Keep path as-is (absolute paths start with /, relative don't)
                     path.to_string()
                 }
             }
@@ -163,7 +165,7 @@ mod tests {
     fn test_parse_duckdb_file() {
         let config = StorageConfig::from_url("duckdb:///var/lib/router-hosts/db.duckdb").unwrap();
         assert_eq!(config.backend, BackendType::DuckDb);
-        assert_eq!(config.connection_string, "var/lib/router-hosts/db.duckdb");
+        assert_eq!(config.connection_string, "/var/lib/router-hosts/db.duckdb");
         assert_eq!(config.pool_size, None);
     }
 
@@ -179,7 +181,7 @@ mod tests {
     fn test_parse_sqlite_file() {
         let config = StorageConfig::from_url("sqlite:///path/to/db.sqlite").unwrap();
         assert_eq!(config.backend, BackendType::Sqlite);
-        assert_eq!(config.connection_string, "path/to/db.sqlite");
+        assert_eq!(config.connection_string, "/path/to/db.sqlite");
         assert_eq!(config.pool_size, None);
     }
 

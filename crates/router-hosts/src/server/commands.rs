@@ -3,14 +3,15 @@
 //! This module centralizes validation and event generation for all write operations.
 //! All operations are immediate - there is no session/batching support.
 
-use crate::server::db::{
-    Database, DatabaseError, EventStore, HostEntry, HostEvent, HostProjections,
-};
 use crate::server::hooks::HookExecutor;
 use crate::server::hosts_file::HostsFileGenerator;
 use crate::server::import::{parse_import, ImportFormat};
 use chrono::Utc;
 use router_hosts_common::validation::{validate_hostname, validate_ip_address};
+use router_hosts_storage::{
+    EventEnvelope, HostEntry, HostEvent, HostFilter, Snapshot, SnapshotId, SnapshotMetadata,
+    Storage, StorageError,
+};
 use std::sync::Arc;
 use thiserror::Error;
 use ulid::Ulid;
@@ -41,8 +42,8 @@ pub enum CommandError {
     #[error("Version conflict: expected {expected}, actual {actual}")]
     VersionConflict { expected: String, actual: String },
 
-    #[error("Database error: {0}")]
-    Database(#[from] DatabaseError),
+    #[error("Storage error: {0}")]
+    Storage(#[from] StorageError),
 
     #[error("File generation error: {0}")]
     FileGeneration(String),
@@ -54,7 +55,7 @@ pub enum CommandError {
 pub type CommandResult<T> = Result<T, CommandError>;
 
 pub struct CommandHandler {
-    db: Arc<Database>,
+    storage: Arc<dyn Storage>,
     hosts_file: Arc<HostsFileGenerator>,
     hooks: Arc<HookExecutor>,
     config: Arc<crate::server::config::Config>,
@@ -62,16 +63,28 @@ pub struct CommandHandler {
 
 impl CommandHandler {
     pub fn new(
-        db: Arc<Database>,
+        storage: Arc<dyn Storage>,
         hosts_file: Arc<HostsFileGenerator>,
         hooks: Arc<HookExecutor>,
         config: Arc<crate::server::config::Config>,
     ) -> Self {
         Self {
-            db,
+            storage,
             hosts_file,
             hooks,
             config,
+        }
+    }
+
+    /// Create an event envelope from a HostEvent
+    fn create_envelope(&self, aggregate_id: Ulid, event: HostEvent) -> EventEnvelope {
+        EventEnvelope {
+            event_id: Ulid::new(),
+            aggregate_id,
+            event,
+            event_version: Ulid::new().to_string(),
+            created_at: Utc::now(),
+            created_by: None,
         }
     }
 
@@ -89,8 +102,10 @@ impl CommandHandler {
         validate_hostname(&hostname).map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
 
         // Check for duplicates
-        if let Some(_existing) =
-            HostProjections::find_by_ip_and_hostname(&self.db, &ip_address, &hostname)?
+        if let Some(_existing) = self
+            .storage
+            .find_by_ip_and_hostname(&ip_address, &hostname)
+            .await?
         {
             return Err(CommandError::DuplicateEntry(format!(
                 "Host with IP {} and hostname {} already exists",
@@ -107,16 +122,17 @@ impl CommandHandler {
             created_at: Utc::now(),
         };
 
-        // Commit immediately
-        EventStore::append_event(&self.db, &aggregate_id, event, None, None)?;
+        // Create envelope and commit immediately
+        let envelope = self.create_envelope(aggregate_id, event);
+        self.storage
+            .append_event(aggregate_id, envelope, None)
+            .await?;
 
         // Regenerate hosts file
         self.regenerate_hosts_file().await?;
 
         // Return the created entry
-        self.get_host(aggregate_id)
-            .await?
-            .ok_or_else(|| CommandError::Internal("Entry not found after creation".to_string()))
+        self.get_host(aggregate_id).await
     }
 
     /// Update an existing host entry
@@ -133,8 +149,13 @@ impl CommandHandler {
         expected_version: Option<String>,
     ) -> CommandResult<HostEntry> {
         // Get current state
-        let current = HostProjections::get_by_id(&self.db, &id)?
-            .ok_or_else(|| CommandError::NotFound(format!("Host {} not found", id)))?;
+        let current = match self.storage.get_by_id(id).await {
+            Ok(entry) => entry,
+            Err(StorageError::NotFound { .. }) => {
+                return Err(CommandError::NotFound(format!("Host {} not found", id)));
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         let current_version = current.version.clone();
 
@@ -187,8 +208,10 @@ impl CommandHandler {
 
         // Check for duplicate IP+hostname (if either changed)
         if final_ip != current.ip_address || final_hostname != current.hostname {
-            if let Some(existing) =
-                HostProjections::find_by_ip_and_hostname(&self.db, &final_ip, &final_hostname)?
+            if let Some(existing) = self
+                .storage
+                .find_by_ip_and_hostname(&final_ip, &final_hostname)
+                .await?
             {
                 if existing.id != id {
                     return Err(CommandError::DuplicateEntry(format!(
@@ -223,23 +246,34 @@ impl CommandHandler {
             return Ok(current);
         }
 
+        // Create envelopes for all events
+        let envelopes: Vec<EventEnvelope> = events
+            .into_iter()
+            .map(|event| self.create_envelope(id, event))
+            .collect();
+
         // Commit all events atomically - prevents race condition where partial
         // updates could be committed if a concurrent write occurs mid-loop
-        EventStore::append_events(&self.db, &id, events, Some(current_version), None)?;
+        self.storage
+            .append_events(id, envelopes, Some(current_version))
+            .await?;
 
         // Regenerate hosts file
         self.regenerate_hosts_file().await?;
 
         // Return updated entry
-        self.get_host(id)
-            .await?
-            .ok_or_else(|| CommandError::Internal("Entry not found after update".to_string()))
+        self.get_host(id).await
     }
 
     /// Delete a host entry
     pub async fn delete_host(&self, id: Ulid, reason: Option<String>) -> CommandResult<()> {
-        let current = HostProjections::get_by_id(&self.db, &id)?
-            .ok_or_else(|| CommandError::NotFound(format!("Host {} not found", id)))?;
+        let current = match self.storage.get_by_id(id).await {
+            Ok(entry) => entry,
+            Err(StorageError::NotFound { .. }) => {
+                return Err(CommandError::NotFound(format!("Host {} not found", id)));
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         let event = HostEvent::HostDeleted {
             ip_address: current.ip_address.clone(),
@@ -248,8 +282,11 @@ impl CommandHandler {
             reason,
         };
 
-        // Commit immediately
-        EventStore::append_event(&self.db, &id, event, Some(current.version.clone()), None)?;
+        // Create envelope and commit immediately
+        let envelope = self.create_envelope(id, event);
+        self.storage
+            .append_event(id, envelope, Some(current.version.clone()))
+            .await?;
 
         // Regenerate hosts file
         self.regenerate_hosts_file().await?;
@@ -258,18 +295,34 @@ impl CommandHandler {
     }
 
     /// Get a host by ID
-    pub async fn get_host(&self, id: Ulid) -> CommandResult<Option<HostEntry>> {
-        Ok(HostProjections::get_by_id(&self.db, &id)?)
+    ///
+    /// # Errors
+    ///
+    /// Returns `CommandError::NotFound` if the host doesn't exist.
+    /// This follows the storage trait design where missing entities
+    /// are errors rather than `Option::None`.
+    pub async fn get_host(&self, id: Ulid) -> CommandResult<HostEntry> {
+        match self.storage.get_by_id(id).await {
+            Ok(entry) => Ok(entry),
+            Err(StorageError::NotFound { .. }) => {
+                Err(CommandError::NotFound(format!("Host {} not found", id)))
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// List all hosts
     pub async fn list_hosts(&self) -> CommandResult<Vec<HostEntry>> {
-        Ok(HostProjections::list_all(&self.db)?)
+        Ok(self.storage.list_all().await?)
     }
 
-    /// Search hosts
+    /// Search hosts by pattern
     pub async fn search_hosts(&self, pattern: &str) -> CommandResult<Vec<HostEntry>> {
-        Ok(HostProjections::search(&self.db, pattern)?)
+        let filter = HostFilter {
+            hostname_pattern: Some(pattern.to_string()),
+            ..Default::default()
+        };
+        Ok(self.storage.search(filter).await?)
     }
 
     /// Import multiple hosts with conflict handling
@@ -304,7 +357,6 @@ impl CommandHandler {
         entries: Vec<crate::server::write_queue::ParsedEntry>,
         conflict_mode: crate::server::write_queue::ConflictMode,
     ) -> CommandResult<crate::server::write_queue::ImportResult> {
-        use crate::server::db::{EventStore, HostEvent, HostProjections};
         use crate::server::write_queue::{ConflictMode, ImportResult};
         use std::collections::HashMap;
 
@@ -317,8 +369,8 @@ impl CommandHandler {
             validation_errors: Vec::new(),
         };
 
-        // Group events by aggregate_id: (aggregate_id, events, expected_version)
-        let mut events_by_aggregate: HashMap<Ulid, (Vec<HostEvent>, Option<String>)> =
+        // Group envelopes by aggregate_id: (aggregate_id, envelopes, expected_version)
+        let mut envelopes_by_aggregate: HashMap<Ulid, (Vec<EventEnvelope>, Option<String>)> =
             HashMap::new();
 
         for entry in entries {
@@ -357,11 +409,10 @@ impl CommandHandler {
             }
 
             // Check for existing entry
-            let existing = HostProjections::find_by_ip_and_hostname(
-                &self.db,
-                &entry.ip_address,
-                &entry.hostname,
-            )?;
+            let existing = self
+                .storage
+                .find_by_ip_and_hostname(&entry.ip_address, &entry.hostname)
+                .await?;
 
             match (existing, conflict_mode) {
                 (Some(_), ConflictMode::Skip) => {
@@ -377,7 +428,7 @@ impl CommandHandler {
                     //
                     // Note: Cross-batch duplicates (same host in concurrent imports) are safe
                     // because WriteQueue serializes all imports - they never interleave.
-                    if events_by_aggregate.contains_key(&existing_entry.id) {
+                    if envelopes_by_aggregate.contains_key(&existing_entry.id) {
                         return Err(CommandError::ValidationFailed(format!(
                             "Line {}: Multiple updates to same host in import batch (IP {} hostname {})",
                             entry.line_number, entry.ip_address, entry.hostname
@@ -385,27 +436,29 @@ impl CommandHandler {
                     }
 
                     // Generate update events
-                    let mut update_events = Vec::new();
+                    let mut update_envelopes = Vec::new();
 
                     if entry.comment != existing_entry.comment {
-                        update_events.push(HostEvent::CommentUpdated {
+                        let event = HostEvent::CommentUpdated {
                             old_comment: existing_entry.comment.clone(),
                             new_comment: entry.comment.clone(),
                             updated_at: Utc::now(),
-                        });
+                        };
+                        update_envelopes.push(self.create_envelope(existing_entry.id, event));
                     }
                     if entry.tags != existing_entry.tags {
-                        update_events.push(HostEvent::TagsModified {
+                        let event = HostEvent::TagsModified {
                             old_tags: existing_entry.tags.clone(),
                             new_tags: entry.tags.clone(),
                             modified_at: Utc::now(),
-                        });
+                        };
+                        update_envelopes.push(self.create_envelope(existing_entry.id, event));
                     }
 
-                    if !update_events.is_empty() {
-                        events_by_aggregate.insert(
+                    if !update_envelopes.is_empty() {
+                        envelopes_by_aggregate.insert(
                             existing_entry.id,
-                            (update_events, Some(existing_entry.version)),
+                            (update_envelopes, Some(existing_entry.version)),
                         );
                         result.updated = result.updated.saturating_add(1);
                     } else {
@@ -429,15 +482,18 @@ impl CommandHandler {
                         tags: entry.tags,
                         created_at: Utc::now(),
                     };
-                    events_by_aggregate.insert(aggregate_id, (vec![event], None));
+                    let envelope = self.create_envelope(aggregate_id, event);
+                    envelopes_by_aggregate.insert(aggregate_id, (vec![envelope], None));
                     result.created = result.created.saturating_add(1);
                 }
             }
         }
 
         // Commit all events grouped by aggregate
-        for (aggregate_id, (events, expected_version)) in events_by_aggregate {
-            EventStore::append_events(&self.db, &aggregate_id, events, expected_version, None)?;
+        for (aggregate_id, (envelopes, expected_version)) in envelopes_by_aggregate {
+            self.storage
+                .append_events(aggregate_id, envelopes, expected_version)
+                .await?;
         }
 
         // Regenerate hosts file once at end if any changes were made
@@ -451,91 +507,38 @@ impl CommandHandler {
     /// Delete a snapshot by ID
     ///
     /// Returns true if snapshot was deleted, false if not found
-    pub fn delete_snapshot(&self, snapshot_id: &str) -> CommandResult<bool> {
-        let conn = self.db.conn();
-
-        let deleted = conn
-            .execute("DELETE FROM snapshots WHERE snapshot_id = ?", [snapshot_id])
-            .map_err(|e| {
-                CommandError::Database(DatabaseError::QueryFailed(format!(
-                    "Failed to delete snapshot: {}",
-                    e
-                )))
-            })?;
-
-        Ok(deleted > 0)
+    pub async fn delete_snapshot(&self, snapshot_id: &str) -> CommandResult<bool> {
+        let id = SnapshotId::from(snapshot_id);
+        match self.storage.delete_snapshot(&id).await {
+            Ok(()) => Ok(true),
+            Err(StorageError::NotFound { .. }) => Ok(false),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// List snapshots with optional pagination
     ///
-    /// Returns snapshots ordered by created_at DESC (newest first)
-    pub fn list_snapshots(
+    /// Returns snapshots ordered by created_at DESC (newest first).
+    /// Pagination is handled at the storage layer for efficiency.
+    pub async fn list_snapshots(
         &self,
         limit: Option<u32>,
         offset: Option<u32>,
-    ) -> CommandResult<Vec<crate::server::db::Snapshot>> {
-        let conn = self.db.conn();
-
-        let limit_clause = limit.map(|l| format!("LIMIT {}", l)).unwrap_or_default();
-        let offset_clause = offset.map(|o| format!("OFFSET {}", o)).unwrap_or_default();
-
-        let query = format!(
-            "SELECT snapshot_id, created_at, hosts_content, entry_count, trigger, name, event_log_position
-             FROM snapshots
-             ORDER BY created_at DESC
-             {} {}",
-            limit_clause, offset_clause
-        );
-
-        let mut stmt = conn.prepare(&query).map_err(|e| {
-            CommandError::Database(DatabaseError::QueryFailed(format!(
-                "Failed to prepare list query: {}",
-                e
-            )))
-        })?;
-
-        let rows = stmt
-            .query_map([], |row| {
-                Ok(crate::server::db::Snapshot {
-                    snapshot_id: row.get(0)?,
-                    created_at: row.get(1)?,
-                    hosts_content: row.get(2)?,
-                    entry_count: row.get(3)?,
-                    trigger: row.get(4)?,
-                    name: row.get(5)?,
-                    event_log_position: row.get(6)?,
-                })
-            })
-            .map_err(|e| {
-                CommandError::Database(DatabaseError::QueryFailed(format!(
-                    "Failed to query snapshots: {}",
-                    e
-                )))
-            })?;
-
-        let mut snapshots = Vec::new();
-        for row in rows {
-            snapshots.push(row.map_err(|e| {
-                CommandError::Database(DatabaseError::QueryFailed(format!(
-                    "Failed to fetch snapshot row: {}",
-                    e
-                )))
-            })?);
-        }
-
+    ) -> CommandResult<Vec<SnapshotMetadata>> {
+        let snapshots = self.storage.list_snapshots(limit, offset).await?;
         Ok(snapshots)
     }
 
     /// Create a snapshot of the current hosts file state
     ///
     /// Generates snapshot from current database projections, not from reading /etc/hosts
-    pub fn create_snapshot(
+    pub async fn create_snapshot(
         &self,
         name: Option<String>,
         trigger: String,
-    ) -> CommandResult<crate::server::db::Snapshot> {
+    ) -> CommandResult<Snapshot> {
         // Query all active hosts
-        let hosts = HostProjections::list_all(&self.db)?;
+        let hosts = self.storage.list_all().await?;
         let entry_count = hosts.len() as i32;
 
         // Generate hosts file content
@@ -546,47 +549,27 @@ impl CommandHandler {
             name.unwrap_or_else(|| format!("snapshot-{}", Utc::now().format("%Y%m%d-%H%M%S")));
 
         // Generate ULID for snapshot_id
-        let snapshot_id = Ulid::new().to_string();
+        let snapshot_id = SnapshotId::from(Ulid::new().to_string());
+        let created_at = Utc::now();
 
-        // Insert snapshot (created_at uses DEFAULT CURRENT_TIMESTAMP)
-        let conn = self.db.conn();
-        conn.execute(
-            "INSERT INTO snapshots (snapshot_id, hosts_content, entry_count, trigger, name, event_log_position)
-             VALUES (?, ?, ?, ?, ?, ?)",
-            duckdb::params![
-                &snapshot_id,
-                &hosts_content,
-                &entry_count,
-                &trigger,
-                &snapshot_name,
-                &None::<i64>, // event_log_position not used in v1
-            ],
-        )
-        .map_err(|e| {
-            CommandError::Database(DatabaseError::QueryFailed(format!(
-                "Failed to insert snapshot: {}",
-                e
-            )))
-        })?;
+        // Create snapshot
+        let snapshot = Snapshot {
+            snapshot_id: snapshot_id.clone(),
+            created_at,
+            hosts_content: hosts_content.clone(),
+            entry_count,
+            trigger: trigger.clone(),
+            name: Some(snapshot_name.clone()),
+            event_log_position: None,
+        };
 
-        // Read back the created_at timestamp as microseconds
-        let created_at: i64 = conn
-            .query_row(
-                "SELECT CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) FROM snapshots WHERE snapshot_id = ?",
-                [&snapshot_id],
-                |row| row.get(0),
-            )
-            .map_err(|e| {
-                CommandError::Database(DatabaseError::QueryFailed(format!(
-                    "Failed to read snapshot timestamp: {}",
-                    e
-                )))
-            })?;
+        // Save snapshot
+        self.storage.save_snapshot(snapshot).await?;
 
-        // Run retention cleanup synchronously
-        let _deleted = self.cleanup_old_snapshots()?;
+        // Run retention cleanup
+        let _deleted = self.cleanup_old_snapshots().await?;
 
-        Ok(crate::server::db::Snapshot {
+        Ok(Snapshot {
             snapshot_id,
             created_at,
             hosts_content,
@@ -603,24 +586,25 @@ impl CommandHandler {
     /// to the state captured in the target snapshot by parsing its hosts file
     /// content and recreating entries.
     pub async fn rollback_to_snapshot(&self, snapshot_id: &str) -> CommandResult<RollbackResult> {
-        // 1. Fetch snapshot from database
-        let hosts_content = {
-            let conn = self.db.conn();
-            let (content, _entry_count): (String, i32) = conn
-                .query_row(
-                    "SELECT hosts_content, entry_count FROM snapshots WHERE snapshot_id = ?",
-                    [snapshot_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .map_err(|_| {
-                    CommandError::NotFound(format!("Snapshot not found: {}", snapshot_id))
-                })?;
-            content
-        }; // Drop conn before any await points
+        // 1. Fetch snapshot from storage
+        let id = SnapshotId::from(snapshot_id);
+        let snapshot = match self.storage.get_snapshot(&id).await {
+            Ok(s) => s,
+            Err(StorageError::NotFound { .. }) => {
+                return Err(CommandError::NotFound(format!(
+                    "Snapshot not found: {}",
+                    snapshot_id
+                )));
+            }
+            Err(e) => return Err(e.into()),
+        };
+        let hosts_content = snapshot.hosts_content;
 
         // 2. Create pre-rollback backup snapshot
-        let backup = self.create_snapshot(None, "pre-rollback".to_string())?;
-        let backup_snapshot_id = backup.snapshot_id;
+        let backup = self
+            .create_snapshot(None, "pre-rollback".to_string())
+            .await?;
+        let backup_snapshot_id = backup.snapshot_id.into_inner();
 
         // 3. Parse snapshot content
         let parsed_entries =
@@ -629,7 +613,7 @@ impl CommandHandler {
             })?;
 
         // 4. Clear current state (delete all existing hosts)
-        let current_hosts = HostProjections::list_all(&self.db)?;
+        let current_hosts = self.storage.list_all().await?;
         for host in &current_hosts {
             self.delete_host(host.id, Some("Deleted during rollback".to_string()))
                 .await?;
@@ -663,7 +647,7 @@ impl CommandHandler {
     /// Clean up old snapshots based on retention policy
     ///
     /// Deletes snapshots that violate either max_snapshots OR max_age_days
-    fn cleanup_old_snapshots(&self) -> CommandResult<usize> {
+    async fn cleanup_old_snapshots(&self) -> CommandResult<usize> {
         let max_snapshots = self.config.retention.max_snapshots;
         let max_age_days = self.config.retention.max_age_days;
 
@@ -672,62 +656,28 @@ impl CommandHandler {
             return Ok(0);
         }
 
-        // Use database-side deletion to avoid loading all snapshots into memory
-        let conn = self.db.conn();
-        let mut deleted_count = 0;
+        // Pass config values directly to storage (types now match)
+        let max_count = if max_snapshots > 0 {
+            Some(max_snapshots)
+        } else {
+            None
+        };
+        let max_age = if max_age_days > 0 {
+            Some(max_age_days)
+        } else {
+            None
+        };
 
-        // Delete snapshots older than max_age_days (if configured)
-        if max_age_days > 0 {
-            let cutoff_timestamp = Utc::now()
-                .checked_sub_signed(chrono::Duration::days(max_age_days as i64))
-                .unwrap()
-                .timestamp_micros();
-
-            let age_deleted = conn
-                .execute(
-                    "DELETE FROM snapshots WHERE CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) < ?",
-                    duckdb::params![cutoff_timestamp],
-                )
-                .map_err(|e| {
-                    CommandError::Database(DatabaseError::QueryFailed(format!(
-                        "Failed to delete old snapshots: {}",
-                        e
-                    )))
-                })?;
-
-            deleted_count += age_deleted;
-        }
-
-        // Delete snapshots beyond max_count limit (if configured)
-        // Keep the newest snapshots up to max_count
-        if max_snapshots > 0 {
-            let count_deleted = conn
-                .execute(
-                    r#"
-                    DELETE FROM snapshots
-                    WHERE snapshot_id IN (
-                        SELECT snapshot_id FROM snapshots
-                        ORDER BY created_at DESC
-                        OFFSET ?
-                    )
-                    "#,
-                    duckdb::params![max_snapshots],
-                )
-                .map_err(|e| {
-                    CommandError::Database(DatabaseError::QueryFailed(format!(
-                        "Failed to delete excess snapshots: {}",
-                        e
-                    )))
-                })?;
-
-            deleted_count += count_deleted;
-        }
+        let deleted_count = self
+            .storage
+            .apply_retention_policy(max_count, max_age)
+            .await?;
 
         Ok(deleted_count)
     }
 
     async fn regenerate_hosts_file(&self) -> CommandResult<()> {
-        match self.hosts_file.regenerate(&self.db).await {
+        match self.hosts_file.regenerate(self.storage.as_ref()).await {
             Ok(count) => {
                 let hook_failures = self.hooks.run_success(count).await;
                 if hook_failures > 0 {
@@ -756,6 +706,7 @@ impl CommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use router_hosts_storage::backends::duckdb::DuckDbStorage;
     use std::env::temp_dir;
     use std::path::PathBuf;
 
@@ -766,7 +717,8 @@ mod tests {
                 hosts_file_path: "/tmp/test_hosts".to_string(),
             },
             database: crate::server::config::DatabaseConfig {
-                path: PathBuf::from("/tmp/test.db"),
+                path: None,
+                url: Some("duckdb://:memory:".to_string()),
             },
             tls: crate::server::config::TlsConfig {
                 cert_path: PathBuf::from("/tmp/cert.pem"),
@@ -781,8 +733,15 @@ mod tests {
         }
     }
 
-    fn setup() -> CommandHandler {
-        let db = Arc::new(Database::in_memory().unwrap());
+    async fn setup() -> CommandHandler {
+        let storage = DuckDbStorage::new(":memory:")
+            .await
+            .expect("failed to create in-memory storage");
+        storage
+            .initialize()
+            .await
+            .expect("failed to initialize storage");
+        let storage: Arc<dyn Storage> = Arc::new(storage);
 
         // Create a unique temp file for each test
         let temp_file = temp_dir().join(format!("test_hosts_{}", ulid::Ulid::new()));
@@ -791,12 +750,12 @@ mod tests {
         let hooks = Arc::new(HookExecutor::default());
         let config = Arc::new(test_config());
 
-        CommandHandler::new(db, hosts_file, hooks, config)
+        CommandHandler::new(storage, hosts_file, hooks, config)
     }
 
     #[tokio::test]
     async fn test_add_host() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -813,7 +772,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_host_validation_failure() {
-        let handler = setup();
+        let handler = setup().await;
         let result = handler
             .add_host(
                 "invalid-ip".to_string(),
@@ -828,7 +787,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_add_host_duplicate() {
-        let handler = setup();
+        let handler = setup().await;
         handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -854,7 +813,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_host() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -882,7 +841,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_host() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -895,13 +854,13 @@ mod tests {
 
         handler.delete_host(entry.id, None).await.unwrap();
 
-        let result = handler.get_host(entry.id).await.unwrap();
-        assert!(result.is_none());
+        let result = handler.get_host(entry.id).await;
+        assert!(matches!(result, Err(CommandError::NotFound(_))));
     }
 
     #[tokio::test]
     async fn test_list_hosts() {
-        let handler = setup();
+        let handler = setup().await;
 
         handler
             .add_host(
@@ -929,7 +888,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_search_hosts() {
-        let handler = setup();
+        let handler = setup().await;
 
         handler
             .add_host(
@@ -958,7 +917,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_hostname() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -986,7 +945,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_comment() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -1014,7 +973,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_tags() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -1042,7 +1001,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_no_changes() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -1065,7 +1024,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_not_found() {
-        let handler = setup();
+        let handler = setup().await;
         let fake_id = Ulid::new();
 
         let result = handler.delete_host(fake_id, None).await;
@@ -1074,7 +1033,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_not_found() {
-        let handler = setup();
+        let handler = setup().await;
         let fake_id = Ulid::new();
 
         let result = handler
@@ -1085,7 +1044,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hostname_validation() {
-        let handler = setup();
+        let handler = setup().await;
 
         let result = handler
             .add_host(
@@ -1101,7 +1060,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_duplicate_detection() {
-        let handler = setup();
+        let handler = setup().await;
 
         // Create two hosts
         let entry_a = handler
@@ -1145,7 +1104,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_empty_expected_version() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -1177,7 +1136,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_version_conflict() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -1226,7 +1185,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_version_conflict_stale_version() {
-        let handler = setup();
+        let handler = setup().await;
         let entry = handler
             .add_host(
                 "192.168.1.1".to_string(),
@@ -1275,7 +1234,7 @@ mod tests {
     async fn test_import_hosts_skip_mode() {
         use crate::server::write_queue::{ConflictMode, ParsedEntry};
 
-        let handler = setup();
+        let handler = setup().await;
 
         // Add existing host
         handler
@@ -1328,7 +1287,7 @@ mod tests {
     async fn test_import_hosts_replace_mode() {
         use crate::server::write_queue::{ConflictMode, ParsedEntry};
 
-        let handler = setup();
+        let handler = setup().await;
 
         // Add existing host
         handler
@@ -1371,7 +1330,7 @@ mod tests {
     async fn test_import_hosts_strict_mode() {
         use crate::server::write_queue::{ConflictMode, ParsedEntry};
 
-        let handler = setup();
+        let handler = setup().await;
 
         // Add existing host
         handler
@@ -1401,7 +1360,7 @@ mod tests {
     async fn test_import_hosts_duplicate_aggregate_in_batch() {
         use crate::server::write_queue::{ConflictMode, ParsedEntry};
 
-        let handler = setup();
+        let handler = setup().await;
 
         // Add existing host
         handler
@@ -1445,7 +1404,7 @@ mod tests {
     async fn test_import_hosts_replace_mode_no_changes() {
         use crate::server::write_queue::{ConflictMode, ParsedEntry};
 
-        let handler = setup();
+        let handler = setup().await;
 
         // Add existing host
         handler
@@ -1483,7 +1442,7 @@ mod tests {
     async fn test_import_hosts_validation_failures() {
         use crate::server::write_queue::{ConflictMode, ParsedEntry};
 
-        let handler = setup();
+        let handler = setup().await;
 
         // Mix of valid and invalid entries
         let entries = vec![
@@ -1541,61 +1500,69 @@ mod tests {
 
     // Snapshot tests
 
-    #[test]
-    fn test_delete_snapshot_not_found() {
-        let handler = setup();
+    #[tokio::test]
+    async fn test_delete_snapshot_not_found() {
+        let handler = setup().await;
 
-        let result = handler.delete_snapshot("01JDTEST000000000000000000");
+        let result = handler.delete_snapshot("01JDTEST000000000000000000").await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 
     #[tokio::test]
     async fn test_delete_snapshot() {
-        let handler = setup();
+        let handler = setup().await;
 
         // First create a snapshot
-        let snapshot = handler.create_snapshot(None, "manual".to_string()).unwrap();
+        let snapshot = handler
+            .create_snapshot(None, "manual".to_string())
+            .await
+            .unwrap();
 
         // Delete it
-        let result = handler.delete_snapshot(&snapshot.snapshot_id);
+        let result = handler.delete_snapshot(snapshot.snapshot_id.as_str()).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), true);
+        assert!(result.unwrap());
 
         // Verify it's gone
-        let result = handler.delete_snapshot(&snapshot.snapshot_id);
+        let result = handler.delete_snapshot(snapshot.snapshot_id.as_str()).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), false);
+        assert!(!result.unwrap());
     }
 
-    #[test]
-    fn test_list_snapshots_empty() {
-        let handler = setup();
+    #[tokio::test]
+    async fn test_list_snapshots_empty() {
+        let handler = setup().await;
 
-        let snapshots = handler.list_snapshots(None, None).unwrap();
-        assert_eq!(snapshots.len(), 0);
+        let snapshots = handler.list_snapshots(None, None).await.unwrap();
+        assert!(snapshots.is_empty());
     }
 
     #[tokio::test]
     async fn test_create_snapshot_with_custom_name() {
-        let handler = setup();
+        let handler = setup().await;
 
         let snapshot = handler
             .create_snapshot(Some("test-snapshot".to_string()), "manual".to_string())
+            .await
             .unwrap();
 
-        assert!(!snapshot.snapshot_id.is_empty());
+        assert!(!snapshot.snapshot_id.as_str().is_empty());
         assert_eq!(snapshot.name, Some("test-snapshot".to_string()));
         assert_eq!(snapshot.trigger, "manual");
         assert_eq!(snapshot.entry_count, 0); // Empty database
-        assert!(snapshot.created_at > 0);
+                                             // Verify created_at is set to a reasonable time (not the Unix epoch)
+        assert!(snapshot.created_at.timestamp() > 0);
     }
 
     #[tokio::test]
     async fn test_create_snapshot_auto_generated_name() {
-        let handler = setup();
+        let handler = setup().await;
 
-        let snapshot = handler.create_snapshot(None, "manual".to_string()).unwrap();
+        let snapshot = handler
+            .create_snapshot(None, "manual".to_string())
+            .await
+            .unwrap();
 
         // Verify auto-generated name has correct format
         let name = snapshot.name.unwrap();
@@ -1605,7 +1572,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_snapshot_captures_hosts() {
-        let handler = setup();
+        let handler = setup().await;
 
         // Add a host
         handler
@@ -1619,16 +1586,19 @@ mod tests {
             .unwrap();
 
         // Create snapshot
-        let snapshot = handler.create_snapshot(None, "manual".to_string()).unwrap();
+        let snapshot = handler
+            .create_snapshot(None, "manual".to_string())
+            .await
+            .unwrap();
 
         assert_eq!(snapshot.entry_count, 1);
         assert!(snapshot.hosts_content.contains("192.168.1.10"));
         assert!(snapshot.hosts_content.contains("test.local"));
     }
 
-    #[test]
-    fn test_cleanup_retention_disabled() {
-        let mut handler = setup();
+    #[tokio::test]
+    async fn test_cleanup_retention_disabled() {
+        let mut handler = setup().await;
         // Set both limits to 0 (disabled)
         let config = Arc::get_mut(&mut handler.config).unwrap();
         config.retention.max_snapshots = 0;
@@ -1638,17 +1608,18 @@ mod tests {
         for i in 0..5 {
             handler
                 .create_snapshot(Some(format!("s{}", i)), "manual".to_string())
+                .await
                 .unwrap();
         }
 
         // Verify all snapshots still exist (cleanup was disabled during create)
-        let snapshots = handler.list_snapshots(None, None).unwrap();
+        let snapshots = handler.list_snapshots(None, None).await.unwrap();
         assert_eq!(snapshots.len(), 5);
     }
 
-    #[test]
-    fn test_cleanup_by_count_only() {
-        let mut handler = setup();
+    #[tokio::test]
+    async fn test_cleanup_by_count_only() {
+        let mut handler = setup().await;
         let config = Arc::get_mut(&mut handler.config).unwrap();
         config.retention.max_snapshots = 3;
         config.retention.max_age_days = 0; // Disabled
@@ -1657,12 +1628,13 @@ mod tests {
         for i in 0..5 {
             handler
                 .create_snapshot(Some(format!("s{}", i)), "manual".to_string())
+                .await
                 .unwrap();
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
 
         // Cleanup runs automatically in create_snapshot, so verify final state
-        let snapshots = handler.list_snapshots(None, None).unwrap();
+        let snapshots = handler.list_snapshots(None, None).await.unwrap();
         assert_eq!(snapshots.len(), 3);
 
         // Verify we kept the 3 most recent (s2, s3, s4)

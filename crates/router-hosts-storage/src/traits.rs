@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use ulid::Ulid;
 
 use crate::error::StorageError;
-use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotMetadata};
+use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotId, SnapshotMetadata};
 
 /// Event sourcing write side
 ///
@@ -113,15 +113,23 @@ pub trait SnapshotStore: Send + Sync {
     /// # Errors
     /// * `StorageError::NotFound` - Snapshot doesn't exist
     /// * `StorageError::Query` - Database error
-    async fn get_snapshot(&self, snapshot_id: &str) -> Result<Snapshot, StorageError>;
+    async fn get_snapshot(&self, snapshot_id: &SnapshotId) -> Result<Snapshot, StorageError>;
 
-    /// List all snapshots (metadata only, no content)
+    /// List snapshots with optional pagination (metadata only, no content)
     ///
     /// Returns snapshots sorted by created_at descending (newest first).
     ///
+    /// # Arguments
+    /// * `limit` - Maximum number of snapshots to return (None = unlimited)
+    /// * `offset` - Number of snapshots to skip (None = 0)
+    ///
     /// # Errors
     /// * `StorageError::Query` - Database error
-    async fn list_snapshots(&self) -> Result<Vec<SnapshotMetadata>, StorageError>;
+    async fn list_snapshots(
+        &self,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<SnapshotMetadata>, StorageError>;
 
     /// Delete a snapshot by ID
     ///
@@ -131,7 +139,7 @@ pub trait SnapshotStore: Send + Sync {
     /// # Errors
     /// * `StorageError::NotFound` - Snapshot doesn't exist
     /// * `StorageError::Query` - Database error
-    async fn delete_snapshot(&self, snapshot_id: &str) -> Result<(), StorageError>;
+    async fn delete_snapshot(&self, snapshot_id: &SnapshotId) -> Result<(), StorageError>;
 
     /// Apply retention policy (delete old snapshots)
     ///
@@ -148,9 +156,9 @@ pub trait SnapshotStore: Send + Sync {
     /// * `StorageError::Query` - Database error
     async fn apply_retention_policy(
         &self,
-        max_count: Option<i32>,
-        max_age_days: Option<i32>,
-    ) -> Result<i32, StorageError>;
+        max_count: Option<usize>,
+        max_age_days: Option<u32>,
+    ) -> Result<usize, StorageError>;
 }
 
 /// CQRS read side projection

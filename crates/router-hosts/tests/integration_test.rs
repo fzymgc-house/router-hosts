@@ -22,7 +22,6 @@
 //! or similar library for comprehensive E2E security testing.
 
 use router_hosts::server::commands::CommandHandler;
-use router_hosts::server::db::Database;
 use router_hosts::server::hooks::HookExecutor;
 use router_hosts::server::hosts_file::HostsFileGenerator;
 use router_hosts::server::service::HostsServiceImpl;
@@ -34,6 +33,8 @@ use router_hosts_common::proto::{
     ExportHostsRequest, GetHostRequest, ImportHostsRequest, ListHostsRequest, ListSnapshotsRequest,
     RollbackToSnapshotRequest, SearchHostsRequest, UpdateHostRequest,
 };
+use router_hosts_storage::backends::duckdb::DuckDbStorage;
+use router_hosts_storage::Storage;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -47,8 +48,15 @@ async fn start_test_server() -> SocketAddr {
     let addr = listener.local_addr().unwrap();
     drop(listener); // Release the port for the server to use
 
-    // Create in-memory database
-    let db = Arc::new(Database::in_memory().unwrap());
+    // Create in-memory storage
+    let storage = DuckDbStorage::new(":memory:")
+        .await
+        .expect("failed to create in-memory storage");
+    storage
+        .initialize()
+        .await
+        .expect("failed to initialize storage");
+    let storage: Arc<dyn Storage> = Arc::new(storage);
 
     // Create hooks (no-op for tests)
     let hooks = Arc::new(HookExecutor::new(vec![], vec![], 30));
@@ -72,7 +80,8 @@ async fn start_test_server() -> SocketAddr {
             hosts_file_path: hosts_path_str,
         },
         database: router_hosts::server::config::DatabaseConfig {
-            path: std::path::PathBuf::from(":memory:"),
+            path: None,
+            url: Some("duckdb://:memory:".to_string()),
         },
         tls: router_hosts::server::config::TlsConfig {
             cert_path: std::path::PathBuf::from("/tmp/cert.pem"),
@@ -88,7 +97,7 @@ async fn start_test_server() -> SocketAddr {
 
     // Create command handler
     let commands = Arc::new(CommandHandler::new(
-        Arc::clone(&db),
+        Arc::clone(&storage),
         Arc::clone(&hosts_file),
         Arc::clone(&hooks),
         config,
@@ -98,7 +107,7 @@ async fn start_test_server() -> SocketAddr {
     let write_queue = WriteQueue::new(Arc::clone(&commands));
 
     // Create service
-    let service = HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&db));
+    let service = HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&storage));
 
     // Spawn server task
     tokio::spawn(async move {

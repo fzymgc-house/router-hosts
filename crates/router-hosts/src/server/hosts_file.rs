@@ -1,7 +1,7 @@
 //! /etc/hosts file generation with atomic writes
 
-use crate::server::db::{Database, DatabaseError, HostEntry, HostProjections};
 use chrono::Utc;
+use router_hosts_storage::{HostEntry, Storage, StorageError};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::fs;
@@ -9,8 +9,8 @@ use tokio::io::AsyncWriteExt;
 
 #[derive(Debug, Error)]
 pub enum GenerateError {
-    #[error("Database error: {0}")]
-    Database(#[from] DatabaseError),
+    #[error("Storage error: {0}")]
+    Storage(#[from] StorageError),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -29,10 +29,10 @@ impl HostsFileGenerator {
         }
     }
 
-    /// Regenerate /etc/hosts from current database state
-    pub async fn regenerate(&self, db: &Database) -> GenerateResult<usize> {
+    /// Regenerate /etc/hosts from current storage state
+    pub async fn regenerate(&self, storage: &dyn Storage) -> GenerateResult<usize> {
         // Query all active hosts
-        let entries = HostProjections::list_all(db)?;
+        let entries = storage.list_all().await?;
         let count = entries.len();
 
         // Generate content

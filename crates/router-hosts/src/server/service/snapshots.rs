@@ -34,11 +34,12 @@ impl HostsServiceImpl {
                 },
                 trigger,
             )
+            .await
             .map_err(|e| Status::internal(format!("Failed to create snapshot: {}", e)))?;
 
         Ok(Response::new(CreateSnapshotResponse {
-            snapshot_id: snapshot.snapshot_id,
-            created_at: snapshot.created_at,
+            snapshot_id: snapshot.snapshot_id.into_inner(),
+            created_at: snapshot.created_at.timestamp_micros(),
             entry_count: snapshot.entry_count,
         }))
     }
@@ -66,6 +67,7 @@ impl HostsServiceImpl {
         let snapshots = self
             .commands
             .list_snapshots(limit, offset)
+            .await
             .map_err(|e| Status::internal(format!("Failed to list snapshots: {}", e)))?;
 
         // Convert to proto snapshots
@@ -73,13 +75,13 @@ impl HostsServiceImpl {
             .into_iter()
             .map(|s| {
                 use prost_types::Timestamp;
-                // Convert microseconds to seconds and nanos for protobuf Timestamp
-                let seconds = s.created_at / 1_000_000;
-                let nanos = ((s.created_at % 1_000_000) * 1000) as i32;
+                // Convert DateTime<Utc> to protobuf Timestamp
+                let seconds = s.created_at.timestamp();
+                let nanos = s.created_at.timestamp_subsec_nanos() as i32;
 
                 ListSnapshotsResponse {
                     snapshot: Some(Snapshot {
-                        snapshot_id: s.snapshot_id,
+                        snapshot_id: s.snapshot_id.into_inner(),
                         created_at: Some(Timestamp { seconds, nanos }),
                         entry_count: s.entry_count,
                         trigger: s.trigger,
@@ -139,6 +141,7 @@ impl HostsServiceImpl {
         let deleted = self
             .commands
             .delete_snapshot(&req.snapshot_id)
+            .await
             .map_err(|e| Status::internal(format!("Failed to delete snapshot: {}", e)))?;
 
         if !deleted {
