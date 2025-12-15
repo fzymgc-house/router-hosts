@@ -496,9 +496,10 @@ Four crates in a Cargo workspace:
 
 2. **router-hosts-storage** - Storage abstraction layer
    - `Storage` trait defining EventStore, SnapshotStore, and HostProjection
-   - DuckDB backend implementation
+   - DuckDB backend implementation (default, feature-rich)
+   - SQLite backend implementation (lightweight, embedded)
    - Shared test suite for backend compliance (42 tests)
-   - Designed for future backend additions (SQLite, PostgreSQL, etc.)
+   - Designed for future backend additions (PostgreSQL, etc.)
 
 3. **router-hosts** - Unified binary (client and server modes)
    - **Client mode (default):** CLI interface using clap, gRPC client wrapper, command handlers
