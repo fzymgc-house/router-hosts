@@ -496,10 +496,10 @@ Four crates in a Cargo workspace:
 
 2. **router-hosts-storage** - Storage abstraction layer
    - `Storage` trait defining EventStore, SnapshotStore, and HostProjection
-   - DuckDB backend implementation (default, feature-rich)
-   - SQLite backend implementation (lightweight, embedded)
+   - DuckDB backend (default, embedded, feature-rich)
+   - SQLite backend (lightweight, embedded, single-file)
+   - PostgreSQL backend (multi-instance, cloud deployments, connection pooling)
    - Shared test suite for backend compliance (42 tests)
-   - Designed for future backend additions (PostgreSQL, etc.)
 
 3. **router-hosts** - Unified binary (client and server modes)
    - **Client mode (default):** CLI interface using clap, gRPC client wrapper, command handlers
@@ -513,7 +513,7 @@ Four crates in a Cargo workspace:
 ### Key Design Decisions
 
 **Event Sourcing:**
-- All changes stored as immutable events in DuckDB
+- All changes stored as immutable events in the storage backend
 - Current state reconstructed from event log (CQRS pattern)
 - Complete audit trail and time-travel query capability
 - Optimistic concurrency via event versions
@@ -534,7 +534,7 @@ Four crates in a Cargo workspace:
 - Post-edit hooks run after success/failure
 
 **Versioning:**
-- DuckDB stores snapshots of /etc/hosts at points in time
+- Storage backend stores snapshots of /etc/hosts at points in time
 - Configurable retention (max count and max age)
 - Rollback creates snapshot before restoring old version
 
@@ -549,7 +549,7 @@ Four crates in a Cargo workspace:
 **Server requires:**
 - `hosts_file_path` setting (no default) - prevents accidental overwrites
 - TLS certificate paths
-- DuckDB path
+- Storage backend configuration (DuckDB path, SQLite path, or PostgreSQL URL)
 - Optional: retention policy, hooks, timeout settings
 
 **Client:**
@@ -561,8 +561,10 @@ Four crates in a Cargo workspace:
 ### Storage Layer
 
 - **Storage trait** in `router-hosts-storage` abstracts database operations
-- Currently uses **DuckDB** backend (embedded, single file, no daemon)
-- Ideal for embedded/router environments
+- **Available backends:**
+  - **DuckDB** (default): Embedded, single file, feature-rich analytics
+  - **SQLite**: Lightweight embedded, single file, wide compatibility
+  - **PostgreSQL**: Multi-instance deployments, connection pooling, cloud-ready
 - Use in-memory mode for tests: `DuckDbStorage::new(":memory:")`
 - Shared test suite validates any `Storage` implementation (42 tests)
 
