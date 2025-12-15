@@ -6,7 +6,7 @@
 //!
 //! - **DuckDB** (feature: `duckdb`, default) - High-performance embedded analytics database
 //! - **SQLite** (feature: `sqlite`) - Lightweight, widely-available embedded database
-//! - **PostgreSQL** (feature: `postgres`) - Planned for future releases
+//! - **PostgreSQL** (feature: `postgres`) - Scalable networked database for multi-instance deployments
 //!
 //! # Architecture
 //!
@@ -96,9 +96,14 @@ pub async fn create_storage(
                 "SQLite backend not compiled in (enable 'sqlite' feature)".into(),
             ))
         }
+        #[cfg(feature = "postgres")]
+        BackendType::Postgres => std::sync::Arc::new(
+            backends::postgres::PostgresStorage::new(&config.connection_string).await?,
+        ),
+        #[cfg(not(feature = "postgres"))]
         BackendType::Postgres => {
             return Err(StorageError::InvalidConnectionString(
-                "PostgreSQL not yet implemented".into(),
+                "PostgreSQL backend not compiled in (enable 'postgres' feature)".into(),
             ))
         }
     };
