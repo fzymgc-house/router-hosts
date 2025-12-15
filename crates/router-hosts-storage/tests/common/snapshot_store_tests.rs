@@ -70,12 +70,11 @@ pub async fn test_get_nonexistent_snapshot<S: Storage>(storage: &S) {
 /// Test listing snapshots
 pub async fn test_list_snapshots<S: Storage>(storage: &S) {
     // Create multiple snapshots
-    let ids: Vec<SnapshotId> = (0..3)
-        .map(|i| {
-            std::thread::sleep(std::time::Duration::from_millis(2));
-            SnapshotId::new(format!("list-test-{}-{}", Ulid::new(), i))
-        })
-        .collect();
+    let mut ids: Vec<SnapshotId> = Vec::with_capacity(3);
+    for i in 0..3 {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        ids.push(SnapshotId::new(format!("list-test-{}-{}", Ulid::new(), i)));
+    }
 
     for (i, id) in ids.iter().enumerate() {
         let snapshot = Snapshot {
@@ -127,12 +126,11 @@ pub async fn test_list_snapshots<S: Storage>(storage: &S) {
 /// Test listing snapshots with pagination
 pub async fn test_list_snapshots_pagination<S: Storage>(storage: &S) {
     // Create 5 snapshots for pagination test
-    let ids: Vec<SnapshotId> = (0..5)
-        .map(|i| {
-            std::thread::sleep(std::time::Duration::from_millis(2));
-            SnapshotId::new(format!("page-test-{}-{}", Ulid::new(), i))
-        })
-        .collect();
+    let mut ids: Vec<SnapshotId> = Vec::with_capacity(5);
+    for i in 0..5 {
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+        ids.push(SnapshotId::new(format!("page-test-{}-{}", Ulid::new(), i)));
+    }
 
     for (i, id) in ids.iter().enumerate() {
         let snapshot = Snapshot {
@@ -244,7 +242,7 @@ pub async fn test_retention_policy_by_count<S: Storage>(storage: &S) {
     let mut ids = Vec::new();
 
     for i in 0..5 {
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let id = SnapshotId::new(format!("{}-{}", prefix, i));
         let snapshot = Snapshot {
             snapshot_id: id.clone(),
@@ -356,7 +354,7 @@ pub async fn test_retention_policy_combined<S: Storage>(storage: &S) {
 
     // Create some snapshots
     for i in 0..3 {
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         let id = SnapshotId::new(format!("{}-{}", prefix, i));
         let snapshot = Snapshot {
             snapshot_id: id,

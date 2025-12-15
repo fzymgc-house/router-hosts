@@ -406,7 +406,7 @@ pub async fn test_get_at_time<S: Storage>(storage: &S) {
     let t0 = Utc::now();
 
     // Wait a moment to ensure time difference
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Create entry
     let v1 = Ulid::new().to_string();
@@ -431,7 +431,7 @@ pub async fn test_get_at_time<S: Storage>(storage: &S) {
         .expect("create should succeed");
 
     let t1 = Utc::now();
-    std::thread::sleep(std::time::Duration::from_millis(50));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     // Update entry
     let update_event = EventEnvelope {

@@ -197,9 +197,9 @@ pub async fn test_load_events_in_order<S: Storage>(storage: &S) {
 
     // Create events with sequential versions
     let v1 = Ulid::new().to_string();
-    std::thread::sleep(std::time::Duration::from_millis(2)); // Ensure different ULIDs
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await; // Ensure different ULIDs
     let v2 = Ulid::new().to_string();
-    std::thread::sleep(std::time::Duration::from_millis(2));
+    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     let v3 = Ulid::new().to_string();
 
     let event1 = EventEnvelope {
