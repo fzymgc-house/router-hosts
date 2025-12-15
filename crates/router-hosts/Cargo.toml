@@ -40,6 +40,7 @@ tracing-subscriber.workspace = true
 duckdb.workspace = true
 parking_lot.workspace = true
 csv.workspace = true
+rustls-pemfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
