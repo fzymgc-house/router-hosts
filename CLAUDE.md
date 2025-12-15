@@ -487,17 +487,27 @@ recreate it with the original name, and any custom changes will be lost. Always 
 
 ### Workspace Structure
 
-Two crates in a Cargo workspace:
+Four crates in a Cargo workspace:
 
 1. **router-hosts-common** - Shared library
    - Protocol buffer definitions and generated code
    - Validation logic (IP addresses, hostnames)
    - Shared types and utilities
 
-2. **router-hosts** - Unified binary (client and server modes)
+2. **router-hosts-storage** - Storage abstraction layer
+   - `Storage` trait defining EventStore, SnapshotStore, and HostProjection
+   - DuckDB backend implementation
+   - Shared test suite for backend compliance (42 tests)
+   - Designed for future backend additions (SQLite, PostgreSQL, etc.)
+
+3. **router-hosts** - Unified binary (client and server modes)
    - **Client mode (default):** CLI interface using clap, gRPC client wrapper, command handlers
-   - **Server mode:** gRPC service implementation, DuckDB event-sourced storage, hosts file generation with atomic writes, post-edit hook execution
+   - **Server mode:** gRPC service implementation, storage integration, hosts file generation with atomic writes, post-edit hook execution
    - Mode selection: runs in server mode when first argument is "server", otherwise client mode
+
+4. **router-hosts-e2e** - End-to-end acceptance tests
+   - Docker-based integration tests with real mTLS
+   - 8 scenario tests covering CRUD, auth, disaster recovery
 
 ### Key Design Decisions
 
@@ -547,11 +557,13 @@ Two crates in a Cargo workspace:
 
 ## Important Implementation Notes
 
-### DuckDB Usage
+### Storage Layer
 
-- Embedded database, single file, no daemon
+- **Storage trait** in `router-hosts-storage` abstracts database operations
+- Currently uses **DuckDB** backend (embedded, single file, no daemon)
 - Ideal for embedded/router environments
-- Use in-memory for tests (`duckdb::Connection::open_in_memory()`)
+- Use in-memory mode for tests: `DuckDbStorage::new(":memory:")`
+- Shared test suite validates any `Storage` implementation (42 tests)
 
 ### Validation
 
@@ -575,6 +587,9 @@ Include detailed error context in response messages.
 
 - **Unit tests:** Mock filesystem for /etc/hosts operations
 - **Integration tests:** Use in-memory DuckDB, self-signed certs
+- **Storage tests:** Shared test suite in `router-hosts-storage/tests/common/` (42 tests)
+  - Any new storage backend must pass all tests via `run_all_tests(&storage).await`
+- **E2E tests:** Docker containers with real mTLS (8 scenarios)
 - **No real file system writes** in tests (use tempfiles or mocks)
 
 ## Rust Best Practices
