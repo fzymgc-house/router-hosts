@@ -20,6 +20,12 @@
 //!
 //! SQLite doesn't support `IGNORE NULLS` in window functions, so the projection
 //! uses a different approach (subqueries or application-level merging).
+//!
+//! # Security
+//!
+//! All queries use parameterized statements (`rusqlite::params!`) to prevent
+//! SQL injection. User-provided data (hostnames, IPs, comments, tags) is never
+//! interpolated into query strings.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

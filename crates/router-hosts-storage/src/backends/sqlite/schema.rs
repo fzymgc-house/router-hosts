@@ -79,6 +79,11 @@ pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageErr
         )
         .map_err(|e| StorageError::migration("failed to create temporal index", e))?;
 
+        // Note: The existing idx_events_aggregate index on (aggregate_id, event_version)
+        // provides good performance for the view's subqueries. SQLite's rowid cannot be
+        // directly indexed, but lookups by aggregate_id use the existing index and then
+        // scan by rowid which is the primary key ordering.
+
         // Read model: Current active hosts projection
         // SQLite doesn't support IGNORE NULLS, so we use correlated subqueries
         // to find the last non-null value for each field.

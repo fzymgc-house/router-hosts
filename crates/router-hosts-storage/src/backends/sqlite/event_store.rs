@@ -122,7 +122,9 @@ impl SqliteStorage {
 
             // Extract typed columns and metadata
             let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
-                extract_event_data(&envelope.event);
+                extract_event_data(&envelope.event).inspect_err(|_| {
+                    let _ = conn.execute("ROLLBACK", []);
+                })?;
 
             let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
                 let _ = conn.execute("ROLLBACK", []);
@@ -219,7 +221,9 @@ impl SqliteStorage {
 
             for envelope in envelopes {
                 let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
-                    extract_event_data(&envelope.event);
+                    extract_event_data(&envelope.event).inspect_err(|_| {
+                        let _ = conn.execute("ROLLBACK", []);
+                    })?;
 
                 let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
                     let _ = conn.execute("ROLLBACK", []);
@@ -446,7 +450,11 @@ impl SqliteStorage {
 }
 
 /// Extract typed columns and metadata from a HostEvent
-fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
+///
+/// # Errors
+///
+/// Returns `StorageError::InvalidData` if tags cannot be serialized to JSON.
+fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageError> {
     match event {
         HostEvent::HostCreated {
             ip_address,
@@ -454,23 +462,25 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
             comment,
             tags,
             created_at,
-        } => (
+        } => Ok((
             Some(ip_address.clone()),
             Some(hostname.clone()),
-            Some(comment.clone().unwrap_or_default()),
-            Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())),
+            comment.clone(),
+            Some(serde_json::to_string(tags).map_err(|e| {
+                StorageError::InvalidData(format!("failed to serialize tags: {}", e))
+            })?),
             *created_at,
             EventData {
                 comment: comment.clone(),
                 tags: Some(tags.clone()),
                 ..Default::default()
             },
-        ),
+        )),
         HostEvent::IpAddressChanged {
             old_ip,
             new_ip,
             changed_at,
-        } => (
+        } => Ok((
             Some(new_ip.clone()),
             None,
             None,
@@ -480,12 +490,12 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
                 previous_ip: Some(old_ip.clone()),
                 ..Default::default()
             },
-        ),
+        )),
         HostEvent::HostnameChanged {
             old_hostname,
             new_hostname,
             changed_at,
-        } => (
+        } => Ok((
             None,
             Some(new_hostname.clone()),
             None,
@@ -495,15 +505,15 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
                 previous_hostname: Some(old_hostname.clone()),
                 ..Default::default()
             },
-        ),
+        )),
         HostEvent::CommentUpdated {
             old_comment,
             new_comment,
             updated_at,
-        } => (
+        } => Ok((
             None,
             None,
-            Some(new_comment.clone().unwrap_or_default()),
+            new_comment.clone(),
             None,
             *updated_at,
             EventData {
@@ -511,29 +521,31 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
                 previous_comment: old_comment.clone(),
                 ..Default::default()
             },
-        ),
+        )),
         HostEvent::TagsModified {
             old_tags,
             new_tags,
             modified_at,
-        } => (
+        } => Ok((
             None,
             None,
             None,
-            Some(serde_json::to_string(new_tags).unwrap_or_else(|_| "[]".to_string())),
+            Some(serde_json::to_string(new_tags).map_err(|e| {
+                StorageError::InvalidData(format!("failed to serialize tags: {}", e))
+            })?),
             *modified_at,
             EventData {
                 tags: Some(new_tags.clone()),
                 previous_tags: Some(old_tags.clone()),
                 ..Default::default()
             },
-        ),
+        )),
         HostEvent::HostDeleted {
             ip_address,
             hostname,
             deleted_at,
             reason,
-        } => (
+        } => Ok((
             Some(ip_address.clone()),
             Some(hostname.clone()),
             None,
@@ -543,7 +555,7 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
                 deleted_reason: reason.clone(),
                 ..Default::default()
             },
-        ),
+        )),
     }
 }
 
