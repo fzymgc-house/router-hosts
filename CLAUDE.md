@@ -737,6 +737,60 @@ Server executes shell commands after /etc/hosts updates:
 - Hooks run with 30s timeout, failures logged but don't fail operation
 - Environment variables provide context (event type, entry count, snapshot ID)
 
+## Certificate Reload via SIGHUP
+
+The server supports dynamic TLS certificate reload via SIGHUP signal (Unix only).
+
+### How It Works
+
+1. Server receives SIGHUP signal
+2. Validates new certificates on disk (PEM format, key present, CA present)
+3. If valid: graceful shutdown (30s drain), restart with new certs
+4. If invalid: logs error, keeps running with current certs
+
+### Usage
+
+```bash
+# Find server PID and send SIGHUP
+pkill -HUP router-hosts
+
+# Or with explicit PID
+kill -HUP $(pgrep router-hosts)
+```
+
+### With Vault Agent
+
+Configure Vault Agent to send SIGHUP after certificate renewal:
+
+```hcl
+template {
+  source      = "cert.tpl"
+  destination = "/etc/router-hosts/server.crt"
+  command     = "pkill -HUP router-hosts"
+}
+```
+
+### Platform Support
+
+| Platform | SIGHUP Support |
+|----------|----------------|
+| Linux    | Yes            |
+| macOS    | Yes            |
+| Windows  | No (logs warning) |
+
+### What Gets Validated
+
+- Files exist and are readable
+- Valid PEM format
+- Private key can be parsed
+- CA certificate can be parsed
+
+### What Doesn't Get Validated
+
+- Certificate expiry (server starts with expired certs)
+- CA chain validity (checked at connection time)
+- Key/cert match (checked by tonic on load)
+
 #### macOS E2E Testing
 
 **Issue:** `task e2e` fails on macOS with "Exec format error" because it uses host binary (macOS) in Linux container.
