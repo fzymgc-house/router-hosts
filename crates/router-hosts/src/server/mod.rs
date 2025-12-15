@@ -49,6 +49,15 @@ pub enum ServerError {
     Io(#[from] std::io::Error),
 }
 
+/// Reason the server is shutting down
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShutdownReason {
+    /// SIGTERM or Ctrl+C - exit completely
+    Terminate,
+    /// SIGHUP - reload certificates and restart
+    Reload,
+}
+
 #[derive(Parser)]
 #[command(name = "router-hosts server")]
 #[command(about = "Router hosts file management server", long_about = None)]
