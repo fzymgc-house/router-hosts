@@ -12,6 +12,8 @@ pub async fn run_all<S: Storage>(storage: &S) {
     test_append_multiple_events_atomically(storage).await;
     test_optimistic_concurrency_conflict(storage).await;
     test_optimistic_concurrency_with_none_version(storage).await;
+    test_concurrent_writes_conflict(storage).await;
+    test_large_batch_append(storage).await;
     test_load_events_in_order(storage).await;
     test_load_events_empty(storage).await;
     test_version_tracking(storage).await;
@@ -189,6 +191,181 @@ pub async fn test_optimistic_concurrency_with_none_version<S: Storage>(storage: 
         "should return ConcurrentWriteConflict when using None on existing aggregate, got: {:?}",
         result
     );
+}
+
+/// Test concurrent writes to same aggregate - simulates race condition
+///
+/// This test validates that optimistic concurrency control works correctly
+/// when two "clients" read the same version and both try to write.
+/// One should succeed, one should fail with ConcurrentWriteConflict.
+pub async fn test_concurrent_writes_conflict<S: Storage>(storage: &S) {
+    let aggregate_id = Ulid::new();
+
+    // Create initial event
+    let v1 = Ulid::new().to_string();
+    let event1 = EventEnvelope {
+        event_id: Ulid::new(),
+        aggregate_id,
+        event: create_host_created_event("192.168.1.100", "concurrent.local"),
+        event_version: v1.clone(),
+        created_at: Utc::now(),
+        created_by: None,
+    };
+
+    storage
+        .append_event(aggregate_id, event1, None)
+        .await
+        .expect("initial event should succeed");
+
+    // Simulate two "clients" that both read v1 as the current version
+    // before either writes (classic race condition scenario)
+    let stale_version = v1.clone();
+
+    // First writer - should succeed
+    let v2 = Ulid::new().to_string();
+    let event_a = EventEnvelope {
+        event_id: Ulid::new(),
+        aggregate_id,
+        event: HostEvent::CommentUpdated {
+            old_comment: None,
+            new_comment: Some("Writer A".to_string()),
+            updated_at: Utc::now(),
+        },
+        event_version: v2,
+        created_at: Utc::now(),
+        created_by: None,
+    };
+
+    let result_a = storage.append_event(aggregate_id, event_a, Some(v1)).await;
+
+    // Second writer tries with the same stale version - should fail
+    // (version has changed since they "read" it)
+    let v3 = Ulid::new().to_string();
+    let event_b = EventEnvelope {
+        event_id: Ulid::new(),
+        aggregate_id,
+        event: HostEvent::CommentUpdated {
+            old_comment: None,
+            new_comment: Some("Writer B".to_string()),
+            updated_at: Utc::now(),
+        },
+        event_version: v3,
+        created_at: Utc::now(),
+        created_by: None,
+    };
+
+    let result_b = storage
+        .append_event(aggregate_id, event_b, Some(stale_version))
+        .await;
+
+    // First write should succeed
+    assert!(
+        result_a.is_ok(),
+        "first writer should succeed, got: {:?}",
+        result_a
+    );
+
+    // Second write should fail with stale version
+    assert!(
+        matches!(result_b, Err(StorageError::ConcurrentWriteConflict { .. })),
+        "second writer should get ConcurrentWriteConflict, got: {:?}",
+        result_b
+    );
+
+    // Verify only 2 events exist (initial + first writer)
+    let events = storage
+        .load_events(aggregate_id)
+        .await
+        .expect("load_events should succeed");
+    assert_eq!(events.len(), 2, "should have exactly 2 events");
+}
+
+/// Test appending a large batch of events atomically
+///
+/// Validates that the storage can handle 100+ events in a single atomic operation.
+pub async fn test_large_batch_append<S: Storage>(storage: &S) {
+    let aggregate_id = Ulid::new();
+
+    // Create initial event
+    let v1 = Ulid::new().to_string();
+    let event1 = EventEnvelope {
+        event_id: Ulid::new(),
+        aggregate_id,
+        event: create_host_created_event("192.168.1.200", "large-batch.local"),
+        event_version: v1.clone(),
+        created_at: Utc::now(),
+        created_by: None,
+    };
+
+    storage
+        .append_event(aggregate_id, event1, None)
+        .await
+        .expect("initial event should succeed");
+
+    // Create 100 events to append atomically
+    let batch_size = 100;
+    let mut events = Vec::with_capacity(batch_size);
+
+    for i in 0..batch_size {
+        let new_version = Ulid::new().to_string();
+        events.push(EventEnvelope {
+            event_id: Ulid::new(),
+            aggregate_id,
+            event: HostEvent::CommentUpdated {
+                old_comment: if i == 0 {
+                    None
+                } else {
+                    Some(format!("Batch update {}", i - 1))
+                },
+                new_comment: Some(format!("Batch update {}", i)),
+                updated_at: Utc::now(),
+            },
+            event_version: new_version,
+            created_at: Utc::now(),
+            created_by: None,
+        });
+    }
+
+    // Append all events atomically
+    storage
+        .append_events(aggregate_id, events, Some(v1))
+        .await
+        .expect("large batch append should succeed");
+
+    // Verify all events were stored
+    let loaded = storage
+        .load_events(aggregate_id)
+        .await
+        .expect("load_events should succeed");
+    assert_eq!(
+        loaded.len(),
+        batch_size + 1,
+        "should have {} events (1 initial + {} batch)",
+        batch_size + 1,
+        batch_size
+    );
+
+    // Verify version tracking - current version should be one of the batch events
+    let current_version = storage
+        .get_current_version(aggregate_id)
+        .await
+        .expect("get_current_version should succeed");
+    assert!(current_version.is_some(), "should have a current version");
+
+    // The current version should be the version of the last event in sort order
+    // (which is the last event returned by load_events)
+    let expected_version = loaded.last().map(|e| e.event_version.clone());
+    assert_eq!(
+        current_version, expected_version,
+        "current version should match last event's version"
+    );
+
+    // Verify event count
+    let count = storage
+        .count_events(aggregate_id)
+        .await
+        .expect("count_events should succeed");
+    assert_eq!(count, (batch_size + 1) as i64);
 }
 
 /// Test events are loaded in version order

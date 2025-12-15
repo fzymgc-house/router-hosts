@@ -21,6 +21,9 @@ pub async fn run_all<S: Storage>(storage: &S) {
     test_search_empty_filter(storage).await;
     test_deleted_entries_not_listed(storage).await;
     test_get_at_time(storage).await;
+    test_unicode_hostnames(storage).await;
+    test_special_characters_in_search(storage).await;
+    test_edge_case_strings(storage).await;
 }
 
 /// Helper to create a host entry via events
@@ -498,4 +501,248 @@ pub async fn test_get_at_time<S: Storage>(storage: &S) {
         .expect("get_at_time should succeed");
     let entry_future = at_future.iter().find(|e| e.id == aggregate_id);
     assert!(entry_future.is_some(), "entry should exist in future query");
+}
+
+/// Test Unicode characters in hostnames and comments
+///
+/// Validates that the storage correctly handles non-ASCII characters.
+pub async fn test_unicode_hostnames<S: Storage>(storage: &S) {
+    // Create entries with Unicode hostnames and comments
+    let id1 = create_host(
+        storage,
+        "10.100.0.1",
+        "サーバー.local",       // Japanese: "server"
+        Some("日本語コメント"), // Japanese comment
+        vec!["unicode", "日本語"],
+    )
+    .await;
+
+    let id2 = create_host(
+        storage,
+        "10.100.0.2",
+        "сервер.local",              // Russian: "server"
+        Some("Русский комментарий"), // Russian comment
+        vec!["unicode", "русский"],
+    )
+    .await;
+
+    let id3 = create_host(
+        storage,
+        "10.100.0.3",
+        "服务器.local",   // Chinese: "server"
+        Some("中文注释"), // Chinese comment
+        vec!["unicode", "中文"],
+    )
+    .await;
+
+    // Verify entries can be retrieved
+    let entry1 = storage
+        .get_by_id(id1)
+        .await
+        .expect("should retrieve Japanese hostname");
+    assert_eq!(entry1.hostname, "サーバー.local");
+    assert_eq!(entry1.comment, Some("日本語コメント".to_string()));
+    assert!(entry1.tags.contains(&"日本語".to_string()));
+
+    let entry2 = storage
+        .get_by_id(id2)
+        .await
+        .expect("should retrieve Russian hostname");
+    assert_eq!(entry2.hostname, "сервер.local");
+
+    let entry3 = storage
+        .get_by_id(id3)
+        .await
+        .expect("should retrieve Chinese hostname");
+    assert_eq!(entry3.hostname, "服务器.local");
+
+    // Test search with Unicode pattern
+    let filter = HostFilter {
+        ip_pattern: None,
+        hostname_pattern: Some("サーバー".to_string()),
+        tags: None,
+    };
+    let results = storage.search(filter).await.expect("search should succeed");
+    assert!(
+        results.iter().any(|e| e.id == id1),
+        "should find Japanese hostname by pattern"
+    );
+
+    // Test search by Unicode tag
+    let filter = HostFilter {
+        ip_pattern: None,
+        hostname_pattern: None,
+        tags: Some(vec!["中文".to_string()]),
+    };
+    let results = storage.search(filter).await.expect("search should succeed");
+    assert!(
+        results.iter().any(|e| e.id == id3),
+        "should find entry by Chinese tag"
+    );
+}
+
+/// Test SQL special characters don't cause injection or errors
+///
+/// Validates that the storage safely handles characters that could
+/// cause SQL injection if not properly escaped.
+pub async fn test_special_characters_in_search<S: Storage>(storage: &S) {
+    // Create entries with SQL-sensitive characters
+    let id1 = create_host(
+        storage,
+        "10.101.0.1",
+        "test's-server.local", // Single quote
+        Some("Comment with 'quotes'"),
+        vec!["sql-test"],
+    )
+    .await;
+
+    let id2 = create_host(
+        storage,
+        "10.101.0.2",
+        "test\"double\".local", // Double quote
+        Some("Comment with \"double quotes\""),
+        vec!["sql-test"],
+    )
+    .await;
+
+    let id3 = create_host(
+        storage,
+        "10.101.0.3",
+        "test;drop.local", // Semicolon (SQL terminator)
+        Some("'; DROP TABLE hosts; --"),
+        vec!["sql-test", "injection-attempt"],
+    )
+    .await;
+
+    let id4 = create_host(
+        storage,
+        "10.101.0.4",
+        "test%wildcard%.local", // SQL wildcards
+        Some("100% complete"),
+        vec!["sql-test"],
+    )
+    .await;
+
+    let _id5 = create_host(
+        storage,
+        "10.101.0.5",
+        "test_underscore_.local", // SQL single-char wildcard
+        Some("Under_score_test"),
+        vec!["sql-test"],
+    )
+    .await;
+
+    // Verify all entries stored correctly
+    let entry1 = storage.get_by_id(id1).await.expect("should get entry1");
+    assert_eq!(entry1.hostname, "test's-server.local");
+
+    let entry2 = storage.get_by_id(id2).await.expect("should get entry2");
+    assert_eq!(entry2.hostname, "test\"double\".local");
+
+    let entry3 = storage.get_by_id(id3).await.expect("should get entry3");
+    assert_eq!(entry3.comment, Some("'; DROP TABLE hosts; --".to_string()));
+
+    // Search with special characters in pattern
+    let filter = HostFilter {
+        ip_pattern: None,
+        hostname_pattern: Some("test's".to_string()),
+        tags: None,
+    };
+    let results = storage.search(filter).await.expect("search should succeed");
+    assert!(
+        results.iter().any(|e| e.id == id1),
+        "should find hostname with single quote"
+    );
+
+    // Search with SQL wildcard characters (should be treated literally)
+    let filter = HostFilter {
+        ip_pattern: None,
+        hostname_pattern: Some("%wildcard%".to_string()),
+        tags: None,
+    };
+    let results = storage.search(filter).await.expect("search should succeed");
+    assert!(
+        results.iter().any(|e| e.id == id4),
+        "should find hostname with percent signs"
+    );
+
+    // Verify SQL injection attempt didn't affect anything
+    let all_entries = storage.list_all().await.expect("list_all should succeed");
+    assert!(
+        all_entries.iter().any(|e| e.id == id3),
+        "entry with injection attempt should exist safely"
+    );
+}
+
+/// Test edge case strings (empty, very long, whitespace)
+pub async fn test_edge_case_strings<S: Storage>(storage: &S) {
+    // Test with comment containing only whitespace
+    let id1 = create_host(
+        storage,
+        "10.102.0.1",
+        "whitespace-comment.local",
+        Some("   "), // Whitespace-only comment
+        vec!["edge-case"],
+    )
+    .await;
+
+    // Test with very long hostname (253 chars is max for DNS)
+    let long_label = "a".repeat(63); // Max label length is 63
+    let long_hostname = format!("{}.{}.{}.local", long_label, long_label, long_label);
+    let id2 = create_host(
+        storage,
+        "10.102.0.2",
+        &long_hostname,
+        Some("Long hostname test"),
+        vec!["edge-case", "long"],
+    )
+    .await;
+
+    // Test with very long comment
+    let long_comment = "x".repeat(10000);
+    let id3 = create_host(
+        storage,
+        "10.102.0.3",
+        "long-comment.local",
+        Some(&long_comment),
+        vec!["edge-case"],
+    )
+    .await;
+
+    // Test with many tags
+    let many_tags: Vec<&str> = (0..50)
+        .map(|i| {
+            // Leak the string to get a static reference - acceptable in tests
+            Box::leak(format!("tag-{}", i).into_boxed_str()) as &str
+        })
+        .collect();
+    let id4 = create_host(storage, "10.102.0.4", "many-tags.local", None, many_tags).await;
+
+    // Verify whitespace comment preserved
+    let entry1 = storage.get_by_id(id1).await.expect("should get entry1");
+    assert_eq!(entry1.comment, Some("   ".to_string()));
+
+    // Verify long hostname stored correctly
+    let entry2 = storage.get_by_id(id2).await.expect("should get entry2");
+    assert_eq!(entry2.hostname, long_hostname);
+
+    // Verify long comment stored correctly
+    let entry3 = storage.get_by_id(id3).await.expect("should get entry3");
+    assert_eq!(entry3.comment.as_ref().map(|c| c.len()), Some(10000));
+
+    // Verify many tags stored correctly
+    let entry4 = storage.get_by_id(id4).await.expect("should get entry4");
+    assert_eq!(entry4.tags.len(), 50);
+
+    // Search for entry with long hostname
+    let filter = HostFilter {
+        ip_pattern: None,
+        hostname_pattern: Some("aaaaaa".to_string()), // Partial match
+        tags: None,
+    };
+    let results = storage.search(filter).await.expect("search should succeed");
+    assert!(
+        results.iter().any(|e| e.id == id2),
+        "should find entry with long hostname"
+    );
 }

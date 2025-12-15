@@ -4,6 +4,7 @@
 
 use chrono::{Duration, Utc};
 use router_hosts_storage::{Snapshot, SnapshotId, Storage, StorageError};
+use std::collections::HashSet;
 use ulid::Ulid;
 
 /// Run all SnapshotStore tests
@@ -162,10 +163,14 @@ pub async fn test_list_snapshots_pagination<S: Storage>(storage: &S) {
         .expect("list_snapshots should succeed");
     assert_eq!(page2.len(), 2, "should return exactly 2 snapshots");
 
-    // Pages should be different
-    assert_ne!(
-        page1[0].snapshot_id, page2[0].snapshot_id,
-        "pages should contain different snapshots"
+    // Pages should be completely disjoint (no overlapping snapshots)
+    let page1_ids: HashSet<_> = page1.iter().map(|s| &s.snapshot_id).collect();
+    let page2_ids: HashSet<_> = page2.iter().map(|s| &s.snapshot_id).collect();
+    assert!(
+        page1_ids.is_disjoint(&page2_ids),
+        "pages should not overlap - page1: {:?}, page2: {:?}",
+        page1_ids,
+        page2_ids
     );
 }
 
