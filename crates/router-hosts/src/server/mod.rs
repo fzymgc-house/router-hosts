@@ -263,58 +263,98 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
         Arc::new(config.clone()),
     ));
 
-    // Log Windows SIGHUP limitation
+    // Set up signal handlers once (Unix only)
+    #[cfg(unix)]
+    let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+        .expect("Failed to install SIGTERM handler");
+    #[cfg(unix)]
+    let mut sighup = signal::unix::signal(signal::unix::SignalKind::hangup())
+        .expect("Failed to install SIGHUP handler");
+
     #[cfg(not(unix))]
     tracing::warn!(
-        "Certificate reload via SIGHUP is not supported on this platform. \
-         Restart the server to load new certificates."
+        "Certificate reload via SIGHUP not supported on this platform. \
+         Restart server to load new certificates."
     );
 
-    // Server loop - restarts on SIGHUP, exits on SIGTERM/Ctrl+C
+    // Server loop
     loop {
-        // Load TLS certificates (re-read on each iteration for reload)
         info!("Loading TLS certificates");
         let tls_config = load_tls(&config.tls).await?;
 
-        // Create write queue and service (fresh for each server instance)
         let write_queue = WriteQueue::new(Arc::clone(&commands));
         let service =
             HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&storage));
 
         info!("Starting gRPC server on {}", addr);
 
-        // Create a oneshot channel to receive the shutdown reason
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<ShutdownReason>();
+        let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+        let shutdown_notify_clone = Arc::clone(&shutdown_notify);
 
-        // Spawn a task to wait for signals and send the reason
-        let signal_task = tokio::spawn(async move {
-            let reason = shutdown_signal().await;
-            let _ = shutdown_tx.send(reason);
-        });
-
-        // Build and run server with graceful shutdown
         let server = Server::builder()
             .tls_config(tls_config)?
             .add_service(HostsServiceServer::new(service))
-            .serve_with_shutdown(addr, async {
-                // Wait for signal task to complete
-                let _ = signal_task.await;
+            .serve_with_shutdown(addr, async move {
+                shutdown_notify_clone.notified().await;
             });
 
-        // Run the server
-        server.await?;
+        tokio::pin!(server);
 
-        // Get the shutdown reason (signal task already completed)
-        // Use a timeout in case something went wrong
-        let reason = match tokio::time::timeout(std::time::Duration::from_secs(1), async {
-            shutdown_rx.await.unwrap_or(ShutdownReason::Terminate)
-        })
-        .await
-        {
-            Ok(r) => r,
-            Err(_) => {
-                tracing::warn!("Timeout waiting for shutdown reason, assuming terminate");
-                ShutdownReason::Terminate
+        // Wait for server completion or signal
+        let reason: ShutdownReason = loop {
+            #[cfg(not(unix))]
+            let select_result = tokio::select! {
+                result = &mut server => {
+                    result?;
+                    // Server exited without signal (shouldn't happen normally)
+                    Some(ShutdownReason::Terminate)
+                },
+                _ = signal::ctrl_c() => {
+                    info!("Received Ctrl+C, initiating graceful shutdown");
+                    shutdown_notify.notify_one();
+                    Some(ShutdownReason::Terminate)
+                }
+            };
+
+            #[cfg(unix)]
+            let select_result = tokio::select! {
+                result = &mut server => {
+                    result?;
+                    // Server exited without signal (shouldn't happen normally)
+                    Some(ShutdownReason::Terminate)
+                },
+                _ = signal::ctrl_c() => {
+                    info!("Received Ctrl+C, initiating graceful shutdown");
+                    shutdown_notify.notify_one();
+                    Some(ShutdownReason::Terminate)
+                },
+                _ = sigterm.recv() => {
+                    info!("Received SIGTERM, initiating graceful shutdown");
+                    shutdown_notify.notify_one();
+                    Some(ShutdownReason::Terminate)
+                },
+                _ = sighup.recv() => {
+                    info!("Received SIGHUP, validating certificates for reload...");
+                    match validate_tls_config(&config.tls) {
+                        Ok(()) => {
+                            info!("Certificates validated successfully, initiating graceful shutdown for reload");
+                            shutdown_notify.notify_one();
+                            Some(ShutdownReason::Reload)
+                        }
+                        Err(e) => {
+                            tracing::error!(
+                                "Certificate validation failed: {}. Server continues with current certificates.",
+                                e
+                            );
+                            // Don't shut down - wait for next signal
+                            None
+                        }
+                    }
+                }
+            };
+
+            if let Some(reason) = select_result {
+                break reason;
             }
         };
 
@@ -324,81 +364,13 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
                 break;
             }
             ShutdownReason::Reload => {
-                // Validate new certificates before restarting
-                match validate_tls_config(&config.tls) {
-                    Ok(()) => {
-                        info!("Certificates validated, restarting server with new certificates...");
-                        // Continue loop to restart with new certs
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Certificate reload failed: {}. Keeping current certificates.",
-                            e
-                        );
-                        // TODO: This is tricky - server already shut down, need to restart anyway
-                        // For now, just restart with whatever is on disk
-                        info!("Restarting server despite validation failure...");
-                    }
-                }
+                info!("Restarting server with new certificates...");
+                // Loop continues, will reload TLS at top
             }
         }
     }
 
     Ok(())
-}
-
-/// Wait for shutdown signal and return the reason
-///
-/// Returns `ShutdownReason::Terminate` for SIGTERM/Ctrl+C (exit)
-/// Returns `ShutdownReason::Reload` for SIGHUP (reload certs)
-async fn shutdown_signal() -> ShutdownReason {
-    use signal::unix::SignalKind;
-
-    let ctrl_c = async {
-        signal::ctrl_c()
-            .await
-            .expect("Failed to install Ctrl+C handler");
-        ShutdownReason::Terminate
-    };
-
-    #[cfg(unix)]
-    let sigterm = async {
-        signal::unix::signal(SignalKind::terminate())
-            .expect("Failed to install SIGTERM handler")
-            .recv()
-            .await;
-        ShutdownReason::Terminate
-    };
-
-    #[cfg(unix)]
-    let sighup = async {
-        signal::unix::signal(SignalKind::hangup())
-            .expect("Failed to install SIGHUP handler")
-            .recv()
-            .await;
-        ShutdownReason::Reload
-    };
-
-    #[cfg(not(unix))]
-    let sigterm = std::future::pending::<ShutdownReason>();
-
-    #[cfg(not(unix))]
-    let sighup = std::future::pending::<ShutdownReason>();
-
-    tokio::select! {
-        reason = ctrl_c => {
-            info!("Received Ctrl+C, initiating graceful shutdown");
-            reason
-        }
-        reason = sigterm => {
-            info!("Received SIGTERM, initiating graceful shutdown");
-            reason
-        }
-        reason = sighup => {
-            info!("Received SIGHUP, checking certificates for reload...");
-            reason
-        }
-    }
 }
 
 #[cfg(test)]
