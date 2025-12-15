@@ -9,8 +9,8 @@ use crate::server::import::{parse_import, ImportFormat};
 use chrono::Utc;
 use router_hosts_common::validation::{validate_hostname, validate_ip_address};
 use router_hosts_storage::{
-    EventEnvelope, HostEntry, HostEvent, HostFilter, Snapshot, SnapshotMetadata, Storage,
-    StorageError,
+    EventEnvelope, HostEntry, HostEvent, HostFilter, Snapshot, SnapshotId, SnapshotMetadata,
+    Storage, StorageError,
 };
 use std::sync::Arc;
 use thiserror::Error;
@@ -508,7 +508,8 @@ impl CommandHandler {
     ///
     /// Returns true if snapshot was deleted, false if not found
     pub async fn delete_snapshot(&self, snapshot_id: &str) -> CommandResult<bool> {
-        match self.storage.delete_snapshot(snapshot_id).await {
+        let id = SnapshotId::from(snapshot_id);
+        match self.storage.delete_snapshot(&id).await {
             Ok(()) => Ok(true),
             Err(StorageError::NotFound { .. }) => Ok(false),
             Err(e) => Err(e.into()),
@@ -548,7 +549,7 @@ impl CommandHandler {
             name.unwrap_or_else(|| format!("snapshot-{}", Utc::now().format("%Y%m%d-%H%M%S")));
 
         // Generate ULID for snapshot_id
-        let snapshot_id = Ulid::new().to_string();
+        let snapshot_id = SnapshotId::from(Ulid::new().to_string());
         let created_at = Utc::now();
 
         // Create snapshot
@@ -586,7 +587,8 @@ impl CommandHandler {
     /// content and recreating entries.
     pub async fn rollback_to_snapshot(&self, snapshot_id: &str) -> CommandResult<RollbackResult> {
         // 1. Fetch snapshot from storage
-        let snapshot = match self.storage.get_snapshot(snapshot_id).await {
+        let id = SnapshotId::from(snapshot_id);
+        let snapshot = match self.storage.get_snapshot(&id).await {
             Ok(s) => s,
             Err(StorageError::NotFound { .. }) => {
                 return Err(CommandError::NotFound(format!(
@@ -602,7 +604,7 @@ impl CommandHandler {
         let backup = self
             .create_snapshot(None, "pre-rollback".to_string())
             .await?;
-        let backup_snapshot_id = backup.snapshot_id;
+        let backup_snapshot_id = backup.snapshot_id.into_inner();
 
         // 3. Parse snapshot content
         let parsed_entries =
@@ -1518,12 +1520,12 @@ mod tests {
             .unwrap();
 
         // Delete it
-        let result = handler.delete_snapshot(&snapshot.snapshot_id).await;
+        let result = handler.delete_snapshot(snapshot.snapshot_id.as_str()).await;
         assert!(result.is_ok());
         assert!(result.unwrap());
 
         // Verify it's gone
-        let result = handler.delete_snapshot(&snapshot.snapshot_id).await;
+        let result = handler.delete_snapshot(snapshot.snapshot_id.as_str()).await;
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }
@@ -1545,7 +1547,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(!snapshot.snapshot_id.is_empty());
+        assert!(!snapshot.snapshot_id.as_str().is_empty());
         assert_eq!(snapshot.name, Some("test-snapshot".to_string()));
         assert_eq!(snapshot.trigger, "manual");
         assert_eq!(snapshot.entry_count, 0); // Empty database

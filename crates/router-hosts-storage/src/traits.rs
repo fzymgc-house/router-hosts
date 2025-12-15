@@ -12,7 +12,7 @@ use chrono::{DateTime, Utc};
 use ulid::Ulid;
 
 use crate::error::StorageError;
-use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotMetadata};
+use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotId, SnapshotMetadata};
 
 /// Event sourcing write side
 ///
@@ -113,7 +113,7 @@ pub trait SnapshotStore: Send + Sync {
     /// # Errors
     /// * `StorageError::NotFound` - Snapshot doesn't exist
     /// * `StorageError::Query` - Database error
-    async fn get_snapshot(&self, snapshot_id: &str) -> Result<Snapshot, StorageError>;
+    async fn get_snapshot(&self, snapshot_id: &SnapshotId) -> Result<Snapshot, StorageError>;
 
     /// List snapshots with optional pagination (metadata only, no content)
     ///
@@ -139,7 +139,7 @@ pub trait SnapshotStore: Send + Sync {
     /// # Errors
     /// * `StorageError::NotFound` - Snapshot doesn't exist
     /// * `StorageError::Query` - Database error
-    async fn delete_snapshot(&self, snapshot_id: &str) -> Result<(), StorageError>;
+    async fn delete_snapshot(&self, snapshot_id: &SnapshotId) -> Result<(), StorageError>;
 
     /// Apply retention policy (delete old snapshots)
     ///

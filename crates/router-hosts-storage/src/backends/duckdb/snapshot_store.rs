@@ -12,7 +12,7 @@ use duckdb::OptionalExt;
 
 use crate::backends::duckdb::DuckDbStorage;
 use crate::error::StorageError;
-use crate::types::{Snapshot, SnapshotMetadata};
+use crate::types::{Snapshot, SnapshotId, SnapshotMetadata};
 
 impl DuckDbStorage {
     /// Save a snapshot to the store
@@ -39,7 +39,7 @@ impl DuckDbStorage {
                 ) VALUES (?, to_timestamp(?::BIGINT / 1000000.0), ?, ?, ?, ?, ?)
                 "#,
                 [
-                    &snapshot.snapshot_id as &dyn duckdb::ToSql,
+                    &snapshot.snapshot_id.as_str() as &dyn duckdb::ToSql,
                     &snapshot.created_at.timestamp_micros(),
                     &snapshot.hosts_content,
                     &snapshot.entry_count,
@@ -64,9 +64,9 @@ impl DuckDbStorage {
     /// Returns `StorageError::Query` if the database operation fails.
     pub(super) async fn get_snapshot_impl(
         &self,
-        snapshot_id: &str,
+        snapshot_id: &SnapshotId,
     ) -> Result<Snapshot, StorageError> {
-        let snapshot_id = snapshot_id.to_string();
+        let snapshot_id_str = snapshot_id.as_str().to_string();
         let conn = self.conn();
 
         tokio::task::spawn_blocking(move || {
@@ -85,7 +85,7 @@ impl DuckDbStorage {
                     FROM snapshots
                     WHERE snapshot_id = ?
                     "#,
-                    [&snapshot_id],
+                    [&snapshot_id_str],
                     |row| {
                         Ok((
                             row.get::<_, String>(0)?,         // snapshot_id
@@ -104,10 +104,10 @@ impl DuckDbStorage {
             match result {
                 None => Err(StorageError::NotFound {
                     entity_type: "snapshot",
-                    id: snapshot_id,
+                    id: snapshot_id_str,
                 }),
                 Some((
-                    snapshot_id,
+                    snapshot_id_from_db,
                     created_at_micros,
                     hosts_content,
                     entry_count,
@@ -124,7 +124,7 @@ impl DuckDbStorage {
                         })?;
 
                     Ok(Snapshot {
-                        snapshot_id,
+                        snapshot_id: SnapshotId::from(snapshot_id_from_db),
                         created_at,
                         hosts_content,
                         entry_count,
@@ -210,7 +210,7 @@ impl DuckDbStorage {
                     })?;
 
                 snapshots.push(SnapshotMetadata {
-                    snapshot_id,
+                    snapshot_id: SnapshotId::from(snapshot_id),
                     created_at,
                     entry_count,
                     trigger,
@@ -230,8 +230,11 @@ impl DuckDbStorage {
     ///
     /// Returns `StorageError::NotFound` if the snapshot doesn't exist.
     /// Returns `StorageError::Query` if the database operation fails.
-    pub(super) async fn delete_snapshot_impl(&self, snapshot_id: &str) -> Result<(), StorageError> {
-        let snapshot_id = snapshot_id.to_string();
+    pub(super) async fn delete_snapshot_impl(
+        &self,
+        snapshot_id: &SnapshotId,
+    ) -> Result<(), StorageError> {
+        let snapshot_id_str = snapshot_id.as_str().to_string();
         let conn = self.conn();
 
         tokio::task::spawn_blocking(move || {
@@ -239,14 +242,14 @@ impl DuckDbStorage {
                 .lock()
                 .execute(
                     "DELETE FROM snapshots WHERE snapshot_id = ?",
-                    [&snapshot_id],
+                    [&snapshot_id_str],
                 )
                 .map_err(|e| StorageError::query("failed to delete snapshot", e))?;
 
             if affected_rows == 0 {
                 Err(StorageError::NotFound {
                     entity_type: "snapshot",
-                    id: snapshot_id,
+                    id: snapshot_id_str,
                 })
             } else {
                 Ok(())
@@ -356,7 +359,7 @@ mod tests {
         let storage = create_test_storage().await;
 
         let snapshot = Snapshot {
-            snapshot_id: "snap-001".to_string(),
+            snapshot_id: SnapshotId::from("snap-001"),
             created_at: Utc::now(),
             hosts_content: "127.0.0.1 localhost".to_string(),
             entry_count: 1,
@@ -371,7 +374,7 @@ mod tests {
             .expect("failed to save snapshot");
 
         let retrieved = storage
-            .get_snapshot_impl("snap-001")
+            .get_snapshot_impl(&SnapshotId::from("snap-001"))
             .await
             .expect("failed to get snapshot");
 
@@ -387,7 +390,9 @@ mod tests {
     async fn test_get_snapshot_not_found() {
         let storage = create_test_storage().await;
 
-        let result = storage.get_snapshot_impl("nonexistent").await;
+        let result = storage
+            .get_snapshot_impl(&SnapshotId::from("nonexistent"))
+            .await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), StorageError::NotFound { .. }));
@@ -407,7 +412,7 @@ mod tests {
         // Add multiple snapshots
         for i in 1..=3 {
             let snapshot = Snapshot {
-                snapshot_id: format!("snap-{:03}", i),
+                snapshot_id: SnapshotId::from(format!("snap-{:03}", i)),
                 created_at: Utc::now(),
                 hosts_content: format!("127.0.0.{} localhost", i),
                 entry_count: i,
@@ -433,9 +438,9 @@ mod tests {
         assert_eq!(snapshots.len(), 3);
 
         // Verify ordering (newest first)
-        assert_eq!(snapshots[0].snapshot_id, "snap-003");
-        assert_eq!(snapshots[1].snapshot_id, "snap-002");
-        assert_eq!(snapshots[2].snapshot_id, "snap-001");
+        assert_eq!(snapshots[0].snapshot_id.as_str(), "snap-003");
+        assert_eq!(snapshots[1].snapshot_id.as_str(), "snap-002");
+        assert_eq!(snapshots[2].snapshot_id.as_str(), "snap-001");
 
         // Verify metadata only (no content)
         assert_eq!(snapshots[0].entry_count, 3);
@@ -449,7 +454,7 @@ mod tests {
         // Add 5 snapshots
         for i in 1..=5 {
             let snapshot = Snapshot {
-                snapshot_id: format!("snap-{:03}", i),
+                snapshot_id: SnapshotId::from(format!("snap-{:03}", i)),
                 created_at: Utc::now(),
                 hosts_content: format!("127.0.0.{} localhost", i),
                 entry_count: i,
@@ -472,8 +477,8 @@ mod tests {
             .await
             .expect("failed to list snapshots");
         assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].snapshot_id, "snap-005");
-        assert_eq!(snapshots[1].snapshot_id, "snap-004");
+        assert_eq!(snapshots[0].snapshot_id.as_str(), "snap-005");
+        assert_eq!(snapshots[1].snapshot_id.as_str(), "snap-004");
 
         // Test offset only
         let snapshots = storage
@@ -481,7 +486,7 @@ mod tests {
             .await
             .expect("failed to list snapshots");
         assert_eq!(snapshots.len(), 3);
-        assert_eq!(snapshots[0].snapshot_id, "snap-003");
+        assert_eq!(snapshots[0].snapshot_id.as_str(), "snap-003");
 
         // Test both limit and offset
         let snapshots = storage
@@ -489,8 +494,8 @@ mod tests {
             .await
             .expect("failed to list snapshots");
         assert_eq!(snapshots.len(), 2);
-        assert_eq!(snapshots[0].snapshot_id, "snap-004");
-        assert_eq!(snapshots[1].snapshot_id, "snap-003");
+        assert_eq!(snapshots[0].snapshot_id.as_str(), "snap-004");
+        assert_eq!(snapshots[1].snapshot_id.as_str(), "snap-003");
 
         // Test offset beyond available items
         let snapshots = storage
@@ -505,7 +510,7 @@ mod tests {
         let storage = create_test_storage().await;
 
         let snapshot = Snapshot {
-            snapshot_id: "snap-delete".to_string(),
+            snapshot_id: SnapshotId::from("snap-delete"),
             created_at: Utc::now(),
             hosts_content: "test".to_string(),
             entry_count: 1,
@@ -520,17 +525,21 @@ mod tests {
             .expect("failed to save snapshot");
 
         // Verify exists
-        let retrieved = storage.get_snapshot_impl("snap-delete").await;
+        let retrieved = storage
+            .get_snapshot_impl(&SnapshotId::from("snap-delete"))
+            .await;
         assert!(retrieved.is_ok());
 
         // Delete
         storage
-            .delete_snapshot_impl("snap-delete")
+            .delete_snapshot_impl(&SnapshotId::from("snap-delete"))
             .await
             .expect("failed to delete snapshot");
 
         // Verify deleted
-        let result = storage.get_snapshot_impl("snap-delete").await;
+        let result = storage
+            .get_snapshot_impl(&SnapshotId::from("snap-delete"))
+            .await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), StorageError::NotFound { .. }));
     }
@@ -539,7 +548,9 @@ mod tests {
     async fn test_delete_snapshot_not_found() {
         let storage = create_test_storage().await;
 
-        let result = storage.delete_snapshot_impl("nonexistent").await;
+        let result = storage
+            .delete_snapshot_impl(&SnapshotId::from("nonexistent"))
+            .await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), StorageError::NotFound { .. }));
@@ -552,7 +563,7 @@ mod tests {
         // Create 5 snapshots
         for i in 1..=5 {
             let snapshot = Snapshot {
-                snapshot_id: format!("snap-{:03}", i),
+                snapshot_id: SnapshotId::from(format!("snap-{:03}", i)),
                 created_at: Utc::now(),
                 hosts_content: format!("test {}", i),
                 entry_count: i,
@@ -586,9 +597,9 @@ mod tests {
         assert_eq!(snapshots.len(), 3);
 
         // Verify the 3 newest remain
-        assert_eq!(snapshots[0].snapshot_id, "snap-005");
-        assert_eq!(snapshots[1].snapshot_id, "snap-004");
-        assert_eq!(snapshots[2].snapshot_id, "snap-003");
+        assert_eq!(snapshots[0].snapshot_id.as_str(), "snap-005");
+        assert_eq!(snapshots[1].snapshot_id.as_str(), "snap-004");
+        assert_eq!(snapshots[2].snapshot_id.as_str(), "snap-003");
     }
 
     #[tokio::test]
@@ -599,7 +610,7 @@ mod tests {
         // Note: In a real test, we'd insert with a specific timestamp,
         // but for this test we'll just verify the logic doesn't error
         let snapshot = Snapshot {
-            snapshot_id: "snap-old".to_string(),
+            snapshot_id: SnapshotId::from("snap-old"),
             created_at: Utc::now() - chrono::Duration::days(10),
             hosts_content: "old".to_string(),
             entry_count: 1,
@@ -615,7 +626,7 @@ mod tests {
 
         // Create a recent snapshot
         let snapshot = Snapshot {
-            snapshot_id: "snap-new".to_string(),
+            snapshot_id: SnapshotId::from("snap-new"),
             created_at: Utc::now(),
             hosts_content: "new".to_string(),
             entry_count: 1,
@@ -643,7 +654,7 @@ mod tests {
             .await
             .expect("failed to list snapshots");
         assert_eq!(snapshots.len(), 1);
-        assert_eq!(snapshots[0].snapshot_id, "snap-new");
+        assert_eq!(snapshots[0].snapshot_id.as_str(), "snap-new");
     }
 
     #[tokio::test]
@@ -653,7 +664,7 @@ mod tests {
         // Create multiple snapshots
         for i in 1..=5 {
             let snapshot = Snapshot {
-                snapshot_id: format!("snap-{:03}", i),
+                snapshot_id: SnapshotId::from(format!("snap-{:03}", i)),
                 created_at: Utc::now(),
                 hosts_content: format!("test {}", i),
                 entry_count: i,

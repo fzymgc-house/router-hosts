@@ -38,7 +38,7 @@ impl HostsServiceImpl {
             .map_err(|e| Status::internal(format!("Failed to create snapshot: {}", e)))?;
 
         Ok(Response::new(CreateSnapshotResponse {
-            snapshot_id: snapshot.snapshot_id,
+            snapshot_id: snapshot.snapshot_id.into_inner(),
             created_at: snapshot.created_at.timestamp_micros(),
             entry_count: snapshot.entry_count,
         }))
@@ -81,7 +81,7 @@ impl HostsServiceImpl {
 
                 ListSnapshotsResponse {
                     snapshot: Some(Snapshot {
-                        snapshot_id: s.snapshot_id,
+                        snapshot_id: s.snapshot_id.into_inner(),
                         created_at: Some(Timestamp { seconds, nanos }),
                         entry_count: s.entry_count,
                         trigger: s.trigger,

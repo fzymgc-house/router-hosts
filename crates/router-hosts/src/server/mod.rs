@@ -7,7 +7,6 @@
 
 pub mod commands;
 pub mod config;
-pub mod db;
 pub mod export;
 pub mod hooks;
 pub mod hosts_file;

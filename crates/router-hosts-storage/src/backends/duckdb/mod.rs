@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::error::StorageError;
 use crate::traits::{EventStore, HostProjection, SnapshotStore, Storage};
-use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotMetadata};
+use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotId, SnapshotMetadata};
 
 mod event_store;
 mod projection;
@@ -217,7 +217,7 @@ impl SnapshotStore for DuckDbStorage {
         self.save_snapshot_impl(snapshot).await
     }
 
-    async fn get_snapshot(&self, snapshot_id: &str) -> Result<Snapshot, StorageError> {
+    async fn get_snapshot(&self, snapshot_id: &SnapshotId) -> Result<Snapshot, StorageError> {
         self.get_snapshot_impl(snapshot_id).await
     }
 
@@ -229,7 +229,7 @@ impl SnapshotStore for DuckDbStorage {
         self.list_snapshots_impl(limit, offset).await
     }
 
-    async fn delete_snapshot(&self, snapshot_id: &str) -> Result<(), StorageError> {
+    async fn delete_snapshot(&self, snapshot_id: &SnapshotId) -> Result<(), StorageError> {
         self.delete_snapshot_impl(snapshot_id).await
     }
 

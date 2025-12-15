@@ -2,7 +2,56 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use ulid::Ulid;
+
+/// Strongly-typed snapshot identifier
+///
+/// This newtype prevents accidentally passing a hostname, IP address,
+/// or other string where a snapshot ID is expected.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct SnapshotId(String);
+
+impl SnapshotId {
+    /// Create a new SnapshotId from a string
+    pub fn new(id: impl Into<String>) -> Self {
+        Self(id.into())
+    }
+
+    /// Get the inner string reference
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume and return the inner string
+    pub fn into_inner(self) -> String {
+        self.0
+    }
+}
+
+impl fmt::Display for SnapshotId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for SnapshotId {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for SnapshotId {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl AsRef<str> for SnapshotId {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
 
 /// Domain events for host entries (event sourcing pattern)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -114,7 +163,7 @@ pub struct HostEntry {
 /// Snapshot of hosts file at a point in time
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
-    pub snapshot_id: String,
+    pub snapshot_id: SnapshotId,
     pub created_at: DateTime<Utc>,
     pub hosts_content: String,
     pub entry_count: i32,
@@ -126,7 +175,7 @@ pub struct Snapshot {
 /// Snapshot metadata (without content, for listing)
 #[derive(Debug, Clone, PartialEq)]
 pub struct SnapshotMetadata {
-    pub snapshot_id: String,
+    pub snapshot_id: SnapshotId,
     pub created_at: DateTime<Utc>,
     pub entry_count: i32,
     pub trigger: String,

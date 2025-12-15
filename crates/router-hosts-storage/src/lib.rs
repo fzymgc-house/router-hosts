@@ -5,11 +5,14 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```no_run
 //! use router_hosts_storage::{create_storage, StorageConfig};
 //!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let config = StorageConfig::from_url("duckdb://:memory:")?;
 //! let storage = create_storage(&config).await?;
+//! # Ok(())
+//! # }
 //! ```
 
 mod config;
@@ -23,7 +26,9 @@ pub mod backends;
 pub use config::{BackendType, ConfigError, StorageConfig};
 pub use error::StorageError;
 pub use traits::{EventStore, HostProjection, SnapshotStore, Storage};
-pub use types::{EventEnvelope, HostEntry, HostEvent, HostFilter, Snapshot, SnapshotMetadata};
+pub use types::{
+    EventEnvelope, HostEntry, HostEvent, HostFilter, Snapshot, SnapshotId, SnapshotMetadata,
+};
 
 /// Create storage from configuration
 ///
