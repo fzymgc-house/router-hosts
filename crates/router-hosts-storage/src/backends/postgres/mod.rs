@@ -105,3 +105,121 @@ impl PostgresStorage {
         &self.pool
     }
 }
+
+#[async_trait]
+impl EventStore for PostgresStorage {
+    async fn append_event(
+        &self,
+        aggregate_id: Ulid,
+        event: EventEnvelope,
+        expected_version: Option<String>,
+    ) -> Result<(), StorageError> {
+        self.append_event_impl(aggregate_id, event, expected_version)
+            .await
+    }
+
+    async fn append_events(
+        &self,
+        aggregate_id: Ulid,
+        events: Vec<EventEnvelope>,
+        expected_version: Option<String>,
+    ) -> Result<(), StorageError> {
+        self.append_events_impl(aggregate_id, events, expected_version)
+            .await
+    }
+
+    async fn load_events(&self, aggregate_id: Ulid) -> Result<Vec<EventEnvelope>, StorageError> {
+        self.load_events_impl(aggregate_id).await
+    }
+
+    async fn get_current_version(
+        &self,
+        aggregate_id: Ulid,
+    ) -> Result<Option<String>, StorageError> {
+        self.get_current_version_impl(aggregate_id).await
+    }
+
+    async fn count_events(&self, aggregate_id: Ulid) -> Result<i64, StorageError> {
+        self.count_events_impl(aggregate_id).await
+    }
+}
+
+#[async_trait]
+impl SnapshotStore for PostgresStorage {
+    async fn save_snapshot(&self, snapshot: Snapshot) -> Result<(), StorageError> {
+        self.save_snapshot_impl(snapshot).await
+    }
+
+    async fn get_snapshot(&self, snapshot_id: &SnapshotId) -> Result<Snapshot, StorageError> {
+        self.get_snapshot_impl(snapshot_id).await
+    }
+
+    async fn list_snapshots(
+        &self,
+        limit: Option<u32>,
+        offset: Option<u32>,
+    ) -> Result<Vec<SnapshotMetadata>, StorageError> {
+        self.list_snapshots_impl(limit, offset).await
+    }
+
+    async fn delete_snapshot(&self, snapshot_id: &SnapshotId) -> Result<(), StorageError> {
+        self.delete_snapshot_impl(snapshot_id).await
+    }
+
+    async fn apply_retention_policy(
+        &self,
+        max_count: Option<usize>,
+        max_age_days: Option<u32>,
+    ) -> Result<usize, StorageError> {
+        self.apply_retention_policy_impl(max_count, max_age_days)
+            .await
+    }
+}
+
+#[async_trait]
+impl HostProjection for PostgresStorage {
+    async fn list_all(&self) -> Result<Vec<HostEntry>, StorageError> {
+        self.list_all_impl().await
+    }
+
+    async fn get_by_id(&self, id: Ulid) -> Result<HostEntry, StorageError> {
+        self.get_by_id_impl(id).await
+    }
+
+    async fn find_by_ip_and_hostname(
+        &self,
+        ip_address: &str,
+        hostname: &str,
+    ) -> Result<Option<HostEntry>, StorageError> {
+        self.find_by_ip_and_hostname_impl(ip_address, hostname)
+            .await
+    }
+
+    async fn search(&self, filter: HostFilter) -> Result<Vec<HostEntry>, StorageError> {
+        self.search_impl(filter).await
+    }
+
+    async fn get_at_time(&self, at_time: DateTime<Utc>) -> Result<Vec<HostEntry>, StorageError> {
+        self.get_at_time_impl(at_time).await
+    }
+}
+
+#[async_trait]
+impl Storage for PostgresStorage {
+    async fn initialize(&self) -> Result<(), StorageError> {
+        schema::initialize_schema(self).await
+    }
+
+    async fn health_check(&self) -> Result<(), StorageError> {
+        sqlx::query("SELECT 1")
+            .execute(self.pool())
+            .await
+            .map_err(|e| StorageError::connection("health check failed", e))?;
+        Ok(())
+    }
+
+    async fn close(&self) -> Result<(), StorageError> {
+        self.pool.close().await;
+        Ok(())
+    }
+}
