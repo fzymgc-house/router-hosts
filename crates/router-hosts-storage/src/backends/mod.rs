@@ -1,4 +1,10 @@
 //! Storage backend implementations
-//! TODO: Implementation in Task 3.1+
+//!
+//! This module contains implementations of the Storage trait for different databases.
+//! At least one backend must be enabled via feature flags.
 
+#[cfg(feature = "duckdb")]
 pub mod duckdb;
+
+#[cfg(feature = "sqlite")]
+pub mod sqlite;

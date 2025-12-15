@@ -1,15 +1,47 @@
 //! Storage abstraction layer for router-hosts
 //!
-//! Provides backend-agnostic traits for event sourcing storage.
-//! Supports DuckDB (default), with SQLite and PostgreSQL planned.
+//! Provides backend-agnostic traits for event sourcing storage with CQRS pattern.
 //!
-//! # Example
+//! # Supported Backends
+//!
+//! - **DuckDB** (feature: `duckdb`, default) - High-performance embedded analytics database
+//! - **SQLite** (feature: `sqlite`) - Lightweight, widely-available embedded database
+//! - **PostgreSQL** (feature: `postgres`) - Planned for future releases
+//!
+//! # Architecture
+//!
+//! All backends implement the same traits:
+//! - [`EventStore`] - Append-only event log (write side)
+//! - [`SnapshotStore`] - Versioned /etc/hosts snapshots
+//! - [`HostProjection`] - Current state queries (read side)
+//! - [`Storage`] - Lifecycle management (initialize, health check, close)
+//!
+//! # Examples
+//!
+//! ## DuckDB (default)
 //!
 //! ```no_run
 //! use router_hosts_storage::{create_storage, StorageConfig};
 //!
 //! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //! let config = StorageConfig::from_url("duckdb://:memory:")?;
+//! let storage = create_storage(&config).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## SQLite
+//!
+//! ```no_run
+//! use router_hosts_storage::{create_storage, StorageConfig};
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! // In-memory for testing
+//! let config = StorageConfig::from_url("sqlite://:memory:")?;
+//! let storage = create_storage(&config).await?;
+//!
+//! // File-based for production
+//! let config = StorageConfig::from_url("sqlite:///var/lib/router-hosts/events.db")?;
 //! let storage = create_storage(&config).await?;
 //! # Ok(())
 //! # }
@@ -39,19 +71,29 @@ pub use types::{
 /// # Errors
 ///
 /// Returns `StorageError::InvalidConnectionString` if the backend type
-/// is not yet implemented (SQLite, PostgreSQL).
+/// is not compiled in (missing feature flag) or not yet implemented.
 pub async fn create_storage(
     config: &StorageConfig,
 ) -> Result<std::sync::Arc<dyn Storage>, StorageError> {
-    use backends::duckdb::DuckDbStorage;
-
     let storage: std::sync::Arc<dyn Storage> = match config.backend {
+        #[cfg(feature = "duckdb")]
+        BackendType::DuckDb => std::sync::Arc::new(
+            backends::duckdb::DuckDbStorage::new(&config.connection_string).await?,
+        ),
+        #[cfg(not(feature = "duckdb"))]
         BackendType::DuckDb => {
-            std::sync::Arc::new(DuckDbStorage::new(&config.connection_string).await?)
+            return Err(StorageError::InvalidConnectionString(
+                "DuckDB backend not compiled in (enable 'duckdb' feature)".into(),
+            ))
         }
+        #[cfg(feature = "sqlite")]
+        BackendType::Sqlite => std::sync::Arc::new(
+            backends::sqlite::SqliteStorage::new(&config.connection_string).await?,
+        ),
+        #[cfg(not(feature = "sqlite"))]
         BackendType::Sqlite => {
             return Err(StorageError::InvalidConnectionString(
-                "SQLite not yet implemented".into(),
+                "SQLite backend not compiled in (enable 'sqlite' feature)".into(),
             ))
         }
         BackendType::Postgres => {
