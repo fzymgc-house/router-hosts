@@ -62,6 +62,7 @@ pub use schema::initialize_schema;
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct PostgresStorage {
     pool: PgPool,
 }

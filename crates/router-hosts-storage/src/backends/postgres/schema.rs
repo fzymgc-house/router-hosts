@@ -58,38 +58,83 @@ pub async fn initialize_schema(storage: &PostgresStorage) -> Result<(), StorageE
         .await
         .map_err(|e| StorageError::migration("failed to drop existing view", e))?;
 
-    // Current hosts view using window functions with IGNORE NULLS
+    // Current hosts view using PostgreSQL-compatible approach
+    // PostgreSQL doesn't support IGNORE NULLS, so we use DISTINCT ON with lateral subqueries
+    // to get the last non-null value for each column
     sqlx::query(
         r#"
         CREATE VIEW host_entries_current AS
-        WITH windowed AS (
-            SELECT
+        WITH
+        -- Get the latest event for each aggregate to determine if deleted
+        latest_events AS (
+            SELECT DISTINCT ON (aggregate_id)
                 aggregate_id,
+                event_type as latest_event_type,
                 event_version,
-                event_type,
-                LAST_VALUE(ip_address) IGNORE NULLS OVER w as ip_address,
-                LAST_VALUE(hostname) IGNORE NULLS OVER w as hostname,
-                LAST_VALUE(comment) IGNORE NULLS OVER w as comment,
-                LAST_VALUE(tags) IGNORE NULLS OVER w as tags,
-                FIRST_VALUE(event_timestamp) OVER w as created_at,
-                LAST_VALUE(created_at) OVER w as updated_at,
-                LAST_VALUE(event_type) OVER w as latest_event_type,
-                ROW_NUMBER() OVER (PARTITION BY aggregate_id ORDER BY event_version DESC) as rn
+                created_at as updated_at
             FROM host_events
-            WINDOW w AS (PARTITION BY aggregate_id ORDER BY event_version
-                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+            ORDER BY aggregate_id, event_version DESC
+        ),
+        -- Get first event timestamp (created_at)
+        first_events AS (
+            SELECT DISTINCT ON (aggregate_id)
+                aggregate_id,
+                event_timestamp as created_at
+            FROM host_events
+            ORDER BY aggregate_id, event_version ASC
+        ),
+        -- Get last non-null ip_address
+        ip_values AS (
+            SELECT DISTINCT ON (aggregate_id)
+                aggregate_id,
+                ip_address
+            FROM host_events
+            WHERE ip_address IS NOT NULL
+            ORDER BY aggregate_id, event_version DESC
+        ),
+        -- Get last non-null hostname
+        hostname_values AS (
+            SELECT DISTINCT ON (aggregate_id)
+                aggregate_id,
+                hostname
+            FROM host_events
+            WHERE hostname IS NOT NULL
+            ORDER BY aggregate_id, event_version DESC
+        ),
+        -- Get last non-null comment
+        comment_values AS (
+            SELECT DISTINCT ON (aggregate_id)
+                aggregate_id,
+                comment
+            FROM host_events
+            WHERE comment IS NOT NULL
+            ORDER BY aggregate_id, event_version DESC
+        ),
+        -- Get last non-null tags
+        tags_values AS (
+            SELECT DISTINCT ON (aggregate_id)
+                aggregate_id,
+                tags
+            FROM host_events
+            WHERE tags IS NOT NULL
+            ORDER BY aggregate_id, event_version DESC
         )
         SELECT
-            aggregate_id as id,
-            ip_address,
-            hostname,
-            comment,
-            tags,
-            created_at,
-            updated_at,
-            event_version
-        FROM windowed
-        WHERE rn = 1 AND latest_event_type != 'HostDeleted'
+            le.aggregate_id as id,
+            ip.ip_address,
+            hn.hostname,
+            cv.comment,
+            tv.tags,
+            fe.created_at,
+            le.updated_at,
+            le.event_version
+        FROM latest_events le
+        LEFT JOIN first_events fe ON fe.aggregate_id = le.aggregate_id
+        LEFT JOIN ip_values ip ON ip.aggregate_id = le.aggregate_id
+        LEFT JOIN hostname_values hn ON hn.aggregate_id = le.aggregate_id
+        LEFT JOIN comment_values cv ON cv.aggregate_id = le.aggregate_id
+        LEFT JOIN tags_values tv ON tv.aggregate_id = le.aggregate_id
+        WHERE le.latest_event_type != 'HostDeleted'
         "#,
     )
     .execute(pool)
