@@ -51,7 +51,6 @@ pub enum ServerError {
 
 /// Reason the server is shutting down
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)] // Used in later tasks (Task 3+)
 pub enum ShutdownReason {
     /// SIGTERM or Ctrl+C - exit completely
     Terminate,
@@ -268,38 +267,65 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
     Server::builder()
         .tls_config(tls_config)?
         .add_service(HostsServiceServer::new(service))
-        .serve_with_shutdown(addr, shutdown_signal())
+        .serve_with_shutdown(addr, async {
+            shutdown_signal().await;
+        })
         .await?;
 
     info!("Server shutdown complete");
     Ok(())
 }
 
-/// Wait for shutdown signal (Ctrl+C or SIGTERM)
-async fn shutdown_signal() {
+/// Wait for shutdown signal and return the reason
+///
+/// Returns `ShutdownReason::Terminate` for SIGTERM/Ctrl+C (exit)
+/// Returns `ShutdownReason::Reload` for SIGHUP (reload certs)
+async fn shutdown_signal() -> ShutdownReason {
+    use signal::unix::SignalKind;
+
     let ctrl_c = async {
         signal::ctrl_c()
             .await
             .expect("Failed to install Ctrl+C handler");
+        ShutdownReason::Terminate
     };
 
     #[cfg(unix)]
-    let terminate = async {
-        signal::unix::signal(signal::unix::SignalKind::terminate())
+    let sigterm = async {
+        signal::unix::signal(SignalKind::terminate())
             .expect("Failed to install SIGTERM handler")
             .recv()
             .await;
+        ShutdownReason::Terminate
+    };
+
+    #[cfg(unix)]
+    let sighup = async {
+        signal::unix::signal(SignalKind::hangup())
+            .expect("Failed to install SIGHUP handler")
+            .recv()
+            .await;
+        ShutdownReason::Reload
     };
 
     #[cfg(not(unix))]
-    let terminate = std::future::pending::<()>();
+    let sigterm = std::future::pending::<ShutdownReason>();
+
+    #[cfg(not(unix))]
+    let sighup = std::future::pending::<ShutdownReason>();
 
     tokio::select! {
-        _ = ctrl_c => {
+        reason = ctrl_c => {
             info!("Received Ctrl+C, initiating graceful shutdown");
+            reason
         }
-        _ = terminate => {
+        reason = sigterm => {
             info!("Received SIGTERM, initiating graceful shutdown");
+            reason
+        }
+        reason = sighup => {
+            info!("Received SIGHUP, checking certificates for reload...");
+            reason
         }
     }
 }
