@@ -4,9 +4,36 @@
 
 **Goal:** Implement PostgreSQL storage backend using sqlx with connection pooling.
 
-**Architecture:** True async PostgreSQL backend using sqlx's PgPool. Window functions with IGNORE NULLS like DuckDB. Testcontainers for testing.
+**Architecture:** True async PostgreSQL backend using sqlx's PgPool. Uses DISTINCT ON with CTEs instead of IGNORE NULLS (PostgreSQL doesn't support IGNORE NULLS until version 19). Testcontainers for testing.
 
 **Tech Stack:** sqlx 0.8, tokio, testcontainers-modules
+
+---
+
+## Status
+
+| Task | Description | Status | PR |
+|------|-------------|--------|-----|
+| 1 | Add Dependencies | ✅ Complete | PR #116 |
+| 2 | Create Module Structure | ✅ Complete | PR #116 |
+| 3 | Implement Schema | ✅ Complete | PR #116 |
+| 4 | Implement EventStore | ✅ Complete | PR #116 |
+| 5 | Implement SnapshotStore | ✅ Complete | PR #116 |
+| 6 | Implement HostProjection | ✅ Complete | PR #116 |
+| 7 | Implement Storage Trait | ✅ Complete | PR #116 |
+| 8 | Update lib.rs Exports | ✅ Complete | PR #116 |
+| 9 | Create Integration Tests | ✅ Complete | PR #116 |
+| 10 | Update CI Workflow | ✅ Complete | PR #116 |
+
+**Status:** ✅ **All tasks complete** - PostgreSQL backend fully implemented
+
+**Implementation Notes:**
+- PostgreSQL doesn't support `IGNORE NULLS` in window functions until version 19
+- Implemented using `DISTINCT ON` with CTEs as PostgreSQL-compatible alternative
+- Tested with PostgreSQL 17 via testcontainers
+- All 42 shared test suite tests pass
+
+**Last Updated:** 2025-12-15
 
 ---
 
