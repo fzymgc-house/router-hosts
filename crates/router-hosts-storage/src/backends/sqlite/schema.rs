@@ -38,8 +38,17 @@ pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageErr
         let conn = conn.lock();
 
         // Enable WAL mode for better concurrent read performance
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
-            .map_err(|e| StorageError::migration("failed to set SQLite pragmas", e))?;
+        // - journal_mode=WAL: Write-Ahead Logging for concurrent reads
+        // - wal_autocheckpoint=1000: Checkpoint every ~4MB (1000 pages × 4KB)
+        // - synchronous=NORMAL: Safe for WAL mode, better performance than FULL
+        // - foreign_keys=ON: Enforce referential integrity
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL; \
+             PRAGMA wal_autocheckpoint=1000; \
+             PRAGMA synchronous=NORMAL; \
+             PRAGMA foreign_keys=ON;",
+        )
+        .map_err(|e| StorageError::migration("failed to set SQLite pragmas", e))?;
 
         // Event store - append-only immutable log of all domain events
         conn.execute(

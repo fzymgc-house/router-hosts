@@ -539,7 +539,7 @@ impl SqliteStorage {
                             created_by
                         FROM host_events
                         WHERE aggregate_id = ?1 AND created_at <= ?2
-                        ORDER BY event_version ASC
+                        ORDER BY rowid ASC
                         "#,
                     )
                     .map_err(|e| StorageError::query("failed to prepare event query", e))?;
