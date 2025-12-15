@@ -734,7 +734,7 @@ mod tests {
     }
 
     async fn setup() -> CommandHandler {
-        let storage = DuckDbStorage::new("duckdb://:memory:")
+        let storage = DuckDbStorage::new(":memory:")
             .await
             .expect("failed to create in-memory storage");
         storage

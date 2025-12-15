@@ -21,7 +21,6 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::sync::Arc;
 use ulid::Ulid;
-use url::Url;
 
 use crate::error::StorageError;
 use crate::traits::{EventStore, HostProjection, SnapshotStore, Storage};
@@ -46,7 +45,7 @@ mod snapshot_store;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 /// // In-memory database for testing
-/// let storage = DuckDbStorage::new("duckdb://:memory:").await?;
+/// let storage = DuckDbStorage::new(":memory:").await?;
 /// storage.initialize().await?;
 ///
 /// // File-based database for production
@@ -66,14 +65,12 @@ impl DuckDbStorage {
     ///
     /// # Arguments
     ///
-    /// * `connection_string` - DuckDB connection URL
-    ///   - `duckdb://:memory:` - In-memory database (for testing)
-    ///   - `duckdb:///path/to/file.duckdb` - File-based database
+    /// * `path` - Database path or `:memory:` for in-memory database
+    ///   - `:memory:` - In-memory database (for testing)
+    ///   - `/path/to/file.duckdb` - File-based database (absolute path)
+    ///   - `./relative/path.duckdb` - File-based database (relative path)
     ///
     /// # Errors
-    ///
-    /// Returns `StorageError::InvalidConnectionString` if the URL is malformed
-    /// or doesn't use the `duckdb://` scheme.
     ///
     /// Returns `StorageError::Connection` if the database connection fails.
     ///
@@ -83,12 +80,16 @@ impl DuckDbStorage {
     /// use router_hosts_storage::backends::duckdb::DuckDbStorage;
     ///
     /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-    /// let storage = DuckDbStorage::new("duckdb://:memory:").await?;
+    /// // In-memory database
+    /// let storage = DuckDbStorage::new(":memory:").await?;
+    ///
+    /// // File-based database
+    /// let storage = DuckDbStorage::new("/var/lib/router-hosts/db.duckdb").await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn new(connection_string: &str) -> Result<Self, StorageError> {
-        let path = Self::parse_connection_string(connection_string)?;
+    pub async fn new(path: &str) -> Result<Self, StorageError> {
+        let path = path.to_string();
 
         // Open connection in spawn_blocking since it may do I/O
         let conn = tokio::task::spawn_blocking(move || {
@@ -105,63 +106,6 @@ impl DuckDbStorage {
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
         })
-    }
-
-    /// Parse DuckDB connection string
-    ///
-    /// Supports:
-    /// - `duckdb://:memory:` - In-memory database
-    /// - `duckdb:///absolute/path` - File-based database (absolute path)
-    /// - `duckdb://./relative/path` - File-based database (relative path)
-    ///
-    /// # Errors
-    ///
-    /// Returns error if:
-    /// - URL scheme is not "duckdb"
-    /// - URL cannot be parsed
-    fn parse_connection_string(connection_string: &str) -> Result<String, StorageError> {
-        // Special case: handle :memory: directly before URL parsing
-        // URL parser doesn't handle this format well
-        if connection_string == "duckdb://:memory:" {
-            return Ok(":memory:".to_string());
-        }
-
-        let url = Url::parse(connection_string)
-            .map_err(|e| StorageError::InvalidConnectionString(format!("invalid URL: {}", e)))?;
-
-        if url.scheme() != "duckdb" {
-            return Err(StorageError::InvalidConnectionString(format!(
-                "expected scheme 'duckdb', got '{}'",
-                url.scheme()
-            )));
-        }
-
-        // For relative paths like duckdb://./path, the URL parser converts host to "."
-        // and path to "/path". We need to reconstruct the original "./path"
-        if let Some(host) = url.host_str() {
-            if host == "." {
-                // Relative path: reconstruct as ./path
-                let path = url.path();
-                if path.is_empty() || path == "/" {
-                    return Err(StorageError::InvalidConnectionString(
-                        "missing database path (use duckdb:///path/to/db.duckdb or duckdb://:memory:)"
-                            .to_string(),
-                    ));
-                }
-                return Ok(format!(".{}", path));
-            }
-        }
-
-        // Extract path from URL (absolute paths)
-        let path = url.path();
-        if path.is_empty() || path == "/" {
-            return Err(StorageError::InvalidConnectionString(
-                "missing database path (use duckdb:///path/to/db.duckdb or duckdb://:memory:)"
-                    .to_string(),
-            ));
-        }
-
-        Ok(path.to_string())
     }
 
     /// Get a reference to the connection for internal use
@@ -304,55 +248,22 @@ impl Storage for DuckDbStorage {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_parse_connection_string_memory() {
-        let result = DuckDbStorage::parse_connection_string("duckdb://:memory:");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), ":memory:");
-    }
-
-    #[test]
-    fn test_parse_connection_string_file() {
-        let result =
-            DuckDbStorage::parse_connection_string("duckdb:///var/lib/router-hosts/events.duckdb");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "/var/lib/router-hosts/events.duckdb");
-    }
-
-    #[test]
-    fn test_parse_connection_string_relative() {
-        let result = DuckDbStorage::parse_connection_string("duckdb://./data/events.duckdb");
-        assert!(result.is_ok());
-        assert_eq!(result.unwrap(), "./data/events.duckdb");
-    }
-
-    #[test]
-    fn test_parse_connection_string_invalid_scheme() {
-        let result = DuckDbStorage::parse_connection_string("sqlite:///path/to/db");
-        assert!(result.is_err());
-        match result {
-            Err(StorageError::InvalidConnectionString(msg)) => {
-                assert!(msg.contains("expected scheme 'duckdb'"));
-            }
-            _ => panic!("expected InvalidConnectionString error"),
-        }
-    }
-
-    #[test]
-    fn test_parse_connection_string_missing_path() {
-        let result = DuckDbStorage::parse_connection_string("duckdb://");
-        assert!(result.is_err());
-        match result {
-            Err(StorageError::InvalidConnectionString(msg)) => {
-                assert!(msg.contains("missing database path"));
-            }
-            _ => panic!("expected InvalidConnectionString error"),
-        }
+    #[tokio::test]
+    async fn test_new_memory_database() {
+        let storage = DuckDbStorage::new(":memory:").await;
+        assert!(storage.is_ok());
     }
 
     #[tokio::test]
-    async fn test_new_memory_database() {
-        let storage = DuckDbStorage::new("duckdb://:memory:").await;
+    async fn test_new_file_database() {
+        let temp_dir = tempfile::tempdir().expect("failed to create temp dir");
+        let db_path = temp_dir.path().join("test.duckdb");
+        let db_path_str = db_path.to_string_lossy().to_string();
+
+        let storage = DuckDbStorage::new(&db_path_str).await;
         assert!(storage.is_ok());
+
+        // Verify file was created
+        assert!(db_path.exists());
     }
 }

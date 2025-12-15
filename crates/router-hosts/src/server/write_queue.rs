@@ -470,7 +470,7 @@ mod tests {
         let hosts_path = temp_dir.path().join("hosts");
 
         // Use in-memory storage for tests
-        let storage = DuckDbStorage::new("duckdb://:memory:")
+        let storage = DuckDbStorage::new(":memory:")
             .await
             .expect("failed to create in-memory storage");
         storage

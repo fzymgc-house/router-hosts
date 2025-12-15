@@ -49,7 +49,7 @@ async fn start_test_server() -> SocketAddr {
     drop(listener); // Release the port for the server to use
 
     // Create in-memory storage
-    let storage = DuckDbStorage::new("duckdb://:memory:")
+    let storage = DuckDbStorage::new(":memory:")
         .await
         .expect("failed to create in-memory storage");
     storage

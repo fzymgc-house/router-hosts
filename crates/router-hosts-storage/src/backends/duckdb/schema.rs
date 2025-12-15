@@ -28,7 +28,7 @@ use crate::error::StorageError;
 /// use router_hosts_storage::Storage;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let storage = DuckDbStorage::new("duckdb://:memory:").await?;
+/// let storage = DuckDbStorage::new(":memory:").await?;
 /// storage.initialize().await?;
 /// # Ok(())
 /// # }
@@ -224,7 +224,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_schema_initialization() -> Result<(), StorageError> {
-        let storage = DuckDbStorage::new("duckdb://:memory:")
+        let storage = DuckDbStorage::new(":memory:")
             .await
             .expect("failed to create in-memory storage");
 
@@ -267,7 +267,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_event_table_columns() -> Result<(), StorageError> {
-        let storage = DuckDbStorage::new("duckdb://:memory:")
+        let storage = DuckDbStorage::new(":memory:")
             .await
             .expect("failed to create in-memory storage");
 
