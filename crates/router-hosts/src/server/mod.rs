@@ -72,7 +72,6 @@ pub enum ShutdownReason {
 /// - Certificate expiry (server should start even with expired certs)
 /// - CA chain validity (client verification handles this at connection time)
 /// - Key/cert match (tonic validates this when creating Identity)
-#[allow(dead_code)] // Used in later tasks (Task 5)
 pub fn validate_tls_config(tls_config: &config::TlsConfig) -> Result<(), String> {
     use rustls_pemfile::{certs, private_key};
     use std::io::BufReader;
