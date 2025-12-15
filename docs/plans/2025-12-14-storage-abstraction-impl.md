@@ -24,11 +24,11 @@
 | 3 | 3.3: Implement DuckDB EventStore trait | ✅ Complete | PR #99 |
 | 3 | 3.4: Implement DuckDB SnapshotStore and HostProjection | ✅ Complete | PR #99 |
 | 4 | 4.1: Add router-hosts-storage dependency | ✅ Complete | PR #99 |
-| 4 | 4.2: Update server to use storage abstraction | 🔲 Pending | Issue #100 |
-| 5 | 5.1: Remove old db module | 🔲 Pending | Issue #101 |
+| 4 | 4.2: Update server to use storage abstraction | ✅ Complete | PR #104 |
+| 5 | 5.1: Remove old db module | ✅ Complete | PR #104 |
 | 5 | 5.2: Add shared test suite | 🔲 Pending | Issue #102 |
 
-**Last Updated:** 2025-12-14
+**Last Updated:** 2025-12-15
 
 ---
 
