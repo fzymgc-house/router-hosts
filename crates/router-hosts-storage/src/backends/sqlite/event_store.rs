@@ -97,9 +97,9 @@ impl SqliteStorage {
                 }
             }
 
-            // Get current version (use created_at for ordering, not event_version)
+            // Get current version (use rowid for ordering, not event_version)
             // ULIDs within the same millisecond have arbitrary lexicographic order,
-            // so we use the insertion timestamp to find the most recent event.
+            // so we use SQLite's rowid to find the most recent event.
             let current_version: Option<String> = conn
                 .query_row(
                     "SELECT event_version FROM host_events WHERE aggregate_id = ?1 ORDER BY rowid DESC LIMIT 1",
@@ -197,9 +197,9 @@ impl SqliteStorage {
             conn.execute("BEGIN TRANSACTION", [])
                 .map_err(|e| StorageError::query("failed to begin transaction", e))?;
 
-            // Get current version (use created_at for ordering, not event_version)
+            // Get current version (use rowid for ordering, not event_version)
             // ULIDs within the same millisecond have arbitrary lexicographic order,
-            // so we use the insertion timestamp to find the most recent event.
+            // so we use SQLite's rowid to find the most recent event.
             let current_version: Option<String> = conn
                 .query_row(
                     "SELECT event_version FROM host_events WHERE aggregate_id = ?1 ORDER BY rowid DESC LIMIT 1",
