@@ -11,6 +11,20 @@ use super::PostgresStorage;
 use crate::error::StorageError;
 use crate::types::{HostEntry, HostFilter};
 
+/// Helper to add a value to PgArguments with proper error handling
+///
+/// sqlx's Arguments::add() returns Box<dyn Error> which doesn't implement Error trait,
+/// so we can't use ? directly. For strings, encoding is infallible, but we handle
+/// the error case properly to comply with project standards.
+fn add_arg(args: &mut PgArguments, value: String) -> Result<(), StorageError> {
+    args.add(value).map_err(|e| {
+        StorageError::Query {
+            message: format!("failed to encode query parameter: {}", e),
+            source: None, // Box<dyn Error> doesn't implement Error, can't wrap directly
+        }
+    })
+}
+
 impl PostgresStorage {
     /// List all active hosts
     pub(crate) async fn list_all_impl(&self) -> Result<Vec<HostEntry>, StorageError> {
@@ -95,19 +109,16 @@ impl PostgresStorage {
         let mut param_idx = 0;
 
         // Build WHERE conditions - column names are constants, values are parameterized
-        // String encoding never fails, so expect() is safe here
         if let Some(ref ip_pattern) = filter.ip_pattern {
             param_idx += 1;
             conditions.push(format!("ip_address LIKE ${}", param_idx));
-            args.add(format!("%{}%", ip_pattern))
-                .expect("string encoding should never fail");
+            add_arg(&mut args, format!("%{}%", ip_pattern))?;
         }
 
         if let Some(ref hostname_pattern) = filter.hostname_pattern {
             param_idx += 1;
             conditions.push(format!("hostname LIKE ${}", param_idx));
-            args.add(format!("%{}%", hostname_pattern))
-                .expect("string encoding should never fail");
+            add_arg(&mut args, format!("%{}%", hostname_pattern))?;
         }
 
         // Handle tag filters - each tag becomes a separate LIKE condition
@@ -115,8 +126,7 @@ impl PostgresStorage {
             for tag in tags {
                 param_idx += 1;
                 conditions.push(format!("tags LIKE ${}", param_idx));
-                args.add(format!("%\"{}%", tag))
-                    .expect("string encoding should never fail");
+                add_arg(&mut args, format!("%\"{}%", tag))?;
             }
         }
 
