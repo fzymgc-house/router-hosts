@@ -28,6 +28,16 @@ tasks:
     cmds:
       - cargo test --workspace --exclude router-hosts-e2e
 
+  test:sqlite:
+    desc: Run SQLite backend tests (requires Docker)
+    cmds:
+      - cargo test -p router-hosts-storage --features sqlite --test sqlite_backend
+
+  test:postgres:
+    desc: Run PostgreSQL backend tests (requires Docker for testcontainers)
+    cmds:
+      - cargo test -p router-hosts-storage --features postgres --test postgres_backend
+
   test:coverage:
     desc: Run tests with coverage report
     cmds:
