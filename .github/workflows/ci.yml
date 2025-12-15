@@ -57,6 +57,9 @@ jobs:
             - name: Run tests
               run: task test:unit
 
+            - name: Run PostgreSQL backend tests
+              run: task test:postgres
+
             - name: Build release binary
               run: task build:release
 
