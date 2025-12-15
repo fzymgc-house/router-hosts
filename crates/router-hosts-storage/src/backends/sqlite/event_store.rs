@@ -220,6 +220,37 @@ impl SqliteStorage {
             }
 
             for envelope in envelopes {
+                // Check for duplicate IP+hostname on HostCreated events
+                if let HostEvent::HostCreated {
+                    ip_address,
+                    hostname,
+                    ..
+                } = &envelope.event
+                {
+                    let exists: bool = conn
+                        .query_row(
+                            r#"
+                            SELECT COUNT(*) > 0
+                            FROM host_entries_current
+                            WHERE ip_address = ?1 AND hostname = ?2
+                            "#,
+                            rusqlite::params![ip_address, hostname],
+                            |row| row.get(0),
+                        )
+                        .map_err(|e| {
+                            let _ = conn.execute("ROLLBACK", []);
+                            StorageError::query("failed to check for duplicate entry", e)
+                        })?;
+
+                    if exists {
+                        let _ = conn.execute("ROLLBACK", []);
+                        return Err(StorageError::DuplicateEntry {
+                            ip: ip_address.clone(),
+                            hostname: hostname.clone(),
+                        });
+                    }
+                }
+
                 let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
                     extract_event_data(&envelope.event).inspect_err(|_| {
                         let _ = conn.execute("ROLLBACK", []);
