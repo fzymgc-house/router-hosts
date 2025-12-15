@@ -33,7 +33,7 @@ parking_lot = { workspace = true }
 # Backend implementations (at least one required)
 duckdb = { workspace = true, optional = true }
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "tls-rustls"], optional = true }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "tls-rustls", "chrono"], optional = true }
 
 # Logging
 tracing = { workspace = true }
