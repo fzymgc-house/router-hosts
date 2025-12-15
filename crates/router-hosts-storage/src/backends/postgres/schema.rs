@@ -52,6 +52,15 @@ pub async fn initialize_schema(storage: &PostgresStorage) -> Result<(), StorageE
         .await
         .map_err(|e| StorageError::migration("failed to create temporal index", e))?;
 
+    // Compound index for duplicate checking and lookups by (ip_address, hostname)
+    // Used by find_by_ip_and_hostname and duplicate detection in event_store
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_events_ip_hostname ON host_events(ip_address, hostname)",
+    )
+    .execute(pool)
+    .await
+    .map_err(|e| StorageError::migration("failed to create ip_hostname index", e))?;
+
     // Drop existing view to recreate (views can't use IF NOT EXISTS with OR REPLACE in all PG versions)
     sqlx::query("DROP VIEW IF EXISTS host_entries_current")
         .execute(pool)

@@ -3,7 +3,8 @@
 //! Provides CQRS read-side queries using the host_entries_current view.
 
 use chrono::{DateTime, Utc};
-use sqlx::Row;
+use sqlx::postgres::PgArguments;
+use sqlx::{Arguments, Row};
 use ulid::Ulid;
 
 use super::PostgresStorage;
@@ -79,34 +80,47 @@ impl PostgresStorage {
     }
 
     /// Search with filters
+    ///
+    /// Uses parameterized queries with explicit argument binding to prevent SQL injection.
+    /// Filter patterns are bound as LIKE parameters, never interpolated into the query.
+    /// Column names are hardcoded constants - only user-provided values are parameterized.
     pub(crate) async fn search_impl(
         &self,
         filter: HostFilter,
     ) -> Result<Vec<HostEntry>, StorageError> {
-        // Build dynamic query based on filters
-        let mut conditions = Vec::new();
-        let mut params: Vec<String> = Vec::new();
+        // Build dynamic query with safe parameterized conditions
+        // All user input is bound via PgArguments, never interpolated
+        let mut conditions: Vec<String> = Vec::new();
+        let mut args = PgArguments::default();
+        let mut param_idx = 0;
 
+        // Build WHERE conditions - column names are constants, values are parameterized
+        // String encoding never fails, so expect() is safe here
         if let Some(ref ip_pattern) = filter.ip_pattern {
-            params.push(format!("%{}%", ip_pattern));
-            conditions.push(format!("ip_address LIKE ${}", params.len()));
+            param_idx += 1;
+            conditions.push(format!("ip_address LIKE ${}", param_idx));
+            args.add(format!("%{}%", ip_pattern))
+                .expect("string encoding should never fail");
         }
 
         if let Some(ref hostname_pattern) = filter.hostname_pattern {
-            params.push(format!("%{}%", hostname_pattern));
-            conditions.push(format!("hostname LIKE ${}", params.len()));
+            param_idx += 1;
+            conditions.push(format!("hostname LIKE ${}", param_idx));
+            args.add(format!("%{}%", hostname_pattern))
+                .expect("string encoding should never fail");
         }
 
+        // Handle tag filters - each tag becomes a separate LIKE condition
         if let Some(ref tags) = filter.tags {
-            if !tags.is_empty() {
-                // Check if any tag matches
-                for tag in tags {
-                    params.push(format!("%\"{}%", tag));
-                    conditions.push(format!("tags LIKE ${}", params.len()));
-                }
+            for tag in tags {
+                param_idx += 1;
+                conditions.push(format!("tags LIKE ${}", param_idx));
+                args.add(format!("%\"{}%", tag))
+                    .expect("string encoding should never fail");
             }
         }
 
+        // Build final query - structure is static, only values are parameterized
         let where_clause = if conditions.is_empty() {
             String::new()
         } else {
@@ -124,16 +138,18 @@ impl PostgresStorage {
             where_clause
         );
 
-        // Build query with dynamic parameters
-        let mut q = sqlx::query(&query);
-        for param in &params {
-            q = q.bind(param);
-        }
-
-        let rows = q
+        let rows = sqlx::query_with(&query, args)
             .fetch_all(self.pool())
             .await
-            .map_err(|e| StorageError::query("search failed", e))?;
+            .map_err(|e| {
+                StorageError::query(
+                    &format!(
+                        "search failed (ip={:?}, hostname={:?}, tags={:?})",
+                        filter.ip_pattern, filter.hostname_pattern, filter.tags
+                    ),
+                    e,
+                )
+            })?;
 
         rows.into_iter()
             .map(|row| row_to_host_entry(&row))

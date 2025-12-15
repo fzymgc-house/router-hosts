@@ -4,29 +4,46 @@
 //! PostgreSQL is ideal for multi-instance and cloud deployments where
 //! horizontal scaling and high availability are required.
 //!
+//! # Compatibility
+//!
+//! Requires PostgreSQL 12+ (tested with PostgreSQL 17). The schema uses
+//! `DISTINCT ON` for "last non-null value" patterns because PostgreSQL
+//! does not support `IGNORE NULLS` in window functions until version 19.
+//!
 //! # Architecture
 //!
 //! - **schema**: Table definitions (CREATE TABLE IF NOT EXISTS)
 //! - **event_store**: Event sourcing write side (append-only events)
 //! - **snapshot_store**: /etc/hosts versioning and snapshots
-//! - **projection**: CQRS read side (window functions with IGNORE NULLS)
+//! - **projection**: CQRS read side (DISTINCT ON with CTEs)
 //!
 //! # Connection Pooling
 //!
-//! Uses sqlx's PgPool for connection management:
+//! Uses sqlx's PgPool for connection management with these defaults:
 //! - min_connections: 1 (keep warm)
 //! - max_connections: 10 (prevent overwhelming)
 //! - acquire_timeout: 30s (match gRPC timeout)
 //! - idle_timeout: 10min (release unused)
 //!
-//! Pool settings can be overridden via connection string query params.
+//! ## Overriding Pool Settings
+//!
+//! Pool settings can be customized via connection string query parameters:
+//!
+//! ```text
+//! postgres://host/db?options=-c%20statement_timeout=30000
+//! postgres://host/db?sslmode=require
+//! ```
+//!
+//! For fine-grained control, use environment variables or configure at
+//! the PostgreSQL server level in `postgresql.conf`.
 //!
 //! # Differences from SQLite/DuckDB
 //!
 //! - True async (no spawn_blocking wrappers)
-//! - Supports IGNORE NULLS in window functions (like DuckDB)
+//! - Uses DISTINCT ON CTEs instead of IGNORE NULLS window functions
 //! - Connection pooling for concurrent access
 //! - Standard PostgreSQL SSL via sslmode parameter
+//! - Better concurrent write handling than SQLite
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -87,8 +104,23 @@ impl PostgresStorage {
     ///
     /// # Errors
     ///
-    /// Returns `StorageError::Connection` if pool creation fails.
+    /// Returns `StorageError::Connection` if:
+    /// - URL is not a valid PostgreSQL connection string
+    /// - Connection to database fails
+    /// - Authentication fails
     pub async fn new(url: &str) -> Result<Self, StorageError> {
+        // Validate URL format before attempting connection
+        if !url.starts_with("postgres://") && !url.starts_with("postgresql://") {
+            return Err(StorageError::InvalidData(format!(
+                "invalid PostgreSQL URL: must start with postgres:// or postgresql://, got: {}",
+                if url.len() > 50 {
+                    format!("{}...", &url[..50])
+                } else {
+                    url.to_string()
+                }
+            )));
+        }
+
         let pool = PgPoolOptions::new()
             .min_connections(1)
             .max_connections(10)
@@ -212,10 +244,35 @@ impl Storage for PostgresStorage {
     }
 
     async fn health_check(&self) -> Result<(), StorageError> {
+        // First check basic connectivity
         sqlx::query("SELECT 1")
             .execute(self.pool())
             .await
-            .map_err(|e| StorageError::connection("health check failed", e))?;
+            .map_err(|e| StorageError::connection("health check: database connection failed", e))?;
+
+        // Verify schema exists by checking for our tables
+        let table_exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT FROM information_schema.tables
+                WHERE table_name = 'host_events'
+            )
+            "#,
+        )
+        .fetch_one(self.pool())
+        .await
+        .map_err(|e| StorageError::connection("health check: failed to verify schema", e))?;
+
+        if !table_exists {
+            return Err(StorageError::connection(
+                "health check: schema not initialized (host_events table missing)",
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "schema not initialized - call initialize() first",
+                ),
+            ));
+        }
+
         Ok(())
     }
 
