@@ -161,9 +161,9 @@ impl DuckDbStorage {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock();
 
-            // Build query with optional LIMIT/OFFSET
-            let mut query = String::from(
-                r#"
+            // Use parameterized query for LIMIT/OFFSET to avoid SQL injection patterns
+            // Even though u32 is safe, parameterized queries are best practice
+            let query = r#"
                 SELECT
                     snapshot_id,
                     created_at,
@@ -172,25 +172,20 @@ impl DuckDbStorage {
                     name
                 FROM snapshots
                 ORDER BY created_at DESC
-                "#,
-            );
-
-            // Append LIMIT/OFFSET clauses if provided
-            if let Some(limit) = limit {
-                query.push_str(&format!(" LIMIT {}", limit));
-            }
-            if let Some(offset) = offset {
-                if offset > 0 {
-                    query.push_str(&format!(" OFFSET {}", offset));
-                }
-            }
+                LIMIT COALESCE(?, 9223372036854775807)
+                OFFSET COALESCE(?, 0)
+            "#;
 
             let mut stmt = conn
-                .prepare(&query)
+                .prepare(query)
                 .map_err(|e| StorageError::query("failed to prepare list query", e))?;
 
+            // Convert Option<u32> to Option<i64> for DuckDB binding
+            let limit_param: Option<i64> = limit.map(i64::from);
+            let offset_param: Option<i64> = offset.filter(|&o| o > 0).map(i64::from);
+
             let rows = stmt
-                .query_map([], |row| {
+                .query_map([&limit_param as &dyn duckdb::ToSql, &offset_param], |row| {
                     Ok((
                         row.get::<_, String>(0)?,         // snapshot_id
                         row.get::<_, i64>(1)?,            // created_at
