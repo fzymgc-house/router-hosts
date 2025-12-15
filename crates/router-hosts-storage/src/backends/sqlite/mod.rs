@@ -21,6 +21,25 @@
 //! SQLite doesn't support `IGNORE NULLS` in window functions, so the projection
 //! uses a different approach (subqueries or application-level merging).
 //!
+//! # Performance Characteristics
+//!
+//! The `host_entries_current` view uses 7 correlated subqueries to reconstruct
+//! the current state of each host from the event log. This scales as O(n × m × 7)
+//! where n = number of hosts and m = average events per host.
+//!
+//! **Ballpark estimates:**
+//! - < 100 hosts: < 10ms (instant)
+//! - ~1,000 hosts: ~100ms (acceptable)
+//! - ~10,000 hosts: 1-2 seconds (consider DuckDB)
+//!
+//! This backend is optimized for router/small server deployments with < 1,000 hosts.
+//! For larger deployments, consider using the DuckDB backend which uses window
+//! functions instead of correlated subqueries.
+//!
+//! Additionally, duplicate entry detection queries the `host_entries_current` view
+//! which is not indexable, resulting in a full table scan. This is acceptable for
+//! small datasets but may become noticeable with many hosts.
+//!
 //! # Security
 //!
 //! All queries use parameterized statements (`rusqlite::params!`) to prevent
