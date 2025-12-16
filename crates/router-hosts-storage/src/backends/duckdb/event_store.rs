@@ -8,8 +8,9 @@
 use chrono::{DateTime, Utc};
 
 /// Extracted event data for database insertion
-/// (ip_address, hostname, comment, tags, event_timestamp, event_data)
+/// (ip_address, hostname, comment, tags, aliases, event_timestamp, event_data)
 type ExtractedEventData = (
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -26,7 +27,7 @@ use crate::error::StorageError;
 use crate::types::{EventEnvelope, HostEvent};
 
 /// Event-specific data stored as JSON metadata
-/// Contains tags, comments, and previous values (for change events)
+/// Contains tags, comments, aliases, and previous values (for change events)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct EventData {
     // Common fields
@@ -34,6 +35,8 @@ struct EventData {
     pub comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub aliases: Option<Vec<String>>,
 
     // Previous values for change events
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,6 +47,8 @@ struct EventData {
     pub previous_comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_aliases: Option<Vec<String>>,
 
     // For deleted events
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -128,7 +133,7 @@ impl DuckDbStorage {
             }
 
             // Extract typed columns and build metadata
-            let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
+            let (ip_address_opt, hostname_opt, comment_opt, tags_opt, aliases_opt, event_timestamp, event_data) =
                 extract_event_data(&envelope.event);
 
             // Serialize EventData to JSON
@@ -142,10 +147,10 @@ impl DuckDbStorage {
                 r#"
                 INSERT INTO host_events (
                     event_id, aggregate_id, event_type, event_version,
-                    ip_address, hostname, comment, tags,
+                    ip_address, hostname, comment, tags, aliases,
                     event_timestamp, metadata,
                     created_at, created_by, expected_version
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
                 "#,
                 [
                     &envelope.event_id.to_string() as &dyn duckdb::ToSql,
@@ -156,6 +161,7 @@ impl DuckDbStorage {
                     &hostname_opt as &dyn duckdb::ToSql,
                     &comment_opt as &dyn duckdb::ToSql,
                     &tags_opt as &dyn duckdb::ToSql,
+                    &aliases_opt as &dyn duckdb::ToSql,
                     &event_timestamp.timestamp_micros(),
                     &event_data_json as &dyn duckdb::ToSql,
                     &envelope.created_at.timestamp_micros(),
@@ -232,7 +238,7 @@ impl DuckDbStorage {
 
             // Insert each event
             for envelope in envelopes {
-                let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
+                let (ip_address_opt, hostname_opt, comment_opt, tags_opt, aliases_opt, event_timestamp, event_data) =
                     extract_event_data(&envelope.event);
 
                 let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
@@ -244,10 +250,10 @@ impl DuckDbStorage {
                     r#"
                     INSERT INTO host_events (
                         event_id, aggregate_id, event_type, event_version,
-                        ip_address, hostname, comment, tags,
+                        ip_address, hostname, comment, tags, aliases,
                         event_timestamp, metadata,
                         created_at, created_by, expected_version
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, to_timestamp(?::BIGINT / 1000000.0), ?, to_timestamp(?::BIGINT / 1000000.0), ?, ?)
                     "#,
                     [
                         &envelope.event_id.to_string() as &dyn duckdb::ToSql,
@@ -258,6 +264,7 @@ impl DuckDbStorage {
                         &hostname_opt as &dyn duckdb::ToSql,
                         &comment_opt as &dyn duckdb::ToSql,
                         &tags_opt as &dyn duckdb::ToSql,
+                        &aliases_opt as &dyn duckdb::ToSql,
                         &event_timestamp.timestamp_micros(),
                         &event_data_json as &dyn duckdb::ToSql,
                         &envelope.created_at.timestamp_micros(),
@@ -337,7 +344,13 @@ impl DuckDbStorage {
                 .map_err(|e| StorageError::query("failed to query events", e))?;
 
             let mut envelopes = Vec::new();
-            let mut current_state: Option<(String, String, Option<String>, Vec<String>)> = None; // (ip, hostname, comment, tags)
+            let mut current_state: Option<(
+                String,
+                String,
+                Option<String>,
+                Vec<String>,
+                Vec<String>,
+            )> = None; // (ip, hostname, comment, tags, aliases)
 
             for row in rows {
                 let (
@@ -465,13 +478,13 @@ impl DuckDbStorage {
 
 /// Extract typed columns and metadata from a HostEvent
 ///
-/// Returns: (ip_address, hostname, comment, tags, event_timestamp, event_data)
+/// Returns: (ip_address, hostname, comment, tags, aliases, event_timestamp, event_data)
 fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
     match event {
         HostEvent::HostCreated {
             ip_address,
             hostname,
-            aliases: _,
+            aliases,
             comment,
             tags,
             created_at,
@@ -480,10 +493,12 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
             Some(hostname.clone()),
             Some(comment.clone().unwrap_or_default()),
             Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string())),
+            Some(serde_json::to_string(aliases).unwrap_or_else(|_| "[]".to_string())),
             *created_at,
             EventData {
                 comment: comment.clone(),
                 tags: Some(tags.clone()),
+                aliases: Some(aliases.clone()),
                 ..Default::default()
             },
         ),
@@ -493,6 +508,7 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
             changed_at,
         } => (
             Some(new_ip.clone()),
+            None,
             None,
             None,
             None,
@@ -511,6 +527,7 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
             Some(new_hostname.clone()),
             None,
             None,
+            None,
             *changed_at,
             EventData {
                 previous_hostname: Some(old_hostname.clone()),
@@ -525,6 +542,7 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
             None,
             None,
             Some(new_comment.clone().unwrap_or_default()),
+            None,
             None,
             *updated_at,
             EventData {
@@ -542,6 +560,7 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
             None,
             None,
             Some(serde_json::to_string(new_tags).unwrap_or_else(|_| "[]".to_string())),
+            None,
             *modified_at,
             EventData {
                 tags: Some(new_tags.clone()),
@@ -550,16 +569,19 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
             },
         ),
         HostEvent::AliasesModified {
-            old_aliases: _,
-            new_aliases: _,
+            old_aliases,
+            new_aliases,
             modified_at,
         } => (
             None,
             None,
             None,
             None,
+            Some(serde_json::to_string(new_aliases).unwrap_or_else(|_| "[]".to_string())),
             *modified_at,
             EventData {
+                aliases: Some(new_aliases.clone()),
+                previous_aliases: Some(old_aliases.clone()),
                 ..Default::default()
             },
         ),
@@ -571,6 +593,7 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
         } => (
             Some(ip_address.clone()),
             Some(hostname.clone()),
+            None,
             None,
             None,
             *deleted_at,
@@ -589,7 +612,7 @@ fn reconstruct_event(
     hostname: Option<String>,
     event_data: &EventData,
     event_timestamp: DateTime<Utc>,
-    current_state: &mut Option<(String, String, Option<String>, Vec<String>)>,
+    current_state: &mut Option<(String, String, Option<String>, Vec<String>, Vec<String>)>,
 ) -> Result<HostEvent, StorageError> {
     match event_type {
         "HostCreated" => {
@@ -600,15 +623,22 @@ fn reconstruct_event(
                 .ok_or_else(|| StorageError::InvalidData("HostCreated missing hostname".into()))?;
 
             let tags = event_data.tags.clone().unwrap_or_default();
+            let aliases = event_data.aliases.clone().unwrap_or_default();
             let comment = event_data.comment.clone();
 
-            // Update current state
-            *current_state = Some((ip.clone(), host.clone(), comment.clone(), tags.clone()));
+            // Update current state (ip, hostname, comment, tags, aliases)
+            *current_state = Some((
+                ip.clone(),
+                host.clone(),
+                comment.clone(),
+                tags.clone(),
+                aliases.clone(),
+            ));
 
             Ok(HostEvent::HostCreated {
                 ip_address: ip,
                 hostname: host,
-                aliases: vec![],
+                aliases,
                 comment,
                 tags,
                 created_at: event_timestamp,
@@ -624,7 +654,7 @@ fn reconstruct_event(
             })?;
 
             // Update current state
-            if let Some((ref mut ip, _, _, _)) = current_state {
+            if let Some((ref mut ip, _, _, _, _)) = current_state {
                 *ip = new_ip.clone();
             }
 
@@ -646,7 +676,7 @@ fn reconstruct_event(
             })?;
 
             // Update current state
-            if let Some((_, ref mut host, _, _)) = current_state {
+            if let Some((_, ref mut host, _, _, _)) = current_state {
                 *host = new_hostname.clone();
             }
 
@@ -661,7 +691,7 @@ fn reconstruct_event(
             let new_comment = event_data.comment.clone();
 
             // Update current state
-            if let Some((_, _, ref mut c, _)) = current_state {
+            if let Some((_, _, ref mut c, _, _)) = current_state {
                 *c = new_comment.clone();
             }
 
@@ -676,13 +706,28 @@ fn reconstruct_event(
             let new_tags = event_data.tags.clone().unwrap_or_default();
 
             // Update current state
-            if let Some((_, _, _, ref mut tags)) = current_state {
+            if let Some((_, _, _, ref mut tags, _)) = current_state {
                 *tags = new_tags.clone();
             }
 
             Ok(HostEvent::TagsModified {
                 old_tags,
                 new_tags,
+                modified_at: event_timestamp,
+            })
+        }
+        "AliasesModified" => {
+            let old_aliases = event_data.previous_aliases.clone().unwrap_or_default();
+            let new_aliases = event_data.aliases.clone().unwrap_or_default();
+
+            // Update current state
+            if let Some((_, _, _, _, ref mut aliases)) = current_state {
+                *aliases = new_aliases.clone();
+            }
+
+            Ok(HostEvent::AliasesModified {
+                old_aliases,
+                new_aliases,
                 modified_at: event_timestamp,
             })
         }

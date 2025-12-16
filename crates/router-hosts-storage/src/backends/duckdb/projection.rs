@@ -43,6 +43,7 @@ impl DuckDbStorage {
                         hostname,
                         comment,
                         tags,
+                        aliases,
                         created_at,
                         updated_at,
                         event_version
@@ -60,9 +61,10 @@ impl DuckDbStorage {
                         row.get::<_, String>(2)?,         // hostname
                         row.get::<_, Option<String>>(3)?, // comment (nullable)
                         row.get::<_, Option<String>>(4)?, // tags (JSON array, nullable)
-                        row.get::<_, i64>(5)?,            // created_at
-                        row.get::<_, i64>(6)?,            // updated_at
-                        row.get::<_, String>(7)?,         // event_version
+                        row.get::<_, Option<String>>(5)?, // aliases (JSON array, nullable)
+                        row.get::<_, i64>(6)?,            // created_at
+                        row.get::<_, i64>(7)?,            // updated_at
+                        row.get::<_, String>(8)?,         // event_version
                     ))
                 })
                 .map_err(|e| StorageError::query("failed to query host entries", e))?;
@@ -75,6 +77,7 @@ impl DuckDbStorage {
                     hostname,
                     comment_str,
                     tags_json,
+                    aliases_json,
                     created_at_micros,
                     updated_at_micros,
                     version,
@@ -88,6 +91,11 @@ impl DuckDbStorage {
 
                 // Parse tags from JSON array
                 let tags: Vec<String> = tags_json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+
+                // Parse aliases from JSON array
+                let aliases: Vec<String> = aliases_json
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
 
@@ -111,7 +119,7 @@ impl DuckDbStorage {
                     id,
                     ip_address,
                     hostname,
-                    aliases: vec![],
+                    aliases,
                     comment,
                     tags,
                     created_at,
@@ -147,6 +155,7 @@ impl DuckDbStorage {
                         hostname,
                         comment,
                         tags,
+                        aliases,
                         created_at,
                         updated_at,
                         event_version
@@ -161,9 +170,10 @@ impl DuckDbStorage {
                             row.get::<_, String>(2)?,         // hostname
                             row.get::<_, Option<String>>(3)?, // comment
                             row.get::<_, Option<String>>(4)?, // tags
-                            row.get::<_, i64>(5)?,            // created_at
-                            row.get::<_, i64>(6)?,            // updated_at
-                            row.get::<_, String>(7)?,         // event_version
+                            row.get::<_, Option<String>>(5)?, // aliases
+                            row.get::<_, i64>(6)?,            // created_at
+                            row.get::<_, i64>(7)?,            // updated_at
+                            row.get::<_, String>(8)?,         // event_version
                         ))
                     },
                 )
@@ -181,6 +191,7 @@ impl DuckDbStorage {
                     hostname,
                     comment_str,
                     tags_json,
+                    aliases_json,
                     created_at_micros,
                     updated_at_micros,
                     version,
@@ -190,6 +201,9 @@ impl DuckDbStorage {
 
                     let comment = comment_str.filter(|s| !s.is_empty());
                     let tags: Vec<String> = tags_json
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default();
+                    let aliases: Vec<String> = aliases_json
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default();
 
@@ -213,7 +227,7 @@ impl DuckDbStorage {
                         id,
                         ip_address,
                         hostname,
-                        aliases: vec![],
+                        aliases,
                         comment,
                         tags,
                         created_at,
@@ -254,6 +268,7 @@ impl DuckDbStorage {
                         hostname,
                         comment,
                         tags,
+                        aliases,
                         created_at,
                         updated_at,
                         event_version
@@ -268,9 +283,10 @@ impl DuckDbStorage {
                             row.get::<_, String>(2)?,         // hostname
                             row.get::<_, Option<String>>(3)?, // comment
                             row.get::<_, Option<String>>(4)?, // tags
-                            row.get::<_, i64>(5)?,            // created_at
-                            row.get::<_, i64>(6)?,            // updated_at
-                            row.get::<_, String>(7)?,         // event_version
+                            row.get::<_, Option<String>>(5)?, // aliases
+                            row.get::<_, i64>(6)?,            // created_at
+                            row.get::<_, i64>(7)?,            // updated_at
+                            row.get::<_, String>(8)?,         // event_version
                         ))
                     },
                 )
@@ -285,6 +301,7 @@ impl DuckDbStorage {
                     hostname,
                     comment_str,
                     tags_json,
+                    aliases_json,
                     created_at_micros,
                     updated_at_micros,
                     version,
@@ -294,6 +311,9 @@ impl DuckDbStorage {
 
                     let comment = comment_str.filter(|s| !s.is_empty());
                     let tags: Vec<String> = tags_json
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_default();
+                    let aliases: Vec<String> = aliases_json
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_default();
 
@@ -317,7 +337,7 @@ impl DuckDbStorage {
                         id,
                         ip_address,
                         hostname,
-                        aliases: vec![],
+                        aliases,
                         comment,
                         tags,
                         created_at,
@@ -354,7 +374,7 @@ impl DuckDbStorage {
 
             // Static string references for IP and hostname patterns
             let ip_clause = "ip_address LIKE ?";
-            let hostname_clause = "hostname LIKE ?";
+            let hostname_clause = "(hostname LIKE ? OR aliases LIKE ?)";
 
             if let Some(ip_pattern) = &filter.ip_pattern {
                 where_clauses.push(ip_clause);
@@ -363,7 +383,9 @@ impl DuckDbStorage {
 
             if let Some(hostname_pattern) = &filter.hostname_pattern {
                 where_clauses.push(hostname_clause);
-                params.push(Box::new(format!("%{}%", hostname_pattern)));
+                let pattern = format!("%{}%", hostname_pattern);
+                params.push(Box::new(pattern.clone()));
+                params.push(Box::new(pattern));
             }
 
             // For tag filtering, we need to check if any of the tags in the filter
@@ -400,6 +422,7 @@ impl DuckDbStorage {
                     hostname,
                     comment,
                     tags,
+                    aliases,
                     created_at,
                     updated_at,
                     event_version
@@ -426,9 +449,10 @@ impl DuckDbStorage {
                         row.get::<_, String>(2)?,         // hostname
                         row.get::<_, Option<String>>(3)?, // comment
                         row.get::<_, Option<String>>(4)?, // tags
-                        row.get::<_, i64>(5)?,            // created_at
-                        row.get::<_, i64>(6)?,            // updated_at
-                        row.get::<_, String>(7)?,         // event_version
+                        row.get::<_, Option<String>>(5)?, // aliases
+                        row.get::<_, i64>(6)?,            // created_at
+                        row.get::<_, i64>(7)?,            // updated_at
+                        row.get::<_, String>(8)?,         // event_version
                     ))
                 })
                 .map_err(|e| StorageError::query("failed to execute search query", e))?;
@@ -441,6 +465,7 @@ impl DuckDbStorage {
                     hostname,
                     comment_str,
                     tags_json,
+                    aliases_json,
                     created_at_micros,
                     updated_at_micros,
                     version,
@@ -451,6 +476,9 @@ impl DuckDbStorage {
 
                 let comment = comment_str.filter(|s| !s.is_empty());
                 let tags: Vec<String> = tags_json
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
+                let aliases: Vec<String> = aliases_json
                     .and_then(|s| serde_json::from_str(&s).ok())
                     .unwrap_or_default();
 
@@ -474,7 +502,7 @@ impl DuckDbStorage {
                     id,
                     ip_address,
                     hostname,
-                    aliases: vec![],
+                    aliases,
                     comment,
                     tags,
                     created_at,
@@ -567,8 +595,8 @@ impl DuckDbStorage {
                     })
                     .map_err(|e| StorageError::query("failed to query events", e))?;
 
-                // Rebuild state by applying events
-                let mut current_state: Option<(String, String, Option<String>, Vec<String>)> = None;
+                // Rebuild state by applying events (ip, hostname, comment, tags, aliases)
+                let mut current_state: Option<(String, String, Option<String>, Vec<String>, Vec<String>)> = None;
 
                 for row in rows {
                     let (event_type, ip_address, hostname, metadata_json, event_timestamp_micros) =
@@ -608,32 +636,44 @@ impl DuckDbStorage {
                                 .get("tags")
                                 .and_then(|v| serde_json::from_value(v.clone()).ok())
                                 .unwrap_or_default();
+                            let aliases: Vec<String> = event_data
+                                .get("aliases")
+                                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                                .unwrap_or_default();
 
-                            current_state = Some((ip, host, comment, tags));
+                            current_state = Some((ip, host, comment, tags, aliases));
                         }
                         "IpAddressChanged" => {
-                            if let Some((ref mut ip, _, _, _)) = current_state {
+                            if let Some((ref mut ip, _, _, _, _)) = current_state {
                                 if let Some(new_ip) = ip_address {
                                     *ip = new_ip;
                                 }
                             }
                         }
                         "HostnameChanged" => {
-                            if let Some((_, ref mut host, _, _)) = current_state {
+                            if let Some((_, ref mut host, _, _, _)) = current_state {
                                 if let Some(new_hostname) = hostname {
                                     *host = new_hostname;
                                 }
                             }
                         }
                         "CommentUpdated" => {
-                            if let Some((_, _, ref mut c, _)) = current_state {
+                            if let Some((_, _, ref mut c, _, _)) = current_state {
                                 *c = event_data.get("comment").and_then(|v| v.as_str()).map(String::from);
                             }
                         }
                         "TagsModified" => {
-                            if let Some((_, _, _, ref mut tags)) = current_state {
+                            if let Some((_, _, _, ref mut tags, _)) = current_state {
                                 *tags = event_data
                                     .get("tags")
+                                    .and_then(|v| serde_json::from_value(v.clone()).ok())
+                                    .unwrap_or_default();
+                            }
+                        }
+                        "AliasesModified" => {
+                            if let Some((_, _, _, _, ref mut aliases)) = current_state {
+                                *aliases = event_data
+                                    .get("aliases")
                                     .and_then(|v| serde_json::from_value(v.clone()).ok())
                                     .unwrap_or_default();
                             }
@@ -647,13 +687,13 @@ impl DuckDbStorage {
                 }
 
                 // If state exists (not deleted), add to results
-                if let Some((ip_address, hostname, comment, tags)) = current_state {
+                if let Some((ip_address, hostname, comment, tags, aliases)) = current_state {
                     // For historical queries, we use a synthetic version and timestamp
                     entries.push(HostEntry {
                         id: aggregate_id,
                         ip_address,
                         hostname,
-                        aliases: vec![],
+                        aliases,
                         comment,
                         tags,
                         created_at: at_time,
