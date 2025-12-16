@@ -150,6 +150,45 @@ mod tests {
     use std::io::Write;
     use tempfile::NamedTempFile;
 
+    /// RAII guard for environment variable cleanup.
+    /// Automatically restores the original value (or removes the var) when dropped.
+    /// This prevents env var leakage even if tests panic.
+    struct EnvGuard {
+        key: String,
+        original: Option<String>,
+    }
+
+    impl EnvGuard {
+        /// Set an environment variable and return a guard that restores it on drop.
+        fn set(key: &str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+
+        /// Remove an environment variable and return a guard that restores it on drop.
+        fn remove(key: &str) -> Self {
+            let original = std::env::var(key).ok();
+            std::env::remove_var(key);
+            Self {
+                key: key.to_string(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match &self.original {
+                Some(v) => std::env::set_var(&self.key, v),
+                None => std::env::remove_var(&self.key),
+            }
+        }
+    }
+
     #[test]
     fn test_load_from_cli_args() {
         let cert = PathBuf::from("/tmp/cert.pem");
@@ -172,11 +211,11 @@ mod tests {
     #[test]
     #[serial]
     fn test_load_from_config_file() {
-        // Clear any env vars from other tests
-        std::env::remove_var("ROUTER_HOSTS_SERVER");
-        std::env::remove_var("ROUTER_HOSTS_CERT");
-        std::env::remove_var("ROUTER_HOSTS_KEY");
-        std::env::remove_var("ROUTER_HOSTS_CA");
+        // Clear any env vars - guards ensure cleanup even on panic
+        let _g1 = EnvGuard::remove("ROUTER_HOSTS_SERVER");
+        let _g2 = EnvGuard::remove("ROUTER_HOSTS_CERT");
+        let _g3 = EnvGuard::remove("ROUTER_HOSTS_KEY");
+        let _g4 = EnvGuard::remove("ROUTER_HOSTS_CA");
 
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
@@ -235,11 +274,11 @@ ca_cert_path = "/file/ca.crt"
     #[test]
     #[serial]
     fn test_missing_required_fields() {
-        // Clear any env vars from other tests
-        std::env::remove_var("ROUTER_HOSTS_SERVER");
-        std::env::remove_var("ROUTER_HOSTS_CERT");
-        std::env::remove_var("ROUTER_HOSTS_KEY");
-        std::env::remove_var("ROUTER_HOSTS_CA");
+        // Clear any env vars - guards ensure cleanup even on panic
+        let _g1 = EnvGuard::remove("ROUTER_HOSTS_SERVER");
+        let _g2 = EnvGuard::remove("ROUTER_HOSTS_CERT");
+        let _g3 = EnvGuard::remove("ROUTER_HOSTS_KEY");
+        let _g4 = EnvGuard::remove("ROUTER_HOSTS_CA");
 
         let result = ClientConfig::load(None, None, None, None, None);
         assert!(result.is_err());
@@ -252,11 +291,11 @@ ca_cert_path = "/file/ca.crt"
     #[test]
     #[serial]
     fn test_env_overrides_file() {
-        // Clear all env vars first to avoid interference
-        std::env::remove_var("ROUTER_HOSTS_SERVER");
-        std::env::remove_var("ROUTER_HOSTS_CERT");
-        std::env::remove_var("ROUTER_HOSTS_KEY");
-        std::env::remove_var("ROUTER_HOSTS_CA");
+        // Clear env vars and set override - guards ensure cleanup even on panic
+        let _g1 = EnvGuard::set("ROUTER_HOSTS_SERVER", "env-server:9999");
+        let _g2 = EnvGuard::remove("ROUTER_HOSTS_CERT");
+        let _g3 = EnvGuard::remove("ROUTER_HOSTS_KEY");
+        let _g4 = EnvGuard::remove("ROUTER_HOSTS_CA");
 
         let mut file = NamedTempFile::new().unwrap();
         writeln!(
@@ -273,21 +312,14 @@ ca_cert_path = "/file/ca.crt"
         )
         .unwrap();
 
-        // Set env var to override file (will be cleaned up after test)
-        std::env::set_var("ROUTER_HOSTS_SERVER", "env-server:9999");
-
         let config = ClientConfig::load(
             Some(&file.path().to_path_buf()),
             None, // no CLI override
             None,
             None,
             None,
-        );
-
-        // Clean up immediately after loading
-        std::env::remove_var("ROUTER_HOSTS_SERVER");
-
-        let config = config.unwrap();
+        )
+        .unwrap();
 
         // Env should override file
         assert_eq!(config.server_address, "env-server:9999");
