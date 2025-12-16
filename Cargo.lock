@@ -3015,6 +3015,7 @@ dependencies = [
  "prost-types",
  "router-hosts-common",
  "router-hosts-storage",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "serial_test",
