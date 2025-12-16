@@ -10,6 +10,7 @@ use ulid::Ulid;
 pub async fn run_all<S: Storage>(storage: &S) {
     test_list_all_entries(storage).await;
     test_list_all_empty(storage).await;
+    test_list_all_sorted_by_ip_then_hostname(storage).await;
     test_get_by_id(storage).await;
     test_get_by_id_not_found(storage).await;
     test_find_by_ip_and_hostname(storage).await;
@@ -745,4 +746,84 @@ pub async fn test_edge_case_strings<S: Storage>(storage: &S) {
         results.iter().any(|e| e.id == id2),
         "should find entry with long hostname"
     );
+}
+
+/// Test that list_all returns entries sorted by IP address, then hostname
+///
+/// This is a critical invariant for /etc/hosts file generation.
+/// Design doc: "Sorted entries (by IP, then hostname)"
+pub async fn test_list_all_sorted_by_ip_then_hostname<S: Storage>(storage: &S) {
+    // Create entries in random order (not sorted by IP or hostname)
+    // Using IPs that will sort differently lexicographically vs numerically
+    let entries = [
+        ("192.168.10.1", "zebra.local"),
+        ("10.0.0.1", "alpha.local"),
+        ("192.168.1.1", "gamma.local"),
+        ("10.0.0.1", "beta.local"), // Same IP as alpha, different hostname
+        ("192.168.1.1", "delta.local"), // Same IP as gamma, different hostname
+        ("172.16.0.1", "epsilon.local"),
+    ];
+
+    for (ip, hostname) in entries {
+        create_host(storage, ip, hostname, None, vec!["sort-test"]).await;
+    }
+
+    let all = storage.list_all().await.expect("list_all should succeed");
+
+    // Filter to only our test entries
+    let sorted: Vec<_> = all
+        .iter()
+        .filter(|e| e.tags.contains(&"sort-test".to_string()))
+        .collect();
+
+    assert_eq!(sorted.len(), 6, "should have all 6 test entries");
+
+    // Verify sorting: IPs should be sorted lexicographically (string order),
+    // then hostnames within same IP
+    //
+    // Expected order (lexicographic IP sort):
+    // 1. 10.0.0.1 alpha.local
+    // 2. 10.0.0.1 beta.local
+    // 3. 172.16.0.1 epsilon.local
+    // 4. 192.168.1.1 delta.local
+    // 5. 192.168.1.1 gamma.local
+    // 6. 192.168.10.1 zebra.local
+
+    // Verify IP ordering
+    for i in 0..sorted.len() - 1 {
+        let current = &sorted[i];
+        let next = &sorted[i + 1];
+
+        let ip_cmp = current.ip_address.cmp(&next.ip_address);
+        let hostname_cmp = current.hostname.cmp(&next.hostname);
+
+        assert!(
+            ip_cmp.is_lt() || (ip_cmp.is_eq() && hostname_cmp.is_lt()),
+            "Entries not sorted correctly at position {}: {} {} should come before {} {}",
+            i,
+            current.ip_address,
+            current.hostname,
+            next.ip_address,
+            next.hostname
+        );
+    }
+
+    // Verify specific expected order
+    assert_eq!(sorted[0].ip_address, "10.0.0.1");
+    assert_eq!(sorted[0].hostname, "alpha.local");
+
+    assert_eq!(sorted[1].ip_address, "10.0.0.1");
+    assert_eq!(sorted[1].hostname, "beta.local");
+
+    assert_eq!(sorted[2].ip_address, "172.16.0.1");
+    assert_eq!(sorted[2].hostname, "epsilon.local");
+
+    assert_eq!(sorted[3].ip_address, "192.168.1.1");
+    assert_eq!(sorted[3].hostname, "delta.local");
+
+    assert_eq!(sorted[4].ip_address, "192.168.1.1");
+    assert_eq!(sorted[4].hostname, "gamma.local");
+
+    assert_eq!(sorted[5].ip_address, "192.168.10.1");
+    assert_eq!(sorted[5].hostname, "zebra.local");
 }

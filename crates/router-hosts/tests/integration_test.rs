@@ -832,6 +832,255 @@ async fn test_import_hosts_csv_format() {
 }
 
 // ============================================================================
+// Import Conflict Mode Integration Tests
+//
+// These tests verify the different conflict handling modes for the import
+// endpoint: skip (default), replace, and strict.
+// ============================================================================
+
+/// Test import with `skip` mode - skips duplicate IP+hostname combinations
+#[tokio::test]
+async fn test_import_conflict_mode_skip() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // First, add a host directly
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.50.1".to_string(),
+            hostname: "skip-test.local".to_string(),
+            comment: Some("Original entry".to_string()),
+            tags: vec!["original".to_string()],
+        })
+        .await
+        .unwrap();
+
+    // Import with skip mode - same IP+hostname should be skipped
+    let import_data =
+        b"192.168.50.1\tskip-test.local\t# Imported entry\n192.168.50.2\tnew-skip.local\n";
+
+    let requests = vec![ImportHostsRequest {
+        chunk: import_data.to_vec(),
+        last_chunk: true,
+        format: Some("hosts".to_string()),
+        conflict_mode: Some("skip".to_string()),
+    }];
+
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
+        .await
+        .unwrap();
+
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
+
+    assert_eq!(progress.processed, 2);
+    assert_eq!(progress.created, 1); // Only the new entry
+    assert_eq!(progress.skipped, 1); // Duplicate skipped
+    assert_eq!(progress.failed, 0);
+
+    // Verify original entry wasn't modified
+    let search_response = client
+        .search_hosts(SearchHostsRequest {
+            query: "skip-test.local".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut stream = search_response.into_inner();
+    let entry = stream.message().await.unwrap().unwrap().entry.unwrap();
+    assert_eq!(entry.comment.as_deref(), Some("Original entry")); // Unchanged
+    assert_eq!(entry.tags, vec!["original".to_string()]);
+}
+
+/// Test import with `replace` mode - updates existing entries with new values
+#[tokio::test]
+async fn test_import_conflict_mode_replace() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // First, add a host directly
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.51.1".to_string(),
+            hostname: "replace-test.local".to_string(),
+            comment: Some("Original entry".to_string()),
+            tags: vec!["original".to_string()],
+        })
+        .await
+        .unwrap();
+
+    // Import with replace mode - same IP+hostname should be updated
+    let import_data =
+        b"192.168.51.1\treplace-test.local\t# Updated entry\n192.168.51.2\tnew-replace.local\n";
+
+    let requests = vec![ImportHostsRequest {
+        chunk: import_data.to_vec(),
+        last_chunk: true,
+        format: Some("hosts".to_string()),
+        conflict_mode: Some("replace".to_string()),
+    }];
+
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
+        .await
+        .unwrap();
+
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
+
+    assert_eq!(progress.processed, 2);
+    assert_eq!(progress.created, 1); // New entry created
+    assert_eq!(progress.updated, 1); // Existing entry updated
+    assert_eq!(progress.skipped, 0);
+    assert_eq!(progress.failed, 0);
+
+    // Verify the entry was updated
+    let search_response = client
+        .search_hosts(SearchHostsRequest {
+            query: "replace-test.local".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut stream = search_response.into_inner();
+    let entry = stream.message().await.unwrap().unwrap().entry.unwrap();
+    assert_eq!(entry.comment.as_deref(), Some("Updated entry")); // Changed
+    assert!(entry.tags.is_empty()); // Tags not in hosts format, so empty
+}
+
+/// Test import with `strict` mode - fails on any duplicate with ALREADY_EXISTS error
+#[tokio::test]
+async fn test_import_conflict_mode_strict() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // First, add a host directly
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.52.1".to_string(),
+            hostname: "strict-test.local".to_string(),
+            comment: Some("Original entry".to_string()),
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Import with strict mode - same IP+hostname should fail with ALREADY_EXISTS
+    let import_data = b"192.168.52.2\tnew-strict.local\n192.168.52.1\tstrict-test.local\n";
+
+    let requests = vec![ImportHostsRequest {
+        chunk: import_data.to_vec(),
+        last_chunk: true,
+        format: Some("hosts".to_string()),
+        conflict_mode: Some("strict".to_string()),
+    }];
+
+    let result = client.import_hosts(tokio_stream::iter(requests)).await;
+
+    // Strict mode should return an error for duplicates
+    assert!(result.is_err());
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::AlreadyExists);
+    assert!(status.message().contains("already exists"));
+}
+
+/// Test import with invalid conflict mode - should default to skip
+#[tokio::test]
+async fn test_import_invalid_conflict_mode_defaults_to_skip() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // First, add a host directly
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.53.1".to_string(),
+            hostname: "default-test.local".to_string(),
+            comment: Some("Original".to_string()),
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Import with no conflict_mode specified (should default to skip)
+    let import_data = b"192.168.53.1\tdefault-test.local\t# Imported\n";
+
+    let requests = vec![ImportHostsRequest {
+        chunk: import_data.to_vec(),
+        last_chunk: true,
+        format: Some("hosts".to_string()),
+        conflict_mode: None, // Not specified
+    }];
+
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
+        .await
+        .unwrap();
+
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
+
+    // Should behave like skip mode
+    assert_eq!(progress.skipped, 1);
+    assert_eq!(progress.created, 0);
+    assert_eq!(progress.failed, 0);
+}
+
+/// Test import replace mode with JSON format preserves tags
+#[tokio::test]
+async fn test_import_replace_mode_json_preserves_tags() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // First, add a host directly
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.54.1".to_string(),
+            hostname: "json-replace.local".to_string(),
+            comment: Some("Original".to_string()),
+            tags: vec!["old-tag".to_string()],
+        })
+        .await
+        .unwrap();
+
+    // Import with replace mode using JSON (which supports tags)
+    let import_data =
+        br#"{"ip_address": "192.168.54.1", "hostname": "json-replace.local", "comment": "Updated via JSON", "tags": ["new-tag", "imported"]}"#;
+
+    let requests = vec![ImportHostsRequest {
+        chunk: import_data.to_vec(),
+        last_chunk: true,
+        format: Some("json".to_string()),
+        conflict_mode: Some("replace".to_string()),
+    }];
+
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
+        .await
+        .unwrap();
+
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
+
+    assert_eq!(progress.updated, 1);
+
+    // Verify the entry was updated with new tags
+    let search_response = client
+        .search_hosts(SearchHostsRequest {
+            query: "json-replace.local".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut stream = search_response.into_inner();
+    let entry = stream.message().await.unwrap().unwrap().entry.unwrap();
+    assert_eq!(entry.comment.as_deref(), Some("Updated via JSON"));
+    assert!(entry.tags.contains(&"new-tag".to_string()));
+    assert!(entry.tags.contains(&"imported".to_string()));
+    assert!(!entry.tags.contains(&"old-tag".to_string())); // Old tag replaced
+}
+
+// ============================================================================
 // Version Conflict Integration Tests (Issue #52)
 //
 // These tests verify the server-side optimistic concurrency control for
@@ -2006,4 +2255,394 @@ async fn test_rollback_preserves_tags_and_comments() {
         restored.tags,
         vec!["production".to_string(), "critical".to_string()]
     );
+}
+
+// ============================================================================
+// Error Code Tests (Design Invariant Coverage)
+//
+// These tests verify that the server returns correct gRPC status codes per
+// the design document error mapping specification.
+// ============================================================================
+
+/// Test that adding a duplicate IP+hostname returns ALREADY_EXISTS
+///
+/// Design requirement: "Duplicate IP+hostname combinations are rejected"
+/// Error mapping: Duplicate IP+hostname → ALREADY_EXISTS
+#[tokio::test]
+async fn test_add_duplicate_host_returns_already_exists() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add first host successfully
+    let response = client
+        .add_host(AddHostRequest {
+            ip_address: "10.99.99.1".to_string(),
+            hostname: "duplicate-test.local".to_string(),
+            comment: Some("First entry".to_string()),
+            tags: vec![],
+        })
+        .await;
+    assert!(response.is_ok(), "First add should succeed");
+
+    // Try to add the same IP+hostname combination again
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "10.99.99.1".to_string(),
+            hostname: "duplicate-test.local".to_string(),
+            comment: Some("Duplicate entry".to_string()),
+            tags: vec!["different-tag".to_string()],
+        })
+        .await;
+
+    assert!(result.is_err(), "Second add should fail");
+    let status = result.unwrap_err();
+    assert_eq!(
+        status.code(),
+        tonic::Code::AlreadyExists,
+        "Expected ALREADY_EXISTS, got {:?}: {}",
+        status.code(),
+        status.message()
+    );
+    assert!(
+        status.message().contains("10.99.99.1")
+            || status.message().contains("duplicate-test.local"),
+        "Error message should reference the duplicate: {}",
+        status.message()
+    );
+}
+
+/// Test that same hostname with different IP is allowed (not a duplicate)
+#[tokio::test]
+async fn test_same_hostname_different_ip_allowed() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add first host
+    client
+        .add_host(AddHostRequest {
+            ip_address: "10.98.98.1".to_string(),
+            hostname: "shared-hostname.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .expect("First add should succeed");
+
+    // Same hostname, different IP - should succeed
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "10.98.98.2".to_string(),
+            hostname: "shared-hostname.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Same hostname with different IP should be allowed"
+    );
+}
+
+/// Test that same IP with different hostname is allowed (not a duplicate)
+#[tokio::test]
+async fn test_same_ip_different_hostname_allowed() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add first host
+    client
+        .add_host(AddHostRequest {
+            ip_address: "10.97.97.1".to_string(),
+            hostname: "first-hostname.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .expect("First add should succeed");
+
+    // Same IP, different hostname - should succeed (IP can have multiple aliases)
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "10.97.97.1".to_string(),
+            hostname: "second-hostname.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "Same IP with different hostname should be allowed"
+    );
+}
+
+/// Test that invalid IP address returns INVALID_ARGUMENT
+///
+/// Design requirement: "IP must be valid IPv4 or IPv6"
+/// Error mapping: Validation failure → INVALID_ARGUMENT
+#[tokio::test]
+async fn test_add_host_invalid_ip_returns_invalid_argument() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Invalid IP address
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "not-an-ip-address".to_string(),
+            hostname: "valid-hostname.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await;
+
+    assert!(result.is_err(), "Invalid IP should be rejected");
+    let status = result.unwrap_err();
+    assert_eq!(
+        status.code(),
+        tonic::Code::InvalidArgument,
+        "Expected INVALID_ARGUMENT, got {:?}: {}",
+        status.code(),
+        status.message()
+    );
+}
+
+/// Test various invalid IP formats return INVALID_ARGUMENT
+#[tokio::test]
+async fn test_add_host_various_invalid_ips() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    let invalid_ips = [
+        ("", "empty IP"),
+        ("256.1.1.1", "IPv4 octet > 255"),
+        ("1.2.3.4.5", "too many IPv4 octets"),
+        ("1.2.3", "incomplete IPv4"),
+        (":::", "malformed IPv6"),
+        ("192.168.1.1/24", "IP with CIDR notation"),
+    ];
+
+    for (ip, description) in invalid_ips {
+        let result = client
+            .add_host(AddHostRequest {
+                ip_address: ip.to_string(),
+                hostname: format!("test-{}.local", ip.replace(['.', ':', '/'], "-")),
+                comment: None,
+                tags: vec![],
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Invalid IP '{}' ({}) should be rejected",
+            ip,
+            description
+        );
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::InvalidArgument,
+            "Invalid IP '{}' ({}) should return INVALID_ARGUMENT, got {:?}",
+            ip,
+            description,
+            status.code()
+        );
+    }
+}
+
+/// Test that invalid hostname returns INVALID_ARGUMENT
+///
+/// Design requirement: "Hostname must be valid DNS name (RFC 1123)"
+/// Error mapping: Validation failure → INVALID_ARGUMENT
+#[tokio::test]
+async fn test_add_host_invalid_hostname_returns_invalid_argument() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Invalid hostname (starts with hyphen)
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "10.96.96.1".to_string(),
+            hostname: "-invalid-hostname.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await;
+
+    assert!(result.is_err(), "Invalid hostname should be rejected");
+    let status = result.unwrap_err();
+    assert_eq!(
+        status.code(),
+        tonic::Code::InvalidArgument,
+        "Expected INVALID_ARGUMENT, got {:?}: {}",
+        status.code(),
+        status.message()
+    );
+}
+
+/// Test various invalid hostname formats return INVALID_ARGUMENT
+#[tokio::test]
+async fn test_add_host_various_invalid_hostnames() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    let invalid_hostnames = [
+        ("", "empty hostname"),
+        ("-startswithhyphen.local", "starts with hyphen"),
+        ("endswithhyphen-.local", "ends with hyphen"),
+        ("has spaces.local", "contains space"),
+        ("has..double.dots", "consecutive dots"),
+        (".startswith.dot", "starts with dot"),
+    ];
+
+    for (hostname, description) in invalid_hostnames {
+        let result = client
+            .add_host(AddHostRequest {
+                ip_address: "10.95.95.1".to_string(),
+                hostname: hostname.to_string(),
+                comment: None,
+                tags: vec![],
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Invalid hostname '{}' ({}) should be rejected",
+            hostname,
+            description
+        );
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::InvalidArgument,
+            "Invalid hostname '{}' ({}) should return INVALID_ARGUMENT, got {:?}",
+            hostname,
+            description,
+            status.code()
+        );
+    }
+}
+
+/// Test that update with nonexistent ID returns NOT_FOUND
+///
+/// Note: Uses valid ULID format - invalid ID format returns INVALID_ARGUMENT
+#[tokio::test]
+async fn test_update_nonexistent_host_returns_not_found() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Use valid ULID format that doesn't exist in database
+    // Invalid ULID format would return INVALID_ARGUMENT instead
+    let nonexistent_ulid = "01JFZZZZZZZZZZZZZZZZZZZZZZ";
+
+    let result = client
+        .update_host(UpdateHostRequest {
+            id: nonexistent_ulid.to_string(),
+            ip_address: Some("10.94.94.1".to_string()),
+            hostname: None,
+            comment: None,
+            tags: vec![],
+            expected_version: None,
+        })
+        .await;
+
+    assert!(result.is_err(), "Update of nonexistent host should fail");
+    let status = result.unwrap_err();
+    assert_eq!(
+        status.code(),
+        tonic::Code::NotFound,
+        "Expected NOT_FOUND, got {:?}: {}",
+        status.code(),
+        status.message()
+    );
+}
+
+/// Test that delete with nonexistent ID returns NOT_FOUND
+///
+/// Note: Uses valid ULID format - invalid ID format returns INVALID_ARGUMENT
+#[tokio::test]
+async fn test_delete_nonexistent_host_returns_not_found() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Use valid ULID format that doesn't exist in database
+    let nonexistent_ulid = "01JFYYYYYYYYYYYYYYYYYYYYYY";
+
+    let result = client
+        .delete_host(DeleteHostRequest {
+            id: nonexistent_ulid.to_string(),
+        })
+        .await;
+
+    assert!(result.is_err(), "Delete of nonexistent host should fail");
+    let status = result.unwrap_err();
+    assert_eq!(
+        status.code(),
+        tonic::Code::NotFound,
+        "Expected NOT_FOUND, got {:?}: {}",
+        status.code(),
+        status.message()
+    );
+}
+
+/// Test that get with nonexistent ID returns NOT_FOUND
+///
+/// Note: Uses valid ULID format - invalid ID format returns INVALID_ARGUMENT
+#[tokio::test]
+async fn test_get_nonexistent_host_returns_not_found() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Use valid ULID format that doesn't exist in database
+    // ULID is exactly 26 characters: 10 for timestamp + 16 for randomness
+    let nonexistent_ulid = "01JFWWWWWWWWWWWWWWWWWWWWWW";
+
+    let result = client
+        .get_host(GetHostRequest {
+            id: nonexistent_ulid.to_string(),
+        })
+        .await;
+
+    assert!(result.is_err(), "Get of nonexistent host should fail");
+    let status = result.unwrap_err();
+    assert_eq!(
+        status.code(),
+        tonic::Code::NotFound,
+        "Expected NOT_FOUND, got {:?}: {}",
+        status.code(),
+        status.message()
+    );
+}
+
+/// Test that invalid ID format returns INVALID_ARGUMENT (not NOT_FOUND)
+///
+/// This verifies proper validation order: format validation before database lookup
+#[tokio::test]
+async fn test_invalid_id_format_returns_invalid_argument() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    let invalid_ids = ["not-a-ulid", "", "12345", "too-short"];
+
+    for invalid_id in invalid_ids {
+        let result = client
+            .get_host(GetHostRequest {
+                id: invalid_id.to_string(),
+            })
+            .await;
+
+        assert!(
+            result.is_err(),
+            "Invalid ID '{}' should be rejected",
+            invalid_id
+        );
+        let status = result.unwrap_err();
+        assert_eq!(
+            status.code(),
+            tonic::Code::InvalidArgument,
+            "Invalid ID format '{}' should return INVALID_ARGUMENT, got {:?}",
+            invalid_id,
+            status.code()
+        );
+    }
 }
