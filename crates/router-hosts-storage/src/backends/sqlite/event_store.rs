@@ -21,7 +21,9 @@ use crate::error::StorageError;
 use crate::types::{EventEnvelope, HostEvent};
 
 /// Extracted event data for database insertion
+/// (ip_address, hostname, comment, tags, aliases, timestamp, metadata)
 type ExtractedEventData = (
+    Option<String>,
     Option<String>,
     Option<String>,
     Option<String>,
@@ -38,6 +40,8 @@ struct EventData {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub aliases: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_ip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_hostname: Option<String>,
@@ -45,6 +49,8 @@ struct EventData {
     pub previous_comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_aliases: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted_reason: Option<String>,
 }
@@ -121,7 +127,7 @@ impl SqliteStorage {
             }
 
             // Extract typed columns and metadata
-            let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
+            let (ip_address_opt, hostname_opt, comment_opt, tags_opt, aliases_opt, event_timestamp, event_data) =
                 extract_event_data(&envelope.event).inspect_err(|_| {
                     let _ = conn.execute("ROLLBACK", []);
                 })?;
@@ -136,10 +142,10 @@ impl SqliteStorage {
                 r#"
                 INSERT INTO host_events (
                     event_id, aggregate_id, event_type, event_version,
-                    ip_address, hostname, comment, tags,
+                    ip_address, hostname, comment, tags, aliases,
                     event_timestamp, metadata,
                     created_at, created_by, expected_version
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                 "#,
                 rusqlite::params![
                     envelope.event_id.to_string(),
@@ -150,6 +156,7 @@ impl SqliteStorage {
                     hostname_opt,
                     comment_opt,
                     tags_opt,
+                    aliases_opt,
                     event_timestamp.timestamp_micros(),
                     event_data_json,
                     envelope.created_at.timestamp_micros(),
@@ -251,7 +258,7 @@ impl SqliteStorage {
                     }
                 }
 
-                let (ip_address_opt, hostname_opt, comment_opt, tags_opt, event_timestamp, event_data) =
+                let (ip_address_opt, hostname_opt, comment_opt, tags_opt, aliases_opt, event_timestamp, event_data) =
                     extract_event_data(&envelope.event).inspect_err(|_| {
                         let _ = conn.execute("ROLLBACK", []);
                     })?;
@@ -265,10 +272,10 @@ impl SqliteStorage {
                     r#"
                     INSERT INTO host_events (
                         event_id, aggregate_id, event_type, event_version,
-                        ip_address, hostname, comment, tags,
+                        ip_address, hostname, comment, tags, aliases,
                         event_timestamp, metadata,
                         created_at, created_by, expected_version
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                     "#,
                     rusqlite::params![
                         envelope.event_id.to_string(),
@@ -279,6 +286,7 @@ impl SqliteStorage {
                         hostname_opt,
                         comment_opt,
                         tags_opt,
+                        aliases_opt,
                         event_timestamp.timestamp_micros(),
                         event_data_json,
                         envelope.created_at.timestamp_micros(),
@@ -490,6 +498,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
         HostEvent::HostCreated {
             ip_address,
             hostname,
+            aliases,
             comment,
             tags,
             created_at,
@@ -500,10 +509,14 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             Some(serde_json::to_string(tags).map_err(|e| {
                 StorageError::InvalidData(format!("failed to serialize tags: {}", e))
             })?),
+            Some(serde_json::to_string(aliases).map_err(|e| {
+                StorageError::InvalidData(format!("failed to serialize aliases: {}", e))
+            })?),
             *created_at,
             EventData {
                 comment: comment.clone(),
                 tags: Some(tags.clone()),
+                aliases: Some(aliases.clone()),
                 ..Default::default()
             },
         )),
@@ -513,6 +526,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             changed_at,
         } => Ok((
             Some(new_ip.clone()),
+            None,
             None,
             None,
             None,
@@ -531,6 +545,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             Some(new_hostname.clone()),
             None,
             None,
+            None,
             *changed_at,
             EventData {
                 previous_hostname: Some(old_hostname.clone()),
@@ -545,6 +560,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             None,
             None,
             new_comment.clone(),
+            None,
             None,
             *updated_at,
             EventData {
@@ -564,10 +580,30 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             Some(serde_json::to_string(new_tags).map_err(|e| {
                 StorageError::InvalidData(format!("failed to serialize tags: {}", e))
             })?),
+            None,
             *modified_at,
             EventData {
                 tags: Some(new_tags.clone()),
                 previous_tags: Some(old_tags.clone()),
+                ..Default::default()
+            },
+        )),
+        HostEvent::AliasesModified {
+            old_aliases,
+            new_aliases,
+            modified_at,
+        } => Ok((
+            None,
+            None,
+            None,
+            None,
+            Some(serde_json::to_string(new_aliases).map_err(|e| {
+                StorageError::InvalidData(format!("failed to serialize aliases: {}", e))
+            })?),
+            *modified_at,
+            EventData {
+                aliases: Some(new_aliases.clone()),
+                previous_aliases: Some(old_aliases.clone()),
                 ..Default::default()
             },
         )),
@@ -579,6 +615,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
         } => Ok((
             Some(ip_address.clone()),
             Some(hostname.clone()),
+            None,
             None,
             None,
             *deleted_at,
@@ -615,6 +652,7 @@ fn reconstruct_event(
             Ok(HostEvent::HostCreated {
                 ip_address: ip,
                 hostname: host,
+                aliases: event_data.aliases.clone().unwrap_or_default(),
                 comment,
                 tags,
                 created_at: event_timestamp,
@@ -685,6 +723,16 @@ fn reconstruct_event(
             Ok(HostEvent::TagsModified {
                 old_tags,
                 new_tags,
+                modified_at: event_timestamp,
+            })
+        }
+        "AliasesModified" => {
+            let old_aliases = event_data.previous_aliases.clone().unwrap_or_default();
+            let new_aliases = event_data.aliases.clone().unwrap_or_default();
+
+            Ok(HostEvent::AliasesModified {
+                old_aliases,
+                new_aliases,
                 modified_at: event_timestamp,
             })
         }
