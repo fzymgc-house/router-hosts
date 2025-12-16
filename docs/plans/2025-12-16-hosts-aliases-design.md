@@ -120,25 +120,27 @@ message AliasesUpdate {
 
 ### Protobuf Changes (`proto/router_hosts/v1/hosts.proto`)
 
+Field numbers preserve wire compatibility with existing messages:
+
 ```protobuf
 message HostEntry {
     string id = 1;
     string ip_address = 2;
     string hostname = 3;
-    repeated string aliases = 4;    // NEW
-    optional string comment = 5;
-    repeated string tags = 6;
-    google.protobuf.Timestamp created_at = 7;
-    google.protobuf.Timestamp updated_at = 8;
-    string version = 9;
+    optional string comment = 4;      // unchanged
+    repeated string tags = 5;         // unchanged
+    google.protobuf.Timestamp created_at = 6;
+    google.protobuf.Timestamp updated_at = 7;
+    string version = 8;
+    repeated string aliases = 9;      // NEW - field 9 to preserve compatibility
 }
 
-message CreateHostRequest {
+message AddHostRequest {
     string ip_address = 1;
     string hostname = 2;
-    repeated string aliases = 3;    // NEW
-    optional string comment = 4;
-    repeated string tags = 5;
+    optional string comment = 3;      // unchanged
+    repeated string tags = 4;         // unchanged
+    repeated string aliases = 5;      // NEW - field 5
 }
 
 // Wrapper messages for optional repeated field semantics in updates
@@ -155,14 +157,15 @@ message UpdateHostRequest {
     string id = 1;
     optional string ip_address = 2;
     optional string hostname = 3;
-    AliasesUpdate aliases = 4;      // NEW - wrapper for optional semantics
-    optional string comment = 5;
-    TagsUpdate tags = 6;            // CHANGED - now uses wrapper (breaking change)
-    optional string expected_version = 7;
+    optional string comment = 4;      // unchanged
+    // Field 5 deprecated: was `repeated string tags`
+    optional string expected_version = 6;
+    AliasesUpdate aliases = 7;        // NEW
+    TagsUpdate tags = 8;              // NEW wrapper (replaces field 5)
 }
 ```
 
-**Note:** The `TagsUpdate` wrapper is a breaking change from the previous `repeated string tags` pattern. This aligns tags with aliases for consistent update semantics.
+**Breaking Change:** `UpdateHostRequest.tags` changes from `repeated string tags = 5` to `TagsUpdate tags = 8`. Clients must update to use the wrapper message.
 
 ### CLI Changes
 
@@ -225,7 +228,7 @@ if aliases.contains(&hostname.to_string()) {
 let mut seen = HashSet::new();
 for alias in &aliases {
     if !seen.insert(alias.clone()) {
-        warn!("Duplicate alias '{}' in entry, skipping duplicate", alias);
+        return Err(ParseError::DuplicateAlias(alias.clone()));
     }
 }
 ```
@@ -284,37 +287,55 @@ CREATE TABLE IF NOT EXISTS hosts (
 );
 ```
 
-### Event Sourcing (`types.rs`)
+### Event Sourcing (`router-hosts-storage/src/types.rs`)
 
-Aliases are carried in the existing event types - no new event variant needed:
+The storage layer uses a tagged enum for events. Add `aliases` to `HostCreated` and new `AliasesModified` variant:
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostCreatedPayload {
-    pub ip_address: String,
-    pub hostname: String,
-    #[serde(default)]  // Backward compat: old events without aliases = empty vec
-    pub aliases: Vec<String>,
-    pub comment: Option<String>,
-    pub tags: Vec<String>,
-}
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum HostEvent {
+    /// A new host entry was created
+    HostCreated {
+        ip_address: String,
+        hostname: String,
+        #[serde(default)]  // Backward compat: old events = empty vec
+        aliases: Vec<String>,
+        comment: Option<String>,
+        tags: Vec<String>,
+        created_at: DateTime<Utc>,
+    },
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct HostUpdatedPayload {
-    pub ip_address: Option<String>,
-    pub hostname: Option<String>,
-    pub aliases: Option<Vec<String>>,  // None = unchanged, Some([]) = clear
-    pub comment: Option<Option<String>>,
-    pub tags: Option<Vec<String>>,
+    /// Host IP address was changed
+    IpAddressChanged { /* ... existing ... */ },
+
+    /// Host hostname was changed
+    HostnameChanged { /* ... existing ... */ },
+
+    /// Host comment was updated
+    CommentUpdated { /* ... existing ... */ },
+
+    /// Host tags were modified
+    TagsModified { /* ... existing ... */ },
+
+    /// Host aliases were modified (NEW)
+    AliasesModified {
+        old_aliases: Vec<String>,
+        new_aliases: Vec<String>,
+        modified_at: DateTime<Utc>,
+    },
+
+    /// Host entry was deleted
+    HostDeleted { /* ... existing ... */ },
 }
 ```
 
 **Event replay behavior:**
-- Old `HostCreated` events (pre-alias): `#[serde(default)]` deserializes to `aliases: vec![]`
-- Old `HostUpdated` events: Missing `aliases` field deserializes to `None` (preserve existing)
+- Old `HostCreated` events (pre-alias): `#[serde(default)]` deserializes `aliases` to `vec![]`
+- `AliasesModified` events only created when aliases change (like `TagsModified`)
 - No migration required - event log remains unchanged
 
-**Rationale:** Aliases are a property of the host entry, not a separate entity. Using existing events maintains the simple event model and avoids event schema versioning complexity.
+**Update `event_type()` and `occurred_at()` methods** to handle the new variant.
 
 ## Testing Strategy
 
@@ -331,7 +352,7 @@ pub struct HostUpdatedPayload {
 #[test] fn test_import_hosts_with_aliases()
 #[test] fn test_import_hosts_without_aliases_unchanged()
 #[test] fn test_import_handles_comment_with_hash_in_text()
-#[test] fn test_import_warns_on_duplicate_aliases_in_entry()
+#[test] fn test_import_rejects_duplicate_aliases_in_entry()
 
 // Export generation
 #[test] fn test_hosts_file_includes_aliases()
