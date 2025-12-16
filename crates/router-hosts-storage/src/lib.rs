@@ -111,3 +111,22 @@ pub async fn create_storage(
     storage.initialize().await?;
     Ok(storage)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_create_storage_duckdb_memory() {
+        let config = StorageConfig::from_url("duckdb://:memory:").unwrap();
+        let storage = create_storage(&config).await.unwrap();
+        assert!(storage.health_check().await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_create_storage_invalid_backend() {
+        // Test that parsing fails for unknown backend
+        let result = StorageConfig::from_url("unknown://test");
+        assert!(result.is_err());
+    }
+}

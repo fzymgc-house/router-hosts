@@ -54,9 +54,6 @@ jobs:
             - name: Build
               run: task build
 
-            - name: Run tests
-              run: task test:unit
-
             - name: Run PostgreSQL backend tests
               run: task test:postgres
 
@@ -69,8 +66,19 @@ jobs:
             - name: Run E2E tests
               run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
-            # TODO: Enable test coverage enforcement once implementation begins
-            # CLAUDE.md mandates ≥80% coverage, but deferred for skeleton PR
-            # Uncomment when ready:
-            # - name: Check test coverage
-            #   run: task test:coverage
+            - name: Install cargo-tarpaulin
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-tarpaulin
+
+            - name: Check test coverage (≥80% required)
+              # Coverage runs all tests with instrumentation enabled
+              run: task test:coverage:ci
+
+            - name: Upload coverage report
+              uses: actions/upload-artifact@v4
+              if: always()
+              with:
+                  name: coverage-report
+                  path: coverage/
+                  retention-days: 14

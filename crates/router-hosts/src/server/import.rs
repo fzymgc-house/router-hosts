@@ -406,4 +406,88 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].comment, Some("Line 1\nLine 2".to_string()));
     }
+
+    #[test]
+    fn test_import_format_from_str() {
+        assert_eq!(
+            "hosts".parse::<ImportFormat>().unwrap(),
+            ImportFormat::Hosts
+        );
+        assert_eq!(
+            "HOSTS".parse::<ImportFormat>().unwrap(),
+            ImportFormat::Hosts
+        );
+        assert_eq!("".parse::<ImportFormat>().unwrap(), ImportFormat::Hosts);
+        assert_eq!("json".parse::<ImportFormat>().unwrap(), ImportFormat::Json);
+        assert_eq!("JSON".parse::<ImportFormat>().unwrap(), ImportFormat::Json);
+        assert_eq!("csv".parse::<ImportFormat>().unwrap(), ImportFormat::Csv);
+        assert_eq!("CSV".parse::<ImportFormat>().unwrap(), ImportFormat::Csv);
+    }
+
+    #[test]
+    fn test_import_format_from_str_invalid() {
+        let result = "invalid".parse::<ImportFormat>();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_import_format_display() {
+        let err = InvalidImportFormat;
+        assert_eq!(err.to_string(), "invalid import format");
+    }
+
+    #[test]
+    fn test_parse_error_display() {
+        let err = ParseError::InvalidLine {
+            line: 5,
+            message: "Missing IP".to_string(),
+        };
+        assert!(err.to_string().contains("5"));
+        assert!(err.to_string().contains("Missing IP"));
+
+        let err = ParseError::InvalidUtf8;
+        assert!(err.to_string().contains("UTF-8"));
+
+        let err = ParseError::JsonError {
+            line: 3,
+            message: "parse failed".to_string(),
+        };
+        assert!(err.to_string().contains("3"));
+
+        let err = ParseError::CsvError("csv failed".to_string());
+        assert!(err.to_string().contains("csv failed"));
+    }
+
+    #[test]
+    fn test_parse_invalid_utf8() {
+        let invalid_utf8 = vec![0xff, 0xfe];
+        let result = parse_import(&invalid_utf8, ImportFormat::Hosts);
+        assert!(matches!(result, Err(ParseError::InvalidUtf8)));
+    }
+
+    #[test]
+    fn test_parse_hosts_missing_hostname() {
+        let input = b"192.168.1.10\n";
+        let result = parse_import(input, ImportFormat::Hosts);
+        assert!(result.is_err());
+        match result {
+            Err(ParseError::InvalidLine { line, message }) => {
+                assert_eq!(line, 1);
+                assert!(message.contains("hostname"));
+            }
+            _ => panic!("Expected InvalidLine error"),
+        }
+    }
+
+    #[test]
+    fn test_parse_json_invalid() {
+        let input = b"{invalid json}";
+        let result = parse_import(input, ImportFormat::Json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_import_format_default() {
+        assert_eq!(ImportFormat::default(), ImportFormat::Hosts);
+    }
 }

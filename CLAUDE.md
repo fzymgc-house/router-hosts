@@ -142,9 +142,11 @@ open coverage/index.html
 cargo tarpaulin --workspace --fail-under 80
 ```
 
-**Exemptions:**
+**Exemptions (excluded from coverage calculation):**
 - Generated protobuf code (in `target/`)
 - `main.rs` entry points (minimal logic only)
+- `client/grpc.rs` - gRPC client wrapper (requires live server, tested by E2E)
+- `server/mod.rs` - gRPC server impl (requires network binding, tested by E2E)
 - Trivial getters/setters (if any exist)
 - Mark untestable code with `#[cfg(not(tarpaulin_include))]`
 
@@ -706,6 +708,7 @@ Core dependencies (see Cargo.toml for versions):
 - `serde` + `toml` - config
 - `rustls` - TLS
 - `tracing` - logging
+- `proptest` - property-based testing
 
 **Note on Protocol Buffers:** The project uses `protobuf-src` to provide a bundled
 Protocol Buffers compiler (`protoc`), eliminating the need for system installation.

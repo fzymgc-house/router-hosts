@@ -527,4 +527,24 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
         let url = config.database.storage_url().unwrap();
         assert_eq!(url, "duckdb://:memory:");
     }
+
+    #[test]
+    fn test_config_error_display() {
+        // Test error display for various error variants
+        let err = ConfigError::MissingHostsFilePath;
+        assert!(err.to_string().contains("hosts_file_path"));
+
+        let err = ConfigError::MissingBindAddress;
+        assert!(err.to_string().contains("bind_address"));
+
+        let err = ConfigError::InsecureConfig("test insecure".into());
+        assert!(err.to_string().contains("test insecure"));
+    }
+
+    #[test]
+    fn test_retention_config_default() {
+        let retention = RetentionConfig::default();
+        assert_eq!(retention.max_snapshots, 50);
+        assert_eq!(retention.max_age_days, 30);
+    }
 }

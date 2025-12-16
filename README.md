@@ -1,5 +1,9 @@
 # router-hosts
 
+[![CI](https://github.com/fzymgc-house/router-hosts/actions/workflows/ci.yml/badge.svg)](https://github.com/fzymgc-house/router-hosts/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-%E2%89%A580%25-green)](docs/test-coverage-audit.md)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Rust CLI tool for managing DNS host entries on routers via gRPC.
 
 ## Overview

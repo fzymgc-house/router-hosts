@@ -251,4 +251,103 @@ mod tests {
         let failures = executor.run_failure(10, "test error").await;
         assert_eq!(failures, 1, "Should report 1 failed hook out of 3");
     }
+
+    /// Test that ROUTER_HOSTS_ENTRY_COUNT environment variable is set correctly
+    #[tokio::test]
+    async fn test_entry_count_env_var() {
+        let executor = HookExecutor::new(
+            vec!["test \"$ROUTER_HOSTS_ENTRY_COUNT\" = \"42\"".to_string()],
+            vec![],
+            5,
+        );
+        let failures = executor.run_success(42).await;
+        assert_eq!(
+            failures, 0,
+            "Hook should succeed with correct entry count env var"
+        );
+    }
+
+    /// Test all environment variables are set correctly for success hooks
+    #[tokio::test]
+    async fn test_all_env_vars_success_hook() {
+        // This script checks all env vars are set correctly
+        let script = r#"
+            test "$ROUTER_HOSTS_EVENT" = "success" && \
+            test "$ROUTER_HOSTS_ENTRY_COUNT" = "100" && \
+            test -z "$ROUTER_HOSTS_ERROR"
+        "#;
+        let executor = HookExecutor::new(vec![script.to_string()], vec![], 5);
+        let failures = executor.run_success(100).await;
+        assert_eq!(
+            failures, 0,
+            "All env vars should be set correctly for success"
+        );
+    }
+
+    /// Test all environment variables are set correctly for failure hooks
+    #[tokio::test]
+    async fn test_all_env_vars_failure_hook() {
+        // This script checks all env vars are set correctly
+        let script = r#"
+            test "$ROUTER_HOSTS_EVENT" = "failure" && \
+            test "$ROUTER_HOSTS_ENTRY_COUNT" = "50" && \
+            test "$ROUTER_HOSTS_ERROR" = "Database connection failed"
+        "#;
+        let executor = HookExecutor::new(vec![], vec![script.to_string()], 5);
+        let failures = executor.run_failure(50, "Database connection failed").await;
+        assert_eq!(
+            failures, 0,
+            "All env vars should be set correctly for failure"
+        );
+    }
+
+    /// Test hook timeout returns correct failure count
+    #[tokio::test]
+    async fn test_hook_timeout_returns_failure() {
+        let executor = HookExecutor::new(vec!["sleep 10".to_string()], vec![], 1);
+        let failures = executor.run_success(10).await;
+        assert_eq!(failures, 1, "Timed out hook should count as failure");
+    }
+
+    /// Test hooks run sequentially (order preserved)
+    #[tokio::test]
+    async fn test_hooks_run_sequentially() {
+        // Create a temp file to track execution order
+        let temp_dir = std::env::temp_dir();
+        let order_file = temp_dir.join("hook_order_test");
+
+        // Clean up from previous runs
+        let _ = std::fs::remove_file(&order_file);
+
+        // Use printf for portable output without newlines
+        let executor = HookExecutor::new(
+            vec![
+                format!("printf '1' >> {}", order_file.display()),
+                format!("printf '2' >> {}", order_file.display()),
+                format!("printf '3' >> {}", order_file.display()),
+            ],
+            vec![],
+            5,
+        );
+
+        let failures = executor.run_success(10).await;
+        assert_eq!(failures, 0, "All hooks should succeed");
+
+        // Verify order
+        let content = std::fs::read_to_string(&order_file).unwrap_or_default();
+        assert_eq!(content, "123", "Hooks should run in order");
+
+        // Cleanup
+        let _ = std::fs::remove_file(&order_file);
+    }
+
+    #[test]
+    fn test_hook_error_display() {
+        let err = HookError::Timeout(30);
+        assert!(err.to_string().contains("30"));
+
+        let err = HookError::Failed(1, "test cmd".to_string());
+        assert!(err.to_string().contains("1"));
+        assert!(err.to_string().contains("test cmd"));
+    }
 }

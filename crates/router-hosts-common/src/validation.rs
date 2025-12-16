@@ -80,6 +80,165 @@ pub fn validate_hostname(hostname: &str) -> ValidationResult<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    // ==========================================================================
+    // Property-based tests with proptest
+    // ==========================================================================
+
+    proptest! {
+        /// Any valid IPv4 address string should parse successfully
+        #[test]
+        fn prop_valid_ipv4_parses(
+            a in 0u8..=255,
+            b in 0u8..=255,
+            c in 0u8..=255,
+            d in 0u8..=255,
+        ) {
+            let ip = format!("{}.{}.{}.{}", a, b, c, d);
+            prop_assert!(validate_ip_address(&ip).is_ok(), "Failed to validate: {}", ip);
+        }
+
+        /// Any valid full IPv6 address should parse successfully
+        #[test]
+        fn prop_valid_ipv6_parses(
+            a in 0u16..=0xFFFF,
+            b in 0u16..=0xFFFF,
+            c in 0u16..=0xFFFF,
+            d in 0u16..=0xFFFF,
+            e in 0u16..=0xFFFF,
+            f in 0u16..=0xFFFF,
+            g in 0u16..=0xFFFF,
+            h in 0u16..=0xFFFF,
+        ) {
+            let ip = format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", a, b, c, d, e, f, g, h);
+            prop_assert!(validate_ip_address(&ip).is_ok(), "Failed to validate: {}", ip);
+        }
+
+        /// Compressed IPv6 addresses (using ::) should parse successfully
+        #[test]
+        fn prop_compressed_ipv6_parses(
+            prefix in 0u16..=0xFFFF,
+            suffix in 0u16..=0xFFFF,
+        ) {
+            // Test :: compression in middle (e.g., fe80::1)
+            let ip_middle = format!("{:x}::{:x}", prefix, suffix);
+            prop_assert!(validate_ip_address(&ip_middle).is_ok(), "Failed middle compression: {}", ip_middle);
+
+            // Test leading :: (e.g., ::1, ::ffff)
+            let ip_leading = format!("::{:x}", suffix);
+            prop_assert!(validate_ip_address(&ip_leading).is_ok(), "Failed leading compression: {}", ip_leading);
+
+            // Test trailing :: (e.g., fe80::)
+            let ip_trailing = format!("{:x}::", prefix);
+            prop_assert!(validate_ip_address(&ip_trailing).is_ok(), "Failed trailing compression: {}", ip_trailing);
+        }
+
+        /// Valid single-label hostnames (1-63 alphanumeric chars, no leading/trailing hyphen)
+        #[test]
+        fn prop_valid_single_label_hostname(
+            // Start with alphanumeric
+            first in "[a-zA-Z0-9]",
+            // Middle can be alphanumeric or hyphens (0-61 chars to stay under 63 total)
+            middle in "[a-zA-Z0-9-]{0,61}",
+        ) {
+            // Build hostname ensuring no trailing hyphen
+            let hostname = if middle.is_empty() {
+                first.to_string()
+            } else if middle.ends_with('-') {
+                // Ensure no trailing hyphen by appending alphanumeric
+                format!("{}{}a", first, middle)
+            } else {
+                format!("{}{}", first, middle)
+            };
+
+            // Skip if too long (edge case from middle + suffix)
+            if hostname.len() <= 63 {
+                prop_assert!(
+                    validate_hostname(&hostname).is_ok(),
+                    "Failed to validate single label: {}",
+                    hostname
+                );
+            }
+        }
+
+        /// Valid multi-label hostnames (e.g., sub.domain.com)
+        #[test]
+        fn prop_valid_multi_label_hostname(
+            label1 in "[a-zA-Z0-9][a-zA-Z0-9]{0,10}",
+            label2 in "[a-zA-Z0-9][a-zA-Z0-9]{0,10}",
+            label3 in "[a-zA-Z0-9][a-zA-Z0-9]{0,5}",
+        ) {
+            let hostname = format!("{}.{}.{}", label1, label2, label3);
+            prop_assert!(
+                validate_hostname(&hostname).is_ok(),
+                "Failed to validate multi-label: {}",
+                hostname
+            );
+        }
+
+        /// IP validation is consistent (same input always gives same result)
+        #[test]
+        fn prop_ip_validation_consistent(ip in ".*") {
+            let result1 = validate_ip_address(&ip).is_ok();
+            let result2 = validate_ip_address(&ip).is_ok();
+            prop_assert_eq!(result1, result2, "Inconsistent validation for: {}", ip);
+        }
+
+        /// Hostname validation is consistent (same input always gives same result)
+        #[test]
+        fn prop_hostname_validation_consistent(hostname in ".*") {
+            let result1 = validate_hostname(&hostname).is_ok();
+            let result2 = validate_hostname(&hostname).is_ok();
+            prop_assert_eq!(result1, result2, "Inconsistent validation for: {}", hostname);
+        }
+
+        /// Empty strings always fail IP validation
+        #[test]
+        fn prop_empty_ip_fails(spaces in " *") {
+            prop_assert!(
+                validate_ip_address(&spaces).is_err(),
+                "Empty/whitespace should fail: '{}'",
+                spaces
+            );
+        }
+
+        /// Hostnames with underscores always fail (common mistake)
+        #[test]
+        fn prop_underscore_hostname_fails(
+            prefix in "[a-z]{1,5}",
+            suffix in "[a-z]{1,5}",
+        ) {
+            let hostname = format!("{}_{}",  prefix, suffix);
+            prop_assert!(
+                validate_hostname(&hostname).is_err(),
+                "Underscore hostname should fail: {}",
+                hostname
+            );
+        }
+
+        /// Hostnames exceeding 253 chars always fail
+        #[test]
+        fn prop_oversized_hostname_fails(
+            // Generate labels that will exceed 253 chars when combined
+            label in "[a-z]{60,63}",
+        ) {
+            // Create a hostname > 253 chars using repeated labels
+            let hostname = format!("{}.{}.{}.{}.{}", label, label, label, label, label);
+            if hostname.len() > 253 {
+                prop_assert!(
+                    validate_hostname(&hostname).is_err(),
+                    "Oversized hostname should fail: {} (len={})",
+                    hostname,
+                    hostname.len()
+                );
+            }
+        }
+    }
+
+    // ==========================================================================
+    // Traditional unit tests
+    // ==========================================================================
 
     #[test]
     fn test_valid_ipv4_addresses() {

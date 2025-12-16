@@ -181,4 +181,159 @@ mod tests {
         // Cleanup
         let _ = fs::remove_file(&hosts_path).await;
     }
+
+    /// Test that atomic write doesn't leave .tmp files after successful write
+    #[tokio::test]
+    async fn test_atomic_write_cleans_up_tmp_file() {
+        let tmp_dir = std::env::temp_dir();
+        let hosts_path = tmp_dir.join("test_hosts_atomic_cleanup");
+        let tmp_path = hosts_path.with_extension("tmp");
+
+        // Ensure clean state
+        let _ = fs::remove_file(&hosts_path).await;
+        let _ = fs::remove_file(&tmp_path).await;
+
+        let gen = HostsFileGenerator::new(&hosts_path);
+        gen.atomic_write("test content\n").await.unwrap();
+
+        // Main file should exist
+        assert!(
+            fs::metadata(&hosts_path).await.is_ok(),
+            "Main file should exist"
+        );
+
+        // Temp file should NOT exist after successful write
+        assert!(
+            fs::metadata(&tmp_path).await.is_err(),
+            "Temp file should be cleaned up after successful write"
+        );
+
+        // Cleanup
+        let _ = fs::remove_file(&hosts_path).await;
+    }
+
+    /// Test that atomic write overwrites existing file content completely
+    #[tokio::test]
+    async fn test_atomic_write_overwrites_existing() {
+        let tmp_dir = std::env::temp_dir();
+        let hosts_path = tmp_dir.join("test_hosts_atomic_overwrite");
+
+        // Create initial file
+        fs::write(&hosts_path, "old content\n").await.unwrap();
+
+        let gen = HostsFileGenerator::new(&hosts_path);
+        gen.atomic_write("new content\n").await.unwrap();
+
+        let content = fs::read_to_string(&hosts_path).await.unwrap();
+        assert_eq!(
+            content, "new content\n",
+            "Content should be completely replaced"
+        );
+
+        // Cleanup
+        let _ = fs::remove_file(&hosts_path).await;
+    }
+
+    /// Test that multiple sequential writes work correctly
+    #[tokio::test]
+    async fn test_atomic_write_multiple_sequential() {
+        let tmp_dir = std::env::temp_dir();
+        let hosts_path = tmp_dir.join("test_hosts_atomic_seq");
+
+        let gen = HostsFileGenerator::new(&hosts_path);
+
+        // Multiple sequential writes
+        for i in 1..=5 {
+            let content = format!("content version {}\n", i);
+            gen.atomic_write(&content).await.unwrap();
+
+            let read_content = fs::read_to_string(&hosts_path).await.unwrap();
+            assert_eq!(read_content, content, "Write {} should succeed", i);
+        }
+
+        // Cleanup
+        let _ = fs::remove_file(&hosts_path).await;
+    }
+
+    /// Test atomic write with Unicode content
+    #[tokio::test]
+    async fn test_atomic_write_unicode() {
+        let tmp_dir = std::env::temp_dir();
+        let hosts_path = tmp_dir.join("test_hosts_atomic_unicode");
+
+        let gen = HostsFileGenerator::new(&hosts_path);
+        let content = "192.168.1.1\tserver.local\t# 日本語コメント 🏠\n";
+        gen.atomic_write(content).await.unwrap();
+
+        let read_content = fs::read_to_string(&hosts_path).await.unwrap();
+        assert_eq!(read_content, content);
+
+        // Cleanup
+        let _ = fs::remove_file(&hosts_path).await;
+    }
+
+    /// Test format_hosts_file with various tag and comment combinations
+    #[test]
+    fn test_format_hosts_file_metadata_combinations() {
+        let gen = HostsFileGenerator::new("/tmp/hosts");
+
+        // Entry with only tags (no comment)
+        let entries_tags_only = vec![HostEntry {
+            id: ulid::Ulid::new(),
+            ip_address: "192.168.1.1".to_string(),
+            hostname: "tagged.local".to_string(),
+            comment: None,
+            tags: vec!["prod".to_string(), "web".to_string()],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+        }];
+
+        let content = gen.format_hosts_file(&entries_tags_only);
+        assert!(
+            content.contains("192.168.1.1\ttagged.local\t# [prod, web]"),
+            "Tags without comment should format as '# [tags]'"
+        );
+
+        // Entry with both comment and tags
+        let entries_both = vec![HostEntry {
+            id: ulid::Ulid::new(),
+            ip_address: "192.168.1.2".to_string(),
+            hostname: "both.local".to_string(),
+            comment: Some("My server".to_string()),
+            tags: vec!["dev".to_string()],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+        }];
+
+        let content = gen.format_hosts_file(&entries_both);
+        assert!(
+            content.contains("192.168.1.2\tboth.local\t# My server [dev]"),
+            "Comment and tags should be separated by space"
+        );
+
+        // Entry with neither comment nor tags
+        let entries_none = vec![HostEntry {
+            id: ulid::Ulid::new(),
+            ip_address: "192.168.1.3".to_string(),
+            hostname: "plain.local".to_string(),
+            comment: None,
+            tags: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+        }];
+
+        let content = gen.format_hosts_file(&entries_none);
+        assert!(
+            content.contains("192.168.1.3\tplain.local\n")
+                || content.ends_with("192.168.1.3\tplain.local\n"),
+            "Entry without metadata should have no trailing comment"
+        );
+        assert!(
+            !content.contains("192.168.1.3\tplain.local\t#"),
+            "Entry without metadata should NOT have comment marker"
+        );
+    }
 }
