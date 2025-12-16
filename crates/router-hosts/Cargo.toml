@@ -40,7 +40,9 @@ tracing-subscriber.workspace = true
 duckdb.workspace = true
 parking_lot.workspace = true
 csv.workspace = true
+rustls-pemfile.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 serial_test = "3"
+rcgen = "0.14"
