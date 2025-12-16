@@ -143,11 +143,18 @@ mod tests {
     use chrono::Utc;
     use ulid::Ulid;
 
-    fn make_entry(ip: &str, hostname: &str, comment: Option<&str>, tags: Vec<&str>) -> HostEntry {
+    fn make_entry(
+        ip: &str,
+        hostname: &str,
+        aliases: Vec<&str>,
+        comment: Option<&str>,
+        tags: Vec<&str>,
+    ) -> HostEntry {
         HostEntry {
             id: Ulid::new(),
             ip_address: ip.to_string(),
             hostname: hostname.to_string(),
+            aliases: aliases.into_iter().map(|s| s.to_string()).collect(),
             comment: comment.map(|s| s.to_string()),
             tags: tags.into_iter().map(|s| s.to_string()).collect(),
             created_at: Utc::now(),
@@ -158,28 +165,46 @@ mod tests {
 
     #[test]
     fn test_format_hosts_entry_simple() {
-        let entry = make_entry("192.168.1.10", "server.local", None, vec![]);
+        let entry = make_entry("192.168.1.10", "server.local", vec![], None, vec![]);
         let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.10\tserver.local\n");
     }
 
     #[test]
     fn test_format_hosts_entry_with_comment() {
-        let entry = make_entry("192.168.1.20", "nas.local", Some("NAS storage"), vec![]);
+        let entry = make_entry(
+            "192.168.1.20",
+            "nas.local",
+            vec![],
+            Some("NAS storage"),
+            vec![],
+        );
         let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.20\tnas.local\t# NAS storage\n");
     }
 
     #[test]
     fn test_format_hosts_entry_with_tags() {
-        let entry = make_entry("192.168.1.30", "iot.local", None, vec!["iot", "homelab"]);
+        let entry = make_entry(
+            "192.168.1.30",
+            "iot.local",
+            vec![],
+            None,
+            vec!["iot", "homelab"],
+        );
         let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.30\tiot.local\t# [iot, homelab]\n");
     }
 
     #[test]
     fn test_format_hosts_entry_with_comment_and_tags() {
-        let entry = make_entry("192.168.1.40", "db.local", Some("Database"), vec!["prod"]);
+        let entry = make_entry(
+            "192.168.1.40",
+            "db.local",
+            vec![],
+            Some("Database"),
+            vec!["prod"],
+        );
         let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.40\tdb.local\t# Database [prod]\n");
     }
@@ -196,7 +221,13 @@ mod tests {
 
     #[test]
     fn test_format_json_entry() {
-        let entry = make_entry("192.168.1.10", "server.local", Some("Test"), vec!["tag1"]);
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec![],
+            Some("Test"),
+            vec!["tag1"],
+        );
         let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
 
         // Parse back to verify it's valid JSON
@@ -209,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_format_json_entry_null_comment() {
-        let entry = make_entry("192.168.1.10", "server.local", None, vec![]);
+        let entry = make_entry("192.168.1.10", "server.local", vec![], None, vec![]);
         let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
 
         let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -218,21 +249,33 @@ mod tests {
 
     #[test]
     fn test_format_csv_entry_simple() {
-        let entry = make_entry("192.168.1.10", "server.local", None, vec![]);
+        let entry = make_entry("192.168.1.10", "server.local", vec![], None, vec![]);
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.10,server.local,,\n");
     }
 
     #[test]
     fn test_format_csv_entry_with_tags() {
-        let entry = make_entry("192.168.1.10", "server.local", None, vec!["tag1", "tag2"]);
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec![],
+            None,
+            vec!["tag1", "tag2"],
+        );
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.10,server.local,,tag1;tag2\n");
     }
 
     #[test]
     fn test_format_csv_entry_with_comma_in_comment() {
-        let entry = make_entry("192.168.1.10", "server.local", Some("Hello, world"), vec![]);
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec![],
+            Some("Hello, world"),
+            vec![],
+        );
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.10,server.local,\"Hello, world\",\n");
     }
@@ -248,6 +291,7 @@ mod tests {
         let entry = make_entry(
             "192.168.1.10",
             "server.local",
+            vec![],
             Some("He said \"hello\""),
             vec![],
         );
@@ -262,7 +306,7 @@ mod tests {
     #[test]
     fn test_format_hosts_entry_empty_comment() {
         // Empty string comment should not add comment marker
-        let entry = make_entry("192.168.1.10", "server.local", Some(""), vec![]);
+        let entry = make_entry("192.168.1.10", "server.local", vec![], Some(""), vec![]);
         let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.10\tserver.local\n");
     }
@@ -288,7 +332,13 @@ mod tests {
 
     #[test]
     fn test_format_csv_entry_with_newline_in_comment() {
-        let entry = make_entry("192.168.1.10", "server.local", Some("Line1\nLine2"), vec![]);
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec![],
+            Some("Line1\nLine2"),
+            vec![],
+        );
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
         // Should be quoted due to newline
         assert!(output.contains("\"Line1\nLine2\""));

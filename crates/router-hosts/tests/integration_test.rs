@@ -156,6 +156,7 @@ async fn test_add_and_get_host() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.10".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("Test server".to_string()),
             tags: vec!["test".to_string()],
         })
@@ -204,6 +205,7 @@ async fn test_update_host() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.20".to_string(),
             hostname: "old.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -219,8 +221,11 @@ async fn test_update_host() {
             id: host_id.clone(),
             ip_address: Some("192.168.1.21".to_string()),
             hostname: Some("new.local".to_string()),
+            aliases: None,
             comment: Some("Updated".to_string()),
-            tags: vec!["updated".to_string()],
+            tags: Some(router_hosts_common::proto::TagsUpdate {
+                values: vec!["updated".to_string()],
+            }),
             expected_version: None,
         })
         .await
@@ -243,6 +248,7 @@ async fn test_delete_host() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.30".to_string(),
             hostname: "delete.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -280,6 +286,7 @@ async fn test_list_hosts() {
             .add_host(AddHostRequest {
                 ip_address: format!("192.168.1.{}", 40 + i),
                 hostname: format!("host{}.local", i),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
             })
@@ -317,6 +324,7 @@ async fn test_search_hosts() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.50".to_string(),
             hostname: "webserver.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -327,6 +335,7 @@ async fn test_search_hosts() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.51".to_string(),
             hostname: "database.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -361,6 +370,7 @@ async fn test_export_hosts_hosts_format() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.10".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("Test server".to_string()),
             tags: vec!["test".to_string()],
         })
@@ -371,6 +381,7 @@ async fn test_export_hosts_hosts_format() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.20".to_string(),
             hostname: "nas.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -410,6 +421,7 @@ async fn test_export_hosts_json_format() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.10".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("Test".to_string()),
             tags: vec!["tag1".to_string()],
         })
@@ -466,6 +478,7 @@ async fn test_export_hosts_csv_format() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.10".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("Hello, world".to_string()),
             tags: vec!["tag1".to_string(), "tag2".to_string()],
         })
@@ -612,6 +625,7 @@ async fn test_import_hosts_via_grpc() {
         last_chunk: true,
         format: Some("hosts".to_string()),
         conflict_mode: Some("skip".to_string()),
+        force: Some(false),
     }];
 
     let response = client
@@ -655,6 +669,7 @@ async fn test_import_export_roundtrip() {
         .add_host(AddHostRequest {
             ip_address: "192.168.1.10".to_string(),
             hostname: "roundtrip.local".to_string(),
+            aliases: vec![],
             comment: Some("Roundtrip test".to_string()),
             tags: vec!["test".to_string()],
         })
@@ -700,6 +715,7 @@ async fn test_import_export_roundtrip() {
         last_chunk: true,
         format: Some("hosts".to_string()),
         conflict_mode: Some("skip".to_string()),
+        force: Some(false),
     }];
 
     let response = client
@@ -749,6 +765,7 @@ async fn test_import_hosts_json_format() {
         last_chunk: true,
         format: Some("json".to_string()),
         conflict_mode: Some("skip".to_string()),
+        force: Some(false),
     }];
 
     let response = client
@@ -796,6 +813,7 @@ async fn test_import_hosts_csv_format() {
         last_chunk: true,
         format: Some("csv".to_string()),
         conflict_mode: Some("skip".to_string()),
+        force: Some(false),
     }];
 
     let response = client
@@ -846,6 +864,7 @@ async fn test_import_conflict_mode_skip() {
         .add_host(AddHostRequest {
             ip_address: "192.168.50.1".to_string(),
             hostname: "skip-test.local".to_string(),
+            aliases: vec![],
             comment: Some("Original entry".to_string()),
             tags: vec!["original".to_string()],
         })
@@ -861,6 +880,7 @@ async fn test_import_conflict_mode_skip() {
         last_chunk: true,
         format: Some("hosts".to_string()),
         conflict_mode: Some("skip".to_string()),
+        force: Some(false),
     }];
 
     let response = client
@@ -901,6 +921,7 @@ async fn test_import_conflict_mode_replace() {
         .add_host(AddHostRequest {
             ip_address: "192.168.51.1".to_string(),
             hostname: "replace-test.local".to_string(),
+            aliases: vec![],
             comment: Some("Original entry".to_string()),
             tags: vec!["original".to_string()],
         })
@@ -916,6 +937,7 @@ async fn test_import_conflict_mode_replace() {
         last_chunk: true,
         format: Some("hosts".to_string()),
         conflict_mode: Some("replace".to_string()),
+        force: Some(false),
     }];
 
     let response = client
@@ -957,6 +979,7 @@ async fn test_import_conflict_mode_strict() {
         .add_host(AddHostRequest {
             ip_address: "192.168.52.1".to_string(),
             hostname: "strict-test.local".to_string(),
+            aliases: vec![],
             comment: Some("Original entry".to_string()),
             tags: vec![],
         })
@@ -971,6 +994,7 @@ async fn test_import_conflict_mode_strict() {
         last_chunk: true,
         format: Some("hosts".to_string()),
         conflict_mode: Some("strict".to_string()),
+        force: Some(false),
     }];
 
     let result = client.import_hosts(tokio_stream::iter(requests)).await;
@@ -993,6 +1017,7 @@ async fn test_import_invalid_conflict_mode_defaults_to_skip() {
         .add_host(AddHostRequest {
             ip_address: "192.168.53.1".to_string(),
             hostname: "default-test.local".to_string(),
+            aliases: vec![],
             comment: Some("Original".to_string()),
             tags: vec![],
         })
@@ -1007,6 +1032,7 @@ async fn test_import_invalid_conflict_mode_defaults_to_skip() {
         last_chunk: true,
         format: Some("hosts".to_string()),
         conflict_mode: None, // Not specified
+        force: Some(false),
     }];
 
     let response = client
@@ -1034,6 +1060,7 @@ async fn test_import_replace_mode_json_preserves_tags() {
         .add_host(AddHostRequest {
             ip_address: "192.168.54.1".to_string(),
             hostname: "json-replace.local".to_string(),
+            aliases: vec![],
             comment: Some("Original".to_string()),
             tags: vec!["old-tag".to_string()],
         })
@@ -1049,6 +1076,7 @@ async fn test_import_replace_mode_json_preserves_tags() {
         last_chunk: true,
         format: Some("json".to_string()),
         conflict_mode: Some("replace".to_string()),
+        force: Some(false),
     }];
 
     let response = client
@@ -1113,6 +1141,7 @@ async fn test_version_conflict_detection() {
         .add_host(AddHostRequest {
             ip_address: "192.168.100.1".to_string(),
             hostname: "conflict-test.local".to_string(),
+            aliases: vec![],
             comment: Some("Initial".to_string()),
             tags: vec![],
         })
@@ -1130,8 +1159,9 @@ async fn test_version_conflict_detection() {
             id: host_id.clone(),
             ip_address: Some("192.168.100.2".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Updated by client2".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: None, // No version check
         })
         .await
@@ -1143,8 +1173,9 @@ async fn test_version_conflict_detection() {
             id: host_id.clone(),
             ip_address: Some("192.168.100.3".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Updated by client1".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: Some(v1.clone()), // Stale version
         })
         .await;
@@ -1177,6 +1208,7 @@ async fn test_version_conflict_with_successful_retry() {
         .add_host(AddHostRequest {
             ip_address: "192.168.101.1".to_string(),
             hostname: "retry-test.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1193,8 +1225,9 @@ async fn test_version_conflict_with_successful_retry() {
             id: host_id.clone(),
             ip_address: Some("192.168.101.2".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Client2 update".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: None,
         })
         .await
@@ -1209,8 +1242,9 @@ async fn test_version_conflict_with_successful_retry() {
             id: host_id.clone(),
             ip_address: Some("192.168.101.3".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Client1 first attempt".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: Some(v1),
         })
         .await;
@@ -1232,8 +1266,9 @@ async fn test_version_conflict_with_successful_retry() {
             id: host_id.clone(),
             ip_address: Some("192.168.101.3".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Client1 retry".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: Some(current.entry.unwrap().version),
         })
         .await;
@@ -1256,6 +1291,7 @@ async fn test_version_conflict_multiple_rapid_conflicts() {
         .add_host(AddHostRequest {
             ip_address: "192.168.102.1".to_string(),
             hostname: "rapid-conflict.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1272,8 +1308,9 @@ async fn test_version_conflict_multiple_rapid_conflicts() {
             id: host_id.clone(),
             ip_address: Some("192.168.102.2".to_string()),
             hostname: None,
+            aliases: None,
             comment: None,
-            tags: vec![],
+            tags: None,
             expected_version: None,
         })
         .await
@@ -1285,8 +1322,9 @@ async fn test_version_conflict_multiple_rapid_conflicts() {
             id: host_id.clone(),
             ip_address: Some("192.168.102.3".to_string()),
             hostname: None,
+            aliases: None,
             comment: None,
-            tags: vec![],
+            tags: None,
             expected_version: None,
         })
         .await
@@ -1298,8 +1336,9 @@ async fn test_version_conflict_multiple_rapid_conflicts() {
             id: host_id.clone(),
             ip_address: Some("192.168.102.99".to_string()),
             hostname: None,
+            aliases: None,
             comment: None,
-            tags: vec![],
+            tags: None,
             expected_version: Some(v1),
         })
         .await;
@@ -1330,6 +1369,7 @@ async fn test_version_conflict_recursive_retry_simulation() {
         .add_host(AddHostRequest {
             ip_address: "192.168.103.1".to_string(),
             hostname: "recursive.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1346,8 +1386,9 @@ async fn test_version_conflict_recursive_retry_simulation() {
             id: host_id.clone(),
             ip_address: Some("192.168.103.2".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Update 1".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: None,
         })
         .await
@@ -1361,8 +1402,9 @@ async fn test_version_conflict_recursive_retry_simulation() {
             id: host_id.clone(),
             ip_address: Some("192.168.103.3".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Update 2".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: Some(v2),
         })
         .await
@@ -1374,8 +1416,9 @@ async fn test_version_conflict_recursive_retry_simulation() {
             id: host_id.clone(),
             ip_address: Some("192.168.103.99".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Client1 attempt".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: Some(v1),
         })
         .await;
@@ -1402,8 +1445,9 @@ async fn test_version_conflict_recursive_retry_simulation() {
             id: host_id.clone(),
             ip_address: Some("192.168.103.4".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Update 3".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: Some(v3.clone()),
         })
         .await
@@ -1415,8 +1459,9 @@ async fn test_version_conflict_recursive_retry_simulation() {
             id: host_id.clone(),
             ip_address: Some("192.168.103.99".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Client1 retry 1".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: Some(v3),
         })
         .await;
@@ -1441,8 +1486,9 @@ async fn test_version_conflict_recursive_retry_simulation() {
             id: host_id.clone(),
             ip_address: Some("192.168.103.99".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Client1 final retry".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: Some(current2.version),
         })
         .await;
@@ -1467,6 +1513,7 @@ async fn test_update_without_version_check_always_succeeds() {
         .add_host(AddHostRequest {
             ip_address: "192.168.104.1".to_string(),
             hostname: "no-version-check.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1482,8 +1529,9 @@ async fn test_update_without_version_check_always_succeeds() {
             id: host_id.clone(),
             ip_address: Some("192.168.104.2".to_string()),
             hostname: None,
+            aliases: None,
             comment: None,
-            tags: vec![],
+            tags: None,
             expected_version: None,
         })
         .await
@@ -1495,8 +1543,9 @@ async fn test_update_without_version_check_always_succeeds() {
             id: host_id.clone(),
             ip_address: Some("192.168.104.3".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("No version check".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: None, // No version check = last write wins
         })
         .await;
@@ -1529,6 +1578,7 @@ async fn test_create_snapshot_manual() {
         .add_host(AddHostRequest {
             ip_address: "192.168.200.1".to_string(),
             hostname: "snapshot-test-1.local".to_string(),
+            aliases: vec![],
             comment: Some("Test host 1".to_string()),
             tags: vec!["test".to_string()],
         })
@@ -1539,6 +1589,7 @@ async fn test_create_snapshot_manual() {
         .add_host(AddHostRequest {
             ip_address: "192.168.200.2".to_string(),
             hostname: "snapshot-test-2.local".to_string(),
+            aliases: vec![],
             comment: Some("Test host 2".to_string()),
             tags: vec!["test".to_string()],
         })
@@ -1572,6 +1623,7 @@ async fn test_list_snapshots() {
         .add_host(AddHostRequest {
             ip_address: "192.168.201.1".to_string(),
             hostname: "list-snapshot-test.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1643,6 +1695,7 @@ async fn test_list_snapshots_with_pagination() {
         .add_host(AddHostRequest {
             ip_address: "192.168.202.1".to_string(),
             hostname: "pagination-test.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1714,6 +1767,7 @@ async fn test_delete_snapshot() {
         .add_host(AddHostRequest {
             ip_address: "192.168.204.1".to_string(),
             hostname: "delete-snapshot-test.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1815,6 +1869,7 @@ async fn test_create_snapshot_with_empty_trigger() {
         .add_host(AddHostRequest {
             ip_address: "192.168.220.1".to_string(),
             hostname: "empty-trigger-test.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1858,6 +1913,7 @@ async fn test_create_snapshot_with_empty_name() {
         .add_host(AddHostRequest {
             ip_address: "192.168.221.1".to_string(),
             hostname: "empty-name-test.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -1946,6 +2002,7 @@ async fn test_rollback_to_snapshot_basic() {
         .add_host(AddHostRequest {
             ip_address: "192.168.210.1".to_string(),
             hostname: "rollback-test-1.local".to_string(),
+            aliases: vec![],
             comment: Some("Initial state".to_string()),
             tags: vec!["test".to_string()],
         })
@@ -1973,8 +2030,9 @@ async fn test_rollback_to_snapshot_basic() {
             id: host1_id.clone(),
             ip_address: Some("192.168.210.99".to_string()),
             hostname: None,
+            aliases: None,
             comment: Some("Modified after snapshot".to_string()),
-            tags: vec![],
+            tags: None,
             expected_version: None,
         })
         .await
@@ -1984,6 +2042,7 @@ async fn test_rollback_to_snapshot_basic() {
         .add_host(AddHostRequest {
             ip_address: "192.168.210.2".to_string(),
             hostname: "rollback-test-2.local".to_string(),
+            aliases: vec![],
             comment: Some("Added after snapshot".to_string()),
             tags: vec![],
         })
@@ -2084,6 +2143,7 @@ async fn test_rollback_creates_backup_snapshot() {
         .add_host(AddHostRequest {
             ip_address: "192.168.211.1".to_string(),
             hostname: "backup-test.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -2105,6 +2165,7 @@ async fn test_rollback_creates_backup_snapshot() {
         .add_host(AddHostRequest {
             ip_address: "192.168.211.2".to_string(),
             hostname: "modified.local".to_string(),
+            aliases: vec![],
             comment: Some("After snapshot".to_string()),
             tags: vec![],
         })
@@ -2175,6 +2236,7 @@ async fn test_rollback_preserves_tags_and_comments() {
         .add_host(AddHostRequest {
             ip_address: "192.168.212.1".to_string(),
             hostname: "tags-test.local".to_string(),
+            aliases: vec![],
             comment: Some("Important comment".to_string()),
             tags: vec!["production".to_string(), "critical".to_string()],
         })
@@ -2275,6 +2337,7 @@ async fn test_add_duplicate_host_returns_already_exists() {
         .add_host(AddHostRequest {
             ip_address: "10.99.99.1".to_string(),
             hostname: "duplicate-test.local".to_string(),
+            aliases: vec![],
             comment: Some("First entry".to_string()),
             tags: vec![],
         })
@@ -2286,6 +2349,7 @@ async fn test_add_duplicate_host_returns_already_exists() {
         .add_host(AddHostRequest {
             ip_address: "10.99.99.1".to_string(),
             hostname: "duplicate-test.local".to_string(),
+            aliases: vec![],
             comment: Some("Duplicate entry".to_string()),
             tags: vec!["different-tag".to_string()],
         })
@@ -2319,6 +2383,7 @@ async fn test_same_hostname_different_ip_allowed() {
         .add_host(AddHostRequest {
             ip_address: "10.98.98.1".to_string(),
             hostname: "shared-hostname.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -2330,6 +2395,7 @@ async fn test_same_hostname_different_ip_allowed() {
         .add_host(AddHostRequest {
             ip_address: "10.98.98.2".to_string(),
             hostname: "shared-hostname.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -2352,6 +2418,7 @@ async fn test_same_ip_different_hostname_allowed() {
         .add_host(AddHostRequest {
             ip_address: "10.97.97.1".to_string(),
             hostname: "first-hostname.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -2363,6 +2430,7 @@ async fn test_same_ip_different_hostname_allowed() {
         .add_host(AddHostRequest {
             ip_address: "10.97.97.1".to_string(),
             hostname: "second-hostname.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -2388,6 +2456,7 @@ async fn test_add_host_invalid_ip_returns_invalid_argument() {
         .add_host(AddHostRequest {
             ip_address: "not-an-ip-address".to_string(),
             hostname: "valid-hostname.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -2424,6 +2493,7 @@ async fn test_add_host_various_invalid_ips() {
             .add_host(AddHostRequest {
                 ip_address: ip.to_string(),
                 hostname: format!("test-{}.local", ip.replace(['.', ':', '/'], "-")),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
             })
@@ -2461,6 +2531,7 @@ async fn test_add_host_invalid_hostname_returns_invalid_argument() {
         .add_host(AddHostRequest {
             ip_address: "10.96.96.1".to_string(),
             hostname: "-invalid-hostname.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
         })
@@ -2497,6 +2568,7 @@ async fn test_add_host_various_invalid_hostnames() {
             .add_host(AddHostRequest {
                 ip_address: "10.95.95.1".to_string(),
                 hostname: hostname.to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
             })
@@ -2537,8 +2609,9 @@ async fn test_update_nonexistent_host_returns_not_found() {
             id: nonexistent_ulid.to_string(),
             ip_address: Some("10.94.94.1".to_string()),
             hostname: None,
+            aliases: None,
             comment: None,
-            tags: vec![],
+            tags: None,
             expected_version: None,
         })
         .await;

@@ -814,7 +814,6 @@ mod tests {
             .add_host(
                 "invalid-ip".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -830,7 +829,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -842,7 +840,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -858,7 +855,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -869,7 +865,6 @@ mod tests {
             .update_host(
                 entry.id,
                 Some("192.168.1.2".to_string()),
-                None,
                 None,
                 None,
                 None,
@@ -888,7 +883,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -909,7 +903,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "host1.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -920,7 +913,6 @@ mod tests {
             .add_host(
                 "192.168.1.2".to_string(),
                 "host2.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -939,7 +931,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "server.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -950,7 +941,6 @@ mod tests {
             .add_host(
                 "192.168.1.2".to_string(),
                 "client.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -969,7 +959,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "old.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -981,7 +970,6 @@ mod tests {
                 entry.id,
                 None,
                 Some("new.local".to_string()),
-                None,
                 None,
                 None,
                 None,
@@ -999,7 +987,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1012,7 +999,6 @@ mod tests {
                 None,
                 None,
                 Some(Some("Test comment".to_string())),
-                None,
                 None,
                 None,
             )
@@ -1029,7 +1015,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1039,7 +1024,6 @@ mod tests {
         let updated = handler
             .update_host(
                 entry.id,
-                None,
                 None,
                 None,
                 None,
@@ -1059,7 +1043,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1068,7 +1051,7 @@ mod tests {
 
         // Update with no actual changes
         let result = handler
-            .update_host(entry.id, None, None, None, None, None, None)
+            .update_host(entry.id, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -1091,7 +1074,7 @@ mod tests {
         let fake_id = Ulid::new();
 
         let result = handler
-            .update_host(fake_id, None, None, None, None, None, None)
+            .update_host(fake_id, None, None, None, None, None)
             .await;
         assert!(matches!(result, Err(CommandError::NotFound(_))));
     }
@@ -1104,7 +1087,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "invalid..hostname".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1122,7 +1104,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "host-a.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1133,7 +1114,6 @@ mod tests {
             .add_host(
                 "192.168.1.2".to_string(),
                 "host-b.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1146,7 +1126,6 @@ mod tests {
                 entry_a.id,
                 Some("192.168.1.2".to_string()),
                 Some("host-b.local".to_string()),
-                None,
                 None,
                 None,
                 None,
@@ -1167,7 +1146,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1179,7 +1157,6 @@ mod tests {
             .update_host(
                 entry.id,
                 Some("192.168.1.2".to_string()),
-                None,
                 None,
                 None,
                 None,
@@ -1201,7 +1178,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1218,7 +1194,6 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
                 Some(current_version),
             )
             .await
@@ -1231,7 +1206,6 @@ mod tests {
             .update_host(
                 entry.id,
                 Some("192.168.1.3".to_string()),
-                None,
                 None,
                 None,
                 None,
@@ -1253,7 +1227,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1271,7 +1244,6 @@ mod tests {
                 None,
                 None,
                 None,
-                None,
             )
             .await
             .unwrap();
@@ -1281,7 +1253,6 @@ mod tests {
             .update_host(
                 entry.id,
                 Some("192.168.1.3".to_string()),
-                None,
                 None,
                 None,
                 None,
@@ -1307,7 +1278,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1318,7 +1288,6 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.1".to_string(),
                 hostname: "existing.local".to_string(),
-                aliases: vec![],
                 comment: Some("New comment".to_string()),
                 tags: vec![],
                 line_number: 1,
@@ -1326,7 +1295,6 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.2".to_string(),
                 hostname: "new.local".to_string(),
-                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 2,
@@ -1363,7 +1331,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1373,7 +1340,6 @@ mod tests {
         let entries = vec![ParsedEntry {
             ip_address: "192.168.1.1".to_string(),
             hostname: "existing.local".to_string(),
-            aliases: vec![],
             comment: Some("Updated comment".to_string()),
             tags: vec!["updated".to_string()],
             line_number: 1,
@@ -1408,7 +1374,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )
@@ -1418,7 +1383,6 @@ mod tests {
         let entries = vec![ParsedEntry {
             ip_address: "192.168.1.1".to_string(),
             hostname: "existing.local".to_string(),
-            aliases: vec![],
             comment: None,
             tags: vec![],
             line_number: 1,
@@ -1440,7 +1404,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
-                vec![],
                 Some("Original comment".to_string()),
                 vec![],
             )
@@ -1452,7 +1415,6 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.1".to_string(),
                 hostname: "existing.local".to_string(),
-                aliases: vec![],
                 comment: Some("First update".to_string()),
                 tags: vec![],
                 line_number: 1,
@@ -1460,7 +1422,6 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.1".to_string(),
                 hostname: "existing.local".to_string(),
-                aliases: vec![],
                 comment: Some("Second update".to_string()),
                 tags: vec![],
                 line_number: 2,
@@ -1487,7 +1448,6 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
-                vec![],
                 Some("Same comment".to_string()),
                 vec!["tag1".to_string()],
             )
@@ -1498,7 +1458,6 @@ mod tests {
         let entries = vec![ParsedEntry {
             ip_address: "192.168.1.1".to_string(),
             hostname: "existing.local".to_string(),
-            aliases: vec![],
             comment: Some("Same comment".to_string()),
             tags: vec!["tag1".to_string()],
             line_number: 1,
@@ -1528,7 +1487,6 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.1".to_string(),
                 hostname: "valid.local".to_string(),
-                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 1,
@@ -1537,7 +1495,6 @@ mod tests {
             ParsedEntry {
                 ip_address: "not-an-ip".to_string(),
                 hostname: "badip.local".to_string(),
-                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 2,
@@ -1546,7 +1503,6 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.3".to_string(),
                 hostname: "bad_hostname".to_string(),
-                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 3,
@@ -1555,7 +1511,6 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.4".to_string(),
                 hostname: "valid2.local".to_string(),
-                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 4,
@@ -1661,7 +1616,6 @@ mod tests {
             .add_host(
                 "192.168.1.10".to_string(),
                 "test.local".to_string(),
-                vec![],
                 None,
                 vec![],
             )

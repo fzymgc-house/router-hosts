@@ -101,6 +101,7 @@ fn parse_hosts_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         entries.push(ParsedEntry {
             ip_address: ip_address.to_string(),
             hostname: hostname.to_string(),
+            aliases: vec![], // TODO: Task 9 - parse aliases from hosts format
             comment,
             tags,
             line_number,
@@ -187,6 +188,7 @@ fn parse_json_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         entries.push(ParsedEntry {
             ip_address: json_entry.ip_address,
             hostname: json_entry.hostname,
+            aliases: vec![], // TODO: Task 9 - parse aliases from JSON format
             comment: normalize_comment(json_entry.comment),
             tags: json_entry.tags,
             line_number,
@@ -249,6 +251,7 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         entries.push(ParsedEntry {
             ip_address,
             hostname,
+            aliases: vec![], // TODO: Task 9 - parse aliases from CSV format
             comment,
             tags,
             line_number,

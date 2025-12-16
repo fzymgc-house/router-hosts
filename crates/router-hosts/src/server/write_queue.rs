@@ -110,6 +110,7 @@ impl std::str::FromStr for ConflictMode {
 pub struct ParsedEntry {
     pub ip_address: String,
     pub hostname: String,
+    pub aliases: Vec<String>,
     pub comment: Option<String>,
     pub tags: Vec<String>,
     pub line_number: usize,
@@ -120,6 +121,7 @@ pub enum WriteCommand {
     AddHost {
         ip_address: String,
         hostname: String,
+        aliases: Vec<String>,
         comment: Option<String>,
         tags: Vec<String>,
         reply: oneshot::Sender<Result<HostEntry, crate::server::commands::CommandError>>,
@@ -129,6 +131,7 @@ pub enum WriteCommand {
         ip_address: Option<String>,
         hostname: Option<String>,
         comment: Option<Option<String>>,
+        aliases: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         expected_version: Option<String>,
         reply: oneshot::Sender<Result<HostEntry, crate::server::commands::CommandError>>,
@@ -209,6 +212,7 @@ impl WriteQueue {
         &self,
         ip_address: String,
         hostname: String,
+        aliases: Vec<String>,
         comment: Option<String>,
         tags: Vec<String>,
     ) -> Result<HostEntry, crate::server::commands::CommandError> {
@@ -218,6 +222,7 @@ impl WriteQueue {
             .send(WriteCommand::AddHost {
                 ip_address: ip_address.clone(),
                 hostname: hostname.clone(),
+                aliases,
                 comment,
                 tags,
                 reply: reply_tx,
@@ -255,6 +260,7 @@ impl WriteQueue {
         ip_address: Option<String>,
         hostname: Option<String>,
         comment: Option<Option<String>>,
+        aliases: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         expected_version: Option<String>,
     ) -> Result<HostEntry, crate::server::commands::CommandError> {
@@ -266,6 +272,7 @@ impl WriteQueue {
                 ip_address,
                 hostname,
                 comment,
+                aliases,
                 tags,
                 expected_version,
                 reply: reply_tx,
@@ -409,12 +416,15 @@ async fn write_worker(mut rx: mpsc::Receiver<WriteCommand>, handler: Arc<Command
             WriteCommand::AddHost {
                 ip_address,
                 hostname,
+                aliases,
                 comment,
                 tags,
                 reply,
             } => {
                 debug!(commands_processed, ip = %ip_address, hostname = %hostname, "Processing add_host");
-                let result = handler.add_host(ip_address, hostname, comment, tags).await;
+                let result = handler
+                    .add_host(ip_address, hostname, aliases, comment, tags)
+                    .await;
                 let elapsed = start.elapsed();
                 debug!(
                     elapsed_ms = elapsed.as_millis(),
@@ -430,13 +440,22 @@ async fn write_worker(mut rx: mpsc::Receiver<WriteCommand>, handler: Arc<Command
                 ip_address,
                 hostname,
                 comment,
+                aliases,
                 tags,
                 expected_version,
                 reply,
             } => {
                 debug!(commands_processed, id = %id, "Processing update_host");
                 let result = handler
-                    .update_host(id, ip_address, hostname, comment, tags, expected_version)
+                    .update_host(
+                        id,
+                        ip_address,
+                        hostname,
+                        comment,
+                        aliases,
+                        tags,
+                        expected_version,
+                    )
                     .await;
                 let elapsed = start.elapsed();
                 debug!(
@@ -556,6 +575,7 @@ mod tests {
                 wq.add_host(
                     format!("192.168.1.{}", i),
                     format!("host{}.local", i),
+                    vec![],
                     Some(format!("Host {}", i)),
                     vec![],
                 )
@@ -602,6 +622,7 @@ mod tests {
             wq1.add_host(
                 "192.168.1.1".to_string(),
                 "same.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -612,6 +633,7 @@ mod tests {
             wq2.add_host(
                 "192.168.1.1".to_string(),
                 "same.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -647,6 +669,7 @@ mod tests {
             .map(|i| ParsedEntry {
                 ip_address: format!("10.0.0.{}", i),
                 hostname: format!("batch1-host{}.local", i),
+                aliases: vec![],
                 comment: Some(format!("Batch 1 host {}", i)),
                 tags: vec!["batch1".to_string()],
                 line_number: i + 1,
@@ -657,6 +680,7 @@ mod tests {
             .map(|i| ParsedEntry {
                 ip_address: format!("10.0.1.{}", i),
                 hostname: format!("batch2-host{}.local", i),
+                aliases: vec![],
                 comment: Some(format!("Batch 2 host {}", i)),
                 tags: vec!["batch2".to_string()],
                 line_number: i + 1,
@@ -714,6 +738,7 @@ mod tests {
             .map(|i| ParsedEntry {
                 ip_address: format!("10.0.0.{}", i),
                 hostname: format!("shared-host{}.local", i),
+                aliases: vec![],
                 comment: Some("From batch 1".to_string()),
                 tags: vec!["batch1".to_string()],
                 line_number: i + 1,
@@ -724,6 +749,7 @@ mod tests {
             .map(|i| ParsedEntry {
                 ip_address: format!("10.0.0.{}", i), // Same IPs/hostnames as batch 1
                 hostname: format!("shared-host{}.local", i),
+                aliases: vec![],
                 comment: Some("From batch 2".to_string()),
                 tags: vec!["batch2".to_string()],
                 line_number: i + 1,
@@ -778,6 +804,7 @@ mod tests {
                 wq.add_host(
                     format!("192.168.{}.{}", i / 256, i % 256),
                     format!("host{}.local", i),
+                    vec![],
                     Some(format!("Host {}", i)),
                     vec![format!("batch{}", i / 50)],
                 )
@@ -836,6 +863,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "shared.local".to_string(),
+                vec![],
                 Some("Original comment".to_string()),
                 vec!["original".to_string()],
             )
@@ -846,6 +874,7 @@ mod tests {
         let entries1 = vec![ParsedEntry {
             ip_address: "192.168.1.1".to_string(),
             hostname: "shared.local".to_string(),
+            aliases: vec![],
             comment: Some("Comment from import 1".to_string()),
             tags: vec!["import1".to_string()],
             line_number: 1,
@@ -854,6 +883,7 @@ mod tests {
         let entries2 = vec![ParsedEntry {
             ip_address: "192.168.1.1".to_string(),
             hostname: "shared.local".to_string(),
+            aliases: vec![],
             comment: Some("Comment from import 2".to_string()),
             tags: vec!["import2".to_string()],
             line_number: 1,
@@ -916,6 +946,7 @@ mod tests {
             wq.add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )

@@ -47,6 +47,7 @@ pub async fn handle(
             let request = AddHostRequest {
                 ip_address: ip,
                 hostname,
+                aliases: vec![], // TODO: Task 8 - add CLI support
                 comment,
                 tags,
             };
@@ -79,7 +80,8 @@ pub async fn handle(
                 ip_address: ip.clone(),
                 hostname: hostname.clone(),
                 comment: comment.clone(),
-                tags: tags.as_ref().cloned().unwrap_or_default(),
+                aliases: None, // TODO: Task 8 - add CLI support for wrapper pattern
+                tags: None,    // TODO: Task 8 - add CLI support for wrapper pattern
                 expected_version: version.clone(),
             };
 
@@ -246,6 +248,7 @@ fn read_file_chunks(
             } else {
                 None
             },
+            force: None, // TODO: Task 9 - add --force flag support for strict mode override
             conflict_mode: if i == 0 {
                 Some(conflict_mode.to_string())
             } else {
@@ -347,7 +350,8 @@ async fn handle_version_conflict(
         ip_address: fields.ip.clone(),
         hostname: fields.hostname.clone(),
         comment: fields.comment.clone(),
-        tags: fields.tags.as_ref().cloned().unwrap_or_default(),
+        aliases: None, // TODO: Task 8 - add CLI support for wrapper pattern
+        tags: None,    // TODO: Task 8 - add CLI support for wrapper pattern
         expected_version: Some(current_entry.version.clone()),
     };
 
@@ -581,6 +585,7 @@ mod tests {
             id: "01TEST".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("original".to_string()),
             tags: vec!["prod".to_string()],
             created_at: None,
@@ -603,6 +608,7 @@ mod tests {
             id: "01TEST".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("old comment".to_string()),
             tags: vec!["prod".to_string()],
             created_at: None,
@@ -625,6 +631,7 @@ mod tests {
             id: "01TEST".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec!["prod".to_string(), "web".to_string()],
             created_at: None,
@@ -644,6 +651,7 @@ mod tests {
             id: "01TEST".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("comment".to_string()),
             tags: vec!["prod".to_string()],
             created_at: None,
