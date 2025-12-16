@@ -16,10 +16,10 @@
 //!    not in re-testing the TLS stack.
 //!
 //! For production deployment, mTLS is mandatory and configured via the server config.
-//! Manual testing with real certificates should be performed before release.
 //!
-//! TODO: Add mTLS integration tests with runtime certificate generation using rcgen
-//! or similar library for comprehensive E2E security testing.
+//! **Note:** Full mTLS testing is covered by E2E tests (router-hosts-e2e crate) which
+//! use real certificates generated at test runtime. These unit-level integration tests
+//! focus on gRPC service logic without the TLS overhead.
 
 use router_hosts::server::commands::CommandHandler;
 use router_hosts::server::hooks::HookExecutor;

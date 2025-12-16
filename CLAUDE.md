@@ -706,6 +706,7 @@ Core dependencies (see Cargo.toml for versions):
 - `serde` + `toml` - config
 - `rustls` - TLS
 - `tracing` - logging
+- `proptest` - property-based testing
 
 **Note on Protocol Buffers:** The project uses `protobuf-src` to provide a bundled
 Protocol Buffers compiler (`protoc`), eliminating the need for system installation.

@@ -43,7 +43,7 @@ tasks:
     cmds:
       - cargo tarpaulin --workspace --out Html --output-dir coverage
 
-  test:coverage-ci:
+  test:coverage:ci:
     desc: Run tests with coverage (CI mode - enforces 80% threshold)
     cmds:
       - cargo tarpaulin --workspace --out Html --out Xml --output-dir coverage --fail-under 80 --exclude router-hosts-e2e
