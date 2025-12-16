@@ -1,7 +1,7 @@
 # Client CLI Design
 
 **Date:** 2025-12-06
-**Status:** Active
+**Status:** ✅ Implemented (PR #36)
 **Issue:** #11
 
 ## Overview

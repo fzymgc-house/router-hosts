@@ -1,5 +1,7 @@
 # RollbackToSnapshot Implementation Plan
 
+> **Status:** ✅ **COMPLETED** - Merged in PR #63
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement RollbackToSnapshot RPC to restore hosts database to a previous snapshot state.

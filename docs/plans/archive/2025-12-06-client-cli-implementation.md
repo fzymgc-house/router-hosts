@@ -1,5 +1,7 @@
 # Client CLI Implementation Plan
 
+> **Status:** ✅ **COMPLETED** - Merged in PR #36
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement a full-featured CLI client that connects to the router-hosts gRPC server.

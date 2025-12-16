@@ -1,5 +1,7 @@
 # Snapshot Retention Implementation Plan
 
+> **Status:** ✅ **COMPLETED** - Merged in PR #53
+
 **Date:** 2025-12-08
 **Issue:** #48 - feat(server): implement snapshot retention policy
 **Design:** [2025-12-08-snapshot-retention-design.md](2025-12-08-snapshot-retention-design.md)

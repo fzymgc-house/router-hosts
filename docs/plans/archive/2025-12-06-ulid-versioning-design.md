@@ -1,7 +1,7 @@
 # ULID Versioning Implementation Design
 
 **Date:** 2025-12-06
-**Status:** Approved for implementation
+**Status:** ✅ Implemented (PR #50)
 **Related:** Issue #45, docs/plans/2025-12-01-router-hosts-v1-design.md
 
 ## Overview

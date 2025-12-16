@@ -1,5 +1,7 @@
 # ExportHosts Implementation Plan
 
+> **Status:** ✅ **COMPLETED** - ExportHosts RPC implemented
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement the ExportHosts gRPC RPC to export host entries in hosts/json/csv formats.

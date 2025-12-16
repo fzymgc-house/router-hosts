@@ -1,5 +1,7 @@
 # SIGHUP Certificate Reload Implementation Plan
 
+> **Status:** ✅ **COMPLETED** - Merged in PR #118 on 2025-12-16
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Enable certificate rotation via SIGHUP signal without full server restart

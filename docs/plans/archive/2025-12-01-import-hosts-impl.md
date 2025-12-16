@@ -1,5 +1,7 @@
 # ImportHosts Implementation Plan
 
+> **Status:** ✅ **SUPERSEDED** - See 2025-12-02-import-hosts-impl.md for final implementation
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement the ImportHosts bidirectional streaming RPC to import host entries from hosts/json/csv formats with conflict handling.
