@@ -1554,6 +1554,139 @@ async fn test_delete_nonexistent_snapshot() {
 }
 
 // ============================================================================
+// Snapshot Coverage Tests (Issue #67)
+//
+// These tests cover defensive code paths in snapshots.rs to achieve ≥95% coverage.
+// ============================================================================
+
+#[tokio::test]
+async fn test_create_snapshot_with_empty_trigger() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add a host so we have something to snapshot
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.220.1".to_string(),
+            hostname: "empty-trigger-test.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Create snapshot with empty trigger - should default to "manual"
+    let response = client
+        .create_snapshot(CreateSnapshotRequest {
+            name: "test-empty-trigger".to_string(),
+            trigger: "".to_string(), // Empty trigger
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!response.snapshot_id.is_empty());
+    assert_eq!(response.entry_count, 1);
+
+    // Verify the trigger defaulted to "manual" by listing snapshots
+    let mut stream = client
+        .list_snapshots(ListSnapshotsRequest {
+            limit: 0,
+            offset: 0,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let snapshot = stream.message().await.unwrap().unwrap().snapshot.unwrap();
+    assert_eq!(snapshot.trigger, "manual");
+}
+
+#[tokio::test]
+async fn test_create_snapshot_with_empty_name() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add a host so we have something to snapshot
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.221.1".to_string(),
+            hostname: "empty-name-test.local".to_string(),
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Create snapshot with empty name - server generates a default name
+    let response = client
+        .create_snapshot(CreateSnapshotRequest {
+            name: "".to_string(), // Empty name
+            trigger: "manual".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert!(!response.snapshot_id.is_empty());
+    assert_eq!(response.entry_count, 1);
+
+    // Verify the snapshot was created with a generated name (format: snapshot-YYYYMMDD-HHMMSS)
+    let mut stream = client
+        .list_snapshots(ListSnapshotsRequest {
+            limit: 0,
+            offset: 0,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let snapshot = stream.message().await.unwrap().unwrap().snapshot.unwrap();
+    // When name is empty, server generates a default name starting with "snapshot-"
+    assert!(
+        snapshot.name.starts_with("snapshot-"),
+        "Generated name should start with 'snapshot-', got: {}",
+        snapshot.name
+    );
+}
+
+#[tokio::test]
+async fn test_rollback_with_empty_snapshot_id() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Try to rollback with empty snapshot_id - should return INVALID_ARGUMENT
+    let result = client
+        .rollback_to_snapshot(RollbackToSnapshotRequest {
+            snapshot_id: "".to_string(), // Empty snapshot_id
+        })
+        .await;
+
+    assert!(result.is_err());
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("snapshot_id is required"));
+}
+
+#[tokio::test]
+async fn test_delete_snapshot_with_empty_id() {
+    let addr = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Try to delete with empty snapshot_id - should return INVALID_ARGUMENT
+    let result = client
+        .delete_snapshot(DeleteSnapshotRequest {
+            snapshot_id: "".to_string(), // Empty snapshot_id
+        })
+        .await;
+
+    assert!(result.is_err());
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(status.message().contains("snapshot_id is required"));
+}
+
+// ============================================================================
 // Rollback Integration Tests (Issue #58)
 // ============================================================================
 
