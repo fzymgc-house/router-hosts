@@ -33,6 +33,24 @@ message HostEntry {
   // Treat as opaque - compare for equality only, do not parse.
   // Format may change in future versions.
   string version = 8;
+
+  // Optional hostname aliases (additional names resolving to same IP)
+  repeated string aliases = 9;
+}
+
+// Wrapper messages for optional repeated field semantics in updates
+// Absent message = preserve existing, present with empty values = clear all
+
+// Wrapper for updating aliases with optional semantics
+message AliasesUpdate {
+  // New alias values (empty array = clear all aliases)
+  repeated string values = 1;
+}
+
+// Wrapper for updating tags with optional semantics
+message TagsUpdate {
+  // New tag values (empty array = clear all tags)
+  repeated string values = 1;
 }
 
 // Host management requests/responses
@@ -50,6 +68,9 @@ message AddHostRequest {
 
   // Optional tags for categorization
   repeated string tags = 4;
+
+  // Optional hostname aliases
+  repeated string aliases = 5;
 }
 
 // Response after adding a host entry
@@ -87,16 +108,17 @@ message UpdateHostRequest {
   // New comment (optional, keeps existing if not provided, empty string to clear)
   optional string comment = 4;
 
-  // New tags array (replaces all existing tags). Empty array = clear all tags.
-  // Not providing this field = keep existing tags unchanged.
-  repeated string tags = 5;
+  // Field 5 reserved - was: repeated string tags (breaking change)
+  reserved 5;
 
-  // Expected version for optimistic concurrency control.
-  // If provided and doesn't match current version, returns ABORTED.
-  // Treat as opaque - use the value from GetHost response unchanged.
-  // Example: Get host, receive version "1", update with expected_version "1".
-  // Note: Empty string is invalid and will return INVALID_ARGUMENT.
+  // Expected version for optimistic concurrency control
   optional string expected_version = 6;
+
+  // New aliases (wrapper for optional semantics)
+  AliasesUpdate aliases = 7;
+
+  // New tags (wrapper for optional semantics - breaking change from field 5)
+  TagsUpdate tags = 8;
 }
 
 // Response after updating a host entry
@@ -162,6 +184,9 @@ message ImportHostsRequest {
 
   // Conflict handling: "skip" (default), "replace", "strict"
   optional string conflict_mode = 4;
+
+  // Override strict mode validation (e.g., alias conflicts with existing hostname)
+  optional bool force = 5;
 }
 
 // Response for host import operation (streamed progress updates)
