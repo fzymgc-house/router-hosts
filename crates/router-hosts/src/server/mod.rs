@@ -58,6 +58,9 @@ pub enum ShutdownReason {
     Reload,
 }
 
+/// Maximum time to wait for in-flight requests during graceful shutdown
+const GRACEFUL_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Validate TLS configuration by checking files exist and are valid PEM
 ///
 /// This is called before initiating graceful shutdown on SIGHUP to avoid
@@ -301,18 +304,19 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
         tokio::pin!(server);
 
         // Wait for server completion or signal
-        let reason: ShutdownReason = loop {
+        // server_needs_drain: true if we signaled shutdown but server hasn't finished yet
+        let (reason, server_needs_drain): (ShutdownReason, bool) = loop {
             #[cfg(not(unix))]
             let select_result = tokio::select! {
                 result = &mut server => {
                     result?;
                     // Server exited without signal (shouldn't happen normally)
-                    Some(ShutdownReason::Terminate)
+                    Some((ShutdownReason::Terminate, false))
                 },
                 _ = signal::ctrl_c() => {
                     info!("Received Ctrl+C, initiating graceful shutdown");
                     shutdown_notify.notify_one();
-                    Some(ShutdownReason::Terminate)
+                    Some((ShutdownReason::Terminate, true))
                 }
             };
 
@@ -321,17 +325,17 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
                 result = &mut server => {
                     result?;
                     // Server exited without signal (shouldn't happen normally)
-                    Some(ShutdownReason::Terminate)
+                    Some((ShutdownReason::Terminate, false))
                 },
                 _ = signal::ctrl_c() => {
                     info!("Received Ctrl+C, initiating graceful shutdown");
                     shutdown_notify.notify_one();
-                    Some(ShutdownReason::Terminate)
+                    Some((ShutdownReason::Terminate, true))
                 },
                 _ = sigterm.recv() => {
                     info!("Received SIGTERM, initiating graceful shutdown");
                     shutdown_notify.notify_one();
-                    Some(ShutdownReason::Terminate)
+                    Some((ShutdownReason::Terminate, true))
                 },
                 _ = sighup.recv() => {
                     info!("Received SIGHUP, validating certificates for reload...");
@@ -339,7 +343,7 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
                         Ok(()) => {
                             info!("Certificates validated successfully, initiating graceful shutdown for reload");
                             shutdown_notify.notify_one();
-                            Some(ShutdownReason::Reload)
+                            Some((ShutdownReason::Reload, true))
                         }
                         Err(e) => {
                             tracing::error!(
@@ -353,10 +357,35 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
                 }
             };
 
-            if let Some(reason) = select_result {
-                break reason;
+            if let Some(result) = select_result {
+                break result;
             }
         };
+
+        // If we signaled shutdown, wait for server to drain with timeout
+        if server_needs_drain {
+            info!(
+                "Waiting up to {:?} for in-flight requests to complete...",
+                GRACEFUL_SHUTDOWN_TIMEOUT
+            );
+            match tokio::time::timeout(GRACEFUL_SHUTDOWN_TIMEOUT, server).await {
+                Ok(result) => {
+                    // Server finished within timeout
+                    if let Err(e) = result {
+                        tracing::warn!("Server shutdown completed with error: {}", e);
+                    }
+                }
+                Err(_) => {
+                    // Timeout expired - force shutdown
+                    tracing::warn!(
+                        "Graceful shutdown timeout ({:?}) expired, forcing shutdown. \
+                         Some requests may have been interrupted.",
+                        GRACEFUL_SHUTDOWN_TIMEOUT
+                    );
+                    // Server future is dropped here, closing connections
+                }
+            }
+        }
 
         match reason {
             ShutdownReason::Terminate => {
@@ -426,23 +455,51 @@ mod tests {
 
     #[test]
     fn test_validate_tls_config_valid_certs() {
-        // Use the test certificates from E2E test fixtures
-        let cert_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../crates/router-hosts-e2e/fixtures/certs");
+        use rcgen::{
+            BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+            KeyPair, KeyUsagePurpose,
+        };
 
-        // Skip test if fixtures don't exist (CI might not have them)
-        if !cert_dir.exists() {
-            eprintln!(
-                "Skipping test - E2E cert fixtures not found at {:?}",
-                cert_dir
-            );
-            return;
-        }
+        // Generate test certificates at runtime (like E2E tests do)
+        let ca_key = KeyPair::generate().expect("Failed to generate CA key");
+        let mut ca_params = CertificateParams::default();
+        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        ca_params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
+        ca_params
+            .distinguished_name
+            .push(DnType::CommonName, "Test CA");
+        let ca_cert = ca_params
+            .self_signed(&ca_key)
+            .expect("Failed to generate CA cert");
+
+        let server_key = KeyPair::generate().expect("Failed to generate server key");
+        let mut server_params = CertificateParams::default();
+        server_params
+            .distinguished_name
+            .push(DnType::CommonName, "localhost");
+        server_params.key_usages = vec![
+            KeyUsagePurpose::DigitalSignature,
+            KeyUsagePurpose::KeyEncipherment,
+        ];
+        server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let server_cert = server_params
+            .signed_by(&server_key, &Issuer::from_params(&ca_params, &ca_key))
+            .expect("Failed to generate server cert");
+
+        // Write certs to temp files
+        let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+        let ca_path = temp_dir.path().join("ca.pem");
+        let cert_path = temp_dir.path().join("server.pem");
+        let key_path = temp_dir.path().join("server-key.pem");
+
+        std::fs::write(&ca_path, ca_cert.pem()).expect("Failed to write CA cert");
+        std::fs::write(&cert_path, server_cert.pem()).expect("Failed to write server cert");
+        std::fs::write(&key_path, server_key.serialize_pem()).expect("Failed to write server key");
 
         let config = config::TlsConfig {
-            cert_path: cert_dir.join("server.crt"),
-            key_path: cert_dir.join("server.key"),
-            ca_cert_path: cert_dir.join("ca.crt"),
+            cert_path,
+            key_path,
+            ca_cert_path: ca_path,
         };
 
         let result = validate_tls_config(&config);

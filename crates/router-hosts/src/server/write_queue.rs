@@ -19,6 +19,25 @@
 //! Each operation has a configurable timeout (default 30s) to prevent indefinite
 //! hangs. If an operation times out, it returns an error but the worker continues
 //! processing other commands.
+//!
+//! ## Behavior During SIGHUP Reload
+//!
+//! When the server receives SIGHUP for certificate reload:
+//!
+//! 1. **Graceful shutdown begins** - server stops accepting new connections
+//! 2. **In-flight operations complete** - existing operations in the queue continue
+//!    processing until done or the 30-second graceful shutdown timeout expires
+//! 3. **WriteQueue is dropped** - this closes the channel sender
+//! 4. **Worker exits gracefully** - the `write_worker` task sees the closed channel,
+//!    logs "Write worker shutting down", and exits
+//! 5. **New WriteQueue created** - when the server loop restarts with new TLS certs,
+//!    a fresh WriteQueue is created with a new channel and worker task
+//!
+//! This ensures:
+//! - Operations that started before SIGHUP complete (up to graceful shutdown timeout)
+//! - No operations are lost in-flight during reload
+//! - The storage layer (shared across reloads) remains consistent
+//! - A clean state for the new WriteQueue after reload
 
 use router_hosts_storage::HostEntry;
 use std::time::Duration;

@@ -748,6 +748,28 @@ The server supports dynamic TLS certificate reload via SIGHUP signal (Unix only)
 3. If valid: graceful shutdown (30s drain), restart with new certs
 4. If invalid: logs error, keeps running with current certs
 
+### Graceful Shutdown Details
+
+During the 30-second graceful shutdown period:
+
+- **New connections**: Rejected (server stops accepting)
+- **In-flight gRPC requests**: Allowed to complete
+- **WriteQueue operations**: Continue processing until completion or timeout
+- **Storage layer**: Shared across reloads (database connections persist)
+
+If the timeout expires before all operations complete, remaining connections are forcibly closed. The server logs a warning indicating some requests may have been interrupted.
+
+**What persists across reloads:**
+- Storage backend (DuckDB/SQLite/PostgreSQL connection)
+- CommandHandler (business logic)
+- HookExecutor (post-edit hooks configuration)
+- HostsFileGenerator (output path configuration)
+
+**What is recreated:**
+- TLS certificates (the whole point of SIGHUP)
+- gRPC server instance
+- WriteQueue (fresh channel and worker task)
+
 ### Usage
 
 ```bash

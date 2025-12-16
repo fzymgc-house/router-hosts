@@ -3013,6 +3013,7 @@ dependencies = [
  "parking_lot",
  "prost",
  "prost-types",
+ "rcgen",
  "router-hosts-common",
  "router-hosts-storage",
  "rustls-pemfile",
