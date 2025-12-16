@@ -5,6 +5,9 @@
 target/
 # Note: Cargo.lock IS committed for binary projects (see CLAUDE.md)
 
+# Proptest failure persistence (auto-generated, not needed in repo)
+**/proptest-regressions/
+
 # IDE
 .idea/
 .vscode/

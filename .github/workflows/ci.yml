@@ -70,9 +70,14 @@ jobs:
               run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
             - name: Install cargo-tarpaulin
-              run: cargo install cargo-tarpaulin
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-tarpaulin
 
             - name: Check test coverage (≥80% required)
+              # Note: Coverage runs tests with instrumentation, so we skip
+              # the separate "Run tests" step to avoid running tests twice.
+              # The test:unit step above is kept for faster feedback on failures.
               run: task test:coverage-ci
 
             - name: Upload coverage report

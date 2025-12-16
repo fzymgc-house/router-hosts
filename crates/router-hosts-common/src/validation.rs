@@ -99,7 +99,7 @@ mod tests {
             prop_assert!(validate_ip_address(&ip).is_ok(), "Failed to validate: {}", ip);
         }
 
-        /// Any valid IPv6 address should parse successfully
+        /// Any valid full IPv6 address should parse successfully
         #[test]
         fn prop_valid_ipv6_parses(
             a in 0u16..=0xFFFF,
@@ -113,6 +113,25 @@ mod tests {
         ) {
             let ip = format!("{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}:{:x}", a, b, c, d, e, f, g, h);
             prop_assert!(validate_ip_address(&ip).is_ok(), "Failed to validate: {}", ip);
+        }
+
+        /// Compressed IPv6 addresses (using ::) should parse successfully
+        #[test]
+        fn prop_compressed_ipv6_parses(
+            prefix in 0u16..=0xFFFF,
+            suffix in 0u16..=0xFFFF,
+        ) {
+            // Test :: compression in middle (e.g., fe80::1)
+            let ip_middle = format!("{:x}::{:x}", prefix, suffix);
+            prop_assert!(validate_ip_address(&ip_middle).is_ok(), "Failed middle compression: {}", ip_middle);
+
+            // Test leading :: (e.g., ::1, ::ffff)
+            let ip_leading = format!("::{:x}", suffix);
+            prop_assert!(validate_ip_address(&ip_leading).is_ok(), "Failed leading compression: {}", ip_leading);
+
+            // Test trailing :: (e.g., fe80::)
+            let ip_trailing = format!("{:x}::", prefix);
+            prop_assert!(validate_ip_address(&ip_trailing).is_ok(), "Failed trailing compression: {}", ip_trailing);
         }
 
         /// Valid single-label hostnames (1-63 alphanumeric chars, no leading/trailing hyphen)
