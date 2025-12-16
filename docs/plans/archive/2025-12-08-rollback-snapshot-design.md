@@ -1,7 +1,7 @@
 # Rollback to Snapshot Design
 
 **Date:** 2025-12-08
-**Status:** Approved for implementation
+**Status:** ✅ Implemented (PR #63)
 **Issue:** #58
 
 ## Summary

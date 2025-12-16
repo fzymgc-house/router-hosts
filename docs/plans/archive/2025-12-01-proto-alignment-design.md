@@ -1,7 +1,7 @@
 # Proto Alignment Design
 
 **Date:** 2025-12-01
-**Status:** Ready for implementation
+**Status:** ✅ Implemented
 **Related:** [v0.5.0 Design](2025-12-01-router-hosts-v1-design.md), [Tasks](2025-12-01-v1-tasks.md)
 
 Aligns `proto/router_hosts/v1/hosts.proto` with the v0.5.0 design document.

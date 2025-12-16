@@ -1,5 +1,7 @@
 # ULID Versioning Implementation Plan
 
+> **Status:** ✅ **COMPLETED** - Merged in PR #50
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Replace sequential integer event versioning with ULID-based versioning for proper optimistic concurrency control.

@@ -1,5 +1,7 @@
 # GHCR Image Pruning Implementation Plan
 
+> **Status:** ✅ **COMPLETED** - Merged in PRs #85, #86
+
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Implement automated weekly cleanup of old Docker images in GitHub Container Registry to prevent storage bloat.
