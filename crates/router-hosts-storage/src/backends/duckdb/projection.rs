@@ -111,6 +111,7 @@ impl DuckDbStorage {
                     id,
                     ip_address,
                     hostname,
+                    aliases: vec![],
                     comment,
                     tags,
                     created_at,
@@ -212,6 +213,7 @@ impl DuckDbStorage {
                         id,
                         ip_address,
                         hostname,
+                        aliases: vec![],
                         comment,
                         tags,
                         created_at,
@@ -315,6 +317,7 @@ impl DuckDbStorage {
                         id,
                         ip_address,
                         hostname,
+                        aliases: vec![],
                         comment,
                         tags,
                         created_at,
@@ -471,6 +474,7 @@ impl DuckDbStorage {
                     id,
                     ip_address,
                     hostname,
+                    aliases: vec![],
                     comment,
                     tags,
                     created_at,
@@ -649,6 +653,7 @@ impl DuckDbStorage {
                         id: aggregate_id,
                         ip_address,
                         hostname,
+                        aliases: vec![],
                         comment,
                         tags,
                         created_at: at_time,
@@ -708,6 +713,7 @@ mod tests {
                 event: HostEvent::HostCreated {
                     ip_address: format!("192.168.1.{}", i + 10),
                     hostname: format!("server{}.local", i),
+                    aliases: vec![],
                     comment: None,
                     tags: vec![],
                     created_at: Utc::now(),
@@ -739,6 +745,7 @@ mod tests {
             event: HostEvent::HostCreated {
                 ip_address: "192.168.1.10".to_string(),
                 hostname: "server.local".to_string(),
+                aliases: vec![],
                 comment: Some("Test server".to_string()),
                 tags: vec!["prod".to_string()],
                 created_at: Utc::now(),
@@ -786,6 +793,7 @@ mod tests {
             event: HostEvent::HostCreated {
                 ip_address: "192.168.1.10".to_string(),
                 hostname: "server.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 created_at: Utc::now(),
@@ -836,6 +844,7 @@ mod tests {
                 event: HostEvent::HostCreated {
                     ip_address: ip.to_string(),
                     hostname: hostname.to_string(),
+                    aliases: vec![],
                     comment: None,
                     tags: vec![],
                     created_at: Utc::now(),
@@ -877,6 +886,7 @@ mod tests {
             event: HostEvent::HostCreated {
                 ip_address: "192.168.1.10".to_string(),
                 hostname: "prod1.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec!["production".to_string(), "critical".to_string()],
                 created_at: Utc::now(),
@@ -892,6 +902,7 @@ mod tests {
             event: HostEvent::HostCreated {
                 ip_address: "192.168.1.20".to_string(),
                 hostname: "dev1.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec!["development".to_string()],
                 created_at: Utc::now(),

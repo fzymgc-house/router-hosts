@@ -39,6 +39,7 @@ async fn create_host<S: Storage>(
     let event = HostEvent::HostCreated {
         ip_address: ip.to_string(),
         hostname: hostname.to_string(),
+        aliases: vec![],
         comment: comment.map(String::from),
         tags: tags.into_iter().map(String::from).collect(),
         created_at: Utc::now(),
@@ -351,6 +352,7 @@ pub async fn test_deleted_entries_not_listed<S: Storage>(storage: &S) {
         event: HostEvent::HostCreated {
             ip_address: "10.7.0.1".to_string(),
             hostname: "to-delete.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
             created_at: Utc::now(),
@@ -420,6 +422,7 @@ pub async fn test_get_at_time<S: Storage>(storage: &S) {
         event: HostEvent::HostCreated {
             ip_address: "10.8.0.1".to_string(),
             hostname: "time-travel.local".to_string(),
+            aliases: vec![],
             comment: Some("Initial".to_string()),
             tags: vec![],
             created_at: Utc::now(),

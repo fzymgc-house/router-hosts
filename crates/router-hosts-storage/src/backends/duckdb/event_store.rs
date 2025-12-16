@@ -471,6 +471,7 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
         HostEvent::HostCreated {
             ip_address,
             hostname,
+            aliases: _,
             comment,
             tags,
             created_at,
@@ -548,6 +549,20 @@ fn extract_event_data(event: &HostEvent) -> ExtractedEventData {
                 ..Default::default()
             },
         ),
+        HostEvent::AliasesModified {
+            old_aliases: _,
+            new_aliases: _,
+            modified_at,
+        } => (
+            None,
+            None,
+            None,
+            None,
+            *modified_at,
+            EventData {
+                ..Default::default()
+            },
+        ),
         HostEvent::HostDeleted {
             ip_address,
             hostname,
@@ -593,6 +608,7 @@ fn reconstruct_event(
             Ok(HostEvent::HostCreated {
                 ip_address: ip,
                 hostname: host,
+                aliases: vec![],
                 comment,
                 tags,
                 created_at: event_timestamp,
@@ -715,6 +731,7 @@ mod tests {
         let event = HostEvent::HostCreated {
             ip_address: "192.168.1.10".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
             created_at: Utc::now(),
@@ -747,6 +764,7 @@ mod tests {
             event: HostEvent::HostCreated {
                 ip_address: "192.168.1.10".to_string(),
                 hostname: "server.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 created_at: Utc::now(),
@@ -803,6 +821,7 @@ mod tests {
             event: HostEvent::HostCreated {
                 ip_address: "192.168.1.10".to_string(),
                 hostname: "server.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 created_at: Utc::now(),
@@ -856,6 +875,7 @@ mod tests {
             event: HostEvent::HostCreated {
                 ip_address: "192.168.1.10".to_string(),
                 hostname: "server.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 created_at: Utc::now(),

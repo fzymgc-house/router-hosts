@@ -588,6 +588,7 @@ fn create_host_created_event(ip: &str, hostname: &str) -> HostEvent {
     HostEvent::HostCreated {
         ip_address: ip.to_string(),
         hostname: hostname.to_string(),
+        aliases: vec![],
         comment: None,
         tags: vec![],
         created_at: Utc::now(),
