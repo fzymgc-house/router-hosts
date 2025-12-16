@@ -744,12 +744,7 @@ mod tests {
     /// 1. All operations eventually complete (backpressure works correctly)
     /// 2. Data integrity is maintained (no duplicates, correct count)
     /// 3. No deadlocks or timeouts occur
-    ///
-    /// Note: This test is excluded from coverage runs because tarpaulin's instrumentation
-    /// adds significant overhead (~10-50x slower), causing the 30-second operation timeouts
-    /// to fire. The test passes reliably in normal test runs (`cargo test`).
     #[tokio::test]
-    #[cfg(not(tarpaulin_include))]
     async fn test_backpressure_with_high_concurrency() {
         let (write_queue, commands, _tempdir) = setup_write_queue().await;
 
