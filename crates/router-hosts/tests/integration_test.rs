@@ -40,8 +40,9 @@ use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tonic::transport::{Channel, Server};
 
-/// Start a test server on a random port and return the address
-async fn start_test_server() -> SocketAddr {
+/// Start a test server on a random port and return the address and temp directory handle.
+/// The caller must keep the returned TempDir alive for the duration of the test.
+async fn start_test_server() -> (SocketAddr, Arc<tempfile::TempDir>) {
     // Bind to port 0 to let the OS assign an available port
     // This prevents port conflicts when tests run in parallel
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -62,13 +63,9 @@ async fn start_test_server() -> SocketAddr {
     let hooks = Arc::new(HookExecutor::new(vec![], vec![], 30));
 
     // Create hosts file generator with temp path.
-    //
-    // Note on Box::leak: The temp directory must outlive the spawned server task,
-    // but we can't move an Arc<TempDir> into the spawned task without complex
-    // lifetime gymnastics. Since tests are short-lived and the OS cleans up /tmp
-    // on reboot, leaking the TempDir handle is acceptable here. The actual temp
-    // directory still gets cleaned up when the test process exits.
-    let temp_dir = Box::leak(Box::new(tempfile::tempdir().unwrap()));
+    // The TempDir is wrapped in Arc and returned to the caller to ensure
+    // the directory stays alive for the test duration.
+    let temp_dir = Arc::new(tempfile::tempdir().unwrap());
     let hosts_path = temp_dir.path().join("hosts");
     let hosts_path_str = hosts_path.to_string_lossy().to_string();
     let hosts_file = Arc::new(HostsFileGenerator::new(hosts_path));
@@ -126,7 +123,7 @@ async fn start_test_server() -> SocketAddr {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         if TcpStream::connect(addr).await.is_ok() {
             eprintln!("Server is ready after {} attempts", i + 1);
-            return addr;
+            return (addr, temp_dir);
         }
     }
 
@@ -151,7 +148,7 @@ async fn create_client(addr: SocketAddr) -> HostsServiceClient<Channel> {
 
 #[tokio::test]
 async fn test_add_and_get_host() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host
@@ -193,13 +190,13 @@ async fn test_add_and_get_host() {
 #[tokio::test]
 async fn test_server_starts() {
     // Simply verify we can start a test server
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     eprintln!("Test server started successfully on {}", addr);
 }
 
 #[tokio::test]
 async fn test_update_host() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host
@@ -238,7 +235,7 @@ async fn test_update_host() {
 
 #[tokio::test]
 async fn test_delete_host() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host
@@ -274,7 +271,7 @@ async fn test_delete_host() {
 
 #[tokio::test]
 async fn test_list_hosts() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add multiple hosts
@@ -312,7 +309,7 @@ async fn test_list_hosts() {
 
 #[tokio::test]
 async fn test_search_hosts() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add hosts with different names
@@ -356,7 +353,7 @@ async fn test_search_hosts() {
 
 #[tokio::test]
 async fn test_export_hosts_hosts_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add some hosts
@@ -405,7 +402,7 @@ async fn test_export_hosts_hosts_format() {
 
 #[tokio::test]
 async fn test_export_hosts_json_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host
@@ -445,7 +442,7 @@ async fn test_export_hosts_json_format() {
 
 #[tokio::test]
 async fn test_export_hosts_invalid_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     let result = client
@@ -461,7 +458,7 @@ async fn test_export_hosts_invalid_format() {
 
 #[tokio::test]
 async fn test_export_hosts_csv_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host with a comment containing a comma
@@ -511,7 +508,7 @@ async fn test_export_hosts_csv_format() {
 
 #[tokio::test]
 async fn test_export_hosts_empty_database_hosts_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Export without adding any hosts - database is empty
@@ -547,7 +544,7 @@ async fn test_export_hosts_empty_database_hosts_format() {
 
 #[tokio::test]
 async fn test_export_hosts_empty_database_json_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Export without adding any hosts - database is empty
@@ -574,7 +571,7 @@ async fn test_export_hosts_empty_database_json_format() {
 
 #[tokio::test]
 async fn test_export_hosts_empty_database_csv_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Export without adding any hosts - database is empty
@@ -603,7 +600,7 @@ async fn test_export_hosts_empty_database_csv_format() {
 
 #[tokio::test]
 async fn test_import_hosts_via_grpc() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Import some hosts
@@ -650,7 +647,7 @@ async fn test_import_hosts_via_grpc() {
 
 #[tokio::test]
 async fn test_import_export_roundtrip() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host
@@ -740,7 +737,7 @@ async fn test_import_export_roundtrip() {
 
 #[tokio::test]
 async fn test_import_hosts_json_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Import hosts using JSON Lines format
@@ -786,7 +783,7 @@ async fn test_import_hosts_json_format() {
 
 #[tokio::test]
 async fn test_import_hosts_csv_format() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Import hosts using CSV format
@@ -841,7 +838,7 @@ async fn test_import_hosts_csv_format() {
 /// Test import with `skip` mode - skips duplicate IP+hostname combinations
 #[tokio::test]
 async fn test_import_conflict_mode_skip() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // First, add a host directly
@@ -896,7 +893,7 @@ async fn test_import_conflict_mode_skip() {
 /// Test import with `replace` mode - updates existing entries with new values
 #[tokio::test]
 async fn test_import_conflict_mode_replace() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // First, add a host directly
@@ -952,7 +949,7 @@ async fn test_import_conflict_mode_replace() {
 /// Test import with `strict` mode - fails on any duplicate with ALREADY_EXISTS error
 #[tokio::test]
 async fn test_import_conflict_mode_strict() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // First, add a host directly
@@ -988,7 +985,7 @@ async fn test_import_conflict_mode_strict() {
 /// Test import with invalid conflict mode - should default to skip
 #[tokio::test]
 async fn test_import_invalid_conflict_mode_defaults_to_skip() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // First, add a host directly
@@ -1029,7 +1026,7 @@ async fn test_import_invalid_conflict_mode_defaults_to_skip() {
 /// Test import replace mode with JSON format preserves tags
 #[tokio::test]
 async fn test_import_replace_mode_json_preserves_tags() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // First, add a host directly
@@ -1107,7 +1104,7 @@ async fn test_import_replace_mode_json_preserves_tags() {
 
 #[tokio::test]
 async fn test_version_conflict_detection() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client1 = create_client(addr).await;
     let mut client2 = create_client(addr).await;
 
@@ -1171,7 +1168,7 @@ async fn test_version_conflict_detection() {
 
 #[tokio::test]
 async fn test_version_conflict_with_successful_retry() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client1 = create_client(addr).await;
     let mut client2 = create_client(addr).await;
 
@@ -1249,7 +1246,7 @@ async fn test_version_conflict_with_successful_retry() {
 
 #[tokio::test]
 async fn test_version_conflict_multiple_rapid_conflicts() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client1 = create_client(addr).await;
     let mut client2 = create_client(addr).await;
     let mut client3 = create_client(addr).await;
@@ -1324,7 +1321,7 @@ async fn test_version_conflict_multiple_rapid_conflicts() {
 
 #[tokio::test]
 async fn test_version_conflict_recursive_retry_simulation() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client1 = create_client(addr).await;
     let mut client2 = create_client(addr).await;
 
@@ -1461,7 +1458,7 @@ async fn test_version_conflict_recursive_retry_simulation() {
 
 #[tokio::test]
 async fn test_update_without_version_check_always_succeeds() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client1 = create_client(addr).await;
     let mut client2 = create_client(addr).await;
 
@@ -1524,7 +1521,7 @@ async fn test_update_without_version_check_always_succeeds() {
 
 #[tokio::test]
 async fn test_create_snapshot_manual() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add some hosts to create initial state
@@ -1567,7 +1564,7 @@ async fn test_create_snapshot_manual() {
 async fn test_list_snapshots() {
     use tonic::Streaming;
 
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host
@@ -1638,7 +1635,7 @@ async fn test_list_snapshots() {
 async fn test_list_snapshots_with_pagination() {
     use tonic::Streaming;
 
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host
@@ -1709,7 +1706,7 @@ async fn test_list_snapshots_with_pagination() {
 async fn test_delete_snapshot() {
     use tonic::Streaming;
 
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host
@@ -1787,7 +1784,7 @@ async fn test_delete_snapshot() {
 
 #[tokio::test]
 async fn test_delete_nonexistent_snapshot() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Try to delete a snapshot that doesn't exist
@@ -1810,7 +1807,7 @@ async fn test_delete_nonexistent_snapshot() {
 
 #[tokio::test]
 async fn test_create_snapshot_with_empty_trigger() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host so we have something to snapshot
@@ -1853,7 +1850,7 @@ async fn test_create_snapshot_with_empty_trigger() {
 
 #[tokio::test]
 async fn test_create_snapshot_with_empty_name() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add a host so we have something to snapshot
@@ -1901,7 +1898,7 @@ async fn test_create_snapshot_with_empty_name() {
 
 #[tokio::test]
 async fn test_rollback_with_empty_snapshot_id() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Try to rollback with empty snapshot_id - should return INVALID_ARGUMENT
@@ -1919,7 +1916,7 @@ async fn test_rollback_with_empty_snapshot_id() {
 
 #[tokio::test]
 async fn test_delete_snapshot_with_empty_id() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Try to delete with empty snapshot_id - should return INVALID_ARGUMENT
@@ -1941,7 +1938,7 @@ async fn test_delete_snapshot_with_empty_id() {
 
 #[tokio::test]
 async fn test_rollback_to_snapshot_basic() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Initial state: Create host1
@@ -2060,7 +2057,7 @@ async fn test_rollback_to_snapshot_basic() {
 
 #[tokio::test]
 async fn test_rollback_to_nonexistent_snapshot() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     let result = client
@@ -2079,7 +2076,7 @@ async fn test_rollback_to_nonexistent_snapshot() {
 async fn test_rollback_creates_backup_snapshot() {
     use tonic::Streaming;
 
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Create initial state
@@ -2170,7 +2167,7 @@ async fn test_rollback_creates_backup_snapshot() {
 
 #[tokio::test]
 async fn test_rollback_preserves_tags_and_comments() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Create hosts with tags and comments
@@ -2270,7 +2267,7 @@ async fn test_rollback_preserves_tags_and_comments() {
 /// Error mapping: Duplicate IP+hostname → ALREADY_EXISTS
 #[tokio::test]
 async fn test_add_duplicate_host_returns_already_exists() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add first host successfully
@@ -2314,7 +2311,7 @@ async fn test_add_duplicate_host_returns_already_exists() {
 /// Test that same hostname with different IP is allowed (not a duplicate)
 #[tokio::test]
 async fn test_same_hostname_different_ip_allowed() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add first host
@@ -2347,7 +2344,7 @@ async fn test_same_hostname_different_ip_allowed() {
 /// Test that same IP with different hostname is allowed (not a duplicate)
 #[tokio::test]
 async fn test_same_ip_different_hostname_allowed() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Add first host
@@ -2383,7 +2380,7 @@ async fn test_same_ip_different_hostname_allowed() {
 /// Error mapping: Validation failure → INVALID_ARGUMENT
 #[tokio::test]
 async fn test_add_host_invalid_ip_returns_invalid_argument() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Invalid IP address
@@ -2410,7 +2407,7 @@ async fn test_add_host_invalid_ip_returns_invalid_argument() {
 /// Test various invalid IP formats return INVALID_ARGUMENT
 #[tokio::test]
 async fn test_add_host_various_invalid_ips() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     let invalid_ips = [
@@ -2456,7 +2453,7 @@ async fn test_add_host_various_invalid_ips() {
 /// Error mapping: Validation failure → INVALID_ARGUMENT
 #[tokio::test]
 async fn test_add_host_invalid_hostname_returns_invalid_argument() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Invalid hostname (starts with hyphen)
@@ -2483,7 +2480,7 @@ async fn test_add_host_invalid_hostname_returns_invalid_argument() {
 /// Test various invalid hostname formats return INVALID_ARGUMENT
 #[tokio::test]
 async fn test_add_host_various_invalid_hostnames() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     let invalid_hostnames = [
@@ -2528,7 +2525,7 @@ async fn test_add_host_various_invalid_hostnames() {
 /// Note: Uses valid ULID format - invalid ID format returns INVALID_ARGUMENT
 #[tokio::test]
 async fn test_update_nonexistent_host_returns_not_found() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Use valid ULID format that doesn't exist in database
@@ -2562,7 +2559,7 @@ async fn test_update_nonexistent_host_returns_not_found() {
 /// Note: Uses valid ULID format - invalid ID format returns INVALID_ARGUMENT
 #[tokio::test]
 async fn test_delete_nonexistent_host_returns_not_found() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Use valid ULID format that doesn't exist in database
@@ -2590,7 +2587,7 @@ async fn test_delete_nonexistent_host_returns_not_found() {
 /// Note: Uses valid ULID format - invalid ID format returns INVALID_ARGUMENT
 #[tokio::test]
 async fn test_get_nonexistent_host_returns_not_found() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     // Use valid ULID format that doesn't exist in database
@@ -2619,7 +2616,7 @@ async fn test_get_nonexistent_host_returns_not_found() {
 /// This verifies proper validation order: format validation before database lookup
 #[tokio::test]
 async fn test_invalid_id_format_returns_invalid_argument() {
-    let addr = start_test_server().await;
+    let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
 
     let invalid_ids = ["not-a-ulid", "", "12345", "too-short"];

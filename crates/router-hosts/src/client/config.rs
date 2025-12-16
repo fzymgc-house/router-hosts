@@ -337,4 +337,39 @@ ca_cert_path = "/file/ca.crt"
         let unchanged = ClientConfig::expand_tilde(PathBuf::from("/absolute/path"));
         assert_eq!(unchanged, PathBuf::from("/absolute/path"));
     }
+
+    #[test]
+    #[serial]
+    fn test_env_guard_restores_on_panic() {
+        use std::panic;
+
+        const TEST_KEY: &str = "ROUTER_HOSTS_PANIC_TEST";
+        const ORIGINAL_VALUE: &str = "original";
+        const PANIC_VALUE: &str = "panic_value";
+
+        // Set initial value
+        std::env::set_var(TEST_KEY, ORIGINAL_VALUE);
+
+        // Run code that panics while holding an EnvGuard
+        let result = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+            let _guard = EnvGuard::set(TEST_KEY, PANIC_VALUE);
+            // Verify the value was changed
+            assert_eq!(std::env::var(TEST_KEY).unwrap(), PANIC_VALUE);
+            // Now panic - EnvGuard::drop should still run
+            panic!("intentional panic to test EnvGuard cleanup");
+        }));
+
+        // Verify panic occurred
+        assert!(result.is_err());
+
+        // Verify EnvGuard restored the original value despite the panic
+        assert_eq!(
+            std::env::var(TEST_KEY).unwrap(),
+            ORIGINAL_VALUE,
+            "EnvGuard should restore original value even after panic"
+        );
+
+        // Cleanup
+        std::env::remove_var(TEST_KEY);
+    }
 }

@@ -54,9 +54,6 @@ jobs:
             - name: Build
               run: task build
 
-            - name: Run tests
-              run: task test:unit
-
             - name: Run PostgreSQL backend tests
               run: task test:postgres
 
@@ -75,9 +72,7 @@ jobs:
                   tool: cargo-tarpaulin
 
             - name: Check test coverage (≥80% required)
-              # Note: Coverage runs tests with instrumentation, so we skip
-              # the separate "Run tests" step to avoid running tests twice.
-              # The test:unit step above is kept for faster feedback on failures.
+              # Coverage runs all tests with instrumentation enabled
               run: task test:coverage:ci
 
             - name: Upload coverage report
