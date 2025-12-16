@@ -44,11 +44,20 @@ tasks:
       - cargo tarpaulin --workspace --out Html --output-dir coverage
 
   test:coverage:ci:
-    desc: Run tests with coverage (CI mode - enforces 79% threshold)
+    desc: Run tests with coverage (CI mode - enforces 80% threshold)
     cmds:
-      # Note: Threshold lowered from 80% to 79% due to client/grpc.rs and server/mod.rs
-      # requiring actual network calls to test. See GitHub issue for tracking.
-      - cargo tarpaulin --workspace --out Html --out Xml --output-dir coverage --fail-under 79 --exclude router-hosts-e2e --exclude-files "crates/router-hosts-e2e/*"
+      # Excluded from coverage (require network/integration infrastructure, tested by E2E):
+      # - main.rs: entry point (standard exclusion)
+      # - client/grpc.rs: gRPC client wrapper (requires live server)
+      # - server/mod.rs: gRPC server impl (requires network binding)
+      - >-
+        cargo tarpaulin --workspace --out Html --out Xml --output-dir coverage
+        --fail-under 80
+        --exclude router-hosts-e2e
+        --exclude-files "crates/router-hosts-e2e/*"
+        --exclude-files "*/main.rs"
+        --exclude-files "*/client/grpc.rs"
+        --exclude-files "*/server/mod.rs"
 
   lint:
     desc: Run all linters (clippy, fmt, buf)

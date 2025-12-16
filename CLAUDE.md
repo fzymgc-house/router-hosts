@@ -106,14 +106,11 @@ Verify rollback creates backup snapshot and restores state correctly.
 
 ### Test Coverage Requirements
 
-**MANDATORY: Maintain ≥79% test coverage at all times**
-
-> **Note:** Threshold is 79% (not 80%) due to client/grpc.rs and server/mod.rs
-> requiring network infrastructure to test. These are covered by E2E tests.
+**MANDATORY: Maintain ≥80% test coverage at all times**
 
 **Coverage Rules:**
 - All new code must include tests
-- PRs that decrease coverage below 79% will be rejected
+- PRs that decrease coverage below 80% will be rejected
 - Use `cargo tarpaulin` or `cargo llvm-cov` to measure coverage
 - Coverage is measured per-crate and workspace-wide
 
@@ -141,13 +138,15 @@ cargo tarpaulin --workspace --out Html --output-dir coverage
 # View coverage report
 open coverage/index.html
 
-# Fail if coverage < 79%
-cargo tarpaulin --workspace --fail-under 79
+# Fail if coverage < 80%
+cargo tarpaulin --workspace --fail-under 80
 ```
 
-**Exemptions:**
+**Exemptions (excluded from coverage calculation):**
 - Generated protobuf code (in `target/`)
 - `main.rs` entry points (minimal logic only)
+- `client/grpc.rs` - gRPC client wrapper (requires live server, tested by E2E)
+- `server/mod.rs` - gRPC server impl (requires network binding, tested by E2E)
 - Trivial getters/setters (if any exist)
 - Mark untestable code with `#[cfg(not(tarpaulin_include))]`
 
@@ -247,8 +246,8 @@ RUST_LOG=debug cargo test test_name -- --nocapture
 # Run tests with coverage (requires cargo-tarpaulin)
 cargo tarpaulin --workspace --out Html --output-dir coverage
 
-# Fail if coverage drops below 79%
-cargo tarpaulin --workspace --fail-under 79
+# Fail if coverage drops below 80%
+cargo tarpaulin --workspace --fail-under 80
 
 # Run tests in release mode (for performance testing)
 cargo test --release
