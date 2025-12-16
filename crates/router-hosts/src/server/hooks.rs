@@ -340,4 +340,14 @@ mod tests {
         // Cleanup
         let _ = std::fs::remove_file(&order_file);
     }
+
+    #[test]
+    fn test_hook_error_display() {
+        let err = HookError::Timeout(30);
+        assert!(err.to_string().contains("30"));
+
+        let err = HookError::Failed(1, "test cmd".to_string());
+        assert!(err.to_string().contains("1"));
+        assert!(err.to_string().contains("test cmd"));
+    }
 }

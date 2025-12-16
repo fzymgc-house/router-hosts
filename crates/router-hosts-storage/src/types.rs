@@ -211,14 +211,122 @@ mod tests {
 
     #[test]
     fn test_event_type_names() {
-        let event = HostEvent::HostCreated {
+        let now = Utc::now();
+
+        // Test all event type names
+        assert_eq!(
+            HostEvent::HostCreated {
+                ip_address: "192.168.1.1".into(),
+                hostname: "test.local".into(),
+                comment: None,
+                tags: vec![],
+                created_at: now,
+            }
+            .event_type(),
+            "HostCreated"
+        );
+
+        assert_eq!(
+            HostEvent::IpAddressChanged {
+                old_ip: "192.168.1.1".into(),
+                new_ip: "192.168.1.2".into(),
+                changed_at: now,
+            }
+            .event_type(),
+            "IpAddressChanged"
+        );
+
+        assert_eq!(
+            HostEvent::HostnameChanged {
+                old_hostname: "old.local".into(),
+                new_hostname: "new.local".into(),
+                changed_at: now,
+            }
+            .event_type(),
+            "HostnameChanged"
+        );
+
+        assert_eq!(
+            HostEvent::CommentUpdated {
+                old_comment: None,
+                new_comment: Some("new".into()),
+                updated_at: now,
+            }
+            .event_type(),
+            "CommentUpdated"
+        );
+
+        assert_eq!(
+            HostEvent::TagsModified {
+                old_tags: vec![],
+                new_tags: vec!["prod".into()],
+                modified_at: now,
+            }
+            .event_type(),
+            "TagsModified"
+        );
+
+        assert_eq!(
+            HostEvent::HostDeleted {
+                ip_address: "192.168.1.1".into(),
+                hostname: "test.local".into(),
+                deleted_at: now,
+                reason: None,
+            }
+            .event_type(),
+            "HostDeleted"
+        );
+    }
+
+    #[test]
+    fn test_event_occurred_at() {
+        let now = Utc::now();
+
+        // Test occurred_at for all event types
+        let created = HostEvent::HostCreated {
             ip_address: "192.168.1.1".into(),
             hostname: "test.local".into(),
             comment: None,
             tags: vec![],
-            created_at: Utc::now(),
+            created_at: now,
         };
-        assert_eq!(event.event_type(), "HostCreated");
+        assert_eq!(created.occurred_at(), now);
+
+        let ip_changed = HostEvent::IpAddressChanged {
+            old_ip: "192.168.1.1".into(),
+            new_ip: "192.168.1.2".into(),
+            changed_at: now,
+        };
+        assert_eq!(ip_changed.occurred_at(), now);
+
+        let hostname_changed = HostEvent::HostnameChanged {
+            old_hostname: "old.local".into(),
+            new_hostname: "new.local".into(),
+            changed_at: now,
+        };
+        assert_eq!(hostname_changed.occurred_at(), now);
+
+        let comment_updated = HostEvent::CommentUpdated {
+            old_comment: None,
+            new_comment: Some("new".into()),
+            updated_at: now,
+        };
+        assert_eq!(comment_updated.occurred_at(), now);
+
+        let tags_modified = HostEvent::TagsModified {
+            old_tags: vec![],
+            new_tags: vec!["prod".into()],
+            modified_at: now,
+        };
+        assert_eq!(tags_modified.occurred_at(), now);
+
+        let deleted = HostEvent::HostDeleted {
+            ip_address: "192.168.1.1".into(),
+            hostname: "test.local".into(),
+            deleted_at: now,
+            reason: Some("cleanup".into()),
+        };
+        assert_eq!(deleted.occurred_at(), now);
     }
 
     #[test]
@@ -234,5 +342,70 @@ mod tests {
         let json = serde_json::to_string(&event).unwrap();
         let deser: HostEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(event, deser);
+    }
+
+    #[test]
+    fn test_snapshot_id_new_and_as_str() {
+        let id = SnapshotId::new("snap-123");
+        assert_eq!(id.as_str(), "snap-123");
+    }
+
+    #[test]
+    fn test_snapshot_id_into_inner() {
+        let id = SnapshotId::new("snap-456");
+        assert_eq!(id.into_inner(), "snap-456");
+    }
+
+    #[test]
+    fn test_snapshot_id_display() {
+        let id = SnapshotId::new("snap-789");
+        assert_eq!(format!("{}", id), "snap-789");
+    }
+
+    #[test]
+    fn test_snapshot_id_from_string() {
+        let id: SnapshotId = String::from("snap-abc").into();
+        assert_eq!(id.as_str(), "snap-abc");
+    }
+
+    #[test]
+    fn test_snapshot_id_from_str() {
+        let id: SnapshotId = "snap-def".into();
+        assert_eq!(id.as_str(), "snap-def");
+    }
+
+    #[test]
+    fn test_snapshot_id_as_ref() {
+        let id = SnapshotId::new("snap-ghi");
+        let s: &str = id.as_ref();
+        assert_eq!(s, "snap-ghi");
+    }
+
+    #[test]
+    fn test_snapshot_metadata_from_snapshot() {
+        let snapshot = Snapshot {
+            snapshot_id: SnapshotId::new("snap-001"),
+            created_at: Utc::now(),
+            hosts_content: "192.168.1.1\ttest.local".into(),
+            entry_count: 1,
+            trigger: "manual".into(),
+            name: Some("backup".into()),
+            event_log_position: Some(42),
+        };
+
+        let metadata: SnapshotMetadata = snapshot.clone().into();
+        assert_eq!(metadata.snapshot_id, snapshot.snapshot_id);
+        assert_eq!(metadata.created_at, snapshot.created_at);
+        assert_eq!(metadata.entry_count, snapshot.entry_count);
+        assert_eq!(metadata.trigger, snapshot.trigger);
+        assert_eq!(metadata.name, snapshot.name);
+    }
+
+    #[test]
+    fn test_host_filter_default() {
+        let filter = HostFilter::default();
+        assert!(filter.ip_pattern.is_none());
+        assert!(filter.hostname_pattern.is_none());
+        assert!(filter.tags.is_none());
     }
 }
