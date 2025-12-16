@@ -169,6 +169,7 @@ const QUEUE_CAPACITY: usize = 100;
 #[derive(Clone)]
 pub struct WriteQueue {
     tx: mpsc::Sender<WriteCommand>,
+    operation_timeout: Duration,
 }
 
 impl WriteQueue {
@@ -180,7 +181,22 @@ impl WriteQueue {
         let (tx, rx) = mpsc::channel(QUEUE_CAPACITY);
         tokio::spawn(write_worker(rx, handler));
         info!(capacity = QUEUE_CAPACITY, "Write queue initialized");
-        Self { tx }
+        Self {
+            tx,
+            operation_timeout: DEFAULT_OPERATION_TIMEOUT,
+        }
+    }
+
+    /// Set a custom operation timeout
+    ///
+    /// Useful for tests running under instrumentation (e.g., coverage tools)
+    /// where operations may be significantly slower, or for production environments
+    /// with slow storage backends.
+    #[must_use]
+    #[allow(dead_code)] // Used in tests; kept public for production flexibility
+    pub fn with_timeout(mut self, timeout: Duration) -> Self {
+        self.operation_timeout = timeout;
+        self
     }
 
     /// Send an add host command and wait for result
@@ -214,7 +230,7 @@ impl WriteQueue {
                 )
             })?;
 
-        match timeout(DEFAULT_OPERATION_TIMEOUT, reply_rx).await {
+        match timeout(self.operation_timeout, reply_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
                 warn!(ip = %ip_address, hostname = %hostname, "add_host reply channel dropped");
@@ -223,10 +239,10 @@ impl WriteQueue {
                 ))
             }
             Err(_) => {
-                warn!(ip = %ip_address, hostname = %hostname, timeout_secs = DEFAULT_OPERATION_TIMEOUT.as_secs(), "add_host timed out");
+                warn!(ip = %ip_address, hostname = %hostname, timeout_secs = self.operation_timeout.as_secs(), "add_host timed out");
                 Err(crate::server::commands::CommandError::Internal(format!(
                     "Operation timed out after {} seconds",
-                    DEFAULT_OPERATION_TIMEOUT.as_secs()
+                    self.operation_timeout.as_secs()
                 )))
             }
         }
@@ -262,7 +278,7 @@ impl WriteQueue {
                 )
             })?;
 
-        match timeout(DEFAULT_OPERATION_TIMEOUT, reply_rx).await {
+        match timeout(self.operation_timeout, reply_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
                 warn!(id = %id, "update_host reply channel dropped");
@@ -271,10 +287,10 @@ impl WriteQueue {
                 ))
             }
             Err(_) => {
-                warn!(id = %id, timeout_secs = DEFAULT_OPERATION_TIMEOUT.as_secs(), "update_host timed out");
+                warn!(id = %id, timeout_secs = self.operation_timeout.as_secs(), "update_host timed out");
                 Err(crate::server::commands::CommandError::Internal(format!(
                     "Operation timed out after {} seconds",
-                    DEFAULT_OPERATION_TIMEOUT.as_secs()
+                    self.operation_timeout.as_secs()
                 )))
             }
         }
@@ -302,7 +318,7 @@ impl WriteQueue {
                 )
             })?;
 
-        match timeout(DEFAULT_OPERATION_TIMEOUT, reply_rx).await {
+        match timeout(self.operation_timeout, reply_rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => {
                 warn!(id = %id, "delete_host reply channel dropped");
@@ -311,10 +327,10 @@ impl WriteQueue {
                 ))
             }
             Err(_) => {
-                warn!(id = %id, timeout_secs = DEFAULT_OPERATION_TIMEOUT.as_secs(), "delete_host timed out");
+                warn!(id = %id, timeout_secs = self.operation_timeout.as_secs(), "delete_host timed out");
                 Err(crate::server::commands::CommandError::Internal(format!(
                     "Operation timed out after {} seconds",
-                    DEFAULT_OPERATION_TIMEOUT.as_secs()
+                    self.operation_timeout.as_secs()
                 )))
             }
         }
@@ -744,9 +760,14 @@ mod tests {
     /// 1. All operations eventually complete (backpressure works correctly)
     /// 2. Data integrity is maintained (no duplicates, correct count)
     /// 3. No deadlocks or timeouts occur
+    ///
+    /// Note: Uses a 120-second timeout to accommodate coverage instrumentation overhead
+    /// (tarpaulin adds ~10-50x overhead via ptrace).
     #[tokio::test]
     async fn test_backpressure_with_high_concurrency() {
         let (write_queue, commands, _tempdir) = setup_write_queue().await;
+        // Use longer timeout for coverage runs where instrumentation adds significant overhead
+        let write_queue = write_queue.with_timeout(Duration::from_secs(120));
 
         // Spawn 150 concurrent add_host operations (exceeds QUEUE_CAPACITY of 100)
         let mut handles = Vec::with_capacity(150);
