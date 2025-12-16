@@ -10,6 +10,12 @@ pub enum ValidationError {
 
     #[error("Invalid hostname: {0}")]
     InvalidHostname(String),
+
+    #[error("Alias '{0}' matches canonical hostname")]
+    AliasMatchesHostname(String),
+
+    #[error("Duplicate alias '{0}' in entry")]
+    DuplicateAlias(String),
 }
 
 pub type ValidationResult<T> = Result<T, ValidationError>;
@@ -75,6 +81,40 @@ pub fn validate_hostname(hostname: &str) -> ValidationResult<String> {
     }
 
     Ok(hostname.to_string())
+}
+
+/// Validate a single alias (same rules as hostname)
+pub fn validate_alias(alias: &str) -> Result<(), ValidationError> {
+    validate_hostname(alias)?;
+    Ok(())
+}
+
+/// Validate alias list for a host entry
+pub fn validate_aliases(
+    aliases: &[String],
+    canonical_hostname: &str,
+) -> Result<(), ValidationError> {
+    use std::collections::HashSet;
+
+    let mut seen = HashSet::new();
+
+    for alias in aliases {
+        // Same validation as hostname
+        validate_alias(alias)?;
+
+        // Cannot match canonical hostname
+        if alias.eq_ignore_ascii_case(canonical_hostname) {
+            return Err(ValidationError::AliasMatchesHostname(alias.clone()));
+        }
+
+        // No duplicates within entry (case-insensitive)
+        let lower = alias.to_lowercase();
+        if !seen.insert(lower) {
+            return Err(ValidationError::DuplicateAlias(alias.clone()));
+        }
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
@@ -320,5 +360,66 @@ mod tests {
         let too_long_hostname = format!("{}.{}.{}.{}", label, label, label, &label[..62]); // 254 chars
         assert_eq!(too_long_hostname.len(), 254);
         assert!(validate_hostname(&too_long_hostname).is_err());
+    }
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_alias_same_as_hostname() {
+        // Valid hostname = valid alias
+        assert!(validate_alias("server.local").is_ok());
+        assert!(validate_alias("srv").is_ok());
+
+        // Invalid hostname = invalid alias
+        assert!(validate_alias("").is_err());
+        assert!(validate_alias("-invalid").is_err());
+    }
+
+    #[test]
+    fn test_validate_aliases_empty_allowed() {
+        assert!(validate_aliases(&[], "server.local").is_ok());
+    }
+
+    #[test]
+    fn test_validate_aliases_valid() {
+        let aliases = vec!["srv".to_string(), "s.local".to_string()];
+        assert!(validate_aliases(&aliases, "server.local").is_ok());
+    }
+
+    #[test]
+    fn test_validate_aliases_matches_hostname() {
+        let aliases = vec!["srv".to_string(), "server.local".to_string()];
+        let err = validate_aliases(&aliases, "server.local").unwrap_err();
+        assert!(matches!(err, ValidationError::AliasMatchesHostname(_)));
+    }
+
+    #[test]
+    fn test_validate_aliases_matches_hostname_case_insensitive() {
+        let aliases = vec!["SERVER.LOCAL".to_string()];
+        let err = validate_aliases(&aliases, "server.local").unwrap_err();
+        assert!(matches!(err, ValidationError::AliasMatchesHostname(_)));
+    }
+
+    #[test]
+    fn test_validate_aliases_duplicate() {
+        let aliases = vec!["srv".to_string(), "srv".to_string()];
+        let err = validate_aliases(&aliases, "server.local").unwrap_err();
+        assert!(matches!(err, ValidationError::DuplicateAlias(_)));
+    }
+
+    #[test]
+    fn test_validate_aliases_duplicate_case_insensitive() {
+        let aliases = vec!["srv".to_string(), "SRV".to_string()];
+        let err = validate_aliases(&aliases, "server.local").unwrap_err();
+        assert!(matches!(err, ValidationError::DuplicateAlias(_)));
+    }
+
+    #[test]
+    fn test_validate_aliases_invalid_format() {
+        let aliases = vec!["-invalid".to_string()];
+        assert!(validate_aliases(&aliases, "server.local").is_err());
     }
 }
