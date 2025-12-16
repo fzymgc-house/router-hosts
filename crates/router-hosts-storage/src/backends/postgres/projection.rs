@@ -30,7 +30,7 @@ impl PostgresStorage {
     pub(crate) async fn list_all_impl(&self) -> Result<Vec<HostEntry>, StorageError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, ip_address, hostname, comment, tags,
+            SELECT id, ip_address, hostname, comment, tags, aliases,
                    created_at, updated_at, event_version
             FROM host_entries_current
             ORDER BY ip_address, hostname
@@ -49,7 +49,7 @@ impl PostgresStorage {
     pub(crate) async fn get_by_id_impl(&self, id: Ulid) -> Result<HostEntry, StorageError> {
         let row = sqlx::query(
             r#"
-            SELECT id, ip_address, hostname, comment, tags,
+            SELECT id, ip_address, hostname, comment, tags, aliases,
                    created_at, updated_at, event_version
             FROM host_entries_current
             WHERE id = $1
@@ -75,7 +75,7 @@ impl PostgresStorage {
     ) -> Result<Option<HostEntry>, StorageError> {
         let row = sqlx::query(
             r#"
-            SELECT id, ip_address, hostname, comment, tags,
+            SELECT id, ip_address, hostname, comment, tags, aliases,
                    created_at, updated_at, event_version
             FROM host_entries_current
             WHERE ip_address = $1 AND hostname = $2
@@ -117,8 +117,16 @@ impl PostgresStorage {
 
         if let Some(ref hostname_pattern) = filter.hostname_pattern {
             param_idx += 1;
-            conditions.push(format!("hostname LIKE ${}", param_idx));
-            add_arg(&mut args, format!("%{}%", hostname_pattern))?;
+            let pattern1_idx = param_idx;
+            param_idx += 1;
+            let pattern2_idx = param_idx;
+            conditions.push(format!(
+                "(hostname LIKE ${} OR aliases LIKE ${})",
+                pattern1_idx, pattern2_idx
+            ));
+            let pattern = format!("%{}%", hostname_pattern);
+            add_arg(&mut args, pattern.clone())?;
+            add_arg(&mut args, pattern)?;
         }
 
         // Handle tag filters - each tag becomes a separate LIKE condition
@@ -139,7 +147,7 @@ impl PostgresStorage {
 
         let query = format!(
             r#"
-            SELECT id, ip_address, hostname, comment, tags,
+            SELECT id, ip_address, hostname, comment, tags, aliases,
                    created_at, updated_at, event_version
             FROM host_entries_current
             {}
@@ -236,6 +244,15 @@ impl PostgresStorage {
                 FROM events_at_time
                 WHERE tags IS NOT NULL
                 ORDER BY aggregate_id, event_version DESC
+            ),
+            -- Get last non-null aliases
+            aliases_values AS (
+                SELECT DISTINCT ON (aggregate_id)
+                    aggregate_id,
+                    aliases
+                FROM events_at_time
+                WHERE aliases IS NOT NULL
+                ORDER BY aggregate_id, event_version DESC
             )
             SELECT
                 le.aggregate_id as id,
@@ -243,6 +260,7 @@ impl PostgresStorage {
                 hn.hostname,
                 cv.comment,
                 tv.tags,
+                av.aliases,
                 fe.created_at,
                 le.updated_at,
                 le.event_version
@@ -252,6 +270,7 @@ impl PostgresStorage {
             LEFT JOIN hostname_values hn ON hn.aggregate_id = le.aggregate_id
             LEFT JOIN comment_values cv ON cv.aggregate_id = le.aggregate_id
             LEFT JOIN tags_values tv ON tv.aggregate_id = le.aggregate_id
+            LEFT JOIN aliases_values av ON av.aggregate_id = le.aggregate_id
             WHERE le.latest_event_type != 'HostDeleted'
             ORDER BY ip.ip_address, hn.hostname
             "#,
@@ -278,10 +297,16 @@ fn row_to_host_entry(row: &sqlx::postgres::PgRow) -> Result<HostEntry, StorageEr
         .map(|s| serde_json::from_str(&s).unwrap_or_default())
         .unwrap_or_default();
 
+    let aliases_json: Option<String> = row.get("aliases");
+    let aliases: Vec<String> = aliases_json
+        .map(|s| serde_json::from_str(&s).unwrap_or_default())
+        .unwrap_or_default();
+
     Ok(HostEntry {
         id,
         ip_address: row.get("ip_address"),
         hostname: row.get("hostname"),
+        aliases,
         comment: row.get("comment"),
         tags,
         created_at: row.get("created_at"),

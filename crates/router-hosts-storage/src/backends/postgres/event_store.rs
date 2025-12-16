@@ -19,6 +19,8 @@ struct EventData {
     #[serde(skip_serializing_if = "Option::is_none")]
     tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    aliases: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     previous_ip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_hostname: Option<String>,
@@ -26,6 +28,8 @@ struct EventData {
     previous_comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_tags: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_aliases: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     deleted_reason: Option<String>,
 }
@@ -36,6 +40,7 @@ struct ExtractedEventData {
     hostname: Option<String>,
     comment: Option<String>,
     tags: Option<String>,
+    aliases: Option<String>,
     event_timestamp: chrono::DateTime<Utc>,
     metadata_json: String,
 }
@@ -101,10 +106,10 @@ impl PostgresStorage {
             r#"
             INSERT INTO host_events (
                 event_id, aggregate_id, event_type, event_version,
-                ip_address, hostname, comment, tags,
+                ip_address, hostname, comment, tags, aliases,
                 event_timestamp, metadata,
                 created_at, created_by, expected_version
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             "#,
         )
         .bind(event.event_id.to_string())
@@ -115,6 +120,7 @@ impl PostgresStorage {
         .bind(&extracted.hostname)
         .bind(&extracted.comment)
         .bind(&extracted.tags)
+        .bind(&extracted.aliases)
         .bind(extracted.event_timestamp)
         .bind(&extracted.metadata_json)
         .bind(event.created_at)
@@ -206,10 +212,10 @@ impl PostgresStorage {
                 r#"
                 INSERT INTO host_events (
                     event_id, aggregate_id, event_type, event_version,
-                    ip_address, hostname, comment, tags,
+                    ip_address, hostname, comment, tags, aliases,
                     event_timestamp, metadata,
                     created_at, created_by, expected_version
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 "#,
             )
             .bind(event.event_id.to_string())
@@ -220,6 +226,7 @@ impl PostgresStorage {
             .bind(&extracted.hostname)
             .bind(&extracted.comment)
             .bind(&extracted.tags)
+            .bind(&extracted.aliases)
             .bind(extracted.event_timestamp)
             .bind(&extracted.metadata_json)
             .bind(event.created_at)
@@ -329,10 +336,11 @@ impl PostgresStorage {
 
 /// Extract column values and metadata JSON from an event
 fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageError> {
-    let (ip_address, hostname, comment, tags, event_timestamp, event_data) = match event {
+    let (ip_address, hostname, comment, tags, aliases, event_timestamp, event_data) = match event {
         HostEvent::HostCreated {
             ip_address,
             hostname,
+            aliases,
             comment,
             tags,
             created_at,
@@ -341,10 +349,12 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             Some(hostname.clone()),
             comment.clone(),
             Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".into())),
+            Some(serde_json::to_string(aliases).unwrap_or_else(|_| "[]".into())),
             *created_at,
             EventData {
                 comment: comment.clone(),
                 tags: Some(tags.clone()),
+                aliases: Some(aliases.clone()),
                 ..Default::default()
             },
         ),
@@ -354,6 +364,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             changed_at,
         } => (
             Some(new_ip.clone()),
+            None,
             None,
             None,
             None,
@@ -372,6 +383,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             Some(new_hostname.clone()),
             None,
             None,
+            None,
             *changed_at,
             EventData {
                 previous_hostname: Some(old_hostname.clone()),
@@ -386,6 +398,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             None,
             None,
             new_comment.clone(),
+            None,
             None,
             *updated_at,
             EventData {
@@ -403,10 +416,28 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             None,
             None,
             Some(serde_json::to_string(new_tags).unwrap_or_else(|_| "[]".into())),
+            None,
             *modified_at,
             EventData {
                 tags: Some(new_tags.clone()),
                 previous_tags: Some(old_tags.clone()),
+                ..Default::default()
+            },
+        ),
+        HostEvent::AliasesModified {
+            old_aliases,
+            new_aliases,
+            modified_at,
+        } => (
+            None,
+            None,
+            None,
+            None,
+            Some(serde_json::to_string(new_aliases).unwrap_or_else(|_| "[]".into())),
+            *modified_at,
+            EventData {
+                aliases: Some(new_aliases.clone()),
+                previous_aliases: Some(old_aliases.clone()),
                 ..Default::default()
             },
         ),
@@ -418,6 +449,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
         } => (
             Some(ip_address.clone()),
             Some(hostname.clone()),
+            None,
             None,
             None,
             *deleted_at,
@@ -436,6 +468,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
         hostname,
         comment,
         tags,
+        aliases,
         event_timestamp,
         metadata_json,
     })
@@ -454,6 +487,7 @@ fn reconstruct_event(
             ip_address: ip.ok_or_else(|| StorageError::InvalidData("missing ip".into()))?,
             hostname: hostname
                 .ok_or_else(|| StorageError::InvalidData("missing hostname".into()))?,
+            aliases: data.aliases.clone().unwrap_or_default(),
             comment: data.comment.clone(),
             tags: data.tags.clone().unwrap_or_default(),
             created_at: event_ts,
@@ -483,6 +517,11 @@ fn reconstruct_event(
         "TagsModified" => Ok(HostEvent::TagsModified {
             old_tags: data.previous_tags.clone().unwrap_or_default(),
             new_tags: data.tags.clone().unwrap_or_default(),
+            modified_at: event_ts,
+        }),
+        "AliasesModified" => Ok(HostEvent::AliasesModified {
+            old_aliases: data.previous_aliases.clone().unwrap_or_default(),
+            new_aliases: data.aliases.clone().unwrap_or_default(),
             modified_at: event_ts,
         }),
         "HostDeleted" => Ok(HostEvent::HostDeleted {
