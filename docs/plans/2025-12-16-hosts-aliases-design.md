@@ -106,6 +106,23 @@ message AliasesUpdate {
 - Must be unique within the same entry (no duplicate aliases)
 - Cross-entry duplicates allowed (hosts(5) permits this, DNS resolves first match)
 
+### Search Behavior
+
+The `hostname_pattern` filter matches against both canonical hostname AND aliases. This aligns with user expectations - searching for any name a host responds to should find it.
+
+### Import Conflict Handling
+
+When an alias in an imported entry matches an existing canonical hostname:
+
+| Mode | Behavior |
+|------|----------|
+| `skip` | Allow (hosts(5) compatible) |
+| `replace` | Allow (hosts(5) compatible) |
+| `strict` | Reject with error |
+| `strict` + `--force` | Allow (override strict check) |
+
+This gives users control: permissive by default, strict mode catches potential mistakes, `--force` allows intentional shadowing.
+
 ### Output Format
 
 **Canonical hostname first, then aliases alphabetically sorted:**
@@ -167,6 +184,16 @@ message UpdateHostRequest {
 
 **Breaking Change:** `UpdateHostRequest.tags` changes from `repeated string tags = 5` to `TagsUpdate tags = 8`. Clients must update to use the wrapper message.
 
+```protobuf
+message ImportHostsRequest {
+    bytes chunk = 1;
+    bool last_chunk = 2;
+    optional string format = 3;
+    optional string conflict_mode = 4;
+    optional bool force = 5;          // NEW - override strict mode alias conflicts
+}
+```
+
 ### CLI Changes
 
 **Add command:**
@@ -192,6 +219,15 @@ router-hosts host update <id> --comment "new comment"
 ```
 
 **Rationale:** Using repeatable `--alias` flag (not comma-separated `--aliases`) is more shell-friendly, handles spaces in values, and matches the pattern used for `--tag`.
+
+**Import command:**
+```bash
+# Import with strict mode (default rejects alias conflicts)
+router-hosts host import --file hosts.txt --mode strict
+
+# Force import despite alias conflicts
+router-hosts host import --file hosts.txt --mode strict --force
+```
 
 **List output:**
 ```
