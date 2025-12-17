@@ -61,6 +61,16 @@ impl HostsFileGenerator {
         for entry in entries {
             let mut line = format!("{}\t{}", entry.ip_address, entry.hostname);
 
+            // Add aliases if present (sorted alphabetically for deterministic output)
+            if !entry.aliases.is_empty() {
+                let mut sorted_aliases = entry.aliases.clone();
+                sorted_aliases.sort();
+                for alias in sorted_aliases {
+                    line.push(' ');
+                    line.push_str(&alias);
+                }
+            }
+
             // Add comment and tags
             let has_comment = entry.comment.is_some();
             let has_tags = !entry.tags.is_empty();
@@ -167,6 +177,66 @@ mod tests {
 
         assert!(content.contains("192.168.1.10\tserver.local"));
         assert!(content.contains("192.168.1.20\tnas.local\t# NAS storage [homelab]"));
+    }
+
+    #[test]
+    fn test_format_hosts_file_with_aliases() {
+        let gen = HostsFileGenerator::new("/tmp/hosts");
+        let entries = vec![
+            HostEntry {
+                id: ulid::Ulid::new(),
+                ip_address: "192.168.1.10".to_string(),
+                hostname: "server.local".to_string(),
+                aliases: vec!["zulu".to_string(), "alpha".to_string()],
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            },
+            HostEntry {
+                id: ulid::Ulid::new(),
+                ip_address: "192.168.1.20".to_string(),
+                hostname: "nas.local".to_string(),
+                aliases: vec!["www".to_string(), "api".to_string()],
+                comment: Some("Web server".to_string()),
+                tags: vec!["prod".to_string()],
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                version: "01ARZ3NDEKTSV4RRFFQ69G5FAQ".to_string(),
+            },
+        ];
+
+        let content = gen.format_hosts_file(&entries);
+
+        // Verify aliases are sorted alphabetically
+        assert!(content.contains("192.168.1.10\tserver.local alpha zulu"));
+        assert!(content.contains("192.168.1.20\tnas.local api www\t# Web server [prod]"));
+    }
+
+    #[test]
+    fn test_format_hosts_file_aliases_sorted() {
+        let gen = HostsFileGenerator::new("/tmp/hosts");
+        let entries = vec![HostEntry {
+            id: ulid::Ulid::new(),
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec![
+                "zebra".to_string(),
+                "alpha".to_string(),
+                "middle".to_string(),
+            ],
+            comment: None,
+            tags: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+        }];
+
+        let content = gen.format_hosts_file(&entries);
+
+        // Verify alphabetical sorting: alpha, middle, zebra
+        assert!(content.contains("server.local alpha middle zebra"));
     }
 
     #[tokio::test]

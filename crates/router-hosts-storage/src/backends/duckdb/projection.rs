@@ -18,6 +18,10 @@ use crate::backends::duckdb::DuckDbStorage;
 use crate::error::StorageError;
 use crate::types::{HostEntry, HostFilter};
 
+/// Current state tracked during event stream loading
+/// (ip, hostname, comment, tags, aliases)
+type CurrentState = (String, String, Option<String>, Vec<String>, Vec<String>);
+
 impl DuckDbStorage {
     /// List all active host entries
     ///
@@ -596,7 +600,7 @@ impl DuckDbStorage {
                     .map_err(|e| StorageError::query("failed to query events", e))?;
 
                 // Rebuild state by applying events (ip, hostname, comment, tags, aliases)
-                let mut current_state: Option<(String, String, Option<String>, Vec<String>, Vec<String>)> = None;
+                let mut current_state: Option<CurrentState> = None;
 
                 for row in rows {
                     let (event_type, ip_address, hostname, metadata_json, event_timestamp_micros) =

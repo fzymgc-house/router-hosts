@@ -504,7 +504,7 @@ async fn test_export_hosts_csv_format() {
 
     // First chunk should be header
     let header = String::from_utf8(chunks[0].clone()).unwrap();
-    assert_eq!(header, "ip_address,hostname,comment,tags\n");
+    assert_eq!(header, "ip_address,hostname,aliases,comment,tags\n");
 
     // Second chunk should have properly escaped comment
     let entry = String::from_utf8(chunks[1].clone()).unwrap();
@@ -608,7 +608,7 @@ async fn test_export_hosts_empty_database_csv_format() {
         "Empty database CSV export should return only header chunk"
     );
     let header = String::from_utf8(chunks[0].clone()).unwrap();
-    assert_eq!(header, "ip_address,hostname,comment,tags\n");
+    assert_eq!(header, "ip_address,hostname,aliases,comment,tags\n");
 }
 
 #[tokio::test]

@@ -37,6 +37,16 @@ impl std::str::FromStr for ExportFormat {
 pub fn format_hosts_entry(entry: &HostEntry) -> Vec<u8> {
     let mut line = format!("{}\t{}", entry.ip_address, entry.hostname);
 
+    // Add aliases if present (sorted alphabetically for deterministic output)
+    if !entry.aliases.is_empty() {
+        let mut sorted_aliases = entry.aliases.clone();
+        sorted_aliases.sort();
+        for alias in sorted_aliases {
+            line.push(' ');
+            line.push_str(&alias);
+        }
+    }
+
     // Add comment if present
     let has_comment = entry.comment.as_ref().is_some_and(|c| !c.is_empty());
     let has_tags = !entry.tags.is_empty();
@@ -92,6 +102,7 @@ pub fn format_json_entry(entry: &HostEntry) -> Result<Vec<u8>, ExportError> {
         "id": entry.id.to_string(),
         "ip_address": entry.ip_address,
         "hostname": entry.hostname,
+        "aliases": entry.aliases,
         "comment": entry.comment,
         "tags": entry.tags,
         "created_at": entry.created_at.to_rfc3339(),
@@ -107,23 +118,25 @@ pub fn format_json_entry(entry: &HostEntry) -> Result<Vec<u8>, ExportError> {
 
 /// Format CSV header row
 pub fn format_csv_header() -> Vec<u8> {
-    b"ip_address,hostname,comment,tags\n".to_vec()
+    b"ip_address,hostname,aliases,comment,tags\n".to_vec()
 }
 
 /// Format a host entry as CSV
 pub fn format_csv_entry(entry: &HostEntry) -> Vec<u8> {
+    let aliases = entry.aliases.join(";");
     let comment = entry.comment.as_deref().unwrap_or("");
     let tags = entry.tags.join(";");
 
     // Escape all fields for defensive CSV formatting
     let ip_escaped = escape_csv_field(&entry.ip_address);
     let hostname_escaped = escape_csv_field(&entry.hostname);
+    let aliases_escaped = escape_csv_field(&aliases);
     let comment_escaped = escape_csv_field(comment);
     let tags_escaped = escape_csv_field(&tags);
 
     format!(
-        "{},{},{},{}\n",
-        ip_escaped, hostname_escaped, comment_escaped, tags_escaped
+        "{},{},{},{},{}\n",
+        ip_escaped, hostname_escaped, aliases_escaped, comment_escaped, tags_escaped
     )
     .into_bytes()
 }
@@ -168,6 +181,64 @@ mod tests {
         let entry = make_entry("192.168.1.10", "server.local", vec![], None, vec![]);
         let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
         assert_eq!(output, "192.168.1.10\tserver.local\n");
+    }
+
+    #[test]
+    fn test_format_hosts_entry_with_aliases() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["zulu", "alpha", "beta"],
+            None,
+            vec![],
+        );
+        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        // Aliases should be sorted alphabetically
+        assert_eq!(output, "192.168.1.10\tserver.local alpha beta zulu\n");
+    }
+
+    #[test]
+    fn test_format_hosts_entry_with_aliases_and_comment() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["www", "api"],
+            Some("Web server"),
+            vec![],
+        );
+        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        // Aliases should be sorted, then TAB and comment
+        assert_eq!(output, "192.168.1.10\tserver.local api www\t# Web server\n");
+    }
+
+    #[test]
+    fn test_format_hosts_entry_with_aliases_comment_and_tags() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["www"],
+            Some("Production"),
+            vec!["prod", "web"],
+        );
+        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        assert_eq!(
+            output,
+            "192.168.1.10\tserver.local www\t# Production [prod, web]\n"
+        );
+    }
+
+    #[test]
+    fn test_format_hosts_entry_aliases_sorted() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["zebra", "alpha", "middle"],
+            None,
+            vec![],
+        );
+        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        // Verify alphabetical sorting
+        assert!(output.contains("alpha middle zebra"));
     }
 
     #[test]
@@ -236,6 +307,30 @@ mod tests {
         assert_eq!(parsed["hostname"], "server.local");
         assert_eq!(parsed["comment"], "Test");
         assert_eq!(parsed["tags"][0], "tag1");
+        // Verify aliases field exists and is an empty array
+        assert!(parsed["aliases"].is_array());
+        assert_eq!(parsed["aliases"].as_array().unwrap().len(), 0);
+    }
+
+    #[test]
+    fn test_format_json_entry_with_aliases() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["www", "api"],
+            Some("Test"),
+            vec!["tag1"],
+        );
+        let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(parsed["ip_address"], "192.168.1.10");
+        assert_eq!(parsed["hostname"], "server.local");
+        assert!(parsed["aliases"].is_array());
+        let aliases = parsed["aliases"].as_array().unwrap();
+        assert_eq!(aliases.len(), 2);
+        assert_eq!(aliases[0], "www");
+        assert_eq!(aliases[1], "api");
     }
 
     #[test]
@@ -251,7 +346,36 @@ mod tests {
     fn test_format_csv_entry_simple() {
         let entry = make_entry("192.168.1.10", "server.local", vec![], None, vec![]);
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
-        assert_eq!(output, "192.168.1.10,server.local,,\n");
+        assert_eq!(output, "192.168.1.10,server.local,,,\n");
+    }
+
+    #[test]
+    fn test_format_csv_entry_with_aliases() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["www", "api"],
+            None,
+            vec![],
+        );
+        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        assert_eq!(output, "192.168.1.10,server.local,www;api,,\n");
+    }
+
+    #[test]
+    fn test_format_csv_entry_with_aliases_and_tags() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["www"],
+            Some("Web server"),
+            vec!["prod", "web"],
+        );
+        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        assert_eq!(
+            output,
+            "192.168.1.10,server.local,www,Web server,prod;web\n"
+        );
     }
 
     #[test]
@@ -264,7 +388,7 @@ mod tests {
             vec!["tag1", "tag2"],
         );
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
-        assert_eq!(output, "192.168.1.10,server.local,,tag1;tag2\n");
+        assert_eq!(output, "192.168.1.10,server.local,,,tag1;tag2\n");
     }
 
     #[test]
@@ -277,13 +401,13 @@ mod tests {
             vec![],
         );
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
-        assert_eq!(output, "192.168.1.10,server.local,\"Hello, world\",\n");
+        assert_eq!(output, "192.168.1.10,server.local,,\"Hello, world\",\n");
     }
 
     #[test]
     fn test_csv_header() {
         let header = String::from_utf8(format_csv_header()).unwrap();
-        assert_eq!(header, "ip_address,hostname,comment,tags\n");
+        assert_eq!(header, "ip_address,hostname,aliases,comment,tags\n");
     }
 
     #[test]
@@ -299,7 +423,7 @@ mod tests {
         // Quotes should be escaped by doubling them
         assert_eq!(
             output,
-            "192.168.1.10,server.local,\"He said \"\"hello\"\"\",\n"
+            "192.168.1.10,server.local,,\"He said \"\"hello\"\"\",\n"
         );
     }
 

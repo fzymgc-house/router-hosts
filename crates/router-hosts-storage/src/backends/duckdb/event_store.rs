@@ -18,6 +18,11 @@ type ExtractedEventData = (
     DateTime<Utc>,
     EventData,
 );
+
+/// Current state tracked during event stream loading
+/// (ip, hostname, comment, tags, aliases)
+type CurrentState = (String, String, Option<String>, Vec<String>, Vec<String>);
+
 use duckdb::OptionalExt;
 use serde::{Deserialize, Serialize};
 use ulid::Ulid;
@@ -344,13 +349,7 @@ impl DuckDbStorage {
                 .map_err(|e| StorageError::query("failed to query events", e))?;
 
             let mut envelopes = Vec::new();
-            let mut current_state: Option<(
-                String,
-                String,
-                Option<String>,
-                Vec<String>,
-                Vec<String>,
-            )> = None; // (ip, hostname, comment, tags, aliases)
+            let mut current_state: Option<CurrentState> = None; // (ip, hostname, comment, tags, aliases)
 
             for row in rows {
                 let (
@@ -612,7 +611,7 @@ fn reconstruct_event(
     hostname: Option<String>,
     event_data: &EventData,
     event_timestamp: DateTime<Utc>,
-    current_state: &mut Option<(String, String, Option<String>, Vec<String>, Vec<String>)>,
+    current_state: &mut Option<CurrentState>,
 ) -> Result<HostEvent, StorageError> {
     match event_type {
         "HostCreated" => {
