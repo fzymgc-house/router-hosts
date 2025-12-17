@@ -29,7 +29,7 @@ use router_hosts::server::write_queue::WriteQueue;
 use router_hosts_common::proto::hosts_service_client::HostsServiceClient;
 use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
 use router_hosts_common::proto::{
-    AddHostRequest, CreateSnapshotRequest, DeleteHostRequest, DeleteSnapshotRequest,
+    AddHostRequest, AliasesUpdate, CreateSnapshotRequest, DeleteHostRequest, DeleteSnapshotRequest,
     ExportHostsRequest, GetHostRequest, ImportHostsRequest, ListHostsRequest, ListSnapshotsRequest,
     RollbackToSnapshotRequest, SearchHostsRequest, UpdateHostRequest,
 };
@@ -2715,4 +2715,279 @@ async fn test_invalid_id_format_returns_invalid_argument() {
             status.code()
         );
     }
+}
+
+// ============================================================================
+// Aliases Integration Tests
+//
+// These tests verify the aliases feature works end-to-end through gRPC.
+// ============================================================================
+
+#[tokio::test]
+async fn test_add_host_with_aliases() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    let response = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["srv".to_string(), "s.local".to_string()],
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let entry = response.entry.unwrap();
+    assert_eq!(entry.aliases, vec!["srv", "s.local"]);
+}
+
+#[tokio::test]
+async fn test_update_host_add_aliases() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create host without aliases
+    let response = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec![],
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let id = response.id;
+
+    // Update with aliases using wrapper
+    let response = client
+        .update_host(UpdateHostRequest {
+            id: id.clone(),
+            ip_address: None,
+            hostname: None,
+            comment: None,
+            expected_version: None,
+            aliases: Some(AliasesUpdate {
+                values: vec!["srv".to_string(), "app".to_string()],
+            }),
+            tags: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let entry = response.entry.unwrap();
+    assert_eq!(entry.aliases, vec!["srv", "app"]);
+}
+
+#[tokio::test]
+async fn test_update_host_clear_aliases() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create host with aliases
+    let response = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["old-alias".to_string()],
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let id = response.id;
+
+    // Update with empty aliases wrapper to clear
+    let response = client
+        .update_host(UpdateHostRequest {
+            id: id.clone(),
+            ip_address: None,
+            hostname: None,
+            comment: None,
+            expected_version: None,
+            aliases: Some(AliasesUpdate { values: vec![] }),
+            tags: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let entry = response.entry.unwrap();
+    assert!(entry.aliases.is_empty());
+}
+
+#[tokio::test]
+async fn test_update_host_preserves_aliases() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create host with aliases
+    let response = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["srv".to_string(), "app".to_string()],
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let id = response.id;
+
+    // Update hostname but omit aliases field (None wrapper)
+    let response = client
+        .update_host(UpdateHostRequest {
+            id: id.clone(),
+            ip_address: None,
+            hostname: Some("newserver.local".to_string()),
+            comment: None,
+            expected_version: None,
+            aliases: None, // Preserve existing aliases
+            tags: None,
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let entry = response.entry.unwrap();
+    assert_eq!(entry.hostname, "newserver.local");
+    assert_eq!(entry.aliases, vec!["srv", "app"]); // Unchanged
+}
+
+#[tokio::test]
+async fn test_search_matches_alias() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create host with aliases
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["webserver".to_string(), "app".to_string()],
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Search by alias name (should match)
+    let mut stream = client
+        .search_hosts(SearchHostsRequest {
+            query: "webserver".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut results = vec![];
+    while let Some(response) = stream.message().await.unwrap() {
+        results.push(response.entry.unwrap());
+    }
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].hostname, "server.local");
+    assert!(results[0].aliases.contains(&"webserver".to_string()));
+}
+
+#[tokio::test]
+async fn test_import_export_roundtrip_with_aliases() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Add a host with aliases
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["srv".to_string(), "app".to_string()],
+            comment: Some("Test server".to_string()),
+            tags: vec!["test".to_string()],
+        })
+        .await
+        .unwrap();
+
+    // Export as hosts format
+    let export_response = client
+        .export_hosts(ExportHostsRequest {
+            format: "hosts".to_string(),
+        })
+        .await
+        .unwrap();
+
+    let mut export_data = Vec::new();
+    let mut stream = export_response.into_inner();
+    while let Some(chunk) = stream.message().await.unwrap() {
+        export_data.extend_from_slice(&chunk.chunk);
+    }
+
+    // Delete the host
+    let list_response = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap();
+
+    let mut stream = list_response.into_inner();
+    let first_entry = stream.message().await.unwrap().unwrap();
+    let host_id = first_entry.entry.as_ref().unwrap().id.clone();
+
+    client
+        .delete_host(DeleteHostRequest { id: host_id })
+        .await
+        .unwrap();
+
+    // Import the exported data
+    let requests = vec![ImportHostsRequest {
+        chunk: export_data,
+        last_chunk: true,
+        format: Some("hosts".to_string()),
+        conflict_mode: Some("skip".to_string()),
+        force: Some(false),
+    }];
+
+    let response = client
+        .import_hosts(tokio_stream::iter(requests))
+        .await
+        .unwrap();
+
+    let mut stream = response.into_inner();
+    let progress = stream.message().await.unwrap().unwrap();
+
+    assert_eq!(progress.created, 1);
+
+    // Verify aliases are preserved
+    let list_response = client
+        .list_hosts(ListHostsRequest {
+            filter: None,
+            limit: None,
+            offset: None,
+        })
+        .await
+        .unwrap();
+
+    let mut stream = list_response.into_inner();
+    let restored_entry = stream.message().await.unwrap().unwrap();
+    let restored = restored_entry.entry.unwrap();
+
+    assert_eq!(restored.hostname, "server.local");
+    // Aliases may be sorted during export/import
+    let mut expected_aliases = vec!["srv", "app"];
+    let mut actual_aliases = restored.aliases.clone();
+    expected_aliases.sort();
+    actual_aliases.sort();
+    assert_eq!(actual_aliases, expected_aliases);
 }
