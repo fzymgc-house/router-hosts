@@ -77,22 +77,28 @@ async fn test_import_export_roundtrip() {
         server.temp_dir.path(),
     );
 
-    // Create hosts file to import
+    // Create hosts file to import with aliases
     let import_file = server.temp_dir.path().join("import.hosts");
     let mut f = std::fs::File::create(&import_file).unwrap();
     writeln!(f, "# Test hosts file").unwrap();
-    writeln!(f, "192.168.1.10    server1.test.local").unwrap();
-    writeln!(f, "192.168.1.20    server2.test.local # Database").unwrap();
+    writeln!(
+        f,
+        "192.168.1.10    server1.test.local srv1 s1  # Primary server"
+    )
+    .unwrap();
+    writeln!(f, "192.168.1.20    server2.test.local srv2     # Database").unwrap();
 
     // Import (hosts format is default)
     cli.import(&import_file).build().assert().success();
 
-    // Verify imported
+    // Verify imported including aliases
     cli.list_hosts()
         .assert()
         .success()
         .stdout(predicate::str::contains("192.168.1.10"))
-        .stdout(predicate::str::contains("server2.test.local"));
+        .stdout(predicate::str::contains("server2.test.local"))
+        .stdout(predicate::str::contains("srv1"))
+        .stdout(predicate::str::contains("s1"));
 
     // Export to JSON
     let export_output = cli.export("json").output().expect("Failed to export");
@@ -100,6 +106,102 @@ async fn test_import_export_roundtrip() {
     let json = String::from_utf8_lossy(&export_output.stdout);
     assert!(json.contains("192.168.1.10"));
     assert!(json.contains("server1.test.local"));
+
+    server.stop().await;
+}
+
+/// Test CRUD workflow with aliases
+#[tokio::test]
+async fn test_crud_with_aliases() {
+    let server = TestServer::start().await;
+    let cli = TestCli::new(
+        server.address(),
+        server.cert_paths.clone(),
+        server.temp_dir.path(),
+    );
+
+    // Add host with aliases
+    let output = cli
+        .add_host("10.0.0.10", "mainserver.local")
+        .alias("main")
+        .alias("srv")
+        .format(OutputFormat::Json)
+        .build()
+        .output()
+        .expect("Failed to run add");
+    assert!(output.status.success());
+
+    // Extract ID
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let json: serde_json::Value = serde_json::from_str(&stdout).expect("Parse JSON");
+    let id = json.get("id").and_then(|v| v.as_str()).unwrap();
+
+    // Verify aliases in list output
+    cli.list_hosts()
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("main"))
+        .stdout(predicate::str::contains("srv"));
+
+    // Update aliases
+    cli.update_host(id)
+        .aliases(vec!["primary", "app"])
+        .build()
+        .assert()
+        .success();
+
+    // Verify updated aliases
+    cli.get_host(id)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("primary"))
+        .stdout(predicate::str::contains("app"));
+
+    // Clear aliases
+    cli.update_host(id)
+        .clear_aliases()
+        .build()
+        .assert()
+        .success();
+
+    // Verify aliases cleared (should not contain old aliases)
+    cli.get_host(id)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("main").not())
+        .stdout(predicate::str::contains("primary").not());
+
+    server.stop().await;
+}
+
+/// Test search matches aliases
+#[tokio::test]
+async fn test_search_by_alias() {
+    let server = TestServer::start().await;
+    let cli = TestCli::new(
+        server.address(),
+        server.cert_paths.clone(),
+        server.temp_dir.path(),
+    );
+
+    // Add host with alias
+    cli.add_host("10.0.0.1", "webserver.local")
+        .alias("www")
+        .alias("http")
+        .build()
+        .assert()
+        .success();
+
+    // Search by alias should find the host
+    cli.search("www")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("webserver.local"));
+
+    cli.search("http")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("webserver.local"));
 
     server.stop().await;
 }
