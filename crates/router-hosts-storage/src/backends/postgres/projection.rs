@@ -120,8 +120,9 @@ impl PostgresStorage {
             let pattern1_idx = param_idx;
             param_idx += 1;
             let pattern2_idx = param_idx;
+            // Use ILIKE for case-insensitive matching (DNS is case-insensitive)
             conditions.push(format!(
-                "(hostname LIKE ${} OR aliases LIKE ${})",
+                "(hostname ILIKE ${} OR aliases ILIKE ${})",
                 pattern1_idx, pattern2_idx
             ));
             let pattern = format!("%{}%", hostname_pattern);

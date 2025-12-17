@@ -7,8 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+
+#### API: UpdateHostRequest tags field changed to wrapper message
+
+The `UpdateHostRequest.tags` field changed from `repeated string tags` to `TagsUpdate tags` wrapper message. This enables proper optional semantics for update operations.
+
+**Migration:**
+- Wrap tag updates: `TagsUpdate { values: ["tag1", "tag2"] }`
+- Clear tags: `TagsUpdate { values: [] }`
+- Preserve tags: Omit the `tags` field entirely
+
+#### CSV Import/Export format change
+
+The CSV format has changed to include an `aliases` column:
+
+**Old format:**
+```csv
+ip_address,hostname,comment,tags
+```
+
+**New format:**
+```csv
+ip_address,hostname,aliases,comment,tags
+```
+
+**Warning:** Old CSV files will be silently misinterpreted if used with the new format. The old `comment` column will be parsed as `aliases`, and `tags` will be parsed as `comment`.
+
+**Migration:** Update CSV files to include the `aliases` column (can be empty).
+
 ### Added
 
+- **Hostname aliases support**: Full hosts(5) alias support per Unix standard
+  - Parse and output multiple hostnames per IP address (canonical + aliases)
+  - CLI flags: `--alias` (repeatable), `--clear-aliases`, `--clear-tags`
+  - Search matches both canonical hostname and aliases
+  - Import/Export support in hosts, JSON, and CSV formats
+  - Aliases sorted alphabetically in output for deterministic results
+- **Import --force flag**: Override strict mode alias conflict checks
 - Automated multi-platform binary releases via cargo-dist (#93)
 - Shell installer script for quick installation
 - Homebrew formula generation for macOS/Linux

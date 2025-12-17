@@ -198,6 +198,9 @@ pub enum HostCommand {
         /// Conflict mode: skip, replace, strict
         #[arg(long, default_value = "skip")]
         conflict_mode: String,
+        /// Force import despite alias conflicts (overrides strict mode)
+        #[arg(long)]
+        force: bool,
     },
     /// Export hosts to stdout
     Export {

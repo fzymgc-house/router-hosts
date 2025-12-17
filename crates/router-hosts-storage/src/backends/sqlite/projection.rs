@@ -378,7 +378,8 @@ impl SqliteStorage {
             }
 
             if let Some(hostname_pattern) = &filter.hostname_pattern {
-                where_clauses.push("(hostname LIKE ? OR EXISTS (SELECT 1 FROM json_each(aliases) WHERE value LIKE ?))".to_string());
+                // Use LIKE with COLLATE NOCASE for case-insensitive matching (DNS is case-insensitive)
+                where_clauses.push("(hostname LIKE ? COLLATE NOCASE OR EXISTS (SELECT 1 FROM json_each(aliases) WHERE value LIKE ? COLLATE NOCASE))".to_string());
                 let pattern = format!("%{}%", hostname_pattern);
                 params.push(pattern.clone());
                 params.push(pattern);

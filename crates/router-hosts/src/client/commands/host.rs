@@ -191,8 +191,9 @@ pub async fn handle(
             file,
             input_format,
             conflict_mode,
+            force,
         } => {
-            let chunks = read_file_chunks(&file, input_format, &conflict_mode)?;
+            let chunks = read_file_chunks(&file, input_format, &conflict_mode, force)?;
 
             let final_response = client
                 .import_hosts(chunks, |progress| {
@@ -239,6 +240,7 @@ fn read_file_chunks(
     path: &Path,
     format: FileFormat,
     conflict_mode: &str,
+    force: bool,
 ) -> Result<Vec<ImportHostsRequest>> {
     // Validate and canonicalize the path (note: this follows symlinks)
     let canonical_path = path
@@ -274,7 +276,7 @@ fn read_file_chunks(
             } else {
                 None
             },
-            force: None, // TODO: Task 9 - add --force flag support for strict mode override
+            force: if force { Some(true) } else { None },
             conflict_mode: if i == 0 {
                 Some(conflict_mode.to_string())
             } else {

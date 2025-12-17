@@ -2901,6 +2901,65 @@ async fn test_search_matches_alias() {
 }
 
 #[tokio::test]
+async fn test_search_alias_case_insensitive() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create host with lowercase alias
+    client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.20".to_string(),
+            hostname: "myserver.local".to_string(),
+            aliases: vec!["www".to_string(), "api".to_string()],
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap();
+
+    // Search with uppercase should still find the host (DNS is case-insensitive)
+    let mut stream = client
+        .search_hosts(SearchHostsRequest {
+            query: "WWW".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut results = vec![];
+    while let Some(response) = stream.message().await.unwrap() {
+        results.push(response.entry.unwrap());
+    }
+
+    assert_eq!(
+        results.len(),
+        1,
+        "Should find host when searching with uppercase alias"
+    );
+    assert_eq!(results[0].hostname, "myserver.local");
+
+    // Search with mixed case should also work
+    let mut stream = client
+        .search_hosts(SearchHostsRequest {
+            query: "Api".to_string(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let mut results = vec![];
+    while let Some(response) = stream.message().await.unwrap() {
+        results.push(response.entry.unwrap());
+    }
+
+    assert_eq!(
+        results.len(),
+        1,
+        "Should find host when searching with mixed case alias"
+    );
+}
+
+#[tokio::test]
 async fn test_import_export_roundtrip_with_aliases() {
     let (addr, _temp_dir) = start_test_server().await;
     let mut client = create_client(addr).await;
@@ -2990,4 +3049,148 @@ async fn test_import_export_roundtrip_with_aliases() {
     expected_aliases.sort();
     actual_aliases.sort();
     assert_eq!(actual_aliases, expected_aliases);
+}
+
+#[tokio::test]
+async fn test_add_host_alias_matches_own_hostname_rejected() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Try to add host where an alias matches the canonical hostname
+    // This should fail validation (alias cannot equal its own hostname)
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["srv".to_string(), "server.local".to_string()], // Invalid: matches hostname
+            comment: None,
+            tags: vec![],
+        })
+        .await;
+
+    assert!(result.is_err(), "Should reject alias matching own hostname");
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(
+        status.message().contains("alias") || status.message().contains("hostname"),
+        "Error should mention alias/hostname conflict: {}",
+        status.message()
+    );
+}
+
+#[tokio::test]
+async fn test_add_host_alias_matches_own_hostname_case_insensitive() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Case-insensitive check: "SERVER.LOCAL" should match "server.local"
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["SERVER.LOCAL".to_string()], // Invalid: matches hostname (case-insensitive)
+            comment: None,
+            tags: vec![],
+        })
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Should reject alias matching own hostname (case-insensitive)"
+    );
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn test_update_host_alias_matches_own_hostname_rejected() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Create host first
+    let response = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["srv".to_string()],
+            comment: None,
+            tags: vec![],
+        })
+        .await
+        .unwrap()
+        .into_inner();
+
+    let id = response.entry.unwrap().id;
+
+    // Try to update with alias that matches hostname
+    let result = client
+        .update_host(UpdateHostRequest {
+            id,
+            ip_address: None,
+            hostname: None,
+            comment: None,
+            expected_version: None,
+            aliases: Some(AliasesUpdate {
+                values: vec!["server.local".to_string()], // Invalid
+            }),
+            tags: None,
+        })
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Should reject alias matching own hostname on update"
+    );
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+}
+
+#[tokio::test]
+async fn test_alias_duplicate_within_entry_rejected() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Try to add host with duplicate aliases
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["srv".to_string(), "srv".to_string()], // Duplicate alias
+            comment: None,
+            tags: vec![],
+        })
+        .await;
+
+    assert!(result.is_err(), "Should reject duplicate aliases");
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
+    assert!(
+        status.message().contains("duplicate") || status.message().contains("Duplicate"),
+        "Error should mention duplicate: {}",
+        status.message()
+    );
+}
+
+#[tokio::test]
+async fn test_alias_duplicate_case_insensitive_rejected() {
+    let (addr, _temp_dir) = start_test_server().await;
+    let mut client = create_client(addr).await;
+
+    // Case-insensitive duplicate: "srv" == "SRV"
+    let result = client
+        .add_host(AddHostRequest {
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec!["srv".to_string(), "SRV".to_string()], // Duplicate (case-insensitive)
+            comment: None,
+            tags: vec![],
+        })
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Should reject duplicate aliases (case-insensitive)"
+    );
+    let status = result.unwrap_err();
+    assert_eq!(status.code(), tonic::Code::InvalidArgument);
 }

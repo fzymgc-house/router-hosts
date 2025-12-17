@@ -719,6 +719,7 @@ This makes the build self-contained and portable across development environments
 Generated file includes:
 - Header comment with metadata (timestamp, entry count)
 - Sorted entries (by IP, then hostname)
+- Hostname aliases (sorted alphabetically after canonical hostname)
 - Inline comments from entry metadata
 - Tags shown as `[tag1, tag2]` in comments
 
@@ -728,9 +729,40 @@ Example:
 # Last updated: 2025-11-28 20:45:32 UTC
 # Entry count: 42
 
-192.168.1.10    server.local
+192.168.1.10    server.local srv web    # Main server [prod]
 192.168.1.20    nas.home.local    # NAS storage [homelab]
 ```
+
+## Hostname Aliases
+
+Full support for hostname aliases per hosts(5) format:
+
+**CLI Usage:**
+```bash
+# Add host with aliases (--alias is repeatable)
+router-hosts host add --ip 192.168.1.10 --hostname server.local \
+  --alias srv --alias web
+
+# Update aliases (replaces all)
+router-hosts host update <id> --alias primary --alias backup
+
+# Clear all aliases
+router-hosts host update <id> --clear-aliases
+
+# Import with alias conflict override
+router-hosts host import --file hosts.txt --conflict-mode strict --force
+```
+
+**Key Behaviors:**
+- Aliases are sorted alphabetically in all output for deterministic results
+- Search matches both canonical hostname and aliases (case-insensitive)
+- Validation prevents alias matching canonical hostname or duplicates
+- CSV format: aliases are semicolon-separated (e.g., `srv;web;api`)
+
+**API Notes:**
+- `UpdateHostRequest` uses `AliasesUpdate` wrapper message for aliases
+- `None` = preserve existing, `Some(vec![])` = clear, `Some(values)` = replace
+- Same pattern used for tags via `TagsUpdate` wrapper
 
 ## Post-Edit Hooks
 

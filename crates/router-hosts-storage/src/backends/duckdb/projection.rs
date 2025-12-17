@@ -377,8 +377,9 @@ impl DuckDbStorage {
             let mut params: Vec<Box<dyn duckdb::ToSql>> = Vec::new();
 
             // Static string references for IP and hostname patterns
+            // Use ILIKE for case-insensitive matching (DNS is case-insensitive)
             let ip_clause = "ip_address LIKE ?";
-            let hostname_clause = "(hostname LIKE ? OR aliases LIKE ?)";
+            let hostname_clause = "(hostname ILIKE ? OR aliases ILIKE ?)";
 
             if let Some(ip_pattern) = &filter.ip_pattern {
                 where_clauses.push(ip_clause);
