@@ -98,11 +98,15 @@ impl std::error::Error for ExportError {}
 pub fn format_json_entry(entry: &HostEntry) -> Result<Vec<u8>, ExportError> {
     use serde_json::json;
 
+    // Sort aliases for deterministic output
+    let mut sorted_aliases = entry.aliases.clone();
+    sorted_aliases.sort();
+
     let obj = json!({
         "id": entry.id.to_string(),
         "ip_address": entry.ip_address,
         "hostname": entry.hostname,
-        "aliases": entry.aliases,
+        "aliases": sorted_aliases,
         "comment": entry.comment,
         "tags": entry.tags,
         "created_at": entry.created_at.to_rfc3339(),
@@ -123,7 +127,10 @@ pub fn format_csv_header() -> Vec<u8> {
 
 /// Format a host entry as CSV
 pub fn format_csv_entry(entry: &HostEntry) -> Vec<u8> {
-    let aliases = entry.aliases.join(";");
+    // Sort aliases for deterministic output
+    let mut sorted_aliases = entry.aliases.clone();
+    sorted_aliases.sort();
+    let aliases = sorted_aliases.join(";");
     let comment = entry.comment.as_deref().unwrap_or("");
     let tags = entry.tags.join(";");
 
@@ -329,8 +336,9 @@ mod tests {
         assert!(parsed["aliases"].is_array());
         let aliases = parsed["aliases"].as_array().unwrap();
         assert_eq!(aliases.len(), 2);
-        assert_eq!(aliases[0], "www");
-        assert_eq!(aliases[1], "api");
+        // Aliases should be sorted alphabetically
+        assert_eq!(aliases[0], "api");
+        assert_eq!(aliases[1], "www");
     }
 
     #[test]
@@ -359,7 +367,8 @@ mod tests {
             vec![],
         );
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
-        assert_eq!(output, "192.168.1.10,server.local,www;api,,\n");
+        // Aliases should be sorted alphabetically
+        assert_eq!(output, "192.168.1.10,server.local,api;www,,\n");
     }
 
     #[test]
@@ -466,5 +475,39 @@ mod tests {
         let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
         // Should be quoted due to newline
         assert!(output.contains("\"Line1\nLine2\""));
+    }
+
+    #[test]
+    fn test_format_json_entry_sorts_aliases() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["zebra", "alpha", "middle"],
+            None,
+            vec![],
+        );
+        let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
+
+        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let aliases = parsed["aliases"].as_array().unwrap();
+        assert_eq!(aliases.len(), 3);
+        // Verify alphabetical sorting
+        assert_eq!(aliases[0], "alpha");
+        assert_eq!(aliases[1], "middle");
+        assert_eq!(aliases[2], "zebra");
+    }
+
+    #[test]
+    fn test_format_csv_entry_sorts_aliases() {
+        let entry = make_entry(
+            "192.168.1.10",
+            "server.local",
+            vec!["zebra", "alpha", "middle"],
+            None,
+            vec![],
+        );
+        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        // Aliases should be sorted alphabetically and joined with semicolons
+        assert!(output.contains("alpha;middle;zebra"));
     }
 }

@@ -72,7 +72,7 @@ impl HostsFileGenerator {
             }
 
             // Add comment and tags
-            let has_comment = entry.comment.is_some();
+            let has_comment = entry.comment.as_ref().is_some_and(|c| !c.is_empty());
             let has_tags = !entry.tags.is_empty();
 
             if has_comment || has_tags {
@@ -342,6 +342,35 @@ mod tests {
 
         // Cleanup
         let _ = fs::remove_file(&hosts_path).await;
+    }
+
+    #[test]
+    fn test_format_hosts_file_empty_comment_no_metadata() {
+        let gen = HostsFileGenerator::new("/tmp/hosts");
+        // Empty string comment with no tags should not add comment marker
+        let entries = vec![HostEntry {
+            id: ulid::Ulid::new(),
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec![],
+            comment: Some("".to_string()),
+            tags: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+        }];
+
+        let content = gen.format_hosts_file(&entries);
+        // Empty comment should be treated as no comment
+        assert!(
+            content.contains("192.168.1.10\tserver.local\n")
+                || content.ends_with("192.168.1.10\tserver.local\n"),
+            "Empty comment should not add metadata section"
+        );
+        assert!(
+            !content.contains("192.168.1.10\tserver.local\t#"),
+            "Empty comment should NOT have comment marker"
+        );
     }
 
     /// Test format_hosts_file with various tag and comment combinations
