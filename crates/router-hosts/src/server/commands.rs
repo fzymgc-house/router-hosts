@@ -143,6 +143,7 @@ impl CommandHandler {
     ///
     /// If `expected_version` is provided, the update will only succeed if the
     /// current version matches. This enables optimistic concurrency control.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_host(
         &self,
         id: Ulid,

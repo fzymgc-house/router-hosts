@@ -254,6 +254,7 @@ impl WriteQueue {
     }
 
     /// Send an update host command and wait for result
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_host(
         &self,
         id: Ulid,
