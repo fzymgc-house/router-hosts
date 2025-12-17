@@ -13,7 +13,7 @@ pub trait TableDisplay {
 
 impl TableDisplay for HostEntry {
     fn headers() -> Vec<&'static str> {
-        vec!["ID", "IP", "HOSTNAME", "COMMENT", "TAGS"]
+        vec!["ID", "IP", "HOSTNAME", "ALIASES", "COMMENT", "TAGS"]
     }
 
     fn row(&self) -> Vec<String> {
@@ -27,6 +27,7 @@ impl TableDisplay for HostEntry {
             id_display,
             self.ip_address.clone(),
             self.hostname.clone(),
+            self.aliases.join(","),
             self.comment.clone().unwrap_or_default(),
             self.tags.join(","),
         ]
@@ -236,7 +237,7 @@ mod tests {
             id: "01JXXXXXXXXXXXXXXXXX".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "test.local".to_string(),
-            aliases: vec![],
+            aliases: vec!["alias1".to_string(), "alias2".to_string()],
             comment: Some("Test host".to_string()),
             tags: vec!["tag1".to_string(), "tag2".to_string()],
             created_at: None,
@@ -248,8 +249,9 @@ mod tests {
         assert_eq!(row[0], "01JXXXXXXXXX...");
         assert_eq!(row[1], "192.168.1.1");
         assert_eq!(row[2], "test.local");
-        assert_eq!(row[3], "Test host");
-        assert_eq!(row[4], "tag1,tag2");
+        assert_eq!(row[3], "alias1,alias2");
+        assert_eq!(row[4], "Test host");
+        assert_eq!(row[5], "tag1,tag2");
     }
 
     #[test]
@@ -269,16 +271,21 @@ mod tests {
         let row = entry.row();
         // Short ID should not be truncated
         assert_eq!(row[0], "SHORT");
-        // Empty comment should be empty string
+        // Empty aliases should be empty string
         assert_eq!(row[3], "");
-        // Empty tags should be empty string
+        // Empty comment should be empty string
         assert_eq!(row[4], "");
+        // Empty tags should be empty string
+        assert_eq!(row[5], "");
     }
 
     #[test]
     fn test_host_entry_headers() {
         let headers = HostEntry::headers();
-        assert_eq!(headers, vec!["ID", "IP", "HOSTNAME", "COMMENT", "TAGS"]);
+        assert_eq!(
+            headers,
+            vec!["ID", "IP", "HOSTNAME", "ALIASES", "COMMENT", "TAGS"]
+        );
     }
 
     #[test]
@@ -474,8 +481,8 @@ mod tests {
         };
 
         let row = entry.row();
-        // The comment should be escaped when printed
-        assert!(row[3].contains(','));
+        // The comment is now at index 4 (after aliases column)
+        assert!(row[4].contains(','));
     }
 
     #[test]

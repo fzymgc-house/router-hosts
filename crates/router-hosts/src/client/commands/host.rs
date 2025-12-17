@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use router_hosts_common::proto::{
-    AddHostRequest, DeleteHostRequest, ExportHostsRequest, GetHostRequest, ImportHostsRequest,
-    ListHostsRequest, SearchHostsRequest, UpdateHostRequest,
+    AddHostRequest, AliasesUpdate, DeleteHostRequest, ExportHostsRequest, GetHostRequest,
+    ImportHostsRequest, ListHostsRequest, SearchHostsRequest, TagsUpdate, UpdateHostRequest,
 };
 use std::io::{self, Write};
 use std::path::Path;
@@ -43,11 +43,12 @@ pub async fn handle(
             hostname,
             comment,
             tags,
+            aliases,
         } => {
             let request = AddHostRequest {
                 ip_address: ip,
                 hostname,
-                aliases: vec![], // TODO: Task 8 - add CLI support
+                aliases,
                 comment,
                 tags,
             };
@@ -73,15 +74,39 @@ pub async fn handle(
             hostname,
             comment,
             tags,
+            aliases,
+            clear_tags,
+            clear_aliases,
             version,
         } => {
+            // Build wrapper messages for tags and aliases
+            let tags_update = if clear_tags {
+                Some(TagsUpdate { values: vec![] })
+            } else if !tags.is_empty() {
+                Some(TagsUpdate {
+                    values: tags.clone(),
+                })
+            } else {
+                None
+            };
+
+            let aliases_update = if clear_aliases {
+                Some(AliasesUpdate { values: vec![] })
+            } else if !aliases.is_empty() {
+                Some(AliasesUpdate {
+                    values: aliases.clone(),
+                })
+            } else {
+                None
+            };
+
             let request = UpdateHostRequest {
                 id: id.clone(), // Clone all fields for potential conflict retry before moving into request
                 ip_address: ip.clone(),
                 hostname: hostname.clone(),
                 comment: comment.clone(),
-                aliases: None, // TODO: Task 8 - add CLI support for wrapper pattern
-                tags: None,    // TODO: Task 8 - add CLI support for wrapper pattern
+                aliases: aliases_update.clone(),
+                tags: tags_update.clone(),
                 expected_version: version.clone(),
             };
 
@@ -102,7 +127,8 @@ pub async fn handle(
                                 ip: ip.clone(),
                                 hostname: hostname.clone(),
                                 comment: comment.clone(),
-                                tags: tags.clone(),
+                                tags: tags_update.clone(),
+                                aliases: aliases_update.clone(),
                             };
                             handle_version_conflict(
                                 client,
@@ -266,7 +292,8 @@ struct UpdateFields {
     ip: Option<String>,
     hostname: Option<String>,
     comment: Option<String>,
-    tags: Option<Vec<String>>,
+    tags: Option<TagsUpdate>,
+    aliases: Option<AliasesUpdate>,
 }
 
 /// Handle version conflict for update operations
@@ -328,6 +355,7 @@ async fn handle_version_conflict(
             &fields.hostname,
             &fields.comment,
             &fields.tags,
+            &fields.aliases,
         );
     }
 
@@ -350,8 +378,8 @@ async fn handle_version_conflict(
         ip_address: fields.ip.clone(),
         hostname: fields.hostname.clone(),
         comment: fields.comment.clone(),
-        aliases: None, // TODO: Task 8 - add CLI support for wrapper pattern
-        tags: None,    // TODO: Task 8 - add CLI support for wrapper pattern
+        aliases: fields.aliases.clone(),
+        tags: fields.tags.clone(),
         expected_version: Some(current_entry.version.clone()),
     };
 
@@ -402,7 +430,8 @@ async fn handle_version_conflict(
 /// - `user_ip`: IP address user wants to set (None = keep current)
 /// - `user_hostname`: Hostname user wants to set (None = keep current)
 /// - `user_comment`: Comment user wants to set (None = keep current)
-/// - `user_tags`: Tags user wants to set (None = keep current, empty vec = clear)
+/// - `user_tags`: Tags update wrapper (None = keep current)
+/// - `user_aliases`: Aliases update wrapper (None = keep current)
 ///
 /// # Output
 /// Writes to stderr using box-drawing characters for the header.
@@ -412,7 +441,8 @@ fn display_entry_diff(
     user_ip: &Option<String>,
     user_hostname: &Option<String>,
     user_comment: &Option<String>,
-    user_tags: &Option<Vec<String>>,
+    user_tags: &Option<TagsUpdate>,
+    user_aliases: &Option<AliasesUpdate>,
 ) {
     eprintln!("\n╔══════════════════════════════════════════════════════════════╗");
     eprintln!("║              VERSION CONFLICT DETECTED                       ║");
@@ -426,6 +456,7 @@ fn display_entry_diff(
         current.comment.as_deref().unwrap_or("<none>")
     );
     eprintln!("  Tags:     [{}]", current.tags.join(", "));
+    eprintln!("  Aliases:  [{}]", current.aliases.join(", "));
     eprintln!("  Version:  {}", current.version);
 
     // Show what the user was trying to change
@@ -468,10 +499,22 @@ fn display_entry_diff(
     }
 
     if let Some(new_tags) = user_tags {
-        let new_tags_str = new_tags.join(", ");
+        let new_tags_str = new_tags.values.join(", ");
         let current_tags_str = current.tags.join(", ");
         if new_tags_str != current_tags_str {
             eprintln!("  Tags:     [{}] → [{}]", current_tags_str, new_tags_str);
+            has_changes = true;
+        }
+    }
+
+    if let Some(new_aliases) = user_aliases {
+        let new_aliases_str = new_aliases.values.join(", ");
+        let current_aliases_str = current.aliases.join(", ");
+        if new_aliases_str != current_aliases_str {
+            eprintln!(
+                "  Aliases:  [{}] → [{}]",
+                current_aliases_str, new_aliases_str
+            );
             has_changes = true;
         }
     }
@@ -597,9 +640,17 @@ mod tests {
         let new_hostname = None;
         let new_comment = None;
         let new_tags = None;
+        let new_aliases = None;
 
         // This would normally print to stderr - just verify it doesn't panic
-        display_entry_diff(&current, &new_ip, &new_hostname, &new_comment, &new_tags);
+        display_entry_diff(
+            &current,
+            &new_ip,
+            &new_hostname,
+            &new_comment,
+            &new_tags,
+            &new_aliases,
+        );
     }
 
     #[test]
@@ -619,10 +670,22 @@ mod tests {
         let new_ip = Some("10.0.0.1".to_string());
         let new_hostname = Some("app.local".to_string());
         let new_comment = Some("new comment".to_string());
-        let new_tags = Some(vec!["dev".to_string()]);
+        let new_tags = Some(TagsUpdate {
+            values: vec!["dev".to_string()],
+        });
+        let new_aliases = Some(AliasesUpdate {
+            values: vec!["app-alias".to_string()],
+        });
 
         // Verify no panic when all fields change
-        display_entry_diff(&current, &new_ip, &new_hostname, &new_comment, &new_tags);
+        display_entry_diff(
+            &current,
+            &new_ip,
+            &new_hostname,
+            &new_comment,
+            &new_tags,
+            &new_aliases,
+        );
     }
 
     #[test]
@@ -639,10 +702,10 @@ mod tests {
             version: "v1".to_string(),
         };
 
-        let new_tags = Some(vec![]); // Empty vec should show in diff
+        let new_tags = Some(TagsUpdate { values: vec![] }); // Empty vec should show in diff
 
         // Verify clearing tags is shown in diff
-        display_entry_diff(&current, &None, &None, &None, &new_tags);
+        display_entry_diff(&current, &None, &None, &None, &new_tags, &None);
     }
 
     #[test]
@@ -660,7 +723,7 @@ mod tests {
         };
 
         // No fields provided - should show "only version changed"
-        display_entry_diff(&current, &None, &None, &None, &None);
+        display_entry_diff(&current, &None, &None, &None, &None, &None);
     }
 
     // Note on test coverage for handle_version_conflict() and prompt_retry():
