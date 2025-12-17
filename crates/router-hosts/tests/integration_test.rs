@@ -804,9 +804,9 @@ async fn test_import_hosts_csv_format() {
     let mut client = create_client(addr).await;
 
     // Import hosts using CSV format
-    let import_data = b"ip_address,hostname,comment,tags
-10.1.0.1,csv1.local,CSV import 1,test;csv
-10.1.0.2,csv2.local,,";
+    let import_data = b"ip_address,hostname,aliases,comment,tags
+10.1.0.1,csv1.local,,CSV import 1,test;csv
+10.1.0.2,csv2.local,,,";
 
     let requests = vec![ImportHostsRequest {
         chunk: import_data.to_vec(),

@@ -428,6 +428,21 @@ impl CommandHandler {
                 result.failed = result.failed.saturating_add(1);
                 continue;
             }
+            if let Err(e) = validate_aliases(&entry.aliases, &entry.hostname) {
+                let error_msg = format!(
+                    "Line {}: Invalid aliases {:?}: {}",
+                    entry.line_number, entry.aliases, e
+                );
+                tracing::warn!(
+                    line = entry.line_number,
+                    aliases = ?entry.aliases,
+                    error = %e,
+                    "Import validation failed"
+                );
+                result.validation_errors.push(error_msg);
+                result.failed = result.failed.saturating_add(1);
+                continue;
+            }
 
             // Check for existing entry
             let existing = self
@@ -1578,6 +1593,74 @@ mod tests {
         assert_eq!(hosts.len(), 2);
         assert!(hosts.iter().any(|h| h.hostname == "valid.local"));
         assert!(hosts.iter().any(|h| h.hostname == "valid2.local"));
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_alias_validation() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup().await;
+
+        let entries = vec![
+            // Valid entry with valid aliases
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "server.local".to_string(),
+                aliases: vec!["srv".to_string(), "s.local".to_string()],
+                comment: None,
+                tags: vec![],
+                line_number: 1,
+            },
+            // Invalid: alias matches canonical hostname (case-insensitive)
+            ParsedEntry {
+                ip_address: "192.168.1.2".to_string(),
+                hostname: "bad.local".to_string(),
+                aliases: vec!["BAD.LOCAL".to_string()],
+                comment: None,
+                tags: vec![],
+                line_number: 2,
+            },
+            // Invalid: duplicate alias within entry
+            ParsedEntry {
+                ip_address: "192.168.1.3".to_string(),
+                hostname: "dup.local".to_string(),
+                aliases: vec!["alias1".to_string(), "ALIAS1".to_string()],
+                comment: None,
+                tags: vec![],
+                line_number: 3,
+            },
+            // Invalid: invalid alias format
+            ParsedEntry {
+                ip_address: "192.168.1.4".to_string(),
+                hostname: "invalid.local".to_string(),
+                aliases: vec!["-bad-alias".to_string()],
+                comment: None,
+                tags: vec![],
+                line_number: 4,
+            },
+        ];
+
+        let result = handler
+            .import_hosts(entries, ConflictMode::Skip)
+            .await
+            .unwrap();
+
+        assert_eq!(result.processed, 4);
+        assert_eq!(result.created, 1); // Only the first entry is valid
+        assert_eq!(result.failed, 3); // Three entries have invalid aliases
+        assert_eq!(result.validation_errors.len(), 3);
+
+        // Verify error messages contain "alias"
+        assert!(result
+            .validation_errors
+            .iter()
+            .any(|e| e.to_lowercase().contains("alias")));
+
+        // Verify only valid entry was created
+        let hosts = handler.list_hosts().await.unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].hostname, "server.local");
+        assert_eq!(hosts[0].aliases, vec!["srv", "s.local"]);
     }
 
     // Snapshot tests
