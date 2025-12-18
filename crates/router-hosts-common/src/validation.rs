@@ -116,13 +116,15 @@ pub fn validate_aliases(
     let mut seen = HashSet::new();
 
     for alias in aliases {
-        // Same validation as hostname
-        validate_alias(alias)?;
-
-        // Cannot be an IP address (security: prevent confusion attacks)
+        // Check for IP address FIRST (before hostname validation)
+        // This gives a more specific error for IPv6 addresses like "::1" which would
+        // otherwise fail hostname validation due to the colon character
         if alias.parse::<IpAddr>().is_ok() {
             return Err(ValidationError::AliasIsIpAddress(alias.clone()));
         }
+
+        // Now validate as hostname (after IP check)
+        validate_alias(alias)?;
 
         // Cannot match canonical hostname
         if alias.eq_ignore_ascii_case(canonical_hostname) {
