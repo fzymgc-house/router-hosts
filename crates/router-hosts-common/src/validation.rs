@@ -16,6 +16,12 @@ pub enum ValidationError {
 
     #[error("Duplicate alias '{0}' in entry")]
     DuplicateAlias(String),
+
+    #[error("Alias '{0}' cannot be an IP address")]
+    AliasIsIpAddress(String),
+
+    #[error("Too many aliases: {0} exceeds maximum of {1}")]
+    TooManyAliases(usize, usize),
 }
 
 pub type ValidationResult<T> = Result<T, ValidationError>;
@@ -89,6 +95,9 @@ pub fn validate_alias(alias: &str) -> Result<(), ValidationError> {
     Ok(())
 }
 
+/// Maximum number of aliases per host entry (prevents resource exhaustion)
+pub const MAX_ALIASES_PER_ENTRY: usize = 50;
+
 /// Validate alias list for a host entry
 pub fn validate_aliases(
     aliases: &[String],
@@ -96,11 +105,24 @@ pub fn validate_aliases(
 ) -> Result<(), ValidationError> {
     use std::collections::HashSet;
 
+    // Check max alias count (security: prevent resource exhaustion)
+    if aliases.len() > MAX_ALIASES_PER_ENTRY {
+        return Err(ValidationError::TooManyAliases(
+            aliases.len(),
+            MAX_ALIASES_PER_ENTRY,
+        ));
+    }
+
     let mut seen = HashSet::new();
 
     for alias in aliases {
         // Same validation as hostname
         validate_alias(alias)?;
+
+        // Cannot be an IP address (security: prevent confusion attacks)
+        if alias.parse::<IpAddr>().is_ok() {
+            return Err(ValidationError::AliasIsIpAddress(alias.clone()));
+        }
 
         // Cannot match canonical hostname
         if alias.eq_ignore_ascii_case(canonical_hostname) {
@@ -421,5 +443,53 @@ mod alias_tests {
     fn test_validate_aliases_invalid_format() {
         let aliases = vec!["-invalid".to_string()];
         assert!(validate_aliases(&aliases, "server.local").is_err());
+    }
+
+    #[test]
+    fn test_validate_aliases_ip_address_rejected() {
+        // IPv4 address as alias should be rejected
+        let aliases = vec!["192.168.1.1".to_string()];
+        let err = validate_aliases(&aliases, "server.local").unwrap_err();
+        assert!(matches!(err, ValidationError::AliasIsIpAddress(_)));
+
+        // IPv6 address as alias should be rejected
+        let aliases = vec!["::1".to_string()];
+        let err = validate_aliases(&aliases, "server.local").unwrap_err();
+        assert!(matches!(err, ValidationError::AliasIsIpAddress(_)));
+
+        // Full IPv6 address as alias should be rejected
+        let aliases = vec!["2001:db8::1".to_string()];
+        let err = validate_aliases(&aliases, "server.local").unwrap_err();
+        assert!(matches!(err, ValidationError::AliasIsIpAddress(_)));
+    }
+
+    #[test]
+    fn test_validate_aliases_too_many() {
+        // Generate more than MAX_ALIASES_PER_ENTRY aliases
+        let aliases: Vec<String> = (0..MAX_ALIASES_PER_ENTRY + 1)
+            .map(|i| format!("alias{}", i))
+            .collect();
+        let err = validate_aliases(&aliases, "server.local").unwrap_err();
+        assert!(matches!(err, ValidationError::TooManyAliases(_, _)));
+    }
+
+    #[test]
+    fn test_validate_aliases_max_allowed() {
+        // Exactly MAX_ALIASES_PER_ENTRY should be allowed
+        let aliases: Vec<String> = (0..MAX_ALIASES_PER_ENTRY)
+            .map(|i| format!("alias{}", i))
+            .collect();
+        assert!(validate_aliases(&aliases, "server.local").is_ok());
+    }
+
+    #[test]
+    fn test_validation_error_display() {
+        let err = ValidationError::AliasIsIpAddress("192.168.1.1".to_string());
+        assert!(err.to_string().contains("192.168.1.1"));
+        assert!(err.to_string().contains("cannot be an IP address"));
+
+        let err = ValidationError::TooManyAliases(100, 50);
+        assert!(err.to_string().contains("100"));
+        assert!(err.to_string().contains("50"));
     }
 }

@@ -95,15 +95,27 @@ impl PostgresStorage {
 
     /// Search with filters
     ///
-    /// Uses parameterized queries with explicit argument binding to prevent SQL injection.
-    /// Filter patterns are bound as LIKE parameters, never interpolated into the query.
-    /// Column names are hardcoded constants - only user-provided values are parameterized.
+    /// # Safety (SQL Injection Prevention)
+    ///
+    /// This function uses dynamic SQL query construction with `format!()` but is safe because:
+    /// 1. **Column names are hardcoded constants** - Only static strings like "ip_address",
+    ///    "hostname", "aliases", "tags" appear in the query structure.
+    /// 2. **All user input is parameterized** - Filter patterns (ip_pattern, hostname_pattern, tags)
+    ///    are bound via positional `$N` placeholders and `PgArguments`, never interpolated into SQL.
+    /// 3. **Query structure is fixed** - Only the WHERE clause presence changes based on filter,
+    ///    and the clause content uses positional placeholders.
+    /// 4. **PostgreSQL parameterization** - The `sqlx::query_with(&query, args)` call ensures
+    ///    all values are properly escaped by the database driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Query` if the database operation fails.
     pub(crate) async fn search_impl(
         &self,
         filter: HostFilter,
     ) -> Result<Vec<HostEntry>, StorageError> {
         // Build dynamic query with safe parameterized conditions
-        // All user input is bound via PgArguments, never interpolated
+        // SAFETY: All user input is bound via PgArguments, never interpolated into SQL
         let mut conditions: Vec<String> = Vec::new();
         let mut args = PgArguments::default();
         let mut param_idx = 0;

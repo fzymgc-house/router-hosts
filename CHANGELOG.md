@@ -32,9 +32,26 @@ ip_address,hostname,comment,tags
 ip_address,hostname,aliases,comment,tags
 ```
 
-**Warning:** Old CSV files will be silently misinterpreted if used with the new format. The old `comment` column will be parsed as `aliases`, and `tags` will be parsed as `comment`.
+**Format details:**
+- **Aliases**: Multiple aliases separated by semicolons (`;`) e.g., `srv;web;api`
+- **Tags**: Multiple tags separated by semicolons (`;`) e.g., `prod;web`
+- Semicolons avoid conflicts with CSV comma delimiters and don't require quoting
 
-**Migration:** Update CSV files to include the `aliases` column (can be empty).
+**Example:**
+```csv
+ip_address,hostname,aliases,comment,tags
+192.168.1.10,server.local,srv;web,Main server,prod;web
+192.168.1.20,db.local,,Database,prod;db
+```
+
+**Migration:**
+- Legacy CSV files (4-column format) are now **rejected** with a clear error message
+- Update CSV files to include the `aliases` column (can be empty)
+- Re-export existing data with `router-hosts host export --export-format csv`
+
+**Validation changes:**
+- Aliases cannot be IP addresses (e.g., `192.168.1.1` as alias is rejected)
+- Maximum 50 aliases per host entry (prevents resource exhaustion)
 
 ### Added
 

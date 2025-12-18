@@ -186,7 +186,8 @@ mod tests {
     #[test]
     fn test_format_hosts_entry_simple() {
         let entry = make_entry("192.168.1.10", "server.local", vec![], None, vec![]);
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         assert_eq!(output, "192.168.1.10\tserver.local\n");
     }
 
@@ -199,7 +200,8 @@ mod tests {
             None,
             vec![],
         );
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         // Aliases should be sorted alphabetically
         assert_eq!(output, "192.168.1.10\tserver.local alpha beta zulu\n");
     }
@@ -213,7 +215,8 @@ mod tests {
             Some("Web server"),
             vec![],
         );
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         // Aliases should be sorted, then TAB and comment
         assert_eq!(output, "192.168.1.10\tserver.local api www\t# Web server\n");
     }
@@ -227,7 +230,8 @@ mod tests {
             Some("Production"),
             vec!["prod", "web"],
         );
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         assert_eq!(
             output,
             "192.168.1.10\tserver.local www\t# Production [prod, web]\n"
@@ -243,7 +247,8 @@ mod tests {
             None,
             vec![],
         );
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         // Verify alphabetical sorting
         assert!(output.contains("alpha middle zebra"));
     }
@@ -257,7 +262,8 @@ mod tests {
             Some("NAS storage"),
             vec![],
         );
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         assert_eq!(output, "192.168.1.20\tnas.local\t# NAS storage\n");
     }
 
@@ -270,7 +276,8 @@ mod tests {
             None,
             vec!["iot", "homelab"],
         );
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         assert_eq!(output, "192.168.1.30\tiot.local\t# [iot, homelab]\n");
     }
 
@@ -283,7 +290,8 @@ mod tests {
             Some("Database"),
             vec!["prod"],
         );
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         assert_eq!(output, "192.168.1.40\tdb.local\t# Database [prod]\n");
     }
 
@@ -306,17 +314,27 @@ mod tests {
             Some("Test"),
             vec!["tag1"],
         );
-        let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
+        let output = String::from_utf8(
+            format_json_entry(&entry).expect("JSON serialization should succeed"),
+        )
+        .expect("JSON entry should be valid UTF-8");
 
         // Parse back to verify it's valid JSON
-        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("output should parse as JSON");
         assert_eq!(parsed["ip_address"], "192.168.1.10");
         assert_eq!(parsed["hostname"], "server.local");
         assert_eq!(parsed["comment"], "Test");
         assert_eq!(parsed["tags"][0], "tag1");
         // Verify aliases field exists and is an empty array
         assert!(parsed["aliases"].is_array());
-        assert_eq!(parsed["aliases"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            parsed["aliases"]
+                .as_array()
+                .expect("aliases should be array")
+                .len(),
+            0
+        );
     }
 
     #[test]
@@ -328,13 +346,19 @@ mod tests {
             Some("Test"),
             vec!["tag1"],
         );
-        let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
+        let output = String::from_utf8(
+            format_json_entry(&entry).expect("JSON serialization should succeed"),
+        )
+        .expect("JSON entry should be valid UTF-8");
 
-        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("output should parse as JSON");
         assert_eq!(parsed["ip_address"], "192.168.1.10");
         assert_eq!(parsed["hostname"], "server.local");
         assert!(parsed["aliases"].is_array());
-        let aliases = parsed["aliases"].as_array().unwrap();
+        let aliases = parsed["aliases"]
+            .as_array()
+            .expect("aliases should be array");
         assert_eq!(aliases.len(), 2);
         // Aliases should be sorted alphabetically
         assert_eq!(aliases[0], "api");
@@ -344,16 +368,21 @@ mod tests {
     #[test]
     fn test_format_json_entry_null_comment() {
         let entry = make_entry("192.168.1.10", "server.local", vec![], None, vec![]);
-        let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
+        let output = String::from_utf8(
+            format_json_entry(&entry).expect("JSON serialization should succeed"),
+        )
+        .expect("JSON entry should be valid UTF-8");
 
-        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("output should parse as JSON");
         assert!(parsed["comment"].is_null());
     }
 
     #[test]
     fn test_format_csv_entry_simple() {
         let entry = make_entry("192.168.1.10", "server.local", vec![], None, vec![]);
-        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        let output =
+            String::from_utf8(format_csv_entry(&entry)).expect("CSV entry should be valid UTF-8");
         assert_eq!(output, "192.168.1.10,server.local,,,\n");
     }
 
@@ -366,7 +395,8 @@ mod tests {
             None,
             vec![],
         );
-        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        let output =
+            String::from_utf8(format_csv_entry(&entry)).expect("CSV entry should be valid UTF-8");
         // Aliases should be sorted alphabetically
         assert_eq!(output, "192.168.1.10,server.local,api;www,,\n");
     }
@@ -380,7 +410,8 @@ mod tests {
             Some("Web server"),
             vec!["prod", "web"],
         );
-        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        let output =
+            String::from_utf8(format_csv_entry(&entry)).expect("CSV entry should be valid UTF-8");
         assert_eq!(
             output,
             "192.168.1.10,server.local,www,Web server,prod;web\n"
@@ -396,7 +427,8 @@ mod tests {
             None,
             vec!["tag1", "tag2"],
         );
-        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        let output =
+            String::from_utf8(format_csv_entry(&entry)).expect("CSV entry should be valid UTF-8");
         assert_eq!(output, "192.168.1.10,server.local,,,tag1;tag2\n");
     }
 
@@ -409,13 +441,15 @@ mod tests {
             Some("Hello, world"),
             vec![],
         );
-        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        let output =
+            String::from_utf8(format_csv_entry(&entry)).expect("CSV entry should be valid UTF-8");
         assert_eq!(output, "192.168.1.10,server.local,,\"Hello, world\",\n");
     }
 
     #[test]
     fn test_csv_header() {
-        let header = String::from_utf8(format_csv_header()).unwrap();
+        let header =
+            String::from_utf8(format_csv_header()).expect("CSV header should be valid UTF-8");
         assert_eq!(header, "ip_address,hostname,aliases,comment,tags\n");
     }
 
@@ -428,7 +462,8 @@ mod tests {
             Some("He said \"hello\""),
             vec![],
         );
-        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        let output =
+            String::from_utf8(format_csv_entry(&entry)).expect("CSV entry should be valid UTF-8");
         // Quotes should be escaped by doubling them
         assert_eq!(
             output,
@@ -440,7 +475,8 @@ mod tests {
     fn test_format_hosts_entry_empty_comment() {
         // Empty string comment should not add comment marker
         let entry = make_entry("192.168.1.10", "server.local", vec![], Some(""), vec![]);
-        let output = String::from_utf8(format_hosts_entry(&entry)).unwrap();
+        let output = String::from_utf8(format_hosts_entry(&entry))
+            .expect("hosts entry should be valid UTF-8");
         assert_eq!(output, "192.168.1.10\tserver.local\n");
     }
 
@@ -458,7 +494,8 @@ mod tests {
 
     #[test]
     fn test_format_hosts_header() {
-        let header = String::from_utf8(format_hosts_header(42)).unwrap();
+        let header =
+            String::from_utf8(format_hosts_header(42)).expect("hosts header should be valid UTF-8");
         assert!(header.contains("Generated by router-hosts"));
         assert!(header.contains("Entry count: 42"));
     }
@@ -472,7 +509,8 @@ mod tests {
             Some("Line1\nLine2"),
             vec![],
         );
-        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        let output =
+            String::from_utf8(format_csv_entry(&entry)).expect("CSV entry should be valid UTF-8");
         // Should be quoted due to newline
         assert!(output.contains("\"Line1\nLine2\""));
     }
@@ -486,10 +524,16 @@ mod tests {
             None,
             vec![],
         );
-        let output = String::from_utf8(format_json_entry(&entry).unwrap()).unwrap();
+        let output = String::from_utf8(
+            format_json_entry(&entry).expect("JSON serialization should succeed"),
+        )
+        .expect("JSON entry should be valid UTF-8");
 
-        let parsed: serde_json::Value = serde_json::from_str(&output).unwrap();
-        let aliases = parsed["aliases"].as_array().unwrap();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&output).expect("output should parse as JSON");
+        let aliases = parsed["aliases"]
+            .as_array()
+            .expect("aliases should be an array");
         assert_eq!(aliases.len(), 3);
         // Verify alphabetical sorting
         assert_eq!(aliases[0], "alpha");
@@ -506,7 +550,8 @@ mod tests {
             None,
             vec![],
         );
-        let output = String::from_utf8(format_csv_entry(&entry)).unwrap();
+        let output =
+            String::from_utf8(format_csv_entry(&entry)).expect("CSV entry should be valid UTF-8");
         // Aliases should be sorted alphabetically and joined with semicolons
         assert!(output.contains("alpha;middle;zebra"));
     }

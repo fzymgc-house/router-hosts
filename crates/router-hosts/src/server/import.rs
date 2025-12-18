@@ -53,6 +53,9 @@ pub enum ParseError {
 
     #[error("CSV parse error: {0}")]
     CsvError(String),
+
+    #[error("CSV format error: {0}")]
+    CsvFormatError(String),
 }
 
 /// Parse import data in the specified format
@@ -203,6 +206,12 @@ fn parse_json_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
     Ok(entries)
 }
 
+/// Expected CSV headers for the current format
+const EXPECTED_CSV_HEADERS: [&str; 5] = ["ip_address", "hostname", "aliases", "comment", "tags"];
+
+/// Legacy CSV headers (pre-alias support)
+const LEGACY_CSV_HEADERS: [&str; 4] = ["ip_address", "hostname", "comment", "tags"];
+
 fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
     let mut entries = Vec::new();
 
@@ -212,6 +221,51 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         .flexible(true) // Allow varying number of fields per row
         .trim(csv::Trim::All)
         .from_reader(text.as_bytes());
+
+    // Validate headers to detect legacy format
+    let headers = reader
+        .headers()
+        .map_err(|e| ParseError::CsvError(format!("failed to read CSV headers: {}", e)))?;
+
+    let header_vec: Vec<&str> = headers.iter().collect();
+
+    // Check for legacy 4-column format
+    if header_vec.len() == 4 {
+        let is_legacy = header_vec
+            .iter()
+            .zip(LEGACY_CSV_HEADERS.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+
+        if is_legacy {
+            return Err(ParseError::CsvFormatError(
+                "Legacy CSV format detected (ip_address,hostname,comment,tags). \
+                The current format requires 5 columns: ip_address,hostname,aliases,comment,tags. \
+                Please add an 'aliases' column (can be empty) or re-export your data."
+                    .to_string(),
+            ));
+        }
+    }
+
+    // Validate expected headers for 5-column format
+    if header_vec.len() >= 5 {
+        let matches_expected = header_vec
+            .iter()
+            .take(5)
+            .zip(EXPECTED_CSV_HEADERS.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+
+        if !matches_expected {
+            return Err(ParseError::CsvFormatError(format!(
+                "Invalid CSV headers. Expected: {}. Got: {}",
+                EXPECTED_CSV_HEADERS.join(","),
+                header_vec.join(",")
+            )));
+        }
+    } else if header_vec.len() < 2 {
+        return Err(ParseError::CsvFormatError(
+            "CSV must have at least ip_address and hostname columns".to_string(),
+        ));
+    }
 
     for (record_idx, result) in reader.records().enumerate() {
         // Line number is record index + 2 (1 for 0-indexing, 1 for header row)
@@ -235,6 +289,7 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         }
 
         // CSV format: ip_address,hostname,aliases,comment,tags
+        // Aliases use semicolon separator (;) to avoid conflicts with CSV comma delimiter
         let aliases = record
             .get(2)
             .map(|s| {
@@ -254,6 +309,7 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
             }
         });
 
+        // Tags also use semicolon separator (;) for consistency
         let tags = record
             .get(4)
             .map(|s| {
@@ -585,19 +641,48 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_csv_legacy_format_without_aliases_column() {
+    fn test_parse_csv_legacy_format_rejected() {
         // Old CSV format: ip_address,hostname,comment,tags
         // New format: ip_address,hostname,aliases,comment,tags
-        // The "comment" in old format goes to "aliases" in new parser
+        // Legacy format is now rejected with a clear error message
         let input =
             b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,My comment,prod;web\n";
-        let entries = parse_import(input, ImportFormat::Csv).unwrap();
-        assert_eq!(entries.len(), 1);
-        // The comment becomes an "alias" due to column shift
-        // This is expected behavior - users must migrate to new format
-        assert_eq!(entries[0].aliases, vec!["My comment"]);
-        assert_eq!(entries[0].comment, Some("prod;web".to_string()));
-        assert!(entries[0].tags.is_empty());
+        let result = parse_import(input, ImportFormat::Csv);
+        assert!(result.is_err());
+        match result {
+            Err(ParseError::CsvFormatError(msg)) => {
+                assert!(
+                    msg.contains("Legacy CSV format detected"),
+                    "Expected legacy format error, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected CsvFormatError, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_csv_invalid_headers_rejected() {
+        // Invalid header order should be rejected
+        let input = b"hostname,ip_address,aliases,comment,tags\n192.168.1.10,server.local,srv,,\n";
+        let result = parse_import(input, ImportFormat::Csv);
+        assert!(result.is_err());
+        match result {
+            Err(ParseError::CsvFormatError(msg)) => {
+                assert!(
+                    msg.contains("Invalid CSV headers"),
+                    "Expected invalid headers error, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected CsvFormatError, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_csv_format_error_display() {
+        let err = ParseError::CsvFormatError("test error".to_string());
+        assert!(err.to_string().contains("test error"));
     }
 
     #[test]

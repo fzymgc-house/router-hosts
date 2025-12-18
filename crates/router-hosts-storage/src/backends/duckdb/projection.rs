@@ -365,6 +365,18 @@ impl DuckDbStorage {
     /// # Errors
     ///
     /// Returns `StorageError::Query` if the database operation fails.
+    ///
+    /// # Safety (SQL Injection Prevention)
+    ///
+    /// This function uses dynamic SQL query construction with `format!()` but is safe because:
+    /// 1. **Column names are hardcoded constants** - Only static strings like "ip_address",
+    ///    "hostname", "aliases", "tags" appear in the query structure.
+    /// 2. **All user input is parameterized** - Filter patterns (ip_pattern, hostname_pattern, tags)
+    ///    are bound via `?` placeholders and `params` vector, never interpolated into SQL.
+    /// 3. **Query structure is fixed** - Only the WHERE clause presence changes based on filter,
+    ///    and the clause content uses positional placeholders.
+    /// 4. **DuckDB parameterization** - The `query_map(param_refs.as_slice(), ...)` call ensures
+    ///    all values are properly escaped by the database driver.
     pub(super) async fn search_impl(
         &self,
         filter: HostFilter,
@@ -373,6 +385,7 @@ impl DuckDbStorage {
 
         tokio::task::spawn_blocking(move || {
             // Build dynamic WHERE clause based on filters
+            // SAFETY: All user input goes through params vector (parameterized), not string interpolation
             let mut where_clauses: Vec<&str> = Vec::new();
             let mut params: Vec<Box<dyn duckdb::ToSql>> = Vec::new();
 
