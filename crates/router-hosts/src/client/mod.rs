@@ -128,6 +128,9 @@ pub enum HostCommand {
         /// Tags (can be specified multiple times)
         #[arg(long = "tag")]
         tags: Vec<String>,
+        /// Aliases (can be specified multiple times)
+        #[arg(long = "alias")]
+        aliases: Vec<String>,
     },
     /// Get a host entry by ID
     Get {
@@ -149,7 +152,16 @@ pub enum HostCommand {
         comment: Option<String>,
         /// Replace all tags
         #[arg(long = "tag")]
-        tags: Option<Vec<String>>,
+        tags: Vec<String>,
+        /// Replace all aliases
+        #[arg(long = "alias")]
+        aliases: Vec<String>,
+        /// Clear all tags
+        #[arg(long)]
+        clear_tags: bool,
+        /// Clear all aliases
+        #[arg(long)]
+        clear_aliases: bool,
         /// Expected version for optimistic concurrency
         #[arg(long)]
         version: Option<String>,
@@ -186,6 +198,9 @@ pub enum HostCommand {
         /// Conflict mode: skip, replace, strict
         #[arg(long, default_value = "skip")]
         conflict_mode: String,
+        /// Force import despite alias conflicts (overrides strict mode)
+        #[arg(long)]
+        force: bool,
     },
     /// Export hosts to stdout
     Export {

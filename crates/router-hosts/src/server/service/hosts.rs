@@ -21,7 +21,13 @@ impl HostsServiceImpl {
 
         let entry = self
             .write_queue
-            .add_host(req.ip_address, req.hostname, req.comment, req.tags)
+            .add_host(
+                req.ip_address,
+                req.hostname,
+                req.aliases,
+                req.comment,
+                req.tags,
+            )
             .await
             .map_err(Status::from)?;
 
@@ -64,12 +70,11 @@ impl HostsServiceImpl {
             .comment
             .map(|c| if c.is_empty() { None } else { Some(c) });
 
-        // For tags: if provided and empty, clear tags; if not provided, keep existing
-        let tags = if req.tags.is_empty() {
-            None
-        } else {
-            Some(req.tags)
-        };
+        // For aliases: wrapper pattern - None = no change, Some(wrapper) = update
+        let aliases = req.aliases.map(|wrapper| wrapper.values);
+
+        // For tags: wrapper pattern - None = no change, Some(wrapper) = update
+        let tags = req.tags.map(|wrapper| wrapper.values);
 
         let entry = self
             .write_queue
@@ -78,6 +83,7 @@ impl HostsServiceImpl {
                 req.ip_address, // Already Option<String> from proto
                 req.hostname,   // Already Option<String> from proto
                 comment,
+                aliases,
                 tags,
                 req.expected_version, // For optimistic concurrency
             )
@@ -178,6 +184,7 @@ fn host_entry_to_proto(entry: HostEntry) -> proto::HostEntry {
         id: entry.id.to_string(),
         ip_address: entry.ip_address,
         hostname: entry.hostname,
+        aliases: entry.aliases,
         comment: entry.comment,
         tags: entry.tags,
         created_at: Some(prost_types::Timestamp {

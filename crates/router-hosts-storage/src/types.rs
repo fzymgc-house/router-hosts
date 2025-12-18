@@ -61,6 +61,8 @@ pub enum HostEvent {
     HostCreated {
         ip_address: String,
         hostname: String,
+        #[serde(default)]
+        aliases: Vec<String>,
         comment: Option<String>,
         tags: Vec<String>,
         created_at: DateTime<Utc>,
@@ -94,6 +96,13 @@ pub enum HostEvent {
         modified_at: DateTime<Utc>,
     },
 
+    /// Host aliases were modified
+    AliasesModified {
+        old_aliases: Vec<String>,
+        new_aliases: Vec<String>,
+        modified_at: DateTime<Utc>,
+    },
+
     /// Host entry was deleted (tombstone)
     HostDeleted {
         ip_address: String,
@@ -112,6 +121,7 @@ impl HostEvent {
             HostEvent::HostnameChanged { .. } => "HostnameChanged",
             HostEvent::CommentUpdated { .. } => "CommentUpdated",
             HostEvent::TagsModified { .. } => "TagsModified",
+            HostEvent::AliasesModified { .. } => "AliasesModified",
             HostEvent::HostDeleted { .. } => "HostDeleted",
         }
     }
@@ -124,6 +134,7 @@ impl HostEvent {
             HostEvent::HostnameChanged { changed_at, .. } => *changed_at,
             HostEvent::CommentUpdated { updated_at, .. } => *updated_at,
             HostEvent::TagsModified { modified_at, .. } => *modified_at,
+            HostEvent::AliasesModified { modified_at, .. } => *modified_at,
             HostEvent::HostDeleted { deleted_at, .. } => *deleted_at,
         }
     }
@@ -152,6 +163,7 @@ pub struct HostEntry {
     pub id: Ulid,
     pub ip_address: String,
     pub hostname: String,
+    pub aliases: Vec<String>,
     pub comment: Option<String>,
     pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
@@ -218,6 +230,7 @@ mod tests {
             HostEvent::HostCreated {
                 ip_address: "192.168.1.1".into(),
                 hostname: "test.local".into(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 created_at: now,
@@ -267,6 +280,16 @@ mod tests {
         );
 
         assert_eq!(
+            HostEvent::AliasesModified {
+                old_aliases: vec![],
+                new_aliases: vec!["srv".into()],
+                modified_at: now,
+            }
+            .event_type(),
+            "AliasesModified"
+        );
+
+        assert_eq!(
             HostEvent::HostDeleted {
                 ip_address: "192.168.1.1".into(),
                 hostname: "test.local".into(),
@@ -286,6 +309,7 @@ mod tests {
         let created = HostEvent::HostCreated {
             ip_address: "192.168.1.1".into(),
             hostname: "test.local".into(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
             created_at: now,
@@ -320,6 +344,13 @@ mod tests {
         };
         assert_eq!(tags_modified.occurred_at(), now);
 
+        let aliases_modified = HostEvent::AliasesModified {
+            old_aliases: vec![],
+            new_aliases: vec!["srv".into()],
+            modified_at: now,
+        };
+        assert_eq!(aliases_modified.occurred_at(), now);
+
         let deleted = HostEvent::HostDeleted {
             ip_address: "192.168.1.1".into(),
             hostname: "test.local".into(),
@@ -334,6 +365,7 @@ mod tests {
         let event = HostEvent::HostCreated {
             ip_address: "192.168.1.10".into(),
             hostname: "server.local".into(),
+            aliases: vec![],
             comment: Some("Test".into()),
             tags: vec!["prod".into()],
             created_at: Utc::now(),
@@ -407,5 +439,29 @@ mod tests {
         assert!(filter.ip_pattern.is_none());
         assert!(filter.hostname_pattern.is_none());
         assert!(filter.tags.is_none());
+    }
+
+    #[test]
+    fn test_old_event_without_aliases_deserializes() {
+        // Simulate old event JSON without aliases field
+        let old_json = r#"{
+            "type": "HostCreated",
+            "ip_address": "192.168.1.1",
+            "hostname": "test.local",
+            "comment": null,
+            "tags": [],
+            "created_at": "2025-01-01T00:00:00Z"
+        }"#;
+
+        let event: HostEvent = serde_json::from_str(old_json).unwrap();
+        match event {
+            HostEvent::HostCreated { aliases, .. } => {
+                assert!(
+                    aliases.is_empty(),
+                    "Old events should deserialize with empty aliases"
+                );
+            }
+            _ => panic!("Expected HostCreated"),
+        }
     }
 }

@@ -25,6 +25,7 @@ pub async fn initialize_schema(storage: &PostgresStorage) -> Result<(), StorageE
             hostname TEXT,
             comment TEXT,
             tags TEXT,
+            aliases TEXT,
             event_timestamp TIMESTAMPTZ NOT NULL,
             metadata TEXT NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -127,6 +128,15 @@ pub async fn initialize_schema(storage: &PostgresStorage) -> Result<(), StorageE
             FROM host_events
             WHERE tags IS NOT NULL
             ORDER BY aggregate_id, event_version DESC
+        ),
+        -- Get last non-null aliases
+        aliases_values AS (
+            SELECT DISTINCT ON (aggregate_id)
+                aggregate_id,
+                aliases
+            FROM host_events
+            WHERE aliases IS NOT NULL
+            ORDER BY aggregate_id, event_version DESC
         )
         SELECT
             le.aggregate_id as id,
@@ -134,6 +144,7 @@ pub async fn initialize_schema(storage: &PostgresStorage) -> Result<(), StorageE
             hn.hostname,
             cv.comment,
             tv.tags,
+            av.aliases,
             fe.created_at,
             le.updated_at,
             le.event_version
@@ -143,6 +154,7 @@ pub async fn initialize_schema(storage: &PostgresStorage) -> Result<(), StorageE
         LEFT JOIN hostname_values hn ON hn.aggregate_id = le.aggregate_id
         LEFT JOIN comment_values cv ON cv.aggregate_id = le.aggregate_id
         LEFT JOIN tags_values tv ON tv.aggregate_id = le.aggregate_id
+        LEFT JOIN aliases_values av ON av.aggregate_id = le.aggregate_id
         WHERE le.latest_event_type != 'HostDeleted'
         "#,
     )

@@ -59,6 +59,8 @@ pub async fn initialize_schema(storage: &DuckDbStorage) -> Result<(), StorageErr
                     comment VARCHAR,
                     -- Tags as JSON array string (nullable - NULL means "no change")
                     tags VARCHAR,
+                    -- Aliases as JSON array string (nullable - NULL means "no change")
+                    aliases VARCHAR,
                     event_timestamp TIMESTAMP NOT NULL,
                     -- Event metadata: previous values and extension data (stored as JSON string)
                     metadata VARCHAR NOT NULL,
@@ -132,6 +134,11 @@ pub async fn initialize_schema(storage: &DuckDbStorage) -> Result<(), StorageErr
                             ORDER BY event_version
                             ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
                         ) as tags,
+                        LAST_VALUE(aliases IGNORE NULLS) OVER (
+                            PARTITION BY aggregate_id
+                            ORDER BY event_version
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        ) as aliases,
                         FIRST_VALUE(event_timestamp) OVER (
                             PARTITION BY aggregate_id
                             ORDER BY event_version
@@ -156,6 +163,7 @@ pub async fn initialize_schema(storage: &DuckDbStorage) -> Result<(), StorageErr
                     hostname,
                     comment,
                     tags,
+                    aliases,
                     CAST(EXTRACT(EPOCH FROM created_at) * 1000000 AS BIGINT) as created_at,
                     CAST(EXTRACT(EPOCH FROM updated_at) * 1000000 AS BIGINT) as updated_at,
                     event_version

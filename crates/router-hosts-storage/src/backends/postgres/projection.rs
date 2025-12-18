@@ -30,7 +30,7 @@ impl PostgresStorage {
     pub(crate) async fn list_all_impl(&self) -> Result<Vec<HostEntry>, StorageError> {
         let rows = sqlx::query(
             r#"
-            SELECT id, ip_address, hostname, comment, tags,
+            SELECT id, ip_address, hostname, comment, tags, aliases,
                    created_at, updated_at, event_version
             FROM host_entries_current
             ORDER BY ip_address, hostname
@@ -49,7 +49,7 @@ impl PostgresStorage {
     pub(crate) async fn get_by_id_impl(&self, id: Ulid) -> Result<HostEntry, StorageError> {
         let row = sqlx::query(
             r#"
-            SELECT id, ip_address, hostname, comment, tags,
+            SELECT id, ip_address, hostname, comment, tags, aliases,
                    created_at, updated_at, event_version
             FROM host_entries_current
             WHERE id = $1
@@ -75,7 +75,7 @@ impl PostgresStorage {
     ) -> Result<Option<HostEntry>, StorageError> {
         let row = sqlx::query(
             r#"
-            SELECT id, ip_address, hostname, comment, tags,
+            SELECT id, ip_address, hostname, comment, tags, aliases,
                    created_at, updated_at, event_version
             FROM host_entries_current
             WHERE ip_address = $1 AND hostname = $2
@@ -95,15 +95,27 @@ impl PostgresStorage {
 
     /// Search with filters
     ///
-    /// Uses parameterized queries with explicit argument binding to prevent SQL injection.
-    /// Filter patterns are bound as LIKE parameters, never interpolated into the query.
-    /// Column names are hardcoded constants - only user-provided values are parameterized.
+    /// # Safety (SQL Injection Prevention)
+    ///
+    /// This function uses dynamic SQL query construction with `format!()` but is safe because:
+    /// 1. **Column names are hardcoded constants** - Only static strings like "ip_address",
+    ///    "hostname", "aliases", "tags" appear in the query structure.
+    /// 2. **All user input is parameterized** - Filter patterns (ip_pattern, hostname_pattern, tags)
+    ///    are bound via positional `$N` placeholders and `PgArguments`, never interpolated into SQL.
+    /// 3. **Query structure is fixed** - Only the WHERE clause presence changes based on filter,
+    ///    and the clause content uses positional placeholders.
+    /// 4. **PostgreSQL parameterization** - The `sqlx::query_with(&query, args)` call ensures
+    ///    all values are properly escaped by the database driver.
+    ///
+    /// # Errors
+    ///
+    /// Returns `StorageError::Query` if the database operation fails.
     pub(crate) async fn search_impl(
         &self,
         filter: HostFilter,
     ) -> Result<Vec<HostEntry>, StorageError> {
         // Build dynamic query with safe parameterized conditions
-        // All user input is bound via PgArguments, never interpolated
+        // SAFETY: All user input is bound via PgArguments, never interpolated into SQL
         let mut conditions: Vec<String> = Vec::new();
         let mut args = PgArguments::default();
         let mut param_idx = 0;
@@ -117,8 +129,17 @@ impl PostgresStorage {
 
         if let Some(ref hostname_pattern) = filter.hostname_pattern {
             param_idx += 1;
-            conditions.push(format!("hostname LIKE ${}", param_idx));
-            add_arg(&mut args, format!("%{}%", hostname_pattern))?;
+            let pattern1_idx = param_idx;
+            param_idx += 1;
+            let pattern2_idx = param_idx;
+            // Use ILIKE for case-insensitive matching (DNS is case-insensitive)
+            conditions.push(format!(
+                "(hostname ILIKE ${} OR aliases ILIKE ${})",
+                pattern1_idx, pattern2_idx
+            ));
+            let pattern = format!("%{}%", hostname_pattern);
+            add_arg(&mut args, pattern.clone())?;
+            add_arg(&mut args, pattern)?;
         }
 
         // Handle tag filters - each tag becomes a separate LIKE condition
@@ -139,7 +160,7 @@ impl PostgresStorage {
 
         let query = format!(
             r#"
-            SELECT id, ip_address, hostname, comment, tags,
+            SELECT id, ip_address, hostname, comment, tags, aliases,
                    created_at, updated_at, event_version
             FROM host_entries_current
             {}
@@ -236,6 +257,15 @@ impl PostgresStorage {
                 FROM events_at_time
                 WHERE tags IS NOT NULL
                 ORDER BY aggregate_id, event_version DESC
+            ),
+            -- Get last non-null aliases
+            aliases_values AS (
+                SELECT DISTINCT ON (aggregate_id)
+                    aggregate_id,
+                    aliases
+                FROM events_at_time
+                WHERE aliases IS NOT NULL
+                ORDER BY aggregate_id, event_version DESC
             )
             SELECT
                 le.aggregate_id as id,
@@ -243,6 +273,7 @@ impl PostgresStorage {
                 hn.hostname,
                 cv.comment,
                 tv.tags,
+                av.aliases,
                 fe.created_at,
                 le.updated_at,
                 le.event_version
@@ -252,6 +283,7 @@ impl PostgresStorage {
             LEFT JOIN hostname_values hn ON hn.aggregate_id = le.aggregate_id
             LEFT JOIN comment_values cv ON cv.aggregate_id = le.aggregate_id
             LEFT JOIN tags_values tv ON tv.aggregate_id = le.aggregate_id
+            LEFT JOIN aliases_values av ON av.aggregate_id = le.aggregate_id
             WHERE le.latest_event_type != 'HostDeleted'
             ORDER BY ip.ip_address, hn.hostname
             "#,
@@ -278,10 +310,16 @@ fn row_to_host_entry(row: &sqlx::postgres::PgRow) -> Result<HostEntry, StorageEr
         .map(|s| serde_json::from_str(&s).unwrap_or_default())
         .unwrap_or_default();
 
+    let aliases_json: Option<String> = row.get("aliases");
+    let aliases: Vec<String> = aliases_json
+        .map(|s| serde_json::from_str(&s).unwrap_or_default())
+        .unwrap_or_default();
+
     Ok(HostEntry {
         id,
         ip_address: row.get("ip_address"),
         hostname: row.get("hostname"),
+        aliases,
         comment: row.get("comment"),
         tags,
         created_at: row.get("created_at"),

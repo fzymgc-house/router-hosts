@@ -62,6 +62,7 @@ pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageErr
                 hostname TEXT,
                 comment TEXT,
                 tags TEXT,
+                aliases TEXT,
                 event_timestamp INTEGER NOT NULL,
                 metadata TEXT NOT NULL,
                 created_at INTEGER NOT NULL,
@@ -134,6 +135,10 @@ pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageErr
                 (SELECT tags FROM host_events h
                  WHERE h.aggregate_id = e.aggregate_id AND h.tags IS NOT NULL
                  ORDER BY h.rowid DESC LIMIT 1) as tags,
+                -- Get last non-null aliases
+                (SELECT aliases FROM host_events h
+                 WHERE h.aggregate_id = e.aggregate_id AND h.aliases IS NOT NULL
+                 ORDER BY h.rowid DESC LIMIT 1) as aliases,
                 -- First event timestamp as created_at
                 (SELECT event_timestamp FROM host_events h
                  WHERE h.aggregate_id = e.aggregate_id

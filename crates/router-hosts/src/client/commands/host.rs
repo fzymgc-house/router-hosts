@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use router_hosts_common::proto::{
-    AddHostRequest, DeleteHostRequest, ExportHostsRequest, GetHostRequest, ImportHostsRequest,
-    ListHostsRequest, SearchHostsRequest, UpdateHostRequest,
+    AddHostRequest, AliasesUpdate, DeleteHostRequest, ExportHostsRequest, GetHostRequest,
+    ImportHostsRequest, ListHostsRequest, SearchHostsRequest, TagsUpdate, UpdateHostRequest,
 };
 use std::io::{self, Write};
 use std::path::Path;
@@ -43,10 +43,12 @@ pub async fn handle(
             hostname,
             comment,
             tags,
+            aliases,
         } => {
             let request = AddHostRequest {
                 ip_address: ip,
                 hostname,
+                aliases,
                 comment,
                 tags,
             };
@@ -72,14 +74,39 @@ pub async fn handle(
             hostname,
             comment,
             tags,
+            aliases,
+            clear_tags,
+            clear_aliases,
             version,
         } => {
+            // Build wrapper messages for tags and aliases
+            let tags_update = if clear_tags {
+                Some(TagsUpdate { values: vec![] })
+            } else if !tags.is_empty() {
+                Some(TagsUpdate {
+                    values: tags.clone(),
+                })
+            } else {
+                None
+            };
+
+            let aliases_update = if clear_aliases {
+                Some(AliasesUpdate { values: vec![] })
+            } else if !aliases.is_empty() {
+                Some(AliasesUpdate {
+                    values: aliases.clone(),
+                })
+            } else {
+                None
+            };
+
             let request = UpdateHostRequest {
                 id: id.clone(), // Clone all fields for potential conflict retry before moving into request
                 ip_address: ip.clone(),
                 hostname: hostname.clone(),
                 comment: comment.clone(),
-                tags: tags.as_ref().cloned().unwrap_or_default(),
+                aliases: aliases_update.clone(),
+                tags: tags_update.clone(),
                 expected_version: version.clone(),
             };
 
@@ -100,7 +127,8 @@ pub async fn handle(
                                 ip: ip.clone(),
                                 hostname: hostname.clone(),
                                 comment: comment.clone(),
-                                tags: tags.clone(),
+                                tags: tags_update.clone(),
+                                aliases: aliases_update.clone(),
                             };
                             handle_version_conflict(
                                 client,
@@ -163,8 +191,9 @@ pub async fn handle(
             file,
             input_format,
             conflict_mode,
+            force,
         } => {
-            let chunks = read_file_chunks(&file, input_format, &conflict_mode)?;
+            let chunks = read_file_chunks(&file, input_format, &conflict_mode, force)?;
 
             let final_response = client
                 .import_hosts(chunks, |progress| {
@@ -211,6 +240,7 @@ fn read_file_chunks(
     path: &Path,
     format: FileFormat,
     conflict_mode: &str,
+    force: bool,
 ) -> Result<Vec<ImportHostsRequest>> {
     // Validate and canonicalize the path (note: this follows symlinks)
     let canonical_path = path
@@ -246,6 +276,7 @@ fn read_file_chunks(
             } else {
                 None
             },
+            force: if force { Some(true) } else { None },
             conflict_mode: if i == 0 {
                 Some(conflict_mode.to_string())
             } else {
@@ -263,7 +294,8 @@ struct UpdateFields {
     ip: Option<String>,
     hostname: Option<String>,
     comment: Option<String>,
-    tags: Option<Vec<String>>,
+    tags: Option<TagsUpdate>,
+    aliases: Option<AliasesUpdate>,
 }
 
 /// Handle version conflict for update operations
@@ -325,6 +357,7 @@ async fn handle_version_conflict(
             &fields.hostname,
             &fields.comment,
             &fields.tags,
+            &fields.aliases,
         );
     }
 
@@ -347,7 +380,8 @@ async fn handle_version_conflict(
         ip_address: fields.ip.clone(),
         hostname: fields.hostname.clone(),
         comment: fields.comment.clone(),
-        tags: fields.tags.as_ref().cloned().unwrap_or_default(),
+        aliases: fields.aliases.clone(),
+        tags: fields.tags.clone(),
         expected_version: Some(current_entry.version.clone()),
     };
 
@@ -398,7 +432,8 @@ async fn handle_version_conflict(
 /// - `user_ip`: IP address user wants to set (None = keep current)
 /// - `user_hostname`: Hostname user wants to set (None = keep current)
 /// - `user_comment`: Comment user wants to set (None = keep current)
-/// - `user_tags`: Tags user wants to set (None = keep current, empty vec = clear)
+/// - `user_tags`: Tags update wrapper (None = keep current)
+/// - `user_aliases`: Aliases update wrapper (None = keep current)
 ///
 /// # Output
 /// Writes to stderr using box-drawing characters for the header.
@@ -408,7 +443,8 @@ fn display_entry_diff(
     user_ip: &Option<String>,
     user_hostname: &Option<String>,
     user_comment: &Option<String>,
-    user_tags: &Option<Vec<String>>,
+    user_tags: &Option<TagsUpdate>,
+    user_aliases: &Option<AliasesUpdate>,
 ) {
     eprintln!("\n╔══════════════════════════════════════════════════════════════╗");
     eprintln!("║              VERSION CONFLICT DETECTED                       ║");
@@ -422,6 +458,7 @@ fn display_entry_diff(
         current.comment.as_deref().unwrap_or("<none>")
     );
     eprintln!("  Tags:     [{}]", current.tags.join(", "));
+    eprintln!("  Aliases:  [{}]", current.aliases.join(", "));
     eprintln!("  Version:  {}", current.version);
 
     // Show what the user was trying to change
@@ -464,10 +501,22 @@ fn display_entry_diff(
     }
 
     if let Some(new_tags) = user_tags {
-        let new_tags_str = new_tags.join(", ");
+        let new_tags_str = new_tags.values.join(", ");
         let current_tags_str = current.tags.join(", ");
         if new_tags_str != current_tags_str {
             eprintln!("  Tags:     [{}] → [{}]", current_tags_str, new_tags_str);
+            has_changes = true;
+        }
+    }
+
+    if let Some(new_aliases) = user_aliases {
+        let new_aliases_str = new_aliases.values.join(", ");
+        let current_aliases_str = current.aliases.join(", ");
+        if new_aliases_str != current_aliases_str {
+            eprintln!(
+                "  Aliases:  [{}] → [{}]",
+                current_aliases_str, new_aliases_str
+            );
             has_changes = true;
         }
     }
@@ -516,7 +565,8 @@ mod tests {
         let mut file = NamedTempFile::new().unwrap();
         writeln!(file, "192.168.1.1 test.local").unwrap();
 
-        let chunks = read_file_chunks(file.path(), FileFormat::Hosts, "skip").unwrap();
+        let chunks = read_file_chunks(file.path(), FileFormat::Hosts, "skip", false)
+            .expect("valid hosts file should parse successfully");
 
         assert_eq!(chunks.len(), 1);
         assert!(chunks[0].last_chunk);
@@ -530,6 +580,7 @@ mod tests {
             Path::new("/nonexistent/file.txt"),
             FileFormat::Hosts,
             "skip",
+            false,
         );
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
@@ -539,7 +590,7 @@ mod tests {
     #[test]
     fn test_read_file_chunks_directory() {
         let dir = tempfile::tempdir().unwrap();
-        let result = read_file_chunks(dir.path(), FileFormat::Hosts, "skip");
+        let result = read_file_chunks(dir.path(), FileFormat::Hosts, "skip", false);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Not a regular file"));
@@ -552,7 +603,8 @@ mod tests {
         let data = "x".repeat(CHUNK_SIZE + 1);
         write!(file, "{}", data).unwrap();
 
-        let chunks = read_file_chunks(file.path(), FileFormat::Json, "replace").unwrap();
+        let chunks = read_file_chunks(file.path(), FileFormat::Json, "replace", false)
+            .expect("large file should be chunked successfully");
 
         assert_eq!(chunks.len(), 2);
         assert!(!chunks[0].last_chunk);
@@ -567,10 +619,54 @@ mod tests {
         let file = NamedTempFile::new().unwrap();
         // File is empty
 
-        let result = read_file_chunks(file.path(), FileFormat::Csv, "strict");
+        let result = read_file_chunks(file.path(), FileFormat::Csv, "strict", false);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("Import file is empty"));
+    }
+
+    // --force flag tests
+
+    #[test]
+    fn test_read_file_chunks_force_false_sets_none() {
+        let mut file = NamedTempFile::new().expect("failed to create temp file");
+        writeln!(file, "192.168.1.1 test.local").expect("failed to write test data");
+
+        let chunks = read_file_chunks(file.path(), FileFormat::Hosts, "strict", false)
+            .expect("valid hosts file should parse successfully");
+
+        assert_eq!(chunks.len(), 1);
+        // force=false should result in None in the request (default behavior)
+        assert_eq!(chunks[0].force, None);
+    }
+
+    #[test]
+    fn test_read_file_chunks_force_true_sets_some_true() {
+        let mut file = NamedTempFile::new().expect("failed to create temp file");
+        writeln!(file, "192.168.1.1 test.local").expect("failed to write test data");
+
+        let chunks = read_file_chunks(file.path(), FileFormat::Hosts, "strict", true)
+            .expect("valid hosts file should parse successfully");
+
+        assert_eq!(chunks.len(), 1);
+        // force=true should result in Some(true) in the request
+        assert_eq!(chunks[0].force, Some(true));
+    }
+
+    #[test]
+    fn test_read_file_chunks_force_set_on_all_chunks() {
+        let mut file = NamedTempFile::new().expect("failed to create temp file");
+        // Write more than CHUNK_SIZE bytes to create multiple chunks
+        let data = "x".repeat(CHUNK_SIZE + 1);
+        write!(file, "{}", data).expect("failed to write test data");
+
+        let chunks = read_file_chunks(file.path(), FileFormat::Json, "strict", true)
+            .expect("large file should be chunked successfully");
+
+        assert_eq!(chunks.len(), 2);
+        // force is set on ALL chunks (unlike format/conflict_mode which are first-chunk only)
+        assert_eq!(chunks[0].force, Some(true));
+        assert_eq!(chunks[1].force, Some(true));
     }
 
     // Version conflict handling tests
@@ -581,6 +677,7 @@ mod tests {
             id: "01TEST".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("original".to_string()),
             tags: vec!["prod".to_string()],
             created_at: None,
@@ -592,9 +689,17 @@ mod tests {
         let new_hostname = None;
         let new_comment = None;
         let new_tags = None;
+        let new_aliases = None;
 
         // This would normally print to stderr - just verify it doesn't panic
-        display_entry_diff(&current, &new_ip, &new_hostname, &new_comment, &new_tags);
+        display_entry_diff(
+            &current,
+            &new_ip,
+            &new_hostname,
+            &new_comment,
+            &new_tags,
+            &new_aliases,
+        );
     }
 
     #[test]
@@ -603,6 +708,7 @@ mod tests {
             id: "01TEST".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("old comment".to_string()),
             tags: vec!["prod".to_string()],
             created_at: None,
@@ -613,10 +719,22 @@ mod tests {
         let new_ip = Some("10.0.0.1".to_string());
         let new_hostname = Some("app.local".to_string());
         let new_comment = Some("new comment".to_string());
-        let new_tags = Some(vec!["dev".to_string()]);
+        let new_tags = Some(TagsUpdate {
+            values: vec!["dev".to_string()],
+        });
+        let new_aliases = Some(AliasesUpdate {
+            values: vec!["app-alias".to_string()],
+        });
 
         // Verify no panic when all fields change
-        display_entry_diff(&current, &new_ip, &new_hostname, &new_comment, &new_tags);
+        display_entry_diff(
+            &current,
+            &new_ip,
+            &new_hostname,
+            &new_comment,
+            &new_tags,
+            &new_aliases,
+        );
     }
 
     #[test]
@@ -625,6 +743,7 @@ mod tests {
             id: "01TEST".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec!["prod".to_string(), "web".to_string()],
             created_at: None,
@@ -632,10 +751,10 @@ mod tests {
             version: "v1".to_string(),
         };
 
-        let new_tags = Some(vec![]); // Empty vec should show in diff
+        let new_tags = Some(TagsUpdate { values: vec![] }); // Empty vec should show in diff
 
         // Verify clearing tags is shown in diff
-        display_entry_diff(&current, &None, &None, &None, &new_tags);
+        display_entry_diff(&current, &None, &None, &None, &new_tags, &None);
     }
 
     #[test]
@@ -644,6 +763,7 @@ mod tests {
             id: "01TEST".to_string(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "server.local".to_string(),
+            aliases: vec![],
             comment: Some("comment".to_string()),
             tags: vec!["prod".to_string()],
             created_at: None,
@@ -652,7 +772,65 @@ mod tests {
         };
 
         // No fields provided - should show "only version changed"
-        display_entry_diff(&current, &None, &None, &None, &None);
+        display_entry_diff(&current, &None, &None, &None, &None, &None);
+    }
+
+    // Wrapper message semantics tests
+    //
+    // These tests document the three-state semantics for TagsUpdate and AliasesUpdate:
+    // - None: preserve existing values (no change)
+    // - Some({ values: [] }): clear all values
+    // - Some({ values: [..] }): replace with new values
+
+    #[test]
+    fn test_tags_update_none_means_preserve() {
+        // When TagsUpdate is None, existing tags should be preserved
+        // This test documents that None != empty
+        let tags_update: Option<TagsUpdate> = None;
+        assert!(tags_update.is_none());
+    }
+
+    #[test]
+    fn test_tags_update_empty_vec_means_clear() {
+        // When TagsUpdate has empty values vec, tags should be cleared
+        let tags_update = Some(TagsUpdate { values: vec![] });
+        assert!(tags_update.is_some());
+        assert!(tags_update.as_ref().unwrap().values.is_empty());
+    }
+
+    #[test]
+    fn test_tags_update_with_values_means_replace() {
+        // When TagsUpdate has values, tags should be replaced
+        let tags_update = Some(TagsUpdate {
+            values: vec!["new".to_string(), "tags".to_string()],
+        });
+        assert!(tags_update.is_some());
+        assert_eq!(tags_update.as_ref().unwrap().values.len(), 2);
+    }
+
+    #[test]
+    fn test_aliases_update_none_means_preserve() {
+        // When AliasesUpdate is None, existing aliases should be preserved
+        let aliases_update: Option<AliasesUpdate> = None;
+        assert!(aliases_update.is_none());
+    }
+
+    #[test]
+    fn test_aliases_update_empty_vec_means_clear() {
+        // When AliasesUpdate has empty values vec, aliases should be cleared
+        let aliases_update = Some(AliasesUpdate { values: vec![] });
+        assert!(aliases_update.is_some());
+        assert!(aliases_update.as_ref().unwrap().values.is_empty());
+    }
+
+    #[test]
+    fn test_aliases_update_with_values_means_replace() {
+        // When AliasesUpdate has values, aliases should be replaced
+        let aliases_update = Some(AliasesUpdate {
+            values: vec!["srv".to_string(), "api".to_string()],
+        });
+        assert!(aliases_update.is_some());
+        assert_eq!(aliases_update.as_ref().unwrap().values.len(), 2);
     }
 
     // Note on test coverage for handle_version_conflict() and prompt_retry():

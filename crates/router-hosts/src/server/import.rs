@@ -53,6 +53,9 @@ pub enum ParseError {
 
     #[error("CSV parse error: {0}")]
     CsvError(String),
+
+    #[error("CSV format error: {0}")]
+    CsvFormatError(String),
 }
 
 /// Parse import data in the specified format
@@ -84,7 +87,7 @@ fn parse_hosts_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
             None => (line, None),
         };
 
-        // Split entry on whitespace: IP hostname
+        // Split entry on whitespace: IP hostname [aliases...]
         let mut parts = entry_part.split_whitespace();
         let ip_address = parts.next().ok_or_else(|| ParseError::InvalidLine {
             line: line_number,
@@ -95,12 +98,16 @@ fn parse_hosts_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
             message: "Missing hostname".to_string(),
         })?;
 
+        // All remaining parts are aliases
+        let aliases: Vec<String> = parts.map(String::from).collect();
+
         // Parse comment and tags from comment part
         let (comment, tags) = parse_comment_and_tags(comment_part);
 
         entries.push(ParsedEntry {
             ip_address: ip_address.to_string(),
             hostname: hostname.to_string(),
+            aliases,
             comment,
             tags,
             line_number,
@@ -162,6 +169,8 @@ fn normalize_comment(comment: Option<String>) -> Option<String> {
 struct JsonEntry {
     ip_address: String,
     hostname: String,
+    #[serde(default)]
+    aliases: Vec<String>,
     comment: Option<String>,
     #[serde(default)]
     tags: Vec<String>,
@@ -187,6 +196,7 @@ fn parse_json_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         entries.push(ParsedEntry {
             ip_address: json_entry.ip_address,
             hostname: json_entry.hostname,
+            aliases: json_entry.aliases,
             comment: normalize_comment(json_entry.comment),
             tags: json_entry.tags,
             line_number,
@@ -195,6 +205,12 @@ fn parse_json_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
 
     Ok(entries)
 }
+
+/// Expected CSV headers for the current format
+const EXPECTED_CSV_HEADERS: [&str; 5] = ["ip_address", "hostname", "aliases", "comment", "tags"];
+
+/// Legacy CSV headers (pre-alias support)
+const LEGACY_CSV_HEADERS: [&str; 4] = ["ip_address", "hostname", "comment", "tags"];
 
 fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
     let mut entries = Vec::new();
@@ -205,6 +221,51 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         .flexible(true) // Allow varying number of fields per row
         .trim(csv::Trim::All)
         .from_reader(text.as_bytes());
+
+    // Validate headers to detect legacy format
+    let headers = reader
+        .headers()
+        .map_err(|e| ParseError::CsvError(format!("failed to read CSV headers: {}", e)))?;
+
+    let header_vec: Vec<&str> = headers.iter().collect();
+
+    // Check for legacy 4-column format
+    if header_vec.len() == 4 {
+        let is_legacy = header_vec
+            .iter()
+            .zip(LEGACY_CSV_HEADERS.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+
+        if is_legacy {
+            return Err(ParseError::CsvFormatError(
+                "Legacy CSV format detected (ip_address,hostname,comment,tags). \
+                The current format requires 5 columns: ip_address,hostname,aliases,comment,tags. \
+                Please add an 'aliases' column (can be empty) or re-export your data."
+                    .to_string(),
+            ));
+        }
+    }
+
+    // Validate expected headers for 5-column format
+    if header_vec.len() >= 5 {
+        let matches_expected = header_vec
+            .iter()
+            .take(5)
+            .zip(EXPECTED_CSV_HEADERS.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b));
+
+        if !matches_expected {
+            return Err(ParseError::CsvFormatError(format!(
+                "Invalid CSV headers. Expected: {}. Got: {}",
+                EXPECTED_CSV_HEADERS.join(","),
+                header_vec.join(",")
+            )));
+        }
+    } else if header_vec.len() < 2 {
+        return Err(ParseError::CsvFormatError(
+            "CSV must have at least ip_address and hostname columns".to_string(),
+        ));
+    }
 
     for (record_idx, result) in reader.records().enumerate() {
         // Line number is record index + 2 (1 for 0-indexing, 1 for header row)
@@ -227,7 +288,19 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
             continue;
         }
 
-        let comment = record.get(2).and_then(|s| {
+        // CSV format: ip_address,hostname,aliases,comment,tags
+        // Aliases use semicolon separator (;) to avoid conflicts with CSV comma delimiter
+        let aliases = record
+            .get(2)
+            .map(|s| {
+                s.split(';')
+                    .map(|t| t.trim().to_string())
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let comment = record.get(3).and_then(|s| {
             let s = s.trim();
             if s.is_empty() {
                 None
@@ -236,8 +309,9 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
             }
         });
 
+        // Tags also use semicolon separator (;) for consistency
         let tags = record
-            .get(3)
+            .get(4)
             .map(|s| {
                 s.split(';')
                     .map(|t| t.trim().to_string())
@@ -249,6 +323,7 @@ fn parse_csv_format(text: &str) -> Result<Vec<ParsedEntry>, ParseError> {
         entries.push(ParsedEntry {
             ip_address,
             hostname,
+            aliases,
             comment,
             tags,
             line_number,
@@ -357,7 +432,7 @@ mod tests {
 
     #[test]
     fn test_parse_csv_simple() {
-        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,,\n";
+        let input = b"ip_address,hostname,aliases,comment,tags\n192.168.1.10,server.local,,,\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].ip_address, "192.168.1.10");
@@ -367,8 +442,9 @@ mod tests {
     #[test]
     fn test_parse_csv_with_all_fields() {
         let input =
-            b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,My server,prod;web\n";
+            b"ip_address,hostname,aliases,comment,tags\n192.168.1.10,server.local,srv,My server,prod;web\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries[0].aliases, vec!["srv"]);
         assert_eq!(entries[0].comment, Some("My server".to_string()));
         assert_eq!(entries[0].tags, vec!["prod", "web"]);
     }
@@ -376,14 +452,14 @@ mod tests {
     #[test]
     fn test_parse_csv_escaped_fields() {
         let input =
-            b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"Hello, world\",\n";
+            b"ip_address,hostname,aliases,comment,tags\n192.168.1.10,server.local,,\"Hello, world\",\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries[0].comment, Some("Hello, world".to_string()));
     }
 
     #[test]
     fn test_parse_csv_multiple_rows() {
-        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server1.local,,\n192.168.1.11,server2.local,,\n";
+        let input = b"ip_address,hostname,aliases,comment,tags\n192.168.1.10,server1.local,,,\n192.168.1.11,server2.local,,,\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries.len(), 2);
     }
@@ -391,7 +467,7 @@ mod tests {
     #[test]
     fn test_parse_csv_escaped_quotes() {
         // CSV with embedded quotes (escaped as "")
-        let input = b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"He said \"\"hello\"\"\",\n";
+        let input = b"ip_address,hostname,aliases,comment,tags\n192.168.1.10,server.local,,\"He said \"\"hello\"\"\",\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].comment, Some("He said \"hello\"".to_string()));
@@ -401,7 +477,7 @@ mod tests {
     fn test_parse_csv_multiline_field() {
         // CSV with newline inside quoted field (the csv crate handles this)
         let input =
-            b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,\"Line 1\nLine 2\",\n";
+            b"ip_address,hostname,aliases,comment,tags\n192.168.1.10,server.local,,\"Line 1\nLine 2\",\n";
         let entries = parse_import(input, ImportFormat::Csv).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].comment, Some("Line 1\nLine 2".to_string()));
@@ -489,5 +565,141 @@ mod tests {
     #[test]
     fn test_import_format_default() {
         assert_eq!(ImportFormat::default(), ImportFormat::Hosts);
+    }
+
+    // ========================================================================
+    // Alias parsing tests
+    // ========================================================================
+
+    #[test]
+    fn test_parse_hosts_line_with_aliases() {
+        let input = b"192.168.1.10 server.local srv s.local\n";
+        let entries = parse_import(input, ImportFormat::Hosts).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].hostname, "server.local");
+        assert_eq!(entries[0].aliases, vec!["srv", "s.local"]);
+    }
+
+    #[test]
+    fn test_parse_hosts_line_with_comment_and_aliases() {
+        let input = b"192.168.1.10 server.local srv s.local # main server\n";
+        let entries = parse_import(input, ImportFormat::Hosts).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].hostname, "server.local");
+        assert_eq!(entries[0].aliases, vec!["srv", "s.local"]);
+        assert_eq!(entries[0].comment, Some("main server".to_string()));
+    }
+
+    #[test]
+    fn test_parse_hosts_line_no_aliases() {
+        let input = b"192.168.1.10 server.local\n";
+        let entries = parse_import(input, ImportFormat::Hosts).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].hostname, "server.local");
+        assert!(entries[0].aliases.is_empty());
+    }
+
+    #[test]
+    fn test_parse_hosts_with_tags_and_aliases() {
+        let input = b"192.168.1.10 server.local srv # [prod, web]\n";
+        let entries = parse_import(input, ImportFormat::Hosts).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].aliases, vec!["srv"]);
+        assert_eq!(entries[0].tags, vec!["prod", "web"]);
+    }
+
+    #[test]
+    fn test_parse_json_with_aliases() {
+        let input = br#"{"ip_address": "192.168.1.10", "hostname": "server.local", "aliases": ["srv", "s.local"]}"#;
+        let entries = parse_import(input, ImportFormat::Json).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].aliases, vec!["srv", "s.local"]);
+    }
+
+    #[test]
+    fn test_parse_json_without_aliases() {
+        let input = br#"{"ip_address": "192.168.1.10", "hostname": "server.local"}"#;
+        let entries = parse_import(input, ImportFormat::Json).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].aliases.is_empty());
+    }
+
+    #[test]
+    fn test_parse_csv_with_aliases() {
+        let input = b"ip_address,hostname,aliases,comment,tags\n192.168.1.10,server.local,srv;s.local,My server,prod;web\n";
+        let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].aliases, vec!["srv", "s.local"]);
+    }
+
+    #[test]
+    fn test_parse_csv_without_aliases() {
+        let input = b"ip_address,hostname,aliases,comment,tags\n192.168.1.10,server.local,,,\n";
+        let entries = parse_import(input, ImportFormat::Csv).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].aliases.is_empty());
+    }
+
+    #[test]
+    fn test_parse_csv_legacy_format_rejected() {
+        // Old CSV format: ip_address,hostname,comment,tags
+        // New format: ip_address,hostname,aliases,comment,tags
+        // Legacy format is now rejected with a clear error message
+        let input =
+            b"ip_address,hostname,comment,tags\n192.168.1.10,server.local,My comment,prod;web\n";
+        let result = parse_import(input, ImportFormat::Csv);
+        assert!(result.is_err());
+        match result {
+            Err(ParseError::CsvFormatError(msg)) => {
+                assert!(
+                    msg.contains("Legacy CSV format detected"),
+                    "Expected legacy format error, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected CsvFormatError, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_csv_invalid_headers_rejected() {
+        // Invalid header order should be rejected
+        let input = b"hostname,ip_address,aliases,comment,tags\n192.168.1.10,server.local,srv,,\n";
+        let result = parse_import(input, ImportFormat::Csv);
+        assert!(result.is_err());
+        match result {
+            Err(ParseError::CsvFormatError(msg)) => {
+                assert!(
+                    msg.contains("Invalid CSV headers"),
+                    "Expected invalid headers error, got: {}",
+                    msg
+                );
+            }
+            other => panic!("Expected CsvFormatError, got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_csv_format_error_display() {
+        let err = ParseError::CsvFormatError("test error".to_string());
+        assert!(err.to_string().contains("test error"));
+    }
+
+    #[test]
+    fn test_parse_hosts_with_multiple_aliases() {
+        let input = b"192.168.1.10 server.local srv1 srv2 srv3 s.local\n";
+        let entries = parse_import(input, ImportFormat::Hosts).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].hostname, "server.local");
+        assert_eq!(entries[0].aliases, vec!["srv1", "srv2", "srv3", "s.local"]);
+    }
+
+    #[test]
+    fn test_parse_hosts_aliases_with_mixed_whitespace() {
+        let input = b"192.168.1.10   server.local    srv1    srv2   # comment\n";
+        let entries = parse_import(input, ImportFormat::Hosts).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].aliases, vec!["srv1", "srv2"]);
+        assert_eq!(entries[0].comment, Some("comment".to_string()));
     }
 }

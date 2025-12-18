@@ -61,8 +61,18 @@ impl HostsFileGenerator {
         for entry in entries {
             let mut line = format!("{}\t{}", entry.ip_address, entry.hostname);
 
+            // Add aliases if present (sorted alphabetically for deterministic output)
+            if !entry.aliases.is_empty() {
+                let mut sorted_aliases = entry.aliases.clone();
+                sorted_aliases.sort();
+                for alias in sorted_aliases {
+                    line.push(' ');
+                    line.push_str(&alias);
+                }
+            }
+
             // Add comment and tags
-            let has_comment = entry.comment.is_some();
+            let has_comment = entry.comment.as_ref().is_some_and(|c| !c.is_empty());
             let has_tags = !entry.tags.is_empty();
 
             if has_comment || has_tags {
@@ -143,6 +153,7 @@ mod tests {
                 id: ulid::Ulid::new(),
                 ip_address: "192.168.1.10".to_string(),
                 hostname: "server.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 created_at: Utc::now(),
@@ -153,6 +164,7 @@ mod tests {
                 id: ulid::Ulid::new(),
                 ip_address: "192.168.1.20".to_string(),
                 hostname: "nas.local".to_string(),
+                aliases: vec![],
                 comment: Some("NAS storage".to_string()),
                 tags: vec!["homelab".to_string()],
                 created_at: Utc::now(),
@@ -165,6 +177,66 @@ mod tests {
 
         assert!(content.contains("192.168.1.10\tserver.local"));
         assert!(content.contains("192.168.1.20\tnas.local\t# NAS storage [homelab]"));
+    }
+
+    #[test]
+    fn test_format_hosts_file_with_aliases() {
+        let gen = HostsFileGenerator::new("/tmp/hosts");
+        let entries = vec![
+            HostEntry {
+                id: ulid::Ulid::new(),
+                ip_address: "192.168.1.10".to_string(),
+                hostname: "server.local".to_string(),
+                aliases: vec!["zulu".to_string(), "alpha".to_string()],
+                comment: None,
+                tags: vec![],
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+            },
+            HostEntry {
+                id: ulid::Ulid::new(),
+                ip_address: "192.168.1.20".to_string(),
+                hostname: "nas.local".to_string(),
+                aliases: vec!["www".to_string(), "api".to_string()],
+                comment: Some("Web server".to_string()),
+                tags: vec!["prod".to_string()],
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                version: "01ARZ3NDEKTSV4RRFFQ69G5FAQ".to_string(),
+            },
+        ];
+
+        let content = gen.format_hosts_file(&entries);
+
+        // Verify aliases are sorted alphabetically
+        assert!(content.contains("192.168.1.10\tserver.local alpha zulu"));
+        assert!(content.contains("192.168.1.20\tnas.local api www\t# Web server [prod]"));
+    }
+
+    #[test]
+    fn test_format_hosts_file_aliases_sorted() {
+        let gen = HostsFileGenerator::new("/tmp/hosts");
+        let entries = vec![HostEntry {
+            id: ulid::Ulid::new(),
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec![
+                "zebra".to_string(),
+                "alpha".to_string(),
+                "middle".to_string(),
+            ],
+            comment: None,
+            tags: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+        }];
+
+        let content = gen.format_hosts_file(&entries);
+
+        // Verify alphabetical sorting: alpha, middle, zebra
+        assert!(content.contains("server.local alpha middle zebra"));
     }
 
     #[tokio::test]
@@ -272,6 +344,35 @@ mod tests {
         let _ = fs::remove_file(&hosts_path).await;
     }
 
+    #[test]
+    fn test_format_hosts_file_empty_comment_no_metadata() {
+        let gen = HostsFileGenerator::new("/tmp/hosts");
+        // Empty string comment with no tags should not add comment marker
+        let entries = vec![HostEntry {
+            id: ulid::Ulid::new(),
+            ip_address: "192.168.1.10".to_string(),
+            hostname: "server.local".to_string(),
+            aliases: vec![],
+            comment: Some("".to_string()),
+            tags: vec![],
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+            version: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
+        }];
+
+        let content = gen.format_hosts_file(&entries);
+        // Empty comment should be treated as no comment
+        assert!(
+            content.contains("192.168.1.10\tserver.local\n")
+                || content.ends_with("192.168.1.10\tserver.local\n"),
+            "Empty comment should not add metadata section"
+        );
+        assert!(
+            !content.contains("192.168.1.10\tserver.local\t#"),
+            "Empty comment should NOT have comment marker"
+        );
+    }
+
     /// Test format_hosts_file with various tag and comment combinations
     #[test]
     fn test_format_hosts_file_metadata_combinations() {
@@ -282,6 +383,7 @@ mod tests {
             id: ulid::Ulid::new(),
             ip_address: "192.168.1.1".to_string(),
             hostname: "tagged.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec!["prod".to_string(), "web".to_string()],
             created_at: Utc::now(),
@@ -300,6 +402,7 @@ mod tests {
             id: ulid::Ulid::new(),
             ip_address: "192.168.1.2".to_string(),
             hostname: "both.local".to_string(),
+            aliases: vec![],
             comment: Some("My server".to_string()),
             tags: vec!["dev".to_string()],
             created_at: Utc::now(),
@@ -318,6 +421,7 @@ mod tests {
             id: ulid::Ulid::new(),
             ip_address: "192.168.1.3".to_string(),
             hostname: "plain.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
             created_at: Utc::now(),

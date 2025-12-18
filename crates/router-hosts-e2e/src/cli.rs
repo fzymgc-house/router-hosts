@@ -79,6 +79,7 @@ ca_cert_path = "{}"
             hostname: hostname.to_string(),
             comment: None,
             tags: Vec::new(),
+            aliases: Vec::new(),
             format: OutputFormat::Table,
         }
     }
@@ -113,6 +114,8 @@ ca_cert_path = "{}"
             hostname: None,
             comment: None,
             tags: None,
+            aliases: None,
+            clear_aliases: false,
         }
     }
 
@@ -186,6 +189,7 @@ pub struct AddHostBuilder<'a> {
     hostname: String,
     comment: Option<String>,
     tags: Vec<String>,
+    aliases: Vec<String>,
     format: OutputFormat,
 }
 
@@ -197,6 +201,11 @@ impl<'a> AddHostBuilder<'a> {
 
     pub fn tag(mut self, tag: &str) -> Self {
         self.tags.push(tag.to_string());
+        self
+    }
+
+    pub fn alias(mut self, alias: &str) -> Self {
+        self.aliases.push(alias.to_string());
         self
     }
 
@@ -223,6 +232,9 @@ impl<'a> AddHostBuilder<'a> {
         for tag in &self.tags {
             cmd.args(["--tag", tag]);
         }
+        for alias in &self.aliases {
+            cmd.args(["--alias", alias]);
+        }
         cmd
     }
 }
@@ -235,6 +247,8 @@ pub struct UpdateHostBuilder<'a> {
     hostname: Option<String>,
     comment: Option<String>,
     tags: Option<Vec<String>>,
+    aliases: Option<Vec<String>>,
+    clear_aliases: bool,
 }
 
 impl<'a> UpdateHostBuilder<'a> {
@@ -258,6 +272,16 @@ impl<'a> UpdateHostBuilder<'a> {
         self
     }
 
+    pub fn aliases(mut self, aliases: Vec<&str>) -> Self {
+        self.aliases = Some(aliases.into_iter().map(String::from).collect());
+        self
+    }
+
+    pub fn clear_aliases(mut self) -> Self {
+        self.clear_aliases = true;
+        self
+    }
+
     pub fn build(self) -> Command {
         let mut cmd = self.cli.cmd();
         cmd.args(["host", "update", &self.id]);
@@ -273,6 +297,13 @@ impl<'a> UpdateHostBuilder<'a> {
         if let Some(tags) = &self.tags {
             for tag in tags {
                 cmd.args(["--tag", tag]);
+            }
+        }
+        if self.clear_aliases {
+            cmd.arg("--clear-aliases");
+        } else if let Some(aliases) = &self.aliases {
+            for alias in aliases {
+                cmd.args(["--alias", alias]);
             }
         }
         cmd

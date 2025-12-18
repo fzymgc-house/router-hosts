@@ -7,7 +7,7 @@ use crate::server::hooks::HookExecutor;
 use crate::server::hosts_file::HostsFileGenerator;
 use crate::server::import::{parse_import, ImportFormat};
 use chrono::Utc;
-use router_hosts_common::validation::{validate_hostname, validate_ip_address};
+use router_hosts_common::validation::{validate_aliases, validate_hostname, validate_ip_address};
 use router_hosts_storage::{
     EventEnvelope, HostEntry, HostEvent, HostFilter, Snapshot, SnapshotId, SnapshotMetadata,
     Storage, StorageError,
@@ -93,6 +93,7 @@ impl CommandHandler {
         &self,
         ip_address: String,
         hostname: String,
+        aliases: Vec<String>,
         comment: Option<String>,
         tags: Vec<String>,
     ) -> CommandResult<HostEntry> {
@@ -100,6 +101,8 @@ impl CommandHandler {
         validate_ip_address(&ip_address)
             .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
         validate_hostname(&hostname).map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
+        validate_aliases(&aliases, &hostname)
+            .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
 
         // Check for duplicates
         if let Some(_existing) = self
@@ -117,6 +120,7 @@ impl CommandHandler {
         let event = HostEvent::HostCreated {
             ip_address,
             hostname,
+            aliases,
             comment,
             tags,
             created_at: Utc::now(),
@@ -139,12 +143,14 @@ impl CommandHandler {
     ///
     /// If `expected_version` is provided, the update will only succeed if the
     /// current version matches. This enables optimistic concurrency control.
+    #[allow(clippy::too_many_arguments)]
     pub async fn update_host(
         &self,
         id: Ulid,
         ip_address: Option<String>,
         hostname: Option<String>,
         comment: Option<Option<String>>,
+        aliases: Option<Vec<String>>,
         tags: Option<Vec<String>>,
         expected_version: Option<String>,
     ) -> CommandResult<HostEntry> {
@@ -175,7 +181,7 @@ impl CommandHandler {
         }
         let mut events = Vec::new();
 
-        // Track final IP and hostname for duplicate check
+        // Track final IP and hostname for duplicate check and alias validation
         let mut final_ip = current.ip_address.clone();
         let mut final_hostname = current.hostname.clone();
 
@@ -232,6 +238,22 @@ impl CommandHandler {
             }
         }
 
+        // Handle aliases update (wrapper pattern)
+        if let Some(new_aliases) = aliases {
+            // Validate aliases against the final hostname (which may have been updated)
+            validate_aliases(&new_aliases, &final_hostname)
+                .map_err(|e| CommandError::ValidationFailed(e.to_string()))?;
+
+            if new_aliases != current.aliases {
+                events.push(HostEvent::AliasesModified {
+                    old_aliases: current.aliases.clone(),
+                    new_aliases,
+                    modified_at: Utc::now(),
+                });
+            }
+        }
+
+        // Handle tags update (wrapper pattern)
         if let Some(new_tags) = tags {
             if new_tags != current.tags {
                 events.push(HostEvent::TagsModified {
@@ -407,6 +429,21 @@ impl CommandHandler {
                 result.failed = result.failed.saturating_add(1);
                 continue;
             }
+            if let Err(e) = validate_aliases(&entry.aliases, &entry.hostname) {
+                let error_msg = format!(
+                    "Line {}: Invalid aliases {:?}: {}",
+                    entry.line_number, entry.aliases, e
+                );
+                tracing::warn!(
+                    line = entry.line_number,
+                    aliases = ?entry.aliases,
+                    error = %e,
+                    "Import validation failed"
+                );
+                result.validation_errors.push(error_msg);
+                result.failed = result.failed.saturating_add(1);
+                continue;
+            }
 
             // Check for existing entry
             let existing = self
@@ -446,6 +483,14 @@ impl CommandHandler {
                         };
                         update_envelopes.push(self.create_envelope(existing_entry.id, event));
                     }
+                    if entry.aliases != existing_entry.aliases {
+                        let event = HostEvent::AliasesModified {
+                            old_aliases: existing_entry.aliases.clone(),
+                            new_aliases: entry.aliases.clone(),
+                            modified_at: Utc::now(),
+                        };
+                        update_envelopes.push(self.create_envelope(existing_entry.id, event));
+                    }
                     if entry.tags != existing_entry.tags {
                         let event = HostEvent::TagsModified {
                             old_tags: existing_entry.tags.clone(),
@@ -478,6 +523,7 @@ impl CommandHandler {
                     let event = HostEvent::HostCreated {
                         ip_address: entry.ip_address,
                         hostname: entry.hostname,
+                        aliases: entry.aliases,
                         comment: entry.comment,
                         tags: entry.tags,
                         created_at: Utc::now(),
@@ -623,7 +669,13 @@ impl CommandHandler {
         let mut restored_count = 0;
         for entry in parsed_entries {
             match self
-                .add_host(entry.ip_address, entry.hostname, entry.comment, entry.tags)
+                .add_host(
+                    entry.ip_address,
+                    entry.hostname,
+                    entry.aliases,
+                    entry.comment,
+                    entry.tags,
+                )
                 .await
             {
                 Ok(_) => restored_count += 1,
@@ -760,6 +812,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -777,6 +830,7 @@ mod tests {
             .add_host(
                 "invalid-ip".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -792,6 +846,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -803,6 +858,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -818,6 +874,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -828,6 +885,7 @@ mod tests {
             .update_host(
                 entry.id,
                 Some("192.168.1.2".to_string()),
+                None,
                 None,
                 None,
                 None,
@@ -846,6 +904,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -866,6 +925,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "host1.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -876,6 +936,7 @@ mod tests {
             .add_host(
                 "192.168.1.2".to_string(),
                 "host2.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -894,6 +955,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "server.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -904,6 +966,7 @@ mod tests {
             .add_host(
                 "192.168.1.2".to_string(),
                 "client.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -922,6 +985,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "old.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -933,6 +997,7 @@ mod tests {
                 entry.id,
                 None,
                 Some("new.local".to_string()),
+                None,
                 None,
                 None,
                 None,
@@ -950,6 +1015,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -962,6 +1028,7 @@ mod tests {
                 None,
                 None,
                 Some(Some("Test comment".to_string())),
+                None,
                 None,
                 None,
             )
@@ -978,6 +1045,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -987,6 +1055,7 @@ mod tests {
         let updated = handler
             .update_host(
                 entry.id,
+                None,
                 None,
                 None,
                 None,
@@ -1006,6 +1075,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1014,7 +1084,7 @@ mod tests {
 
         // Update with no actual changes
         let result = handler
-            .update_host(entry.id, None, None, None, None, None)
+            .update_host(entry.id, None, None, None, None, None, None)
             .await
             .unwrap();
 
@@ -1037,7 +1107,7 @@ mod tests {
         let fake_id = Ulid::new();
 
         let result = handler
-            .update_host(fake_id, None, None, None, None, None)
+            .update_host(fake_id, None, None, None, None, None, None)
             .await;
         assert!(matches!(result, Err(CommandError::NotFound(_))));
     }
@@ -1050,6 +1120,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "invalid..hostname".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1067,6 +1138,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "host-a.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1077,6 +1149,7 @@ mod tests {
             .add_host(
                 "192.168.1.2".to_string(),
                 "host-b.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1089,6 +1162,7 @@ mod tests {
                 entry_a.id,
                 Some("192.168.1.2".to_string()),
                 Some("host-b.local".to_string()),
+                None,
                 None,
                 None,
                 None,
@@ -1109,6 +1183,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1120,6 +1195,7 @@ mod tests {
             .update_host(
                 entry.id,
                 Some("192.168.1.2".to_string()),
+                None,
                 None,
                 None,
                 None,
@@ -1141,6 +1217,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1157,6 +1234,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some(current_version),
             )
             .await
@@ -1169,6 +1247,7 @@ mod tests {
             .update_host(
                 entry.id,
                 Some("192.168.1.3".to_string()),
+                None,
                 None,
                 None,
                 None,
@@ -1190,6 +1269,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1207,6 +1287,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1216,6 +1297,7 @@ mod tests {
             .update_host(
                 entry.id,
                 Some("192.168.1.3".to_string()),
+                None,
                 None,
                 None,
                 None,
@@ -1241,6 +1323,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1251,6 +1334,7 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.1".to_string(),
                 hostname: "existing.local".to_string(),
+                aliases: vec![],
                 comment: Some("New comment".to_string()),
                 tags: vec![],
                 line_number: 1,
@@ -1258,6 +1342,7 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.2".to_string(),
                 hostname: "new.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 2,
@@ -1294,6 +1379,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1303,6 +1389,7 @@ mod tests {
         let entries = vec![ParsedEntry {
             ip_address: "192.168.1.1".to_string(),
             hostname: "existing.local".to_string(),
+            aliases: vec![],
             comment: Some("Updated comment".to_string()),
             tags: vec!["updated".to_string()],
             line_number: 1,
@@ -1337,6 +1424,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
@@ -1346,6 +1434,7 @@ mod tests {
         let entries = vec![ParsedEntry {
             ip_address: "192.168.1.1".to_string(),
             hostname: "existing.local".to_string(),
+            aliases: vec![],
             comment: None,
             tags: vec![],
             line_number: 1,
@@ -1367,6 +1456,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
+                vec![],
                 Some("Original comment".to_string()),
                 vec![],
             )
@@ -1378,6 +1468,7 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.1".to_string(),
                 hostname: "existing.local".to_string(),
+                aliases: vec![],
                 comment: Some("First update".to_string()),
                 tags: vec![],
                 line_number: 1,
@@ -1385,6 +1476,7 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.1".to_string(),
                 hostname: "existing.local".to_string(),
+                aliases: vec![],
                 comment: Some("Second update".to_string()),
                 tags: vec![],
                 line_number: 2,
@@ -1411,6 +1503,7 @@ mod tests {
             .add_host(
                 "192.168.1.1".to_string(),
                 "existing.local".to_string(),
+                vec![],
                 Some("Same comment".to_string()),
                 vec!["tag1".to_string()],
             )
@@ -1421,6 +1514,7 @@ mod tests {
         let entries = vec![ParsedEntry {
             ip_address: "192.168.1.1".to_string(),
             hostname: "existing.local".to_string(),
+            aliases: vec![],
             comment: Some("Same comment".to_string()),
             tags: vec!["tag1".to_string()],
             line_number: 1,
@@ -1450,6 +1544,7 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.1".to_string(),
                 hostname: "valid.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 1,
@@ -1458,6 +1553,7 @@ mod tests {
             ParsedEntry {
                 ip_address: "not-an-ip".to_string(),
                 hostname: "badip.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 2,
@@ -1466,6 +1562,7 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.3".to_string(),
                 hostname: "bad_hostname".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 3,
@@ -1474,6 +1571,7 @@ mod tests {
             ParsedEntry {
                 ip_address: "192.168.1.4".to_string(),
                 hostname: "valid2.local".to_string(),
+                aliases: vec![],
                 comment: None,
                 tags: vec![],
                 line_number: 4,
@@ -1496,6 +1594,74 @@ mod tests {
         assert_eq!(hosts.len(), 2);
         assert!(hosts.iter().any(|h| h.hostname == "valid.local"));
         assert!(hosts.iter().any(|h| h.hostname == "valid2.local"));
+    }
+
+    #[tokio::test]
+    async fn test_import_hosts_alias_validation() {
+        use crate::server::write_queue::{ConflictMode, ParsedEntry};
+
+        let handler = setup().await;
+
+        let entries = vec![
+            // Valid entry with valid aliases
+            ParsedEntry {
+                ip_address: "192.168.1.1".to_string(),
+                hostname: "server.local".to_string(),
+                aliases: vec!["srv".to_string(), "s.local".to_string()],
+                comment: None,
+                tags: vec![],
+                line_number: 1,
+            },
+            // Invalid: alias matches canonical hostname (case-insensitive)
+            ParsedEntry {
+                ip_address: "192.168.1.2".to_string(),
+                hostname: "bad.local".to_string(),
+                aliases: vec!["BAD.LOCAL".to_string()],
+                comment: None,
+                tags: vec![],
+                line_number: 2,
+            },
+            // Invalid: duplicate alias within entry
+            ParsedEntry {
+                ip_address: "192.168.1.3".to_string(),
+                hostname: "dup.local".to_string(),
+                aliases: vec!["alias1".to_string(), "ALIAS1".to_string()],
+                comment: None,
+                tags: vec![],
+                line_number: 3,
+            },
+            // Invalid: invalid alias format
+            ParsedEntry {
+                ip_address: "192.168.1.4".to_string(),
+                hostname: "invalid.local".to_string(),
+                aliases: vec!["-bad-alias".to_string()],
+                comment: None,
+                tags: vec![],
+                line_number: 4,
+            },
+        ];
+
+        let result = handler
+            .import_hosts(entries, ConflictMode::Skip)
+            .await
+            .unwrap();
+
+        assert_eq!(result.processed, 4);
+        assert_eq!(result.created, 1); // Only the first entry is valid
+        assert_eq!(result.failed, 3); // Three entries have invalid aliases
+        assert_eq!(result.validation_errors.len(), 3);
+
+        // Verify error messages contain "alias"
+        assert!(result
+            .validation_errors
+            .iter()
+            .any(|e| e.to_lowercase().contains("alias")));
+
+        // Verify only valid entry was created
+        let hosts = handler.list_hosts().await.unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].hostname, "server.local");
+        assert_eq!(hosts[0].aliases, vec!["srv", "s.local"]);
     }
 
     // Snapshot tests
@@ -1579,6 +1745,7 @@ mod tests {
             .add_host(
                 "192.168.1.10".to_string(),
                 "test.local".to_string(),
+                vec![],
                 None,
                 vec![],
             )
