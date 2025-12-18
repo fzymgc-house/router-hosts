@@ -121,9 +121,10 @@ async fn test_crud_with_aliases() {
     );
 
     // Add host with aliases
+    // Note: Use hostname that doesn't contain alias names to avoid substring match issues
     let output = cli
-        .add_host("10.0.0.10", "mainserver.local")
-        .alias("main")
+        .add_host("10.0.0.10", "webserver.local")
+        .alias("www")
         .alias("srv")
         .format(OutputFormat::Json)
         .build()
@@ -140,12 +141,12 @@ async fn test_crud_with_aliases() {
     cli.list_hosts()
         .assert()
         .success()
-        .stdout(predicate::str::contains("main"))
+        .stdout(predicate::str::contains("www"))
         .stdout(predicate::str::contains("srv"));
 
     // Update aliases
     cli.update_host(id)
-        .aliases(vec!["primary", "app"])
+        .aliases(vec!["primary", "api"])
         .build()
         .assert()
         .success();
@@ -155,7 +156,7 @@ async fn test_crud_with_aliases() {
         .assert()
         .success()
         .stdout(predicate::str::contains("primary"))
-        .stdout(predicate::str::contains("app"));
+        .stdout(predicate::str::contains("api"));
 
     // Clear aliases
     cli.update_host(id)
@@ -168,7 +169,7 @@ async fn test_crud_with_aliases() {
     cli.get_host(id)
         .assert()
         .success()
-        .stdout(predicate::str::contains("main").not())
+        .stdout(predicate::str::contains("www").not())
         .stdout(predicate::str::contains("primary").not());
 
     server.stop().await;
