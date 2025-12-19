@@ -3063,6 +3063,7 @@ dependencies = [
  "prost",
  "prost-types",
  "rcgen",
+ "regex",
  "router-hosts-common",
  "router-hosts-storage",
  "rustls-pemfile",

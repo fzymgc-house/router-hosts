@@ -42,6 +42,9 @@ parking_lot.workspace = true
 csv.workspace = true
 rustls-pemfile.workspace = true
 
+# ACME support
+regex.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 serial_test = "3"

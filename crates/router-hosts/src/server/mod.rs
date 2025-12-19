@@ -4,7 +4,9 @@
 //! - gRPC service with mTLS
 //! - Storage abstraction with event sourcing
 //! - /etc/hosts file generation
+//! - ACME certificate management
 
+pub mod acme;
 pub mod commands;
 pub mod config;
 pub mod export;
