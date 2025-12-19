@@ -42,6 +42,7 @@ pub mod client;
 pub mod config;
 pub mod env_expand;
 pub mod http_challenge;
+pub mod renewal;
 
 // Re-export types needed by server config
 pub use config::{AcmeConfig, AcmeConfigError};
@@ -69,3 +70,7 @@ pub use http_challenge::{
 pub use cert_writer::{
     trigger_reload, trigger_reload_async, write_certificate, CertWriteError, CertWriteResult,
 };
+
+// Renewal loop types (will be used when ACME is integrated into server)
+#[allow(unused_imports)]
+pub use renewal::{AcmeRenewalLoop, RenewalError, RenewalHandle, TlsPaths};
