@@ -43,36 +43,35 @@ Despite having more features, dataaxiom was rejected due to:
 **Problem:** snok does NOT support regex patterns like `version-pattern: '^[0-9a-f]{40}$'` to select which images to delete.
 
 **Workaround:**
-Use an **inverted protection model**:
-- Explicitly list tags to **protect** via `image-tags`
-- All other tags matching `tag-selection` will be candidates for deletion
+Use **negation syntax** with the `!` prefix to protect specific tags:
+- Tags prefixed with `!` are **protected** from deletion
+- The `*` wildcard targets all other tags for deletion
 - Deletion is subject to `cut-off` (time) and `keep-n-most-recent` (count)
 
 **Example:**
 ```yaml
-image-tags: |
-  latest
-  v0.5.0
-  v*.*.*-alpha.*
-  v*.*.*-beta.*
-  v*.*.*-rc.*
+# Protect production tags, delete everything else
+image-tags: "!latest !v*.*.* *"
 ```
 
-This protects:
-- The `latest` tag
-- The current version `v0.5.0`
-- Pre-release tags matching the wildcard patterns
+This configuration:
+- `!latest` - protects the `latest` tag
+- `!v*.*.*` - protects all semver tags (v0.5.0, v1.0.0-rc.1, etc.)
+- `*` - targets all other tags for deletion
 
 **Consequence:** SHA-tagged dev images (e.g., `abc123def456`, `abc123def456-amd64`) are NOT protected and will be deleted based on age/count criteria.
+
+**Important:** Without the `!` prefix, `image-tags` acts as a **selection filter** (only delete these tags), not a protection list. Always use `!` for tags you want to keep.
 
 ### 2. Wildcard Pattern Support
 
 **Good news:** snok supports glob-style wildcards in `image-tags`:
-- `v*.*.*-alpha.*` matches `v1.0.0-alpha.1`, `v2.3.4-alpha.99`
-- `v*.*.*-beta.*` matches `v1.0.0-beta.1`
-- `v*.*.*-rc.*` matches `v1.0.0-rc.1`
+- `!v*.*.*` matches and protects all semver-like tags:
+  - `v0.5.0`, `v1.0.0` (release versions)
+  - `v1.0.0-alpha.1`, `v1.0.0-beta.1`, `v1.0.0-rc.1` (pre-releases)
+- `*` matches all remaining tags for deletion
 
-This is sufficient for protecting semver tags with common pre-release identifiers.
+The simplified `!v*.*.*` pattern protects all semver tags in one rule, eliminating the need for separate alpha/beta/rc patterns.
 
 ### 3. Build Metadata Tags Not Protected
 
@@ -91,23 +90,28 @@ If you use build metadata in production:
 - Manifest images (SHA tags like `abc123def456`)
 - Architecture-specific images (SHA tags like `abc123def456-amd64`, `abc123def456-arm64`)
 
-**Reality with snok:** A single step handles all tags because:
-- `tag-selection: tagged` targets ALL tagged images
-- Protected tags (via `image-tags`) are excluded
+**Reality with snok:** A single step handles all images because:
+- `tag-selection: both` targets tagged AND untagged images
+- Protected tags (via `!` prefix in `image-tags`) are excluded
 - Both manifest and architecture tags share the same SHA prefix
-- Unprotected = eligible for cleanup
+- Untagged intermediate layers are also cleaned up
 
-**Result:** One step replaces three, simplifying the workflow.
+**Why `tag-selection: both`:**
+- **Tagged images:** SHA-based dev images (abc123def456) are cleaned
+- **Untagged images:** Orphaned manifests and intermediate layers are cleaned
+- More comprehensive cleanup with the same safety guarantees
+
+**Result:** One step handles all cleanup, including orphaned untagged images.
 
 ## Configuration Mapping
 
 | Feature | actions/delete-package-versions | snok/container-retention-policy |
 |---------|--------------------------------|--------------------------------|
 | Time-based retention | ❌ `older-than: 7` (unsupported) | ✅ `cut-off: 1w` |
-| Regex filtering | ❌ `version-pattern: '^...$'` (unsupported) | ⚠️ Use inverted `image-tags` protection |
+| Regex filtering | ❌ `version-pattern: '^...$'` (unsupported) | ⚠️ Use `!` prefix negation syntax |
 | Keep N recent | ✅ `min-versions-to-keep: 3` | ✅ `keep-n-most-recent: 3` |
 | Dry-run mode | ❌ `dry-run: true` (unsupported) | ✅ `dry-run: true` |
-| Tag selection | ✅ `delete-only-untagged-versions` | ✅ `tag-selection: tagged/untagged/all` |
+| Tag selection | ✅ `delete-only-untagged-versions` | ✅ `tag-selection: both` (tagged + untagged) |
 
 ## Testing Strategy
 
@@ -200,19 +204,16 @@ See issue #88 for tracking post-deployment validation checklist.
 
 ### Adding New Protected Tags
 
-When releasing new versions, **you may need to update** `image-tags`:
+With the simplified `!v*.*.*` pattern, **no updates are needed** for new semver releases:
 
 ```yaml
-image-tags: |
-  latest
-  v0.5.0
-  v0.6.0  # Add new release
-  v*.*.*-alpha.*
-  v*.*.*-beta.*
-  v*.*.*-rc.*
+# This pattern automatically protects all semver tags
+image-tags: "!latest !v*.*.* *"
 ```
 
-However, wildcard patterns should cover most cases automatically.
+New versions like `v0.6.0`, `v1.0.0`, `v1.0.0-rc.1` are automatically protected.
+
+**Only update if you need to protect non-semver tags** (e.g., `!stable !edge`).
 
 ### Monitoring
 

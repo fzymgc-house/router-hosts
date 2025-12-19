@@ -82,19 +82,16 @@ jobs:
           # Keep at least 3 most recent images (equivalent to min-versions-to-keep: 3)
           keep-n-most-recent: 3
 
-          # Target only tagged images (equivalent to delete-only-untagged-versions: false)
-          # This ensures we clean SHA-tagged images (e.g., abc123def456)
-          tag-selection: tagged
+          # Target both tagged and untagged images
+          # Tagged: SHA-based images (e.g., abc123def456) will be cleaned
+          # Untagged: Intermediate layers and orphaned manifests will be cleaned
+          tag-selection: both
 
-          # Explicitly protect production tags
-          # This is the workaround for lack of version-pattern support
-          # All tags NOT in this list will be deleted if they meet cut-off criteria
-          image-tags: |
-            latest
-            v0.5.0
-            v*.*.*-alpha.*
-            v*.*.*-beta.*
-            v*.*.*-rc.*
+          # Protect production tags using ! prefix, target all others with *
+          # The ! prefix means "don't delete these tags"
+          # The * means "target all other tags for deletion"
+          # See: https://github.com/snok/container-retention-policy#image-tags
+          image-tags: "!latest !v*.*.* *"
 
           # Enable dry-run for safe testing (change to false for production)
           dry-run: true
