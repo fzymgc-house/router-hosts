@@ -52,6 +52,10 @@ hyper-util.workspace = true
 http-body-util.workspace = true
 rustls.workspace = true
 
+# Unix system calls (for SIGHUP cert reload)
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tempfile.workspace = true
 serial_test = "3"

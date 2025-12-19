@@ -37,6 +37,7 @@
 //! api_token = "${CLOUDFLARE_API_TOKEN}"
 //! ```
 
+pub mod cert_writer;
 pub mod client;
 pub mod config;
 pub mod env_expand;
@@ -61,4 +62,10 @@ pub use env_expand::{contains_env_vars, expand_env_vars, EnvExpandError};
 #[allow(unused_imports)]
 pub use http_challenge::{
     ChallengeStore, HttpChallengeError, HttpChallengeHandle, HttpChallengeServer,
+};
+
+// Certificate writing and SIGHUP trigger (will be used when ACME integration is complete)
+#[allow(unused_imports)]
+pub use cert_writer::{
+    trigger_reload, trigger_reload_async, write_certificate, CertWriteError, CertWriteResult,
 };
