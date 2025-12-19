@@ -138,12 +138,10 @@ impl AcmeConfig {
             self.email = Some(expand_env_vars(email)?);
         }
 
-        // Expand domains
-        self.domains = self
-            .domains
-            .iter()
-            .map(|d| expand_env_vars(d))
-            .collect::<Result<Vec<_>, _>>()?;
+        // Expand domains in-place to avoid unnecessary clones
+        for domain in &mut self.domains {
+            *domain = expand_env_vars(domain)?;
+        }
 
         // Validate domains are specified
         if self.domains.is_empty() {

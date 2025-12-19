@@ -166,19 +166,35 @@ impl AcmeClient {
             })?;
         }
 
-        // Write with secure permissions (owner read/write only)
-        tokio::fs::write(credentials_path, &credentials_json)
+        // Write atomically with secure permissions (0600) to avoid race condition
+        // where file briefly exists with world-readable permissions
+        let temp_path = credentials_path.with_extension("tmp");
+
+        // Write to temp file
+        tokio::fs::write(&temp_path, &credentials_json)
             .await
             .map_err(|e| AcmeError::Account(format!("failed to write credentials: {}", e)))?;
 
+        // Set permissions before rename (Unix only)
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let permissions = std::fs::Permissions::from_mode(0o600);
-            std::fs::set_permissions(credentials_path, permissions).map_err(|e| {
+            std::fs::set_permissions(&temp_path, permissions).map_err(|e| {
+                // Clean up temp file on error
+                let _ = std::fs::remove_file(&temp_path);
                 AcmeError::Account(format!("failed to set credentials permissions: {}", e))
             })?;
         }
+
+        // Atomic rename to final path
+        tokio::fs::rename(&temp_path, credentials_path)
+            .await
+            .map_err(|e| {
+                // Clean up temp file on error
+                let _ = std::fs::remove_file(&temp_path);
+                AcmeError::Account(format!("failed to finalize credentials file: {}", e))
+            })?;
 
         info!("ACME account created and credentials saved");
         *account_guard = Some(account);

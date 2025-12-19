@@ -212,7 +212,10 @@ impl AcmeRenewalLoop {
             .await
             .map_err(|e| RenewalError::Parse(format!("failed to read certificate: {}", e)))?;
 
-        // Parse the first certificate in the chain
+        // Parse the first certificate in the chain (the leaf/end-entity cert).
+        // We intentionally only check the leaf cert's expiry since that's what
+        // determines when the certificate needs renewal. Intermediate certs in
+        // the chain typically have much longer validity periods.
         let (_, pem) = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes())
             .map_err(|e| RenewalError::Parse(format!("failed to parse PEM: {:?}", e)))?;
 
