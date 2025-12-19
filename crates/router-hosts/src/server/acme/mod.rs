@@ -37,11 +37,16 @@
 //! api_token = "${CLOUDFLARE_API_TOKEN}"
 //! ```
 
+pub mod client;
 pub mod config;
 pub mod env_expand;
 
 // Re-export types needed by server config
 pub use config::{AcmeConfig, AcmeConfigError};
+
+// ACME client types (will be used when integration is complete)
+#[allow(unused_imports)]
+pub use client::{AcmeClient, AcmeError, CertificateBundle};
 
 // Additional types will be used in later implementation phases
 #[allow(unused_imports)]

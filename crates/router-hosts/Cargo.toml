@@ -44,8 +44,14 @@ rustls-pemfile.workspace = true
 
 # ACME support
 regex.workspace = true
+instant-acme.workspace = true
+rcgen.workspace = true
+reqwest.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+rustls.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
 serial_test = "3"
-rcgen = "0.14"
