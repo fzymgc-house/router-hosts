@@ -3,7 +3,7 @@ use router_hosts_common::proto::{
     AddHostRequest, AliasesUpdate, DeleteHostRequest, ExportHostsRequest, GetHostRequest,
     ImportHostsRequest, ListHostsRequest, SearchHostsRequest, TagsUpdate, UpdateHostRequest,
 };
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 
 use crate::client::{
@@ -194,10 +194,13 @@ pub async fn handle(
             force,
         } => {
             let chunks = read_file_chunks(&file, input_format, &conflict_mode, force)?;
+            let is_tty = io::stderr().is_terminal();
 
             let final_response = client
                 .import_hosts(chunks, |progress| {
-                    if !quiet {
+                    // Only show live progress updates in TTY mode
+                    // Non-TTY contexts (CI, cron, pipes) get final summary only
+                    if !quiet && is_tty {
                         eprint!(
                             "\rProcessed: {}, Created: {}, Updated: {}, Skipped: {}, Failed: {}",
                             progress.processed,
@@ -211,7 +214,9 @@ pub async fn handle(
                 .await?;
 
             if !quiet {
-                eprintln!(); // New line after progress
+                if is_tty {
+                    eprintln!(); // New line after progress (only needed in TTY mode)
+                }
                 eprintln!(
                     "Import complete: {} processed, {} created, {} updated, {} skipped, {} failed",
                     final_response.processed,
