@@ -16,6 +16,7 @@ pub mod import;
 pub mod service;
 pub mod write_queue;
 
+use crate::server::acme::renewal::{AcmeRenewalLoop, RenewalHandle, TlsPaths};
 use crate::server::commands::CommandHandler;
 use crate::server::config::Config;
 use crate::server::hooks::HookExecutor;
@@ -27,11 +28,12 @@ use clap::Parser;
 use router_hosts_common::proto::hosts_service_server::HostsServiceServer;
 use router_hosts_storage::{create_storage, StorageConfig, StorageError};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::signal;
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
-use tracing::info;
+use tracing::{error, info, warn};
 
 #[derive(Debug, Error)]
 pub enum ServerError {
@@ -49,6 +51,9 @@ pub enum ServerError {
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    #[error("ACME error: {0}")]
+    Acme(#[from] crate::server::acme::renewal::RenewalError),
 }
 
 /// Reason the server is shutting down
@@ -282,6 +287,42 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
          Restart server to load new certificates."
     );
 
+    // Start ACME renewal loop if enabled
+    let mut acme_handle: Option<RenewalHandle> = if config.acme.enabled {
+        info!("ACME certificate management enabled");
+
+        let tls_paths = TlsPaths {
+            cert_path: PathBuf::from(&config.tls.cert_path),
+            key_path: PathBuf::from(&config.tls.key_path),
+            credentials_path: config.acme.credentials_path.clone(),
+        };
+
+        match AcmeRenewalLoop::new(config.acme.clone(), tls_paths).await {
+            Ok(renewal_loop) => match renewal_loop.start().await {
+                Ok(handle) => {
+                    info!(
+                        domains = ?config.acme.domains,
+                        challenge_type = ?config.acme.challenge_type,
+                        "ACME renewal loop started"
+                    );
+                    Some(handle)
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to start ACME renewal loop");
+                    warn!("Server will continue without ACME - manual certificate management required");
+                    None
+                }
+            },
+            Err(e) => {
+                error!(error = %e, "Failed to initialize ACME client");
+                warn!("Server will continue without ACME - manual certificate management required");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // Server loop
     loop {
         info!("Loading TLS certificates");
@@ -391,12 +432,19 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
 
         match reason {
             ShutdownReason::Terminate => {
+                // Shutdown ACME renewal loop if running
+                if let Some(handle) = acme_handle.take() {
+                    info!("Shutting down ACME renewal loop");
+                    handle.shutdown().await;
+                }
+
                 info!("Server shutdown complete");
                 break;
             }
             ShutdownReason::Reload => {
                 info!("Restarting server with new certificates...");
                 // Loop continues, will reload TLS at top
+                // Note: ACME renewal loop continues running - it doesn't need reload
             }
         }
     }

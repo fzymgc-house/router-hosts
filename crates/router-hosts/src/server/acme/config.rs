@@ -47,6 +47,7 @@ pub enum ChallengeType {
 /// email = "admin@example.com"
 /// domains = ["router.example.com"]
 /// challenge_type = "http-01"
+/// credentials_path = "/var/lib/router-hosts/acme-account.json"
 ///
 /// [acme.http]
 /// bind_address = "0.0.0.0:80"
@@ -78,6 +79,11 @@ pub struct AcmeConfig {
     #[serde(default)]
     pub challenge_type: ChallengeType,
 
+    /// Path to store ACME account credentials
+    /// Default: /var/lib/router-hosts/acme-account.json
+    #[serde(default = "default_credentials_path")]
+    pub credentials_path: std::path::PathBuf,
+
     /// HTTP-01 challenge configuration
     pub http: Option<HttpChallengeConfig>,
 
@@ -87,6 +93,10 @@ pub struct AcmeConfig {
     /// Renewal configuration
     #[serde(default)]
     pub renewal: RenewalConfig,
+}
+
+fn default_credentials_path() -> std::path::PathBuf {
+    std::path::PathBuf::from("/var/lib/router-hosts/acme-account.json")
 }
 
 fn default_directory_url() -> String {
@@ -101,6 +111,7 @@ impl Default for AcmeConfig {
             email: None,
             domains: Vec::new(),
             challenge_type: ChallengeType::Http01,
+            credentials_path: default_credentials_path(),
             http: None,
             dns: None,
             renewal: RenewalConfig::default(),
