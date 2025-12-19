@@ -40,6 +40,7 @@
 pub mod client;
 pub mod config;
 pub mod env_expand;
+pub mod http_challenge;
 
 // Re-export types needed by server config
 pub use config::{AcmeConfig, AcmeConfigError};
@@ -55,3 +56,9 @@ pub use config::{
 };
 #[allow(unused_imports)]
 pub use env_expand::{contains_env_vars, expand_env_vars, EnvExpandError};
+
+// HTTP-01 challenge server types (will be used when ACME integration is complete)
+#[allow(unused_imports)]
+pub use http_challenge::{
+    ChallengeStore, HttpChallengeError, HttpChallengeHandle, HttpChallengeServer,
+};
