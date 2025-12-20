@@ -7,6 +7,12 @@ use std::process::ExitCode;
 
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
+    // Install the rustls crypto provider before any TLS operations.
+    // Required when both aws-lc-rs and ring features are enabled.
+    rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     // Check if first argument is "server"
     let args: Vec<String> = env::args().collect();
 
