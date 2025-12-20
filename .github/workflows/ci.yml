@@ -63,6 +63,13 @@ jobs:
             - name: Build CI Docker image
               run: task docker:build-ci IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
+            - name: Verify Docker image runs
+              run: |
+                  echo "Testing binary inside container..."
+                  docker run --rm router-hosts:ci --help
+                  docker run --rm router-hosts:ci server --help
+                  echo "Binary runs successfully"
+
             - name: Run E2E tests
               run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
