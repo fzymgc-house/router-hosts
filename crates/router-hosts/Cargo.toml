@@ -60,7 +60,8 @@ libc.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 serial_test = "3"
-
-[lints.rust]
-# Allow tarpaulin_include cfg for coverage exclusions
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
+testcontainers = "0.26"
+reqwest = { workspace = true }
+rcgen.workspace = true
+time = "0.3"
+rustls.workspace = true
