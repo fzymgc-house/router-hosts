@@ -70,6 +70,45 @@ jobs:
                   docker run --rm router-hosts:ci server --help
                   echo "Binary runs successfully"
 
+                  echo "Testing server startup with config..."
+                  mkdir -p /tmp/test-certs /tmp/test-data
+
+                  # Generate minimal test certs
+                  openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+                    -keyout /tmp/test-certs/server-key.pem \
+                    -out /tmp/test-certs/server.pem \
+                    -subj "/CN=localhost" 2>/dev/null
+                  cp /tmp/test-certs/server.pem /tmp/test-certs/ca.pem
+
+                  # Create server config
+                  cat > /tmp/test-certs/server.toml << 'EOF'
+                  [server]
+                  bind_address = "0.0.0.0:50051"
+                  hosts_file_path = "/data/hosts"
+
+                  [database]
+                  path = "/data/router-hosts.db"
+
+                  [tls]
+                  cert_path = "/certs/server.pem"
+                  key_path = "/certs/server-key.pem"
+                  ca_cert_path = "/certs/ca.pem"
+
+                  [retention]
+                  max_snapshots = 10
+                  max_age_days = 7
+                  EOF
+
+                  # Start container and wait for output
+                  echo "Starting server container..."
+                  timeout 10 docker run --rm \
+                    -v /tmp/test-certs:/certs:ro \
+                    -v /tmp/test-data:/data \
+                    -e RUST_LOG=debug \
+                    router-hosts:ci server --config /certs/server.toml 2>&1 || true
+
+                  echo "Server startup test complete"
+
             - name: Run E2E tests
               run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
