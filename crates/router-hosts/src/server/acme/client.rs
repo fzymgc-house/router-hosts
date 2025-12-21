@@ -85,6 +85,7 @@ pub struct AcmeClient {
 }
 
 #[allow(dead_code)] // Methods will be used when ACME integration is complete
+#[cfg(not(tarpaulin_include))] // Network-dependent ACME protocol, requires Pebble setup in CI (#127)
 impl AcmeClient {
     /// Create a new ACME client
     ///

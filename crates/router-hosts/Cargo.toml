@@ -65,3 +65,7 @@ reqwest = { workspace = true }
 rcgen.workspace = true
 time = "0.3"
 rustls.workspace = true
+
+[lints.rust]
+# Allow tarpaulin_include cfg for coverage exclusions
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin_include)'] }
