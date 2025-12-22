@@ -16,7 +16,11 @@
 
 use super::cert_writer::{trigger_reload_async, write_certificate};
 use super::client::AcmeClient;
-use super::config::{AcmeConfig, ChallengeType};
+use super::config::{AcmeConfig, ChallengeType, DnsConfig};
+use super::dns_provider::{
+    compute_dns01_digest, CloudflareProvider, DnsProvider, DnsProviderError, DnsRecord,
+    WebhookProvider,
+};
 use super::http_challenge::{ChallengeStore, HttpChallengeServer};
 use instant_acme::{ChallengeType as AcmeChallengeType, Identifier};
 use rand::Rng;
@@ -73,6 +77,10 @@ pub enum RenewalError {
     /// HTTP challenge server error
     #[error("HTTP challenge error: {0}")]
     HttpChallenge(#[from] super::http_challenge::HttpChallengeError),
+
+    /// DNS provider error
+    #[error("DNS provider error: {0}")]
+    DnsProvider(#[from] DnsProviderError),
 
     /// Certificate writing error
     #[error("certificate write error: {0}")]
@@ -137,6 +145,8 @@ pub struct AcmeRenewalLoop {
     tls_paths: TlsPaths,
     /// Challenge store for HTTP-01
     challenge_store: Arc<ChallengeStore>,
+    /// DNS provider for DNS-01 (initialized lazily if configured)
+    dns_provider: Option<Arc<dyn DnsProvider>>,
 }
 
 #[allow(dead_code)] // Methods will be used when ACME is integrated
@@ -145,18 +155,65 @@ impl AcmeRenewalLoop {
     /// Create a new renewal loop
     ///
     /// Initializes the ACME client and ensures an account exists.
+    /// If DNS-01 challenge type is configured, initializes the DNS provider.
     pub async fn new(config: AcmeConfig, tls_paths: TlsPaths) -> Result<Self, RenewalError> {
         let client = AcmeClient::new(config.clone())?;
 
         // Ensure we have an account
         client.ensure_account(&tls_paths.credentials_path).await?;
 
+        // Initialize DNS provider if DNS-01 is configured
+        let dns_provider = if config.challenge_type == ChallengeType::Dns01 {
+            let dns_config = config.dns.as_ref().ok_or_else(|| {
+                RenewalError::Config("DNS-01 challenge requires dns configuration".to_string())
+            })?;
+
+            // Get first domain for zone auto-detection
+            let first_domain = config.domains.first().ok_or_else(|| {
+                RenewalError::Config("at least one domain is required".to_string())
+            })?;
+
+            Some(Self::create_dns_provider(dns_config, first_domain).await?)
+        } else {
+            None
+        };
+
         Ok(Self {
             client: Arc::new(client),
             config,
             tls_paths,
             challenge_store: Arc::new(ChallengeStore::new()),
+            dns_provider,
         })
+    }
+
+    /// Create a DNS provider from configuration
+    async fn create_dns_provider(
+        config: &DnsConfig,
+        domain: &str,
+    ) -> Result<Arc<dyn DnsProvider>, RenewalError> {
+        if let Some(cf) = &config.cloudflare {
+            let provider = if let Some(zone_id) = &cf.zone_id {
+                CloudflareProvider::new(cf.api_token.clone(), zone_id.clone())
+            } else {
+                CloudflareProvider::with_auto_zone(cf.api_token.clone(), domain).await?
+            };
+            return Ok(Arc::new(provider));
+        }
+
+        if let Some(wh) = &config.webhook {
+            let provider = WebhookProvider::new(
+                wh.create_url.clone(),
+                wh.delete_url.clone(),
+                wh.headers.clone(),
+                Duration::from_secs(wh.timeout_seconds),
+            );
+            return Ok(Arc::new(provider));
+        }
+
+        Err(RenewalError::Config(
+            "no DNS provider configured".to_string(),
+        ))
     }
 
     /// Start the renewal loop
@@ -381,6 +438,9 @@ impl AcmeRenewalLoop {
             None
         };
 
+        // Track created DNS records for cleanup
+        let mut dns_records: Vec<DnsRecord> = Vec::new();
+
         // Process each authorization
         let challenge_type = self.client.challenge_type();
         for auth in &authorizations {
@@ -426,12 +486,50 @@ impl AcmeRenewalLoop {
                         .await?;
                 }
                 AcmeChallengeType::Dns01 => {
-                    // TODO(#130): Implement DNS-01 challenge support
-                    return Err(RenewalError::Config(
-                        "DNS-01 challenge not yet implemented. \
-                         See: https://github.com/fzymgc-house/router-hosts/issues/130"
-                            .to_string(),
-                    ));
+                    let dns_provider = self.dns_provider.as_ref().ok_or_else(|| {
+                        RenewalError::Config("DNS-01 challenge requires DNS provider".to_string())
+                    })?;
+
+                    let domain = identifier_value(&auth.identifier);
+
+                    // Compute DNS-01 digest from key authorization
+                    let key_auth = order.key_authorization(challenge);
+                    let digest = compute_dns01_digest(key_auth.as_str());
+
+                    // Create TXT record name: _acme-challenge.<domain>
+                    let record_name = format!("_acme-challenge.{}", domain);
+
+                    debug!(
+                        domain = %domain,
+                        record_name = %record_name,
+                        provider = dns_provider.name(),
+                        "Creating DNS-01 challenge TXT record"
+                    );
+
+                    // Create TXT record
+                    let record = dns_provider
+                        .create_txt_record(&record_name, &digest)
+                        .await?;
+                    dns_records.push(record);
+
+                    // Wait for DNS propagation
+                    debug!(
+                        delay_secs = dns_provider.propagation_delay().as_secs(),
+                        "Waiting for DNS propagation"
+                    );
+                    dns_provider.wait_for_propagation().await;
+
+                    // Notify ACME server we're ready
+                    order
+                        .set_challenge_ready(&challenge.url)
+                        .await
+                        .map_err(|e| {
+                            RenewalError::Challenge(format!("failed to set challenge ready: {}", e))
+                        })?;
+
+                    // Wait for authorization to become valid
+                    self.wait_for_order_ready(&mut order, auth.identifier.clone())
+                        .await?;
                 }
                 _ => {
                     return Err(RenewalError::Config(format!(
@@ -461,6 +559,26 @@ impl AcmeRenewalLoop {
 
         // Clear challenge store
         self.challenge_store.clear().await;
+
+        // Clean up DNS records (best-effort, don't fail on error)
+        if !dns_records.is_empty() {
+            if let Some(dns_provider) = &self.dns_provider {
+                for record in &dns_records {
+                    debug!(
+                        record_id = %record.record_id,
+                        name = %record.name,
+                        "Cleaning up DNS challenge record"
+                    );
+                    if let Err(e) = dns_provider.delete_txt_record(record).await {
+                        warn!(
+                            error = %e,
+                            record_name = %record.name,
+                            "Failed to clean up DNS challenge record"
+                        );
+                    }
+                }
+            }
+        }
 
         // Write certificate to disk
         let key_pem = key_pair.serialize_pem();

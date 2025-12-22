@@ -164,17 +164,12 @@ impl AcmeConfig {
                 // HTTP config is optional - defaults are fine
             }
             ChallengeType::Dns01 => {
-                // TODO(#130): Implement DNS-01 challenge support
-                // DNS-01 challenge is not yet implemented (Phase 2)
-                // Reject at config validation to provide a clear error at startup
-                // rather than failing at runtime during certificate renewal
-                return Err(AcmeConfigError::Invalid(
-                    "DNS-01 challenge is not yet implemented. \
-                     Use challenge_type = \"http-01\" for now. \
-                     DNS-01 support will be added in a future release. \
-                     See: https://github.com/fzymgc-house/router-hosts/issues/130"
-                        .to_string(),
-                ));
+                let dns = self.dns.as_mut().ok_or_else(|| {
+                    AcmeConfigError::MissingField(
+                        "acme.dns (required for dns-01 challenge type)".to_string(),
+                    )
+                })?;
+                dns.validate_and_expand()?;
             }
         }
 
@@ -225,7 +220,6 @@ pub struct DnsConfig {
 }
 
 impl DnsConfig {
-    #[allow(dead_code)] // Will be used when DNS-01 is implemented (see #130)
     fn validate_and_expand(&mut self) -> Result<(), AcmeConfigError> {
         let mut providers_configured = 0;
 
@@ -268,7 +262,6 @@ pub struct CloudflareConfig {
 }
 
 impl CloudflareConfig {
-    #[allow(dead_code)] // Will be used when DNS-01 is implemented (see #130)
     fn validate_and_expand(&mut self) -> Result<(), AcmeConfigError> {
         self.api_token = expand_env_vars(&self.api_token)?;
 
@@ -291,7 +284,6 @@ impl CloudflareConfig {
 /// This allows integration with custom DNS APIs by providing
 /// create and delete endpoints for TXT records.
 #[derive(Debug, Clone, Deserialize)]
-#[allow(dead_code)] // Fields will be used in webhook DNS provider implementation
 pub struct WebhookConfig {
     /// URL to POST for creating TXT records
     /// Request body: `{"type": "TXT", "name": "_acme-challenge.domain", "content": "token"}`
@@ -317,7 +309,6 @@ fn default_timeout() -> u64 {
 }
 
 impl WebhookConfig {
-    #[allow(dead_code)] // Will be used when DNS-01 is implemented (see #130)
     fn validate_and_expand(&mut self) -> Result<(), AcmeConfigError> {
         self.create_url = expand_env_vars(&self.create_url)?;
         self.delete_url = expand_env_vars(&self.delete_url)?;
@@ -419,8 +410,8 @@ mod tests {
     }
 
     #[test]
-    fn test_acme_config_dns01_not_implemented() {
-        // DNS-01 is rejected at config validation (not runtime) until Phase 2
+    fn test_acme_config_dns01_requires_dns_config() {
+        // DNS-01 requires a DNS provider configuration
         let mut config = AcmeConfig {
             enabled: true,
             domains: vec!["example.com".to_string()],
@@ -431,10 +422,43 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("not yet implemented"),
-            "Expected 'not yet implemented' error, got: {}",
+            err_msg.contains("acme.dns"),
+            "Expected 'acme.dns' missing field error, got: {}",
             err_msg
         );
+    }
+
+    #[test]
+    fn test_acme_config_dns01_with_cloudflare_validates() {
+        std::env::set_var("TEST_DNS01_CF_TOKEN", "test_token_123");
+
+        let mut config = AcmeConfig {
+            enabled: true,
+            domains: vec!["example.com".to_string()],
+            challenge_type: ChallengeType::Dns01,
+            dns: Some(DnsConfig {
+                cloudflare: Some(CloudflareConfig {
+                    api_token: "${TEST_DNS01_CF_TOKEN}".to_string(),
+                    zone_id: None,
+                }),
+                webhook: None,
+            }),
+            ..Default::default()
+        };
+        assert!(config.validate_and_expand().is_ok());
+        assert_eq!(
+            config
+                .dns
+                .as_ref()
+                .unwrap()
+                .cloudflare
+                .as_ref()
+                .unwrap()
+                .api_token,
+            "test_token_123"
+        );
+
+        std::env::remove_var("TEST_DNS01_CF_TOKEN");
     }
 
     #[test]

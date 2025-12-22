@@ -3171,6 +3171,8 @@ name = "router-hosts"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "base64 0.22.1",
  "chrono",
  "clap",
  "csv",
@@ -3197,6 +3199,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "sha2",
  "tempfile",
  "testcontainers",
  "thiserror 2.0.17",

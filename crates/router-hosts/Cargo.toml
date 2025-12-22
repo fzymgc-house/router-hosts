@@ -53,6 +53,9 @@ http-body-util.workspace = true
 rustls.workspace = true
 x509-parser.workspace = true
 rand.workspace = true
+async-trait.workspace = true
+sha2 = "0.10"
+base64 = "0.22"
 
 # Unix system calls (for SIGHUP cert reload)
 [target.'cfg(unix)'.dependencies]
