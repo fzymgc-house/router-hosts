@@ -12,9 +12,15 @@
 //! Both run in Docker containers connected via a bridge network so Pebble
 //! can validate challenges through challtestsrv.
 
+use http_body_util::Full;
+use hyper::body::Bytes;
+use hyper_rustls::HttpsConnectorBuilder;
+use hyper_util::client::legacy::Client as HyperClient;
+use hyper_util::rt::TokioExecutor;
 use reqwest::Client;
 use router_hosts::server::acme::client::AcmeClient;
 use router_hosts::server::acme::config::{AcmeConfig, ChallengeType};
+use rustls::RootCertStore;
 use std::sync::Once;
 use std::time::Duration;
 use testcontainers::core::{ContainerPort, WaitFor};
@@ -30,6 +36,37 @@ fn init_crypto_provider() {
             .install_default()
             .expect("Failed to install rustls crypto provider");
     });
+}
+
+/// Pebble's test CA certificate (embedded at compile time)
+const PEBBLE_CA_PEM: &str = include_str!("pebble-ca.pem");
+
+/// Create an HTTP client that trusts Pebble's self-signed CA
+///
+/// This allows the ACME client to communicate with Pebble over HTTPS
+/// without certificate verification errors.
+fn create_pebble_http_client() -> Box<dyn instant_acme::HttpClient> {
+    // Parse Pebble's CA certificate
+    let mut roots = RootCertStore::empty();
+    let certs: Vec<_> = rustls_pemfile::certs(&mut PEBBLE_CA_PEM.as_bytes())
+        .filter_map(|r| r.ok())
+        .collect();
+    roots.add_parsable_certificates(certs);
+
+    // Build rustls config with Pebble CA
+    let tls_config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+
+    // Build HTTPS connector
+    let https = HttpsConnectorBuilder::new()
+        .with_tls_config(tls_config)
+        .https_only()
+        .enable_http1()
+        .build();
+
+    // Build hyper client (implements instant_acme::HttpClient)
+    Box::new(HyperClient::builder(TokioExecutor::new()).build::<_, Full<Bytes>>(https))
 }
 
 /// Pebble test infrastructure
@@ -218,32 +255,23 @@ async fn test_acme_challenge_type_mapping() {
 // ============================================================================
 // Pebble Integration Tests
 //
-// These tests require Pebble (ACME test server) to be running and accessible.
-// They are ignored by default because:
-// 1. Pebble uses self-signed certificates
-// 2. instant-acme doesn't allow disabling certificate verification
-// 3. Proper setup requires trusting Pebble's CA or running behind a proxy
-//
-// To run these tests:
-// 1. Set up Pebble with its CA cert trusted in the system store, OR
-// 2. Use the ACME E2E tests which test via the full server binary
-//
-// The ACME client logic is verified through:
-// - Unit tests above (CSR generation, challenge type mapping)
-// - E2E tests with the server binary (full integration)
+// These tests use Pebble (Let's Encrypt's test ACME server) with a custom
+// HTTP client that trusts Pebble's self-signed CA certificate. This allows
+// full ACME protocol testing without modifying system trust stores.
 // ============================================================================
 
 #[tokio::test]
-#[ignore = "Requires Pebble with trusted CA - run via CI or manual setup"]
 async fn test_acme_account_creation_with_pebble() {
     init_crypto_provider();
 
     // Start Pebble environment
     let env = PebbleTestEnv::start().await;
 
-    // Create ACME client
+    // Create ACME client with Pebble-trusting HTTP client
     let config = test_acme_config(&env.directory_url);
-    let client = AcmeClient::new(config).expect("Failed to create ACME client");
+    let http_client = create_pebble_http_client();
+    let client =
+        AcmeClient::with_http_client(config, http_client).expect("Failed to create ACME client");
 
     // Ensure account (creates new one since credentials don't exist)
     let result = client.ensure_account(&env.credentials_path()).await;
@@ -270,16 +298,17 @@ async fn test_acme_account_creation_with_pebble() {
 }
 
 #[tokio::test]
-#[ignore = "Requires Pebble with trusted CA - run via CI or manual setup"]
 async fn test_acme_order_creation_with_pebble() {
     init_crypto_provider();
 
     // Start Pebble environment
     let env = PebbleTestEnv::start().await;
 
-    // Create ACME client and account
+    // Create ACME client with Pebble-trusting HTTP client
     let config = test_acme_config(&env.directory_url);
-    let client = AcmeClient::new(config).expect("Failed to create ACME client");
+    let http_client = create_pebble_http_client();
+    let client =
+        AcmeClient::with_http_client(config, http_client).expect("Failed to create ACME client");
     client
         .ensure_account(&env.credentials_path())
         .await
@@ -292,7 +321,6 @@ async fn test_acme_order_creation_with_pebble() {
 }
 
 #[tokio::test]
-#[ignore = "Requires Pebble with trusted CA - run via CI or manual setup"]
 async fn test_acme_full_certificate_flow_with_pebble() {
     init_crypto_provider();
 
@@ -300,9 +328,11 @@ async fn test_acme_full_certificate_flow_with_pebble() {
     // This skips actual challenge validation, allowing us to test the full flow
     let env = PebbleTestEnv::start().await;
 
-    // Create ACME client and account
+    // Create ACME client with Pebble-trusting HTTP client
     let config = test_acme_config(&env.directory_url);
-    let client = AcmeClient::new(config).expect("Failed to create ACME client");
+    let http_client = create_pebble_http_client();
+    let client =
+        AcmeClient::with_http_client(config, http_client).expect("Failed to create ACME client");
     client
         .ensure_account(&env.credentials_path())
         .await

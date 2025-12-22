@@ -74,7 +74,8 @@ instant-acme = "0.7"
 rcgen = "0.13"       # Certificate generation for ACME
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 hyper = { version = "1.5", features = ["http1", "server"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
+hyper-util = { version = "0.1", features = ["tokio", "client-legacy"] }
+hyper-rustls = { version = "0.27", features = ["http1", "aws-lc-rs"] }
 http-body-util = "0.1"
 regex = "1.11"       # For ${VAR} expansion parsing
 x509-parser = "0.16" # Certificate expiry parsing for renewal

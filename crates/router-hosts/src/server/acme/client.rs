@@ -3,16 +3,37 @@
 //! This module provides the core ACME protocol client for certificate management.
 
 use super::config::{AcmeConfig, ChallengeType};
+use http_body_util::Full;
+use hyper::body::Bytes;
 use instant_acme::{
-    Account, AccountCredentials, ChallengeType as AcmeChallengeType, Identifier, NewAccount,
-    NewOrder, Order,
+    Account, AccountCredentials, ChallengeType as AcmeChallengeType, HttpClient, Identifier,
+    NewAccount, NewOrder, Order,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, Ia5String, KeyPair, SanType};
+use std::future::Future;
 use std::path::Path;
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
+
+/// Wrapper around Arc<dyn HttpClient> that implements HttpClient
+///
+/// This allows us to store a shared HTTP client and clone it for each ACME request.
+struct SharedHttpClient(Arc<dyn HttpClient>);
+
+impl HttpClient for SharedHttpClient {
+    fn request(
+        &self,
+        req: hyper::Request<Full<Bytes>>,
+    ) -> Pin<
+        Box<dyn Future<Output = Result<instant_acme::BytesResponse, instant_acme::Error>> + Send>,
+    > {
+        self.0.request(req)
+    }
+}
 
 /// Errors that can occur during ACME operations
 #[derive(Debug, Error)]
@@ -80,26 +101,39 @@ pub struct AcmeClient {
     /// ACME configuration
     config: AcmeConfig,
 
-    /// HTTP client for API requests
-    http_client: reqwest::Client,
+    /// Custom HTTP client for ACME protocol (used for testing with Pebble)
+    /// If None, uses instant-acme's default HTTP client
+    acme_http_client: Option<Arc<dyn HttpClient>>,
 }
 
 #[allow(dead_code)] // Methods will be used when ACME integration is complete
-#[cfg(not(tarpaulin_include))] // Network-dependent ACME protocol, requires Pebble setup in CI (#127)
 impl AcmeClient {
-    /// Create a new ACME client
+    /// Create a new ACME client with default HTTP client
     ///
+    /// Uses instant-acme's default HTTP client which trusts system root certificates.
     /// The account is not created/loaded until `ensure_account` is called.
     pub fn new(config: AcmeConfig) -> Result<Self, AcmeError> {
-        let http_client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
-            .build()
-            .map_err(|e| AcmeError::Config(format!("failed to create HTTP client: {}", e)))?;
-
         Ok(Self {
             account: RwLock::new(None),
             config,
-            http_client,
+            acme_http_client: None,
+        })
+    }
+
+    /// Create a new ACME client with a custom HTTP client
+    ///
+    /// This is primarily used for testing with Pebble (Let's Encrypt test server)
+    /// where we need to trust Pebble's self-signed CA certificate.
+    ///
+    /// The account is not created/loaded until `ensure_account` is called.
+    pub fn with_http_client(
+        config: AcmeConfig,
+        http_client: Box<dyn HttpClient>,
+    ) -> Result<Self, AcmeError> {
+        Ok(Self {
+            account: RwLock::new(None),
+            config,
+            acme_http_client: Some(Arc::from(http_client)),
         })
     }
 
@@ -125,9 +159,19 @@ impl AcmeClient {
             let credentials: AccountCredentials = serde_json::from_str(&credentials_json)
                 .map_err(|e| AcmeError::Account(format!("failed to parse credentials: {}", e)))?;
 
-            let account = Account::from_credentials(credentials)
+            // Use custom HTTP client if provided, otherwise use default
+            let account = if let Some(ref http) = self.acme_http_client {
+                Account::from_credentials_and_http(
+                    credentials,
+                    Box::new(SharedHttpClient(http.clone())),
+                )
                 .await
-                .map_err(|e| AcmeError::Account(format!("failed to restore account: {}", e)))?;
+                .map_err(|e| AcmeError::Account(format!("failed to restore account: {}", e)))?
+            } else {
+                Account::from_credentials(credentials)
+                    .await
+                    .map_err(|e| AcmeError::Account(format!("failed to restore account: {}", e)))?
+            };
 
             *account_guard = Some(account);
             return Ok(());
@@ -151,10 +195,21 @@ impl AcmeClient {
             only_return_existing: false,
         };
 
-        let (account, credentials) =
+        // Use custom HTTP client if provided, otherwise use default
+        let (account, credentials) = if let Some(ref http) = self.acme_http_client {
+            Account::create_with_http(
+                &new_account,
+                &self.config.directory_url,
+                None,
+                Box::new(SharedHttpClient(http.clone())),
+            )
+            .await
+            .map_err(|e| AcmeError::Account(format!("failed to create account: {}", e)))?
+        } else {
             Account::create(&new_account, &self.config.directory_url, None)
                 .await
-                .map_err(|e| AcmeError::Account(format!("failed to create account: {}", e)))?;
+                .map_err(|e| AcmeError::Account(format!("failed to create account: {}", e)))?
+        };
 
         // Save credentials
         let credentials_json = serde_json::to_string_pretty(&credentials)
