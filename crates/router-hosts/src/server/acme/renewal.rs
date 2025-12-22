@@ -59,6 +59,12 @@ const ORDER_POLL_MAX_ATTEMPTS: u32 = 150;
 /// Timeout for HTTP challenge server shutdown
 const HTTP_SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// Timeout for individual DNS provider operations (create/delete TXT records)
+/// Set to 30 seconds to match typical HTTP client timeouts while allowing for
+/// slow DNS API responses. If Cloudflare/webhook APIs hang, this prevents
+/// blocking the entire renewal process indefinitely.
+const DNS_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Extract domain value from Identifier enum
 fn identifier_value(id: &Identifier) -> &str {
     match id {
@@ -504,10 +510,18 @@ impl AcmeRenewalLoop {
                         "Creating DNS-01 challenge TXT record"
                     );
 
-                    // Create TXT record
-                    let record = dns_provider
-                        .create_txt_record(&record_name, &digest)
-                        .await?;
+                    // Create TXT record with timeout to prevent indefinite blocking
+                    let record = tokio::time::timeout(
+                        DNS_OPERATION_TIMEOUT,
+                        dns_provider.create_txt_record(&record_name, &digest),
+                    )
+                    .await
+                    .map_err(|_| {
+                        RenewalError::DnsProvider(DnsProviderError::Config(format!(
+                            "DNS record creation timed out after {:?}",
+                            DNS_OPERATION_TIMEOUT
+                        )))
+                    })??;
                     dns_records.push(record);
 
                     // Wait for DNS propagation
@@ -567,12 +581,29 @@ impl AcmeRenewalLoop {
                         name = %record.name,
                         "Cleaning up DNS challenge record"
                     );
-                    if let Err(e) = dns_provider.delete_txt_record(record).await {
-                        warn!(
-                            error = %e,
-                            record_name = %record.name,
-                            "Failed to clean up DNS challenge record"
-                        );
+                    // Use timeout to prevent indefinite blocking during cleanup
+                    let delete_result = tokio::time::timeout(
+                        DNS_OPERATION_TIMEOUT,
+                        dns_provider.delete_txt_record(record),
+                    )
+                    .await;
+
+                    match delete_result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(e)) => {
+                            warn!(
+                                error = %e,
+                                record_name = %record.name,
+                                "Failed to clean up DNS challenge record"
+                            );
+                        }
+                        Err(_) => {
+                            warn!(
+                                record_name = %record.name,
+                                timeout_secs = DNS_OPERATION_TIMEOUT.as_secs(),
+                                "DNS record cleanup timed out"
+                            );
+                        }
                     }
                 }
             }

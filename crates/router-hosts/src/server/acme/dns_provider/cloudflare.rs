@@ -159,7 +159,9 @@ impl CloudflareProvider {
                 });
             }
 
-            if let Some(zone) = body.result.into_iter().next() {
+            // Find exact match for zone name to avoid returning wrong zone
+            // when multiple zones could match (e.g., example.com and sub.example.com)
+            if let Some(zone) = body.result.into_iter().find(|z| z.name == zone_name) {
                 debug!(zone_id = %zone.id, zone_name = %zone.name, "Found Cloudflare zone");
                 return Ok(zone.id);
             }

@@ -54,6 +54,7 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
 /// Generic webhook DNS provider
 ///
 /// Manages TXT records via custom HTTP endpoints for ACME DNS-01 challenges.
+#[derive(Debug)]
 pub struct WebhookProvider {
     client: reqwest::Client,
     create_url: String,
@@ -74,13 +75,22 @@ impl WebhookProvider {
     ///
     /// # Errors
     ///
-    /// Returns an error if the HTTP client cannot be built.
+    /// Returns an error if:
+    /// - The `delete_url` does not contain `{record_id}` placeholder
+    /// - The HTTP client cannot be built
     pub fn new(
         create_url: String,
         delete_url: String,
         headers: HashMap<String, String>,
         timeout: Duration,
     ) -> Result<Self, DnsProviderError> {
+        // Validate delete_url contains {record_id} placeholder
+        if !delete_url.contains("{record_id}") {
+            return Err(DnsProviderError::Config(
+                "delete_url must contain {record_id} placeholder".to_string(),
+            ));
+        }
+
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
@@ -264,7 +274,7 @@ mod tests {
     fn test_webhook_provider_name() {
         let provider = WebhookProvider::with_defaults(
             "http://create".into(),
-            "http://delete".into(),
+            "http://delete/{record_id}".into(),
             HashMap::new(),
         )
         .expect("valid config");
@@ -275,7 +285,7 @@ mod tests {
     fn test_webhook_propagation_delay_default() {
         let provider = WebhookProvider::with_defaults(
             "http://create".into(),
-            "http://delete".into(),
+            "http://delete/{record_id}".into(),
             HashMap::new(),
         )
         .expect("valid config");
@@ -286,12 +296,26 @@ mod tests {
     fn test_webhook_propagation_delay_custom() {
         let provider = WebhookProvider::with_defaults(
             "http://create".into(),
-            "http://delete".into(),
+            "http://delete/{record_id}".into(),
             HashMap::new(),
         )
         .expect("valid config")
         .with_propagation_delay(Duration::from_secs(30));
         assert_eq!(provider.propagation_delay(), Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_webhook_missing_placeholder() {
+        // delete_url without {record_id} placeholder should fail
+        let result = WebhookProvider::with_defaults(
+            "http://create".into(),
+            "http://delete".into(), // Missing placeholder
+            HashMap::new(),
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, DnsProviderError::Config(_)));
+        assert!(err.to_string().contains("{record_id}"));
     }
 
     #[test]
@@ -308,9 +332,12 @@ mod tests {
         headers.insert("Authorization".to_string(), "Bearer token123".to_string());
         headers.insert("X-Custom".to_string(), "value".to_string());
 
-        let provider =
-            WebhookProvider::with_defaults("http://create".into(), "http://delete".into(), headers)
-                .expect("valid config");
+        let provider = WebhookProvider::with_defaults(
+            "http://create".into(),
+            "http://delete/{record_id}".into(),
+            headers,
+        )
+        .expect("valid config");
 
         let result = provider.build_headers();
         assert!(result.is_ok());
