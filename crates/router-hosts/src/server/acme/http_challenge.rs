@@ -43,9 +43,9 @@ use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::net::TcpListener;
 use tokio::sync::{RwLock, Semaphore};
@@ -57,6 +57,76 @@ const MAX_CONCURRENT_CONNECTIONS: usize = 100;
 
 /// Timeout for individual HTTP request handling.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Maximum requests per IP within the rate limit window.
+const RATE_LIMIT_MAX_REQUESTS: usize = 20;
+
+/// Time window for per-IP rate limiting.
+const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
+
+/// Interval for rate limiter cleanup task (matches rate limit window)
+const RATE_LIMIT_CLEANUP_INTERVAL: Duration = RATE_LIMIT_WINDOW;
+
+/// Maximum number of challenges that can be stored simultaneously.
+/// This prevents unbounded memory growth from buggy or malicious callers.
+/// Normal ACME operations typically have 1-10 challenges at a time.
+const MAX_CHALLENGES: usize = 100;
+
+/// Time-to-live for individual challenges.
+/// ACME challenges are typically validated within seconds/minutes.
+/// This ensures stale challenges are cleaned up even if explicit removal fails.
+const CHALLENGE_TTL: Duration = Duration::from_secs(10 * 60); // 10 minutes
+
+/// Per-IP rate limiter using a sliding window approach
+#[derive(Debug, Default)]
+struct IpRateLimiter {
+    requests: RwLock<HashMap<IpAddr, Vec<Instant>>>,
+}
+
+impl IpRateLimiter {
+    fn new() -> Self {
+        Self {
+            requests: RwLock::new(HashMap::new()),
+        }
+    }
+
+    /// Check if a request from this IP should be allowed.
+    /// Returns true if allowed, false if rate limited.
+    async fn check_and_record(&self, ip: IpAddr) -> bool {
+        let now = Instant::now();
+        let cutoff = now - RATE_LIMIT_WINDOW;
+
+        let mut requests = self.requests.write().await;
+
+        // Get or create entry for this IP
+        let timestamps = requests.entry(ip).or_insert_with(Vec::new);
+
+        // Remove expired entries
+        timestamps.retain(|&t| t > cutoff);
+
+        // Check if under limit
+        if timestamps.len() >= RATE_LIMIT_MAX_REQUESTS {
+            return false;
+        }
+
+        // Record this request
+        timestamps.push(now);
+        true
+    }
+
+    /// Clean up old entries to prevent unbounded memory growth.
+    /// Call this periodically (e.g., every few minutes).
+    async fn cleanup(&self) {
+        let cutoff = Instant::now() - RATE_LIMIT_WINDOW;
+        let mut requests = self.requests.write().await;
+
+        // Remove IPs with no recent requests
+        requests.retain(|_, timestamps| {
+            timestamps.retain(|&t| t > cutoff);
+            !timestamps.is_empty()
+        });
+    }
+}
 
 /// Errors that can occur in the HTTP challenge server
 #[derive(Debug, Error)]
@@ -75,13 +145,21 @@ pub enum HttpChallengeError {
     Server(String),
 }
 
+/// Entry in the challenge store with expiration tracking
+#[derive(Debug, Clone)]
+struct ChallengeEntry {
+    key_auth: String,
+    created_at: Instant,
+}
+
 /// Thread-safe store for pending ACME challenges
 ///
-/// Maps token -> key_authorization
+/// Maps token -> key_authorization with automatic expiration.
+/// Enforces size limits to prevent unbounded memory growth.
 #[derive(Debug, Default)]
 #[allow(dead_code)] // Will be used when ACME integration is complete
 pub struct ChallengeStore {
-    challenges: RwLock<HashMap<String, String>>,
+    challenges: RwLock<HashMap<String, ChallengeEntry>>,
 }
 
 #[allow(dead_code)] // Methods will be used when ACME integration is complete
@@ -97,10 +175,35 @@ impl ChallengeStore {
     ///
     /// The token is the challenge identifier from ACME.
     /// The key_auth is the full key authorization string (token.thumbprint).
-    pub async fn add_challenge(&self, token: &str, key_auth: &str) {
+    ///
+    /// Returns `false` if the store is at capacity (MAX_CHALLENGES).
+    /// Expired challenges are cleaned up during this operation.
+    pub async fn add_challenge(&self, token: &str, key_auth: &str) -> bool {
         let mut challenges = self.challenges.write().await;
+
+        // Clean up expired entries first
+        let now = Instant::now();
+        challenges.retain(|_, entry| now.duration_since(entry.created_at) < CHALLENGE_TTL);
+
+        // Check size limit
+        if challenges.len() >= MAX_CHALLENGES && !challenges.contains_key(token) {
+            warn!(
+                max = MAX_CHALLENGES,
+                current = challenges.len(),
+                "Challenge store at capacity, rejecting new challenge"
+            );
+            return false;
+        }
+
         debug!(token = %token, "Adding HTTP-01 challenge to store");
-        challenges.insert(token.to_string(), key_auth.to_string());
+        challenges.insert(
+            token.to_string(),
+            ChallengeEntry {
+                key_auth: key_auth.to_string(),
+                created_at: now,
+            },
+        );
+        true
     }
 
     /// Remove a challenge from the store
@@ -111,15 +214,27 @@ impl ChallengeStore {
     }
 
     /// Get the key authorization for a token
+    ///
+    /// Returns `None` if the token doesn't exist or has expired.
     pub async fn get_challenge(&self, token: &str) -> Option<String> {
         let challenges = self.challenges.read().await;
-        challenges.get(token).cloned()
+        challenges.get(token).and_then(|entry| {
+            // Check if expired
+            if Instant::now().duration_since(entry.created_at) >= CHALLENGE_TTL {
+                None
+            } else {
+                Some(entry.key_auth.clone())
+            }
+        })
     }
 
-    /// Check if the store has any pending challenges
+    /// Check if the store has any pending (non-expired) challenges
     pub async fn has_challenges(&self) -> bool {
         let challenges = self.challenges.read().await;
-        !challenges.is_empty()
+        let now = Instant::now();
+        challenges
+            .values()
+            .any(|entry| now.duration_since(entry.created_at) < CHALLENGE_TTL)
     }
 
     /// Clear all challenges
@@ -128,6 +243,17 @@ impl ChallengeStore {
         debug!("Clearing all HTTP-01 challenges");
         challenges.clear();
     }
+
+    /// Get the number of active (non-expired) challenges
+    #[cfg(test)]
+    async fn len(&self) -> usize {
+        let challenges = self.challenges.read().await;
+        let now = Instant::now();
+        challenges
+            .values()
+            .filter(|entry| now.duration_since(entry.created_at) < CHALLENGE_TTL)
+            .count()
+    }
 }
 
 /// Handle for controlling a running HTTP challenge server
@@ -135,6 +261,7 @@ impl ChallengeStore {
 pub struct HttpChallengeHandle {
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
     join_handle: tokio::task::JoinHandle<()>,
+    cleanup_handle: tokio::task::JoinHandle<()>,
 }
 
 #[allow(dead_code)] // Methods will be used when ACME integration is complete
@@ -142,6 +269,8 @@ impl HttpChallengeHandle {
     /// Shutdown the server gracefully
     pub async fn shutdown(self) {
         debug!("Shutting down HTTP challenge server");
+        // Abort the cleanup task first
+        self.cleanup_handle.abort();
         // Send shutdown signal (ignore error if receiver dropped)
         let _ = self.shutdown_tx.send(());
         // Wait for server to finish
@@ -184,6 +313,19 @@ impl HttpChallengeServer {
         // Semaphore to limit concurrent connections (DoS protection)
         let connection_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
 
+        // Per-IP rate limiter
+        let rate_limiter = Arc::new(IpRateLimiter::new());
+
+        // Spawn a background task to periodically clean up the rate limiter
+        let rate_limiter_cleanup = rate_limiter.clone();
+        let cleanup_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(RATE_LIMIT_CLEANUP_INTERVAL);
+            loop {
+                interval.tick().await;
+                rate_limiter_cleanup.cleanup().await;
+            }
+        });
+
         let join_handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -192,6 +334,13 @@ impl HttpChallengeServer {
                             Ok((stream, remote_addr)) => {
                                 let store = store.clone();
                                 let semaphore = connection_semaphore.clone();
+                                let rate_limiter = rate_limiter.clone();
+
+                                // Check per-IP rate limit
+                                if !rate_limiter.check_and_record(remote_addr.ip()).await {
+                                    warn!(remote = %remote_addr, "Rate limit exceeded, rejecting");
+                                    continue;
+                                }
 
                                 // Try to acquire a permit (non-blocking)
                                 let permit = match semaphore.try_acquire_owned() {
@@ -248,6 +397,7 @@ impl HttpChallengeServer {
         Ok(HttpChallengeHandle {
             shutdown_tx,
             join_handle,
+            cleanup_handle,
         })
     }
 }
@@ -292,6 +442,24 @@ async fn handle_request(
             .expect("response builder"));
     }
 
+    // Validate token to prevent path traversal attacks.
+    // ACME tokens are base64url-encoded strings per RFC 8555.
+    // They should only contain: A-Z, a-z, 0-9, -, _ (no slashes, dots, etc.)
+    if !token
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        warn!(
+            token = %token,
+            remote = %remote_addr,
+            "Invalid token format, possible path traversal attempt"
+        );
+        return Ok(Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(Full::new(Bytes::from("Invalid token format")))
+            .expect("response builder"));
+    }
+
     // Look up the key authorization
     match store.get_challenge(token).await {
         Some(key_auth) => {
@@ -322,8 +490,8 @@ mod tests {
     async fn test_challenge_store_add_and_get() {
         let store = ChallengeStore::new();
 
-        store.add_challenge("token1", "key_auth_1").await;
-        store.add_challenge("token2", "key_auth_2").await;
+        assert!(store.add_challenge("token1", "key_auth_1").await);
+        assert!(store.add_challenge("token2", "key_auth_2").await);
 
         assert_eq!(
             store.get_challenge("token1").await,
@@ -340,7 +508,7 @@ mod tests {
     async fn test_challenge_store_remove() {
         let store = ChallengeStore::new();
 
-        store.add_challenge("token1", "key_auth_1").await;
+        assert!(store.add_challenge("token1", "key_auth_1").await);
         assert!(store.has_challenges().await);
 
         store.remove_challenge("token1").await;
@@ -352,8 +520,8 @@ mod tests {
     async fn test_challenge_store_clear() {
         let store = ChallengeStore::new();
 
-        store.add_challenge("token1", "key_auth_1").await;
-        store.add_challenge("token2", "key_auth_2").await;
+        assert!(store.add_challenge("token1", "key_auth_1").await);
+        assert!(store.add_challenge("token2", "key_auth_2").await);
         assert!(store.has_challenges().await);
 
         store.clear().await;
@@ -361,9 +529,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_challenge_store_size_limit() {
+        let store = ChallengeStore::new();
+
+        // Fill up to the limit
+        for i in 0..MAX_CHALLENGES {
+            assert!(
+                store
+                    .add_challenge(&format!("token{}", i), "key_auth")
+                    .await,
+                "Should accept challenge {} (under limit)",
+                i
+            );
+        }
+
+        assert_eq!(store.len().await, MAX_CHALLENGES);
+
+        // Next add should fail (at capacity)
+        assert!(
+            !store.add_challenge("one_more", "key_auth").await,
+            "Should reject challenge when at capacity"
+        );
+
+        // But updating existing token should succeed
+        assert!(
+            store.add_challenge("token0", "updated_key_auth").await,
+            "Should allow updating existing token"
+        );
+    }
+
+    #[tokio::test]
     async fn test_server_responds_to_challenge() {
         let store = Arc::new(ChallengeStore::new());
-        store.add_challenge("test-token", "test-key-auth").await;
+        assert!(store.add_challenge("test-token", "test-key-auth").await);
 
         // Find an available port
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -455,7 +653,7 @@ mod tests {
     #[tokio::test]
     async fn test_server_returns_405_for_non_get() {
         let store = Arc::new(ChallengeStore::new());
-        store.add_challenge("token", "key_auth").await;
+        assert!(store.add_challenge("token", "key_auth").await);
 
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -486,7 +684,7 @@ mod tests {
             handles.push(tokio::spawn(async move {
                 let token = format!("token{}", i);
                 let key_auth = format!("key_auth{}", i);
-                store.add_challenge(&token, &key_auth).await;
+                assert!(store.add_challenge(&token, &key_auth).await);
                 assert_eq!(store.get_challenge(&token).await, Some(key_auth));
             }));
         }

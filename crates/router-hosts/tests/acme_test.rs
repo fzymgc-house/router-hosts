@@ -504,8 +504,8 @@ async fn test_http_challenge_store() {
 
     let store = ChallengeStore::new();
 
-    // Add a challenge
-    store.add_challenge("token123", "key_auth_value").await;
+    // Add a challenge (returns true on success)
+    assert!(store.add_challenge("token123", "key_auth_value").await);
 
     // Get the challenge
     let result = store.get_challenge("token123").await;

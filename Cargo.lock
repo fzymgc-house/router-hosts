@@ -2989,19 +2989,6 @@ dependencies = [
 
 [[package]]
 name = "rcgen"
-version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "75e669e5202259b5314d1ea5397316ad400819437857b90861765f24c4cf80a2"
-dependencies = [
- "pem",
- "ring",
- "rustls-pki-types",
- "time",
- "yasna",
-]
-
-[[package]]
-name = "rcgen"
 version = "0.14.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3ec0a99f2de91c3cddc84b37e7db80e4d96b743e05607f647eb236fc0455907f"
@@ -3200,7 +3187,7 @@ dependencies = [
  "prost",
  "prost-types",
  "rand 0.8.5",
- "rcgen 0.13.2",
+ "rcgen",
  "regex",
  "reqwest",
  "router-hosts-common",
@@ -3249,7 +3236,7 @@ version = "0.5.0"
 dependencies = [
  "assert_cmd",
  "predicates",
- "rcgen 0.14.6",
+ "rcgen",
  "serde",
  "serde_json",
  "tempfile",

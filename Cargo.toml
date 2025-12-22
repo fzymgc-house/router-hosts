@@ -74,7 +74,7 @@ rand = "0.8"
 
 # ACME certificate management
 instant-acme = "0.7"
-rcgen = "0.13"       # Certificate generation for ACME
+rcgen = "0.14"       # Certificate generation for ACME
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 hyper = { version = "1.5", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "client-legacy"] }

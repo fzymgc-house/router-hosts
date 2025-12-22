@@ -28,6 +28,26 @@ use thiserror::Error;
 use tokio::sync::oneshot;
 use tracing::{debug, error, info, warn};
 
+// ============================================================================
+// Constants
+// ============================================================================
+
+/// Base interval between renewal checks (24 hours)
+const RENEWAL_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Number of consecutive failures before emitting CRITICAL alert
+const FAILURE_ALERT_THRESHOLD: u32 = 3;
+
+/// Interval for polling ACME order status during challenge validation
+const ORDER_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Maximum number of polling attempts before timeout
+/// 150 attempts × 2s = 5 minutes total, per Let's Encrypt recommendations
+const ORDER_POLL_MAX_ATTEMPTS: u32 = 150;
+
+/// Timeout for HTTP challenge server shutdown
+const HTTP_SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Extract domain value from Identifier enum
 fn identifier_value(id: &Identifier) -> &str {
     match id {
@@ -139,17 +159,29 @@ impl AcmeRenewalLoop {
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
 
         let join_handle = tokio::spawn(async move {
+            // Failure tracking for observability
+            let mut consecutive_failures: u32 = 0;
+
             // Check for initial certificate
             if !self.certificate_exists() {
                 info!("No certificate found, requesting initial certificate");
-                if let Err(e) = self.request_certificate().await {
-                    error!(error = %e, "Failed to request initial certificate");
+                match self.request_certificate().await {
+                    Ok(()) => {
+                        consecutive_failures = 0;
+                    }
+                    Err(e) => {
+                        consecutive_failures += 1;
+                        error!(
+                            error = %e,
+                            consecutive_failures = consecutive_failures,
+                            "Failed to request initial certificate"
+                        );
+                    }
                 }
             }
 
             // Main renewal loop with jitter to prevent thundering herd
             // when multiple servers check at the same time.
-            let base_interval_secs = 24 * 60 * 60; // Daily base interval
             let jitter_minutes = self.config.renewal.jitter_minutes;
 
             // Calculate initial jitter
@@ -158,9 +190,9 @@ impl AcmeRenewalLoop {
             } else {
                 0
             };
-            let check_interval = Duration::from_secs(base_interval_secs + jitter_secs);
+            let check_interval = RENEWAL_CHECK_INTERVAL + Duration::from_secs(jitter_secs);
             debug!(
-                base_interval_hours = base_interval_secs / 3600,
+                base_interval_hours = RENEWAL_CHECK_INTERVAL.as_secs() / 3600,
                 jitter_minutes = jitter_secs / 60,
                 "ACME renewal loop starting with jittered interval"
             );
@@ -171,8 +203,30 @@ impl AcmeRenewalLoop {
                     _ = interval.tick() => {
                         if self.should_renew().await {
                             info!("Certificate renewal needed");
-                            if let Err(e) = self.request_certificate().await {
-                                error!(error = %e, "Failed to renew certificate");
+                            match self.request_certificate().await {
+                                Ok(()) => {
+                                    consecutive_failures = 0;
+                                    info!("Certificate renewed successfully");
+                                }
+                                Err(e) => {
+                                    consecutive_failures += 1;
+                                    error!(
+                                        error = %e,
+                                        consecutive_failures = consecutive_failures,
+                                        "Failed to renew certificate"
+                                    );
+
+                                    // Alert on repeated failures
+                                    if consecutive_failures >= FAILURE_ALERT_THRESHOLD {
+                                        error!(
+                                            consecutive_failures = consecutive_failures,
+                                            threshold = FAILURE_ALERT_THRESHOLD,
+                                            "CRITICAL: Certificate renewal has failed {} consecutive times. \
+                                             Manual intervention may be required.",
+                                            consecutive_failures
+                                        );
+                                    }
+                                }
                             }
                         } else {
                             debug!("Certificate renewal not needed");
@@ -249,6 +303,10 @@ impl AcmeRenewalLoop {
         Ok(days)
     }
 
+    /// Overall timeout for certificate request operations.
+    /// This prevents indefinite hangs if ACME server is unresponsive.
+    const REQUEST_CERTIFICATE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
+
     /// Request a new certificate via ACME
     ///
     /// This method orchestrates the full ACME flow:
@@ -257,7 +315,25 @@ impl AcmeRenewalLoop {
     /// 3. Generate CSR and finalize order
     /// 4. Write certificate to disk
     /// 5. Trigger server reload
+    ///
+    /// The entire operation has a 5-minute timeout to prevent indefinite hangs.
     async fn request_certificate(&self) -> Result<(), RenewalError> {
+        match tokio::time::timeout(
+            Self::REQUEST_CERTIFICATE_TIMEOUT,
+            self.request_certificate_inner(),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Err(RenewalError::Challenge(format!(
+                "certificate request timed out after {:?}",
+                Self::REQUEST_CERTIFICATE_TIMEOUT
+            ))),
+        }
+    }
+
+    /// Inner implementation of certificate request (called with timeout)
+    async fn request_certificate_inner(&self) -> Result<(), RenewalError> {
         info!(domains = ?self.config.domains, "Requesting ACME certificate");
 
         // Create order
@@ -308,10 +384,16 @@ impl AcmeRenewalLoop {
                     // Get key authorization from order
                     let key_auth = order.key_authorization(challenge);
 
-                    // Add to challenge store
-                    self.challenge_store
+                    // Add to challenge store (may fail if store is at capacity)
+                    if !self
+                        .challenge_store
                         .add_challenge(&challenge.token, key_auth.as_str())
-                        .await;
+                        .await
+                    {
+                        return Err(RenewalError::Challenge(
+                            "challenge store at capacity".to_string(),
+                        ));
+                    }
 
                     // Notify ACME server we're ready
                     order
@@ -345,14 +427,13 @@ impl AcmeRenewalLoop {
 
         // Stop HTTP challenge server with timeout to prevent indefinite blocking
         if let Some(handle) = http_handle {
-            const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
-            if tokio::time::timeout(SHUTDOWN_TIMEOUT, handle.shutdown())
+            if tokio::time::timeout(HTTP_SERVER_SHUTDOWN_TIMEOUT, handle.shutdown())
                 .await
                 .is_err()
             {
                 warn!(
                     "HTTP challenge server shutdown timed out after {:?}",
-                    SHUTDOWN_TIMEOUT
+                    HTTP_SERVER_SHUTDOWN_TIMEOUT
                 );
             }
         }
@@ -387,13 +468,10 @@ impl AcmeRenewalLoop {
         order: &mut instant_acme::Order,
         identifier: Identifier,
     ) -> Result<(), RenewalError> {
-        // 150 attempts × 2s = 5 minutes total, per Let's Encrypt recommendations
-        let max_attempts = 150;
-        let poll_interval = Duration::from_secs(2);
         let domain = identifier_value(&identifier);
 
-        for attempt in 1..=max_attempts {
-            tokio::time::sleep(poll_interval).await;
+        for attempt in 1..=ORDER_POLL_MAX_ATTEMPTS {
+            tokio::time::sleep(ORDER_POLL_INTERVAL).await;
 
             // Refresh order state
             let state = order.state();
@@ -417,7 +495,7 @@ impl AcmeRenewalLoop {
                     debug!(
                         domain = domain,
                         attempt = attempt,
-                        max_attempts = max_attempts,
+                        max_attempts = ORDER_POLL_MAX_ATTEMPTS,
                         status = ?state.status,
                         "Waiting for authorization"
                     );
@@ -431,7 +509,7 @@ impl AcmeRenewalLoop {
 
         Err(RenewalError::Challenge(format!(
             "authorization for {} timed out after {} attempts",
-            domain, max_attempts
+            domain, ORDER_POLL_MAX_ATTEMPTS
         )))
     }
 }

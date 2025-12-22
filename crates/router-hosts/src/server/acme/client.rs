@@ -9,7 +9,7 @@ use instant_acme::{
     Account, AccountCredentials, ChallengeType as AcmeChallengeType, HttpClient, Identifier,
     NewAccount, NewOrder, Order,
 };
-use rcgen::{CertificateParams, DistinguishedName, DnType, Ia5String, KeyPair, SanType};
+use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
@@ -18,6 +18,9 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
+
+/// Interval for polling certificate availability after order finalization
+const CERT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Wrapper around Arc<dyn HttpClient> that implements HttpClient
 ///
@@ -222,25 +225,44 @@ impl AcmeClient {
             })?;
         }
 
-        // Write atomically with secure permissions (0600) to avoid race condition
-        // where file briefly exists with world-readable permissions
+        // Write atomically with secure permissions (0600) to avoid TOCTOU race condition.
+        // On Unix, we create the file with mode 0o600 from the start using OpenOptions,
+        // preventing any window where the file exists with insecure permissions.
         let temp_path = credentials_path.with_extension("tmp");
 
-        // Write to temp file
-        tokio::fs::write(&temp_path, &credentials_json)
-            .await
-            .map_err(|e| AcmeError::Account(format!("failed to write credentials: {}", e)))?;
-
-        // Set permissions before rename (Unix only)
+        // Write to temp file with secure permissions from creation
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o600);
-            std::fs::set_permissions(&temp_path, permissions).map_err(|e| {
-                // Clean up temp file on error
+            use std::fs::OpenOptions;
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600) // Set permissions at creation time - no TOCTOU window
+                .open(&temp_path)
+                .map_err(|e| {
+                    AcmeError::Account(format!("failed to create credentials file: {}", e))
+                })?;
+
+            file.write_all(credentials_json.as_bytes()).map_err(|e| {
                 let _ = std::fs::remove_file(&temp_path);
-                AcmeError::Account(format!("failed to set credentials permissions: {}", e))
+                AcmeError::Account(format!("failed to write credentials: {}", e))
             })?;
+
+            file.sync_all().map_err(|e| {
+                let _ = std::fs::remove_file(&temp_path);
+                AcmeError::Account(format!("failed to sync credentials: {}", e))
+            })?;
+        }
+
+        #[cfg(not(unix))]
+        {
+            tokio::fs::write(&temp_path, &credentials_json)
+                .await
+                .map_err(|e| AcmeError::Account(format!("failed to write credentials: {}", e)))?;
         }
 
         // Atomic rename to final path
@@ -309,11 +331,12 @@ impl AcmeClient {
         }
 
         // Add all domains as SANs
+        // In rcgen 0.14, use try_into() to convert strings to the internal SAN type
         params.subject_alt_names = self
             .config
             .domains
             .iter()
-            .filter_map(|d| Ia5String::try_from(d.clone()).ok().map(SanType::DnsName))
+            .filter_map(|d| d.clone().try_into().ok().map(SanType::DnsName))
             .collect();
 
         let csr = params
@@ -336,7 +359,7 @@ impl AcmeClient {
                 Ok(Some(cert)) => break cert,
                 Ok(None) => {
                     debug!("Certificate not ready yet, waiting...");
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                    tokio::time::sleep(CERT_POLL_INTERVAL).await;
                 }
                 Err(e) => {
                     return Err(AcmeError::Issuance(format!(

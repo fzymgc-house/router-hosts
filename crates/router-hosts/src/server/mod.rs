@@ -506,12 +506,12 @@ mod tests {
     #[test]
     fn test_validate_tls_config_valid_certs() {
         use rcgen::{
-            BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair,
-            KeyUsagePurpose,
+            BasicConstraints, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, Issuer,
+            KeyPair, KeyUsagePurpose,
         };
 
         // Generate test certificates at runtime (like E2E tests do)
-        // rcgen 0.13 API: signed_by(subject_key, issuer_cert, issuer_key)
+        // rcgen 0.14 API: signed_by(subject_key, &Issuer::from_params(&ca_params, &ca_key))
         let ca_key = KeyPair::generate().expect("Failed to generate CA key");
         let mut ca_params = CertificateParams::default();
         ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
@@ -534,7 +534,7 @@ mod tests {
         ];
         server_params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         let server_cert = server_params
-            .signed_by(&server_key, &ca_cert, &ca_key)
+            .signed_by(&server_key, &Issuer::from_params(&ca_params, &ca_key))
             .expect("Failed to generate server cert");
 
         // Write certs to temp files
