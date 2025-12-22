@@ -45,10 +45,18 @@ use hyper_util::rt::TokioIo;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
+
+/// Maximum number of concurrent connections to the HTTP challenge server.
+/// This limits resource exhaustion from DoS attacks or connection floods.
+const MAX_CONCURRENT_CONNECTIONS: usize = 100;
+
+/// Timeout for individual HTTP request handling.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Errors that can occur in the HTTP challenge server
 #[derive(Debug, Error)]
@@ -173,6 +181,9 @@ impl HttpChallengeServer {
         let (shutdown_tx, mut shutdown_rx) = tokio::sync::oneshot::channel();
         let store = self.store;
 
+        // Semaphore to limit concurrent connections (DoS protection)
+        let connection_semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+
         let join_handle = tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -180,19 +191,43 @@ impl HttpChallengeServer {
                         match result {
                             Ok((stream, remote_addr)) => {
                                 let store = store.clone();
+                                let semaphore = connection_semaphore.clone();
+
+                                // Try to acquire a permit (non-blocking)
+                                let permit = match semaphore.try_acquire_owned() {
+                                    Ok(permit) => permit,
+                                    Err(_) => {
+                                        warn!(remote = %remote_addr, "Connection limit reached, rejecting");
+                                        // Drop the stream to reject the connection
+                                        continue;
+                                    }
+                                };
+
                                 tokio::spawn(async move {
+                                    // Permit is held for the lifetime of this task
+                                    let _permit = permit;
+
                                     let io = TokioIo::new(stream);
                                     let service = service_fn(move |req| {
                                         handle_request(req, store.clone(), remote_addr)
                                     });
 
-                                    if let Err(err) = http1::Builder::new()
-                                        .serve_connection(io, service)
-                                        .await
-                                    {
-                                        // Don't log connection reset errors - these are normal
-                                        if !err.to_string().contains("connection reset") {
-                                            warn!(error = %err, "Error serving connection");
+                                    // Apply request timeout to prevent slow clients from holding connections
+                                    let connection_result = tokio::time::timeout(
+                                        REQUEST_TIMEOUT,
+                                        http1::Builder::new().serve_connection(io, service)
+                                    ).await;
+
+                                    match connection_result {
+                                        Ok(Ok(())) => {}
+                                        Ok(Err(err)) => {
+                                            // Don't log connection reset errors - these are normal
+                                            if !err.to_string().contains("connection reset") {
+                                                warn!(error = %err, "Error serving connection");
+                                            }
+                                        }
+                                        Err(_) => {
+                                            debug!(remote = %remote_addr, "Connection timed out");
                                         }
                                     }
                                 });

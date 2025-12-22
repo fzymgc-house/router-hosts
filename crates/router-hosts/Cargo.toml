@@ -52,6 +52,7 @@ hyper-util.workspace = true
 http-body-util.workspace = true
 rustls.workspace = true
 x509-parser.workspace = true
+rand.workspace = true
 
 # Unix system calls (for SIGHUP cert reload)
 [target.'cfg(unix)'.dependencies]

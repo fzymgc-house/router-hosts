@@ -19,6 +19,7 @@ use super::client::AcmeClient;
 use super::config::{AcmeConfig, ChallengeType};
 use super::http_challenge::{ChallengeStore, HttpChallengeServer};
 use instant_acme::{ChallengeType as AcmeChallengeType, Identifier};
+use rand::Rng;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -146,8 +147,23 @@ impl AcmeRenewalLoop {
                 }
             }
 
-            // Main renewal loop
-            let check_interval = Duration::from_secs(24 * 60 * 60); // Daily
+            // Main renewal loop with jitter to prevent thundering herd
+            // when multiple servers check at the same time.
+            let base_interval_secs = 24 * 60 * 60; // Daily base interval
+            let jitter_minutes = self.config.renewal.jitter_minutes;
+
+            // Calculate initial jitter
+            let jitter_secs = if jitter_minutes > 0 {
+                rand::thread_rng().gen_range(0..(jitter_minutes as u64 * 60))
+            } else {
+                0
+            };
+            let check_interval = Duration::from_secs(base_interval_secs + jitter_secs);
+            debug!(
+                base_interval_hours = base_interval_secs / 3600,
+                jitter_minutes = jitter_secs / 60,
+                "ACME renewal loop starting with jittered interval"
+            );
             let mut interval = tokio::time::interval(check_interval);
 
             loop {
@@ -327,9 +343,18 @@ impl AcmeRenewalLoop {
         let (csr, key_pair) = self.client.generate_csr()?;
         let cert_chain = self.client.finalize_order(&mut order, &csr).await?;
 
-        // Stop HTTP challenge server
+        // Stop HTTP challenge server with timeout to prevent indefinite blocking
         if let Some(handle) = http_handle {
-            handle.shutdown().await;
+            const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+            if tokio::time::timeout(SHUTDOWN_TIMEOUT, handle.shutdown())
+                .await
+                .is_err()
+            {
+                warn!(
+                    "HTTP challenge server shutdown timed out after {:?}",
+                    SHUTDOWN_TIMEOUT
+                );
+            }
         }
 
         // Clear challenge store
@@ -353,12 +378,17 @@ impl AcmeRenewalLoop {
     }
 
     /// Wait for an order's authorization to become ready
+    ///
+    /// Polls the ACME server for authorization status. Let's Encrypt recommends
+    /// allowing up to 5 minutes for validation to complete, especially during
+    /// high load periods.
     async fn wait_for_order_ready(
         &self,
         order: &mut instant_acme::Order,
         identifier: Identifier,
     ) -> Result<(), RenewalError> {
-        let max_attempts = 30;
+        // 150 attempts × 2s = 5 minutes total, per Let's Encrypt recommendations
+        let max_attempts = 150;
         let poll_interval = Duration::from_secs(2);
         let domain = identifier_value(&identifier);
 

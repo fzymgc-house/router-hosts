@@ -69,6 +69,9 @@ libc = "0.2"            # Unix system calls (SIGHUP for cert reload)
 # Testing
 proptest = "1.5"
 
+# Random number generation (for ACME renewal jitter)
+rand = "0.8"
+
 # ACME certificate management
 instant-acme = "0.7"
 rcgen = "0.13"       # Certificate generation for ACME

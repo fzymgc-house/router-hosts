@@ -9,9 +9,9 @@ use std::process::ExitCode;
 async fn main() -> Result<ExitCode> {
     // Install the rustls crypto provider before any TLS operations.
     // Required when both aws-lc-rs and ring features are enabled.
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .expect("Failed to install rustls crypto provider");
+    // Use fallible installation to avoid panic if a provider is already installed
+    // (e.g., in test scenarios where multiple tests run in the same process).
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
     // Check if first argument is "server"
     let args: Vec<String> = env::args().collect();

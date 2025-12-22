@@ -19,7 +19,7 @@
 use std::io::Write;
 use std::path::Path;
 use thiserror::Error;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Errors that can occur during certificate writing
 #[derive(Debug, Error)]
@@ -203,6 +203,17 @@ fn write_file_atomic(target: &Path, content: &[u8], private: bool) -> Result<(),
 /// certificate reload. On non-Unix systems, logs a warning and returns
 /// successfully (alternative reload mechanism needed).
 ///
+/// # Safety Considerations
+///
+/// This function sends SIGHUP to the current process using `libc::kill`
+/// with the process's own PID. While `raise()` is async-signal-safe,
+/// we use `kill(getpid(), SIGHUP)` instead because:
+/// 1. It's more explicit about targeting the current process
+/// 2. Both functions are async-signal-safe per POSIX
+///
+/// This function should be called from `trigger_reload_async()` which runs
+/// it in a blocking task to avoid interfering with the Tokio runtime.
+///
 /// # Returns
 ///
 /// Returns `true` if SIGHUP was sent, `false` on non-Unix platforms.
@@ -211,12 +222,16 @@ pub fn trigger_reload() -> bool {
     #[cfg(unix)]
     {
         info!("Triggering certificate reload via SIGHUP");
-        // SAFETY: raise() is async-signal-safe and sending SIGHUP to
-        // ourselves is a documented way to trigger a reload.
-        unsafe {
-            libc::raise(libc::SIGHUP);
+        // SAFETY: kill() with our own PID is equivalent to raise() but more explicit.
+        // Both are async-signal-safe per POSIX. The signal will be delivered after
+        // this function returns, handled by the server's signal handler.
+        let result = unsafe { libc::kill(libc::getpid(), libc::SIGHUP) };
+        if result == 0 {
+            true
+        } else {
+            warn!("Failed to send SIGHUP");
+            false
         }
-        true
     }
 
     #[cfg(not(unix))]
