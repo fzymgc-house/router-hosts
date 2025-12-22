@@ -906,11 +906,45 @@ credentials_path = "C:\\ProgramData\\router-hosts\\acme-account.json"
 
 ### Troubleshooting
 
+#### HTTP-01 Challenge Issues
+
 **Certificate renewal fails repeatedly:**
-1. Verify DNS records point to this server (for HTTP-01)
+1. Verify DNS records point to this server
 2. Ensure port 80 is accessible from the internet
 3. Check Let's Encrypt rate limits: https://letsencrypt.org/docs/rate-limits/
 4. Review server logs for detailed error messages
+
+#### DNS-01 Challenge Issues
+
+**"Zone not found" error:**
+- Verify the domain matches a zone in your DNS provider account
+- For Cloudflare: check the zone exists in your account dashboard
+- If using subdomains, the parent zone must exist (e.g., `sub.example.com` requires `example.com` zone)
+- Consider explicitly configuring `zone_id` instead of relying on auto-detection
+
+**"API token invalid" or authentication errors:**
+- Cloudflare: Verify token has `Zone:DNS:Edit` permission
+- Cloudflare: Ensure token is scoped to the correct zone
+- Check token hasn't expired or been revoked
+- Verify environment variable expansion is working: `echo $CF_API_TOKEN`
+
+**"DNS record creation timed out" error:**
+- Check DNS provider API status page for outages
+- Verify network connectivity to DNS provider API
+- For Cloudflare: check you haven't hit API rate limits (1200 requests/5 min)
+- Try increasing `DNS_OPERATION_TIMEOUT` if on slow network
+
+**Challenge validation fails after record creation:**
+- Increase propagation delay in config (default: 10s for Cloudflare, 120s for webhook)
+- Use `dig _acme-challenge.yourdomain.com TXT` to verify record is visible
+- Some DNS providers have longer propagation times
+
+**Stale TXT records after failed renewal:**
+- If renewal crashes, `_acme-challenge.*` TXT records may remain
+- Manually delete via DNS provider dashboard or API
+- These don't affect functionality but clutter your DNS zone
+
+#### General Issues
 
 **Rate limit errors:**
 - Let's Encrypt allows 5 certificates per domain per week

@@ -511,6 +511,7 @@ impl AcmeRenewalLoop {
                     );
 
                     // Create TXT record with timeout to prevent indefinite blocking
+                    let provider_name = dns_provider.name();
                     let record = tokio::time::timeout(
                         DNS_OPERATION_TIMEOUT,
                         dns_provider.create_txt_record(&record_name, &digest),
@@ -518,8 +519,8 @@ impl AcmeRenewalLoop {
                     .await
                     .map_err(|_| {
                         RenewalError::DnsProvider(DnsProviderError::Config(format!(
-                            "DNS record creation timed out after {:?}",
-                            DNS_OPERATION_TIMEOUT
+                            "DNS record creation timed out after {:?} (provider: {}, record: {})",
+                            DNS_OPERATION_TIMEOUT, provider_name, record_name
                         )))
                     })??;
                     dns_records.push(record);
@@ -575,10 +576,12 @@ impl AcmeRenewalLoop {
         // Clean up DNS records (best-effort, don't fail on error)
         if !dns_records.is_empty() {
             if let Some(dns_provider) = &self.dns_provider {
+                let provider_name = dns_provider.name();
                 for record in &dns_records {
                     debug!(
                         record_id = %record.record_id,
                         name = %record.name,
+                        provider = provider_name,
                         "Cleaning up DNS challenge record"
                     );
                     // Use timeout to prevent indefinite blocking during cleanup
@@ -594,12 +597,14 @@ impl AcmeRenewalLoop {
                             warn!(
                                 error = %e,
                                 record_name = %record.name,
+                                provider = provider_name,
                                 "Failed to clean up DNS challenge record"
                             );
                         }
                         Err(_) => {
                             warn!(
                                 record_name = %record.name,
+                                provider = provider_name,
                                 timeout_secs = DNS_OPERATION_TIMEOUT.as_secs(),
                                 "DNS record cleanup timed out"
                             );

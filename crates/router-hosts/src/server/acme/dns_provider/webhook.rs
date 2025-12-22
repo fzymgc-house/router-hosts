@@ -349,4 +349,49 @@ mod tests {
     }
 
     // Integration tests with mock server are in tests/dns_provider_test.rs
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Property-based test for URL template substitution
+        ///
+        /// Verifies that {record_id} placeholder is always replaced correctly,
+        /// regardless of the record_id content (except for edge cases with
+        /// the placeholder string itself).
+        #[test]
+        fn proptest_url_substitution(
+            prefix in "[a-z]{1,20}",
+            rec_id in "[a-zA-Z0-9_-]{1,50}",
+            suffix in "[a-z]{0,20}"
+        ) {
+            let placeholder = "{record_id}";
+            let delete_url = format!("https://api.example.com/{}/{}/{}", prefix, placeholder, suffix);
+            let result = delete_url.replace(placeholder, &rec_id);
+
+            // Result should contain the record_id
+            prop_assert!(result.contains(&rec_id));
+
+            // Result should not contain the placeholder
+            prop_assert!(!result.contains(placeholder));
+
+            // Result should have correct structure
+            let expected = format!("https://api.example.com/{}/{}/{}", prefix, rec_id, suffix);
+            prop_assert_eq!(result, expected);
+        }
+
+        /// Property-based test for URL substitution with special characters
+        ///
+        /// Verifies substitution works with URL-safe special characters.
+        #[test]
+        fn proptest_url_substitution_special_chars(
+            rec_id in "[a-zA-Z0-9._~-]{1,50}"
+        ) {
+            let placeholder = "{record_id}";
+            let delete_url = format!("https://api.example.com/dns/{}", placeholder);
+            let result = delete_url.replace(placeholder, &rec_id);
+
+            prop_assert!(!result.contains(placeholder));
+            prop_assert!(result.ends_with(&rec_id));
+        }
+    }
 }

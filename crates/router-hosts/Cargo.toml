@@ -72,6 +72,7 @@ rustls.workspace = true
 hyper-rustls.workspace = true
 hyper-util.workspace = true
 proptest.workspace = true
+wiremock.workspace = true
 
 [lints.rust]
 # Allow tarpaulin_include cfg for coverage exclusions

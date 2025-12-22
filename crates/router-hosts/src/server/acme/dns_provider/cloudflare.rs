@@ -37,6 +37,8 @@ pub struct CloudflareProvider {
     #[allow(dead_code)] // Used in auth_headers(), needed for Debug
     api_token: String,
     zone_id: String,
+    /// Base URL for API (allows override for testing)
+    base_url: String,
 }
 
 impl CloudflareProvider {
@@ -58,6 +60,19 @@ impl CloudflareProvider {
     /// )?;
     /// ```
     pub fn new(api_token: String, zone_id: String) -> Result<Self, DnsProviderError> {
+        Self::new_with_base_url(api_token, zone_id, CLOUDFLARE_API_URL.to_string())
+    }
+
+    /// Create a new Cloudflare provider with custom base URL (for testing)
+    ///
+    /// This constructor allows overriding the API base URL, primarily for
+    /// integration testing with mock servers.
+    #[doc(hidden)]
+    pub fn new_with_base_url(
+        api_token: String,
+        zone_id: String,
+        base_url: String,
+    ) -> Result<Self, DnsProviderError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -72,7 +87,15 @@ impl CloudflareProvider {
             client,
             api_token,
             zone_id,
+            base_url,
         })
+    }
+
+    /// Get the zone ID (primarily for testing)
+    #[doc(hidden)]
+    #[allow(dead_code)] // Used in tests
+    pub fn zone_id(&self) -> &str {
+        &self.zone_id
     }
 
     /// Create a new Cloudflare provider with auto-detected zone ID
@@ -99,6 +122,16 @@ impl CloudflareProvider {
     /// ).await?;
     /// ```
     pub async fn with_auto_zone(api_token: String, domain: &str) -> Result<Self, DnsProviderError> {
+        Self::with_auto_zone_and_base_url(api_token, domain, CLOUDFLARE_API_URL.to_string()).await
+    }
+
+    /// Create a new Cloudflare provider with auto-detected zone ID and custom base URL (for testing)
+    #[doc(hidden)]
+    pub async fn with_auto_zone_and_base_url(
+        api_token: String,
+        domain: &str,
+        base_url: String,
+    ) -> Result<Self, DnsProviderError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -109,23 +142,42 @@ impl CloudflareProvider {
             DnsProviderError::Config("API token contains invalid characters".to_string())
         })?;
 
-        let zone_id = Self::lookup_zone_id(&client, &api_token, domain).await?;
+        let zone_id = Self::lookup_zone_id(&client, &api_token, domain, &base_url).await?;
 
         Ok(Self {
             client,
             api_token,
             zone_id,
+            base_url,
         })
     }
 
     /// Look up zone ID from domain name
     ///
-    /// Extracts the registrable domain (e.g., "sub.example.com" -> "example.com")
-    /// and queries Cloudflare for matching zones.
+    /// Tries progressively shorter domain suffixes to find the zone:
+    /// - For `sub.example.com`: tries `sub.example.com`, then `example.com`
+    /// - For `api.v2.example.com`: tries `api.v2.example.com`, `v2.example.com`, `example.com`
+    ///
+    /// # Rate Limit Implications
+    ///
+    /// This function makes 1-N API calls where N is the number of domain labels minus 1.
+    /// Most domains resolve in 1-2 calls. Cloudflare's API rate limit is 1200 requests
+    /// per 5 minutes per user, so this is unlikely to be an issue in practice.
+    ///
+    /// For production deployments with many domains, consider:
+    /// - Explicitly configuring `zone_id` in config to skip auto-detection
+    /// - Using a single zone for all ACME domains where possible
+    ///
+    /// # Algorithm
+    ///
+    /// The function validates exact zone name matches to avoid returning the wrong
+    /// zone when an account has multiple zones (e.g., both `example.com` and
+    /// `sub.example.com` as separate zones).
     async fn lookup_zone_id(
         client: &reqwest::Client,
         api_token: &str,
         domain: &str,
+        base_url: &str,
     ) -> Result<String, DnsProviderError> {
         // Try progressively shorter domain suffixes to find the zone
         // e.g., for "sub.example.com": try "sub.example.com", then "example.com"
@@ -136,7 +188,7 @@ impl CloudflareProvider {
 
             debug!(zone_name = %zone_name, "Looking up Cloudflare zone");
 
-            let url = format!("{}/zones?name={}", CLOUDFLARE_API_URL, zone_name);
+            let url = format!("{}/zones?name={}", base_url, zone_name);
             let response = client
                 .get(&url)
                 .header(AUTHORIZATION, format!("Bearer {}", api_token))
@@ -161,7 +213,12 @@ impl CloudflareProvider {
 
             // Find exact match for zone name to avoid returning wrong zone
             // when multiple zones could match (e.g., example.com and sub.example.com)
-            if let Some(zone) = body.result.into_iter().find(|z| z.name == zone_name) {
+            if let Some(zone) = body
+                .result
+                .unwrap_or_default()
+                .into_iter()
+                .find(|z| z.name == zone_name)
+            {
                 debug!(zone_id = %zone.id, zone_name = %zone.name, "Found Cloudflare zone");
                 return Ok(zone.id);
             }
@@ -193,7 +250,7 @@ impl DnsProvider for CloudflareProvider {
     ) -> Result<DnsRecord, DnsProviderError> {
         debug!(name = %name, "Creating Cloudflare TXT record");
 
-        let url = format!("{}/zones/{}/dns_records", CLOUDFLARE_API_URL, self.zone_id);
+        let url = format!("{}/zones/{}/dns_records", self.base_url, self.zone_id);
 
         let request_body = CreateDnsRecord {
             record_type: "TXT".to_string(),
@@ -226,10 +283,14 @@ impl DnsProvider for CloudflareProvider {
             });
         }
 
-        debug!(record_id = %body.result.id, "Created Cloudflare TXT record");
+        let result = body.result.ok_or_else(|| {
+            DnsProviderError::Parse("Cloudflare API returned success but no result".to_string())
+        })?;
+
+        debug!(record_id = %result.id, "Created Cloudflare TXT record");
 
         Ok(DnsRecord {
-            record_id: body.result.id,
+            record_id: result.id,
             name: name.to_string(),
         })
     }
@@ -239,7 +300,7 @@ impl DnsProvider for CloudflareProvider {
 
         let url = format!(
             "{}/zones/{}/dns_records/{}",
-            CLOUDFLARE_API_URL, self.zone_id, record.record_id
+            self.base_url, self.zone_id, record.record_id
         );
 
         let response = self
@@ -292,12 +353,15 @@ impl DnsProvider for CloudflareProvider {
 // ============================================================================
 
 /// Standard Cloudflare API response wrapper
+///
+/// Note: `result` is optional because error responses return `null` for this field.
 #[derive(Debug, Deserialize)]
 struct CloudflareResponse<T> {
     success: bool,
     #[serde(default)]
     errors: Vec<CloudflareError>,
-    result: T,
+    #[serde(default)]
+    result: Option<T>,
 }
 
 /// Cloudflare API error
@@ -325,13 +389,14 @@ struct CreateDnsRecord {
 }
 
 /// Response from creating a DNS record
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct DnsRecordResponse {
+    #[serde(default)]
     id: String,
 }
 
 /// Response from deleting a DNS record
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct DeleteResponse {
     #[allow(dead_code)]
     id: Option<String>,
@@ -366,4 +431,94 @@ mod tests {
     }
 
     // Integration tests with mock server are in tests/dns_provider_test.rs
+
+    /// Extract zone name suffixes from a domain (for testing the lookup algorithm)
+    fn extract_zone_suffixes(domain: &str) -> Vec<String> {
+        let parts: Vec<&str> = domain.split('.').collect();
+        (0..parts.len().saturating_sub(1))
+            .map(|i| parts[i..].join("."))
+            .collect()
+    }
+
+    #[test]
+    fn test_zone_suffix_extraction() {
+        // Basic case
+        assert_eq!(
+            extract_zone_suffixes("sub.example.com"),
+            vec!["sub.example.com", "example.com"]
+        );
+
+        // Deeper nesting
+        assert_eq!(
+            extract_zone_suffixes("a.b.c.example.com"),
+            vec![
+                "a.b.c.example.com",
+                "b.c.example.com",
+                "c.example.com",
+                "example.com"
+            ]
+        );
+
+        // Simple domain
+        assert_eq!(extract_zone_suffixes("example.com"), vec!["example.com"]);
+
+        // Single label (edge case - no valid zones)
+        assert!(extract_zone_suffixes("localhost").is_empty());
+    }
+
+    use proptest::prelude::*;
+
+    proptest! {
+        /// Property-based test for zone suffix extraction
+        ///
+        /// Verifies that:
+        /// 1. Number of suffixes equals number of labels minus 1
+        /// 2. Each suffix is a valid suffix of the domain
+        /// 3. Suffixes are in decreasing length order
+        /// 4. The shortest suffix has exactly 2 labels (TLD + domain)
+        #[test]
+        fn proptest_zone_suffix_extraction(
+            labels in prop::collection::vec("[a-z]{2,10}", 2..=5)
+        ) {
+            let domain = labels.join(".");
+            let suffixes = extract_zone_suffixes(&domain);
+
+            // Number of suffixes should be (labels - 1)
+            prop_assert_eq!(suffixes.len(), labels.len() - 1);
+
+            // Each suffix should be a valid suffix of the domain
+            for suffix in &suffixes {
+                prop_assert!(domain.ends_with(suffix));
+            }
+
+            // Suffixes should be in decreasing length order
+            for i in 1..suffixes.len() {
+                prop_assert!(suffixes[i].len() < suffixes[i - 1].len());
+            }
+
+            // First suffix should be the full domain
+            prop_assert_eq!(&suffixes[0], &domain);
+
+            // Last suffix should have exactly 2 labels
+            let last_suffix = &suffixes[suffixes.len() - 1];
+            prop_assert_eq!(last_suffix.matches('.').count(), 1);
+        }
+
+        /// Property-based test for zone suffix with various domain formats
+        #[test]
+        fn proptest_zone_suffix_valid_domains(
+            subdomain in "[a-z]{2,10}",
+            domain in "[a-z]{2,10}",
+            tld in "(com|net|org|io)"
+        ) {
+            let full_domain = format!("{}.{}.{}", subdomain, domain, tld);
+            let suffixes = extract_zone_suffixes(&full_domain);
+
+            // Should have 2 suffixes: full domain and domain.tld
+            prop_assert_eq!(suffixes.len(), 2);
+            prop_assert_eq!(&suffixes[0], &full_domain);
+            let expected_suffix = format!("{}.{}", domain, tld);
+            prop_assert_eq!(&suffixes[1], &expected_suffix);
+        }
+    }
 }
