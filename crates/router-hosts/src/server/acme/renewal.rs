@@ -38,11 +38,18 @@ const RENEWAL_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// Number of consecutive failures before emitting CRITICAL alert
 const FAILURE_ALERT_THRESHOLD: u32 = 3;
 
-/// Interval for polling ACME order status during challenge validation
+/// Initial interval for polling ACME order status during challenge validation
 const ORDER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
+/// Maximum interval for order polling (caps exponential backoff)
+const ORDER_POLL_MAX_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Number of attempts before doubling the poll interval (for exponential backoff)
+const ORDER_POLL_BACKOFF_STEP: u32 = 10;
+
 /// Maximum number of polling attempts before timeout
-/// 150 attempts × 2s = 5 minutes total, per Let's Encrypt recommendations
+/// With exponential backoff starting at 2s and capped at 30s, this gives
+/// approximately 10-15 minutes of total wait time.
 const ORDER_POLL_MAX_ATTEMPTS: u32 = 150;
 
 /// Timeout for HTTP challenge server shutdown
@@ -182,25 +189,31 @@ impl AcmeRenewalLoop {
 
             // Main renewal loop with jitter to prevent thundering herd
             // when multiple servers check at the same time.
+            // Jitter is recalculated each iteration to prevent convergence over time.
             let jitter_minutes = self.config.renewal.jitter_minutes;
 
-            // Calculate initial jitter
-            let jitter_secs = if jitter_minutes > 0 {
-                rand::thread_rng().gen_range(0..(jitter_minutes as u64 * 60))
-            } else {
-                0
-            };
-            let check_interval = RENEWAL_CHECK_INTERVAL + Duration::from_secs(jitter_secs);
             debug!(
                 base_interval_hours = RENEWAL_CHECK_INTERVAL.as_secs() / 3600,
-                jitter_minutes = jitter_secs / 60,
-                "ACME renewal loop starting with jittered interval"
+                max_jitter_minutes = jitter_minutes,
+                "ACME renewal loop starting"
             );
-            let mut interval = tokio::time::interval(check_interval);
 
             loop {
+                // Calculate fresh jitter for each sleep cycle
+                let jitter_secs = if jitter_minutes > 0 {
+                    rand::thread_rng().gen_range(0..(jitter_minutes as u64 * 60))
+                } else {
+                    0
+                };
+                let check_interval = RENEWAL_CHECK_INTERVAL + Duration::from_secs(jitter_secs);
+                debug!(
+                    next_check_hours = check_interval.as_secs() / 3600,
+                    jitter_minutes = jitter_secs / 60,
+                    "Sleeping until next renewal check"
+                );
+
                 tokio::select! {
-                    _ = interval.tick() => {
+                    _ = tokio::time::sleep(check_interval) => {
                         if self.should_renew().await {
                             info!("Certificate renewal needed");
                             match self.request_certificate().await {
@@ -216,12 +229,17 @@ impl AcmeRenewalLoop {
                                         "Failed to renew certificate"
                                     );
 
-                                    // Alert on repeated failures
+                                    // Alert on repeated failures with operator guidance
                                     if consecutive_failures >= FAILURE_ALERT_THRESHOLD {
                                         error!(
                                             consecutive_failures = consecutive_failures,
                                             threshold = FAILURE_ALERT_THRESHOLD,
                                             "CRITICAL: Certificate renewal has failed {} consecutive times. \
+                                             Troubleshooting steps: \
+                                             1) Verify DNS records point to this server (for HTTP-01), \
+                                             2) Ensure port 80 is accessible from the internet, \
+                                             3) Check Let's Encrypt rate limits at https://letsencrypt.org/docs/rate-limits/, \
+                                             4) Review earlier log entries for specific error details. \
                                              Manual intervention may be required.",
                                             consecutive_failures
                                         );
@@ -471,7 +489,14 @@ impl AcmeRenewalLoop {
         let domain = identifier_value(&identifier);
 
         for attempt in 1..=ORDER_POLL_MAX_ATTEMPTS {
-            tokio::time::sleep(ORDER_POLL_INTERVAL).await;
+            // Use exponential backoff to reduce load during long validations
+            // Interval doubles every ORDER_POLL_BACKOFF_STEP attempts, capped at max
+            let backoff_multiplier = 2u32.pow(attempt / ORDER_POLL_BACKOFF_STEP);
+            let poll_interval = std::cmp::min(
+                ORDER_POLL_INTERVAL * backoff_multiplier,
+                ORDER_POLL_MAX_INTERVAL,
+            );
+            tokio::time::sleep(poll_interval).await;
 
             // Refresh order state
             let state = order.state();

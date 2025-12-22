@@ -11,6 +11,13 @@
 //!
 //! Both run in Docker containers connected via a bridge network so Pebble
 //! can validate challenges through challtestsrv.
+//!
+//! # CI Integration
+//!
+//! TODO(#127): Configure Pebble CA trust in CI to enable these tests in the
+//! automated test suite. Currently, Pebble tests require Docker and run
+//! locally but are skipped in CI due to Pebble's self-signed CA certificate
+//! not being trusted by the CI environment.
 
 use http_body_util::Full;
 use hyper::body::Bytes;

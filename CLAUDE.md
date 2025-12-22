@@ -848,6 +848,81 @@ template {
 - CA chain validity (checked at connection time)
 - Key/cert match (checked by tonic on load)
 
+## ACME Certificate Management
+
+The server supports automatic TLS certificate management via ACME protocol (e.g., Let's Encrypt).
+
+### Enabling ACME
+
+Add an `[acme]` section to your server configuration:
+
+```toml
+[acme]
+enabled = true
+directory_url = "https://acme-v02.api.letsencrypt.org/directory"  # Or staging URL for testing
+email = "admin@example.com"
+domains = ["router.example.com", "api.example.com"]
+challenge_type = "http-01"  # or "dns-01" for wildcard certs (Phase 2)
+
+[acme.renewal]
+days_before_expiry = 30     # Renew when cert expires within 30 days
+jitter_minutes = 60         # Random delay to prevent thundering herd
+```
+
+### Environment Variable Expansion
+
+Sensitive values can reference environment variables:
+
+```toml
+[acme.dns.cloudflare]
+api_token = "${CF_API_TOKEN}"                    # Required
+zone_id = "${CF_ZONE_ID:-auto}"                  # With default
+```
+
+Supported syntax:
+- `${VAR}` - Required variable (fails if unset/empty)
+- `${VAR:-default}` - Use default if unset/empty
+- `$$` - Literal dollar sign
+
+### File Locations
+
+| File | Path | Permissions |
+|------|------|-------------|
+| Certificate | Configured TLS cert path | 0644 |
+| Private Key | Configured TLS key path | 0600 |
+| Account Credentials | `<data_dir>/acme-account.json` | 0600 |
+
+### Troubleshooting
+
+**Certificate renewal fails repeatedly:**
+1. Verify DNS records point to this server (for HTTP-01)
+2. Ensure port 80 is accessible from the internet
+3. Check Let's Encrypt rate limits: https://letsencrypt.org/docs/rate-limits/
+4. Review server logs for detailed error messages
+
+**Rate limit errors:**
+- Let's Encrypt allows 5 certificates per domain per week
+- Use staging URL for testing: `https://acme-staging-v02.api.letsencrypt.org/directory`
+- Wait 1 week for rate limits to reset
+
+**Account credential backup:**
+- The `acme-account.json` file contains your ACME account private key
+- Back up this file to avoid needing to re-register with Let's Encrypt
+- File is written atomically with 0600 permissions
+
+### Testing with Pebble
+
+ACME integration tests use [Pebble](https://github.com/letsencrypt/pebble) (Let's Encrypt's test server).
+Tests run locally with Docker but are not yet integrated into CI.
+
+**Running locally:**
+```bash
+cargo test -p router-hosts acme  # Runs Pebble tests via testcontainers
+```
+
+**CI integration:** Tracked in issue #127. Requires configuring Pebble's self-signed CA
+certificate trust in the CI environment.
+
 #### macOS E2E Testing
 
 **Issue:** `task e2e` fails on macOS with "Exec format error" because it uses host binary (macOS) in Linux container.
