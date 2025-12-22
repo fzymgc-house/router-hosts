@@ -95,7 +95,12 @@ pub struct AcmeConfig {
     pub renewal: RenewalConfig,
 }
 
+/// Default path for ACME account credentials
+///
+/// **Note:** This default is Unix-specific. On Windows, operators must explicitly
+/// set `credentials_path` to a valid Windows path (e.g., `C:\ProgramData\router-hosts\acme-account.json`).
 fn default_credentials_path() -> std::path::PathBuf {
+    // NOTE: This path is Unix-specific. Windows users must configure this explicitly.
     std::path::PathBuf::from("/var/lib/router-hosts/acme-account.json")
 }
 
@@ -159,13 +164,15 @@ impl AcmeConfig {
                 // HTTP config is optional - defaults are fine
             }
             ChallengeType::Dns01 => {
-                if let Some(dns) = &mut self.dns {
-                    dns.validate_and_expand()?;
-                } else {
-                    return Err(AcmeConfigError::MissingField(
-                        "acme.dns (required for dns-01 challenge)".to_string(),
-                    ));
-                }
+                // DNS-01 challenge is not yet implemented (Phase 2)
+                // Reject at config validation to provide a clear error at startup
+                // rather than failing at runtime during certificate renewal
+                return Err(AcmeConfigError::Invalid(
+                    "DNS-01 challenge is not yet implemented. \
+                     Use challenge_type = \"http-01\" for now. \
+                     DNS-01 support will be added in a future release."
+                        .to_string(),
+                ));
             }
         }
 
@@ -216,6 +223,7 @@ pub struct DnsConfig {
 }
 
 impl DnsConfig {
+    #[allow(dead_code)] // Will be used when DNS-01 is implemented (see #130)
     fn validate_and_expand(&mut self) -> Result<(), AcmeConfigError> {
         let mut providers_configured = 0;
 
@@ -258,6 +266,7 @@ pub struct CloudflareConfig {
 }
 
 impl CloudflareConfig {
+    #[allow(dead_code)] // Will be used when DNS-01 is implemented (see #130)
     fn validate_and_expand(&mut self) -> Result<(), AcmeConfigError> {
         self.api_token = expand_env_vars(&self.api_token)?;
 
@@ -306,6 +315,7 @@ fn default_timeout() -> u64 {
 }
 
 impl WebhookConfig {
+    #[allow(dead_code)] // Will be used when DNS-01 is implemented (see #130)
     fn validate_and_expand(&mut self) -> Result<(), AcmeConfigError> {
         self.create_url = expand_env_vars(&self.create_url)?;
         self.delete_url = expand_env_vars(&self.delete_url)?;
@@ -407,7 +417,8 @@ mod tests {
     }
 
     #[test]
-    fn test_acme_config_dns01_requires_dns_config() {
+    fn test_acme_config_dns01_not_implemented() {
+        // DNS-01 is rejected at config validation (not runtime) until Phase 2
         let mut config = AcmeConfig {
             enabled: true,
             domains: vec!["example.com".to_string()],
@@ -416,7 +427,12 @@ mod tests {
         };
         let result = config.validate_and_expand();
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("acme.dns"));
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not yet implemented"),
+            "Expected 'not yet implemented' error, got: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -536,17 +552,15 @@ mod tests {
 
     #[test]
     fn test_full_acme_config_parse() {
-        std::env::set_var("TEST_FULL_CF_TOKEN", "cf_token");
-
         let toml_str = r#"
             enabled = true
             directory_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
             email = "admin@example.com"
-            domains = ["example.com", "*.example.com"]
-            challenge_type = "dns-01"
+            domains = ["example.com", "www.example.com"]
+            challenge_type = "http-01"
 
-            [dns.cloudflare]
-            api_token = "${TEST_FULL_CF_TOKEN}"
+            [http]
+            bind_address = "0.0.0.0:8080"
 
             [renewal]
             days_before_expiry = 14
@@ -558,14 +572,9 @@ mod tests {
         assert!(config.enabled);
         assert!(config.directory_url.contains("staging"));
         assert_eq!(config.domains.len(), 2);
-        assert_eq!(config.challenge_type, ChallengeType::Dns01);
-        assert_eq!(
-            config.dns.unwrap().cloudflare.unwrap().api_token,
-            "cf_token"
-        );
+        assert_eq!(config.challenge_type, ChallengeType::Http01);
+        assert_eq!(config.http.unwrap().bind_address, "0.0.0.0:8080");
         assert_eq!(config.renewal.days_before_expiry, 14);
-
-        std::env::remove_var("TEST_FULL_CF_TOKEN");
     }
 
     #[test]

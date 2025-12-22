@@ -260,6 +260,14 @@ impl AcmeClient {
 
         #[cfg(not(unix))]
         {
+            // On Windows, we cannot set Unix-style permissions. The file will be created
+            // with default permissions based on the parent directory's ACL. Operators should
+            // ensure the credentials directory is only accessible by the service account.
+            warn!(
+                "Writing ACME credentials on non-Unix platform. \
+                 Ensure {:?} is only accessible by the service account via directory ACLs.",
+                credentials_path.parent().unwrap_or(credentials_path)
+            );
             tokio::fs::write(&temp_path, &credentials_json)
                 .await
                 .map_err(|e| AcmeError::Account(format!("failed to write credentials: {}", e)))?;

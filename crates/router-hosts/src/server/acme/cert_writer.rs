@@ -152,7 +152,40 @@ pub fn write_certificate(
     })
 }
 
+/// Write certificate and key atomically to disk (async wrapper)
+///
+/// This is an async wrapper around [`write_certificate`] that runs the
+/// blocking file I/O operations in a separate thread pool to avoid
+/// blocking the Tokio runtime.
+///
+/// See [`write_certificate`] for details on the atomic write process.
+#[allow(dead_code)] // Will be used when ACME integration is complete
+pub async fn write_certificate_async(
+    cert_pem: String,
+    key_pem: String,
+    cert_path: std::path::PathBuf,
+    key_path: std::path::PathBuf,
+) -> Result<CertWriteResult, CertWriteError> {
+    tokio::task::spawn_blocking(move || {
+        write_certificate(&cert_pem, &key_pem, &cert_path, &key_path)
+    })
+    .await
+    .map_err(|e| CertWriteError::Write {
+        target: "certificate".to_string(),
+        source: std::io::Error::other(e.to_string()),
+    })?
+}
+
 /// Write a file atomically
+///
+/// Uses synchronous std::fs operations intentionally to ensure:
+/// 1. On Unix, file permissions are set at creation time (OpenOptionsExt::mode)
+///    to prevent any window where the file exists with insecure permissions
+/// 2. fsync is called before rename to ensure durability
+/// 3. Atomic rename completes the operation
+///
+/// The calling context (renewal loop) runs this via spawn_blocking to avoid
+/// blocking the async runtime.
 ///
 /// # Arguments
 ///
@@ -282,16 +315,63 @@ pub fn clear_reload_in_progress() {
     RELOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
 }
 
+/// Errors that can occur during SIGHUP reload
+#[derive(Debug, Error)]
+#[allow(dead_code)]
+pub enum ReloadError {
+    /// A reload is already in progress
+    #[error("certificate reload already in progress")]
+    AlreadyInProgress,
+
+    /// Failed to send SIGHUP signal
+    #[error("failed to send SIGHUP signal")]
+    SignalFailed,
+
+    /// SIGHUP not supported on this platform
+    #[error("SIGHUP not available on this platform - manual reload required")]
+    PlatformUnsupported,
+
+    /// Task join error
+    #[error("reload task panicked: {0}")]
+    TaskPanic(String),
+}
+
 /// Trigger certificate reload via SIGHUP asynchronously
 ///
-/// This is a convenience wrapper that runs trigger_reload() and
-/// allows the caller to await any follow-up operations.
+/// This is a convenience wrapper that runs trigger_reload() in a blocking
+/// task and returns a proper Result for error handling.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - A reload is already in progress
+/// - The SIGHUP signal failed to send
+/// - The platform doesn't support SIGHUP
+/// - The blocking task panicked
 #[allow(dead_code)] // Will be used by renewal loop
-pub async fn trigger_reload_async() -> bool {
+pub async fn trigger_reload_async() -> Result<(), ReloadError> {
     // Run in blocking context since it may involve syscalls
-    tokio::task::spawn_blocking(trigger_reload)
-        .await
-        .unwrap_or(false)
+    match tokio::task::spawn_blocking(trigger_reload).await {
+        Ok(true) => Ok(()),
+        Ok(false) => {
+            // trigger_reload returns false for several reasons
+            // Check if a reload was already in progress
+            if RELOAD_IN_PROGRESS.load(Ordering::SeqCst) {
+                Err(ReloadError::AlreadyInProgress)
+            } else {
+                // Otherwise it was a signal failure or platform issue
+                #[cfg(unix)]
+                {
+                    Err(ReloadError::SignalFailed)
+                }
+                #[cfg(not(unix))]
+                {
+                    Err(ReloadError::PlatformUnsupported)
+                }
+            }
+        }
+        Err(e) => Err(ReloadError::TaskPanic(e.to_string())),
+    }
 }
 
 #[cfg(test)]

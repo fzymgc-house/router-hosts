@@ -29,6 +29,13 @@ use regex::{Captures, Regex};
 use std::sync::LazyLock;
 use thiserror::Error;
 
+/// Maximum expanded string size (64 KB)
+///
+/// This limit prevents unbounded expansion when environment variables
+/// contain very large values. It's generous enough for any reasonable
+/// configuration value while preventing potential memory exhaustion.
+const MAX_EXPANDED_SIZE: usize = 64 * 1024;
+
 /// Errors that can occur during environment variable expansion
 #[derive(Debug, Error, PartialEq, Eq)]
 pub enum EnvExpandError {
@@ -44,6 +51,10 @@ pub enum EnvExpandError {
     #[error("invalid variable syntax: {0}")]
     #[allow(dead_code)]
     InvalidSyntax(String),
+
+    /// Expanded result exceeds size limit
+    #[error("expanded result exceeds maximum size of {MAX_EXPANDED_SIZE} bytes")]
+    SizeExceeded,
 }
 
 /// Regex for matching ${VAR} or ${VAR:-default} patterns
@@ -131,6 +142,11 @@ pub fn expand_env_vars(input: &str) -> Result<String, EnvExpandError> {
                     break;
                 }
             }
+        }
+
+        // Check size limit to prevent unbounded expansion
+        if result.len() > MAX_EXPANDED_SIZE {
+            return Err(EnvExpandError::SizeExceeded);
         }
     }
 
@@ -334,5 +350,36 @@ mod tests {
         assert_eq!(result, "postgres://admin:secret@localhost/db");
         std::env::remove_var("TEST_DB_USER");
         std::env::remove_var("TEST_DB_PASS");
+    }
+
+    #[test]
+    fn test_expand_size_limit_exceeded() {
+        // Create a variable with a large value (just over 64KB when expanded)
+        let large_value = "x".repeat(MAX_EXPANDED_SIZE + 1);
+        std::env::set_var("TEST_LARGE_VAR", &large_value);
+
+        let result = expand_env_vars("${TEST_LARGE_VAR}");
+        assert!(matches!(result, Err(EnvExpandError::SizeExceeded)));
+
+        std::env::remove_var("TEST_LARGE_VAR");
+    }
+
+    #[test]
+    fn test_expand_size_limit_at_boundary() {
+        // Create a variable at exactly the limit - should succeed
+        let at_limit_value = "x".repeat(MAX_EXPANDED_SIZE);
+        std::env::set_var("TEST_BOUNDARY_VAR", &at_limit_value);
+
+        let result = expand_env_vars("${TEST_BOUNDARY_VAR}");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().len(), MAX_EXPANDED_SIZE);
+
+        std::env::remove_var("TEST_BOUNDARY_VAR");
+    }
+
+    #[test]
+    fn test_error_display_size_exceeded() {
+        let err = EnvExpandError::SizeExceeded;
+        assert!(err.to_string().contains("65536"));
     }
 }

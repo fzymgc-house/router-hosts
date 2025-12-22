@@ -256,25 +256,44 @@ impl ChallengeStore {
     }
 }
 
+/// Timeout for graceful shutdown before forcing abort
+const SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Handle for controlling a running HTTP challenge server
 #[allow(dead_code)] // Will be used when ACME integration is complete
 pub struct HttpChallengeHandle {
     shutdown_tx: tokio::sync::oneshot::Sender<()>,
     join_handle: tokio::task::JoinHandle<()>,
+    abort_handle: tokio::task::AbortHandle,
     cleanup_handle: tokio::task::JoinHandle<()>,
 }
 
 #[allow(dead_code)] // Methods will be used when ACME integration is complete
 impl HttpChallengeHandle {
-    /// Shutdown the server gracefully
+    /// Shutdown the server gracefully with timeout
+    ///
+    /// Waits up to [`SHUTDOWN_TIMEOUT`] for the server to finish handling requests.
+    /// If the timeout expires, the task is forcibly aborted to ensure
+    /// the server shuts down promptly.
     pub async fn shutdown(self) {
         debug!("Shutting down HTTP challenge server");
         // Abort the cleanup task first
         self.cleanup_handle.abort();
         // Send shutdown signal (ignore error if receiver dropped)
         let _ = self.shutdown_tx.send(());
-        // Wait for server to finish
-        let _ = self.join_handle.await;
+        // Wait for server to finish with timeout, then abort if necessary
+        match tokio::time::timeout(SHUTDOWN_TIMEOUT, self.join_handle).await {
+            Ok(_) => {
+                debug!("HTTP challenge server shutdown completed gracefully");
+            }
+            Err(_) => {
+                warn!(
+                    "HTTP challenge server shutdown timed out after {:?}, aborting task",
+                    SHUTDOWN_TIMEOUT
+                );
+                self.abort_handle.abort();
+            }
+        }
     }
 }
 
@@ -394,9 +413,11 @@ impl HttpChallengeServer {
             }
         });
 
+        let abort_handle = join_handle.abort_handle();
         Ok(HttpChallengeHandle {
             shutdown_tx,
             join_handle,
+            abort_handle,
             cleanup_handle,
         })
     }

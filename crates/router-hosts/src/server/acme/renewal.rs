@@ -468,8 +468,12 @@ impl AcmeRenewalLoop {
             &self.tls_paths.key_path,
         )?;
 
-        // Trigger reload
-        trigger_reload_async().await;
+        // Trigger reload - log but don't fail renewal if reload fails
+        // The certificate is already written, and reload may fail for various
+        // reasons (e.g., platform doesn't support SIGHUP, reload already in progress)
+        if let Err(e) = trigger_reload_async().await {
+            warn!(error = %e, "Failed to trigger certificate reload via SIGHUP");
+        }
 
         info!("Certificate successfully renewed and server reloaded");
 

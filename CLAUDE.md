@@ -892,6 +892,18 @@ Supported syntax:
 | Private Key | Configured TLS key path | 0600 |
 | Account Credentials | `<data_dir>/acme-account.json` | 0600 |
 
+**Windows Security Note:** On Windows, Unix-style file permissions (0600) cannot be set.
+Credential files inherit permissions from the parent directory's ACL. Operators must ensure
+the credentials directory is only accessible by the service account. A warning is logged
+when writing credentials on non-Unix platforms.
+
+**Platform-Specific Defaults:** The default `credentials_path` (`/var/lib/router-hosts/acme-account.json`)
+is Unix-specific. On Windows, you must explicitly set this to a valid path:
+```toml
+[acme]
+credentials_path = "C:\\ProgramData\\router-hosts\\acme-account.json"
+```
+
 ### Troubleshooting
 
 **Certificate renewal fails repeatedly:**
