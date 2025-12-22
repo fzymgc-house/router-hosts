@@ -119,7 +119,6 @@ pub struct RenewalHandle {
 }
 
 #[allow(dead_code)] // Methods will be used when renewal loop is integrated
-#[cfg(not(tarpaulin_include))] // Requires running renewal loop, tested via E2E (#127)
 impl RenewalHandle {
     /// Shutdown the renewal loop gracefully
     pub async fn shutdown(self) {
@@ -150,7 +149,6 @@ pub struct AcmeRenewalLoop {
 }
 
 #[allow(dead_code)] // Methods will be used when ACME is integrated
-#[cfg(not(tarpaulin_include))] // Network-dependent ACME protocol, requires Pebble setup in CI (#127)
 impl AcmeRenewalLoop {
     /// Create a new renewal loop
     ///
