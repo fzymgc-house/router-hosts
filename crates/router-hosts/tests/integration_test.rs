@@ -90,6 +90,7 @@ async fn start_test_server() -> (SocketAddr, Arc<tempfile::TempDir>) {
             max_age_days: 30,
         },
         hooks: router_hosts::server::config::HooksConfig::default(),
+        acme: router_hosts::server::acme::AcmeConfig::default(),
     });
 
     // Create command handler

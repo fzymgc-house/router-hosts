@@ -782,6 +782,7 @@ mod tests {
                 max_age_days: 30,
             },
             hooks: crate::server::config::HooksConfig::default(),
+            acme: crate::server::acme::AcmeConfig::default(),
         }
     }
 

@@ -1,3 +1,4 @@
+use crate::server::acme::{AcmeConfig, AcmeConfigError};
 use router_hosts_storage::StorageError;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -23,6 +24,9 @@ pub enum ConfigError {
 
     #[error("Storage configuration error: {0}")]
     StorageConfig(#[from] StorageError),
+
+    #[error("ACME configuration error: {0}")]
+    AcmeConfig(#[from] AcmeConfigError),
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -156,6 +160,10 @@ pub struct Config {
 
     #[serde(default)]
     pub hooks: HooksConfig,
+
+    /// ACME certificate management configuration
+    #[serde(default)]
+    pub acme: AcmeConfig,
 }
 
 impl Default for RetentionConfig {
@@ -175,7 +183,7 @@ impl Config {
         Self::check_config_permissions(path)?;
 
         let content = std::fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let mut config: Config = toml::from_str(&content)?;
 
         // Validate required fields
         if config.server.bind_address.is_empty() {
@@ -185,6 +193,9 @@ impl Config {
         if config.server.hosts_file_path.is_empty() {
             return Err(ConfigError::MissingHostsFilePath);
         }
+
+        // Validate and expand ACME configuration (handles ${VAR} expansion)
+        config.acme.validate_and_expand()?;
 
         Ok(config)
     }
