@@ -194,7 +194,7 @@ impl AcmeRenewalLoop {
     ) -> Result<Arc<dyn DnsProvider>, RenewalError> {
         if let Some(cf) = &config.cloudflare {
             let provider = if let Some(zone_id) = &cf.zone_id {
-                CloudflareProvider::new(cf.api_token.clone(), zone_id.clone())
+                CloudflareProvider::new(cf.api_token.clone(), zone_id.clone())?
             } else {
                 CloudflareProvider::with_auto_zone(cf.api_token.clone(), domain).await?
             };
@@ -207,7 +207,7 @@ impl AcmeRenewalLoop {
                 wh.delete_url.clone(),
                 wh.headers.clone(),
                 Duration::from_secs(wh.timeout_seconds),
-            );
+            )?;
             return Ok(Arc::new(provider));
         }
 

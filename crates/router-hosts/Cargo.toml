@@ -71,6 +71,7 @@ time = "0.3"
 rustls.workspace = true
 hyper-rustls.workspace = true
 hyper-util.workspace = true
+proptest.workspace = true
 
 [lints.rust]
 # Allow tarpaulin_include cfg for coverage exclusions

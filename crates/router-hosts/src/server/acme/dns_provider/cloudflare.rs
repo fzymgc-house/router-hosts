@@ -25,11 +25,16 @@ const CLOUDFLARE_API_URL: &str = "https://api.cloudflare.com/client/v4";
 /// Cloudflare DNS propagation delay (typically very fast)
 const CLOUDFLARE_PROPAGATION_DELAY: Duration = Duration::from_secs(10);
 
+/// Default DNS record TTL for ACME challenge records (minimum allowed by Cloudflare)
+const CLOUDFLARE_DNS_TTL: u32 = 60;
+
 /// Cloudflare DNS provider
 ///
 /// Manages TXT records via Cloudflare's REST API for ACME DNS-01 challenges.
+#[derive(Debug)]
 pub struct CloudflareProvider {
     client: reqwest::Client,
+    #[allow(dead_code)] // Used in auth_headers(), needed for Debug
     api_token: String,
     zone_id: String,
 }
@@ -38,17 +43,36 @@ impl CloudflareProvider {
     /// Create a new Cloudflare provider with explicit zone ID
     ///
     /// Use this when the zone ID is known (e.g., from configuration).
-    pub fn new(api_token: String, zone_id: String) -> Self {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be built or if the API token
+    /// contains invalid header characters.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let provider = CloudflareProvider::new(
+    ///     "my-api-token".to_string(),
+    ///     "zone123abc".to_string(),
+    /// )?;
+    /// ```
+    pub fn new(api_token: String, zone_id: String) -> Result<Self, DnsProviderError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("failed to build HTTP client");
+            .map_err(|e| DnsProviderError::Config(format!("failed to build HTTP client: {}", e)))?;
 
-        Self {
+        // Validate API token can be used in headers (fail early)
+        HeaderValue::from_str(&format!("Bearer {}", api_token)).map_err(|_| {
+            DnsProviderError::Config("API token contains invalid characters".to_string())
+        })?;
+
+        Ok(Self {
             client,
             api_token,
             zone_id,
-        }
+        })
     }
 
     /// Create a new Cloudflare provider with auto-detected zone ID
@@ -60,11 +84,30 @@ impl CloudflareProvider {
     ///
     /// * `api_token` - Cloudflare API token with Zone:Read permission
     /// * `domain` - Domain name to look up (e.g., "example.com")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be built, if the API token
+    /// is invalid, or if the zone cannot be found.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let provider = CloudflareProvider::with_auto_zone(
+    ///     "my-api-token".to_string(),
+    ///     "example.com",
+    /// ).await?;
+    /// ```
     pub async fn with_auto_zone(api_token: String, domain: &str) -> Result<Self, DnsProviderError> {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
-            .expect("failed to build HTTP client");
+            .map_err(|e| DnsProviderError::Config(format!("failed to build HTTP client: {}", e)))?;
+
+        // Validate API token can be used in headers (fail early)
+        HeaderValue::from_str(&format!("Bearer {}", api_token)).map_err(|_| {
+            DnsProviderError::Config("API token contains invalid characters".to_string())
+        })?;
 
         let zone_id = Self::lookup_zone_id(&client, &api_token, domain).await?;
 
@@ -126,13 +169,14 @@ impl CloudflareProvider {
     }
 
     /// Build authorization headers for API requests
+    ///
+    /// Since we validate the token in the constructor, this should never fail.
     fn auth_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", self.api_token))
-                .expect("invalid API token"),
-        );
+        // Token was validated in constructor, so this unwrap is safe
+        if let Ok(value) = HeaderValue::from_str(&format!("Bearer {}", self.api_token)) {
+            headers.insert(AUTHORIZATION, value);
+        }
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers
     }
@@ -153,7 +197,7 @@ impl DnsProvider for CloudflareProvider {
             record_type: "TXT".to_string(),
             name: name.to_string(),
             content: content.to_string(),
-            ttl: 60, // Short TTL for challenge records
+            ttl: CLOUDFLARE_DNS_TTL,
         };
 
         let response = self
@@ -297,14 +341,26 @@ mod tests {
 
     #[test]
     fn test_cloudflare_provider_name() {
-        let provider = CloudflareProvider::new("token".to_string(), "zone123".to_string());
+        let provider = CloudflareProvider::new("token".to_string(), "zone123".to_string())
+            .expect("valid token");
         assert_eq!(provider.name(), "cloudflare");
     }
 
     #[test]
     fn test_cloudflare_propagation_delay() {
-        let provider = CloudflareProvider::new("token".to_string(), "zone123".to_string());
+        let provider = CloudflareProvider::new("token".to_string(), "zone123".to_string())
+            .expect("valid token");
         assert_eq!(provider.propagation_delay(), Duration::from_secs(10));
+    }
+
+    #[test]
+    fn test_cloudflare_provider_invalid_token() {
+        // API tokens with invalid header characters should fail
+        let result =
+            CloudflareProvider::new("token\x00with\x00nulls".to_string(), "zone123".to_string());
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(matches!(err, DnsProviderError::Config(_)));
     }
 
     // Integration tests with mock server are in tests/dns_provider_test.rs

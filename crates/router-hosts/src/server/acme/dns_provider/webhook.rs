@@ -71,33 +71,41 @@ impl WebhookProvider {
     /// * `delete_url` - URL template to DELETE records (use `{record_id}` placeholder)
     /// * `headers` - Custom headers to include in requests (e.g., Authorization)
     /// * `timeout` - Request timeout
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be built.
     pub fn new(
         create_url: String,
         delete_url: String,
         headers: HashMap<String, String>,
         timeout: Duration,
-    ) -> Self {
+    ) -> Result<Self, DnsProviderError> {
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
-            .expect("failed to build HTTP client");
+            .map_err(|e| DnsProviderError::Config(format!("failed to build HTTP client: {}", e)))?;
 
-        Self {
+        Ok(Self {
             client,
             create_url,
             delete_url,
             headers,
             propagation_delay: WEBHOOK_PROPAGATION_DELAY,
-        }
+        })
     }
 
     /// Create provider with default timeout
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client cannot be built.
     #[allow(dead_code)] // Public API for simplified construction
     pub fn with_defaults(
         create_url: String,
         delete_url: String,
         headers: HashMap<String, String>,
-    ) -> Self {
+    ) -> Result<Self, DnsProviderError> {
         Self::new(create_url, delete_url, headers, DEFAULT_TIMEOUT)
     }
 
@@ -105,6 +113,7 @@ impl WebhookProvider {
     ///
     /// Use this if you know your DNS provider propagates faster than 120 seconds.
     #[allow(dead_code)] // Public API for custom propagation delay
+    #[must_use]
     pub fn with_propagation_delay(mut self, delay: Duration) -> Self {
         self.propagation_delay = delay;
         self
@@ -257,7 +266,8 @@ mod tests {
             "http://create".into(),
             "http://delete".into(),
             HashMap::new(),
-        );
+        )
+        .expect("valid config");
         assert_eq!(provider.name(), "webhook");
     }
 
@@ -267,7 +277,8 @@ mod tests {
             "http://create".into(),
             "http://delete".into(),
             HashMap::new(),
-        );
+        )
+        .expect("valid config");
         assert_eq!(provider.propagation_delay(), Duration::from_secs(120));
     }
 
@@ -278,6 +289,7 @@ mod tests {
             "http://delete".into(),
             HashMap::new(),
         )
+        .expect("valid config")
         .with_propagation_delay(Duration::from_secs(30));
         assert_eq!(provider.propagation_delay(), Duration::from_secs(30));
     }
@@ -297,7 +309,8 @@ mod tests {
         headers.insert("X-Custom".to_string(), "value".to_string());
 
         let provider =
-            WebhookProvider::with_defaults("http://create".into(), "http://delete".into(), headers);
+            WebhookProvider::with_defaults("http://create".into(), "http://delete".into(), headers)
+                .expect("valid config");
 
         let result = provider.build_headers();
         assert!(result.is_ok());

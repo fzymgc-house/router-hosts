@@ -145,6 +145,7 @@ pub fn compute_dns01_digest(key_authorization: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn test_compute_dns01_digest() {
@@ -193,5 +194,39 @@ mod tests {
         };
         assert!(err.to_string().contains("403"));
         assert!(err.to_string().contains("forbidden"));
+    }
+
+    proptest! {
+        /// Property-based test for compute_dns01_digest
+        ///
+        /// Verifies:
+        /// - Output is always 43 characters (base64url of SHA256 without padding)
+        /// - Output contains only valid base64url characters
+        /// - Same input always produces same output (deterministic)
+        #[test]
+        fn proptest_compute_dns01_digest(input in ".*") {
+            let digest = compute_dns01_digest(&input);
+
+            // SHA256 = 32 bytes = 43 base64url chars without padding
+            prop_assert_eq!(digest.len(), 43);
+
+            // Must be valid base64url (no padding, URL-safe characters)
+            prop_assert!(!digest.contains('='), "digest should not contain padding");
+            prop_assert!(!digest.contains('+'), "digest should use URL-safe encoding");
+            prop_assert!(!digest.contains('/'), "digest should use URL-safe encoding");
+
+            // All characters must be valid base64url
+            for c in digest.chars() {
+                prop_assert!(
+                    c.is_ascii_alphanumeric() || c == '-' || c == '_',
+                    "invalid base64url character: {}",
+                    c
+                );
+            }
+
+            // Deterministic: same input produces same output
+            let digest2 = compute_dns01_digest(&input);
+            prop_assert_eq!(digest, digest2);
+        }
     }
 }

@@ -3186,6 +3186,7 @@ dependencies = [
  "instant-acme",
  "libc",
  "parking_lot",
+ "proptest",
  "prost",
  "prost-types",
  "rand 0.8.5",
