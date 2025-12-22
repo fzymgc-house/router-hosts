@@ -5,6 +5,19 @@
 //! - `${VAR:-default}` - Use default if VAR is unset or empty
 //! - `$$` - Literal `$` character
 //!
+//! # Non-Recursive Expansion
+//!
+//! Expansion is **not recursive**. If an environment variable's value contains
+//! `${...}` syntax, those patterns are **not** expanded. This is intentional:
+//!
+//! - **Security**: Prevents injection attacks where environment variables
+//!   contain malicious `${...}` patterns
+//! - **Predictability**: The expanded value is exactly what's in the environment
+//! - **Consistency**: Matches behavior of most configuration libraries
+//!
+//! For example, if `FOO=bar` and `BAR=${FOO}`, then `${BAR}` expands to
+//! the literal string `${FOO}`, not `bar`.
+//!
 //! # Examples
 //!
 //! ```
@@ -381,5 +394,24 @@ mod tests {
     fn test_error_display_size_exceeded() {
         let err = EnvExpandError::SizeExceeded;
         assert!(err.to_string().contains("65536"));
+    }
+
+    #[test]
+    fn test_expansion_is_not_recursive() {
+        // Set FOO to a literal value
+        std::env::set_var("TEST_NONREC_INNER", "inner_value");
+        // Set BAR to a string containing ${FOO} syntax - NOT expanded
+        std::env::set_var("TEST_NONREC_OUTER", "${TEST_NONREC_INNER}");
+
+        // Expanding BAR should give the literal string "${TEST_NONREC_INNER}",
+        // NOT "inner_value". This is intentional for security and predictability.
+        let result = expand_env_vars("${TEST_NONREC_OUTER}").unwrap();
+        assert_eq!(
+            result, "${TEST_NONREC_INNER}",
+            "Expansion should NOT be recursive - inner ${{...}} should remain literal"
+        );
+
+        std::env::remove_var("TEST_NONREC_INNER");
+        std::env::remove_var("TEST_NONREC_OUTER");
     }
 }

@@ -19,6 +19,10 @@ use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+// warn is only used in #[cfg(not(unix))] block
+#[cfg(not(unix))]
+use tracing::warn;
+
 /// Interval for polling certificate availability after order finalization
 const CERT_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
@@ -265,7 +269,9 @@ impl AcmeClient {
             // ensure the credentials directory is only accessible by the service account.
             warn!(
                 "Writing ACME credentials on non-Unix platform. \
-                 Ensure {:?} is only accessible by the service account via directory ACLs.",
+                 Ensure {:?} is only accessible by the service account. \
+                 Example: icacls {:?} /inheritance:r /grant:r \"SYSTEM:(OI)(CI)F\" /grant:r \"Administrators:(OI)(CI)F\"",
+                credentials_path.parent().unwrap_or(credentials_path),
                 credentials_path.parent().unwrap_or(credentials_path)
             );
             tokio::fs::write(&temp_path, &credentials_json)

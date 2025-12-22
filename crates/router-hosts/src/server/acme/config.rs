@@ -164,13 +164,15 @@ impl AcmeConfig {
                 // HTTP config is optional - defaults are fine
             }
             ChallengeType::Dns01 => {
+                // TODO(#130): Implement DNS-01 challenge support
                 // DNS-01 challenge is not yet implemented (Phase 2)
                 // Reject at config validation to provide a clear error at startup
                 // rather than failing at runtime during certificate renewal
                 return Err(AcmeConfigError::Invalid(
                     "DNS-01 challenge is not yet implemented. \
                      Use challenge_type = \"http-01\" for now. \
-                     DNS-01 support will be added in a future release."
+                     DNS-01 support will be added in a future release. \
+                     See: https://github.com/fzymgc-house/router-hosts/issues/130"
                         .to_string(),
                 ));
             }

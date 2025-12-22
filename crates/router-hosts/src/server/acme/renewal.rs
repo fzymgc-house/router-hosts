@@ -426,8 +426,11 @@ impl AcmeRenewalLoop {
                         .await?;
                 }
                 AcmeChallengeType::Dns01 => {
+                    // TODO(#130): Implement DNS-01 challenge support
                     return Err(RenewalError::Config(
-                        "DNS-01 challenge not yet implemented".to_string(),
+                        "DNS-01 challenge not yet implemented. \
+                         See: https://github.com/fzymgc-house/router-hosts/issues/130"
+                            .to_string(),
                     ));
                 }
                 _ => {
@@ -492,14 +495,25 @@ impl AcmeRenewalLoop {
     ) -> Result<(), RenewalError> {
         let domain = identifier_value(&identifier);
 
+        // Pre-calculate the attempt threshold where we hit max interval to avoid
+        // redundant min() comparisons. With ORDER_POLL_INTERVAL=2s, ORDER_POLL_MAX_INTERVAL=30s,
+        // and ORDER_POLL_BACKOFF_STEP=10, we hit max at 2^4=16x (32s capped to 30s) after 40 attempts.
+        let max_interval_attempt = {
+            let ratio = ORDER_POLL_MAX_INTERVAL.as_secs() / ORDER_POLL_INTERVAL.as_secs();
+            // Find smallest power of 2 >= ratio, then multiply by step
+            let power = (ratio as f64).log2().ceil() as u32;
+            power * ORDER_POLL_BACKOFF_STEP
+        };
+
         for attempt in 1..=ORDER_POLL_MAX_ATTEMPTS {
             // Use exponential backoff to reduce load during long validations
             // Interval doubles every ORDER_POLL_BACKOFF_STEP attempts, capped at max
-            let backoff_multiplier = 2u32.pow(attempt / ORDER_POLL_BACKOFF_STEP);
-            let poll_interval = std::cmp::min(
-                ORDER_POLL_INTERVAL * backoff_multiplier,
-                ORDER_POLL_MAX_INTERVAL,
-            );
+            let poll_interval = if attempt >= max_interval_attempt {
+                ORDER_POLL_MAX_INTERVAL
+            } else {
+                let backoff_multiplier = 2u32.pow(attempt / ORDER_POLL_BACKOFF_STEP);
+                ORDER_POLL_INTERVAL * backoff_multiplier
+            };
             tokio::time::sleep(poll_interval).await;
 
             // Refresh order state

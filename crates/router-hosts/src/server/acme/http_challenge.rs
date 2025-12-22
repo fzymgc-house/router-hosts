@@ -48,7 +48,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::net::TcpListener;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::{Mutex, RwLock, Semaphore};
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 /// Maximum number of concurrent connections to the HTTP challenge server.
@@ -345,8 +346,18 @@ impl HttpChallengeServer {
             }
         });
 
+        // Track spawned connection handler tasks for graceful shutdown
+        let connection_tasks: Arc<Mutex<Vec<JoinHandle<()>>>> = Arc::new(Mutex::new(Vec::new()));
+        let connection_tasks_for_server = connection_tasks.clone();
+
         let join_handle = tokio::spawn(async move {
             loop {
+                // Clean up completed tasks periodically to avoid unbounded growth
+                {
+                    let mut tasks = connection_tasks_for_server.lock().await;
+                    tasks.retain(|handle| !handle.is_finished());
+                }
+
                 tokio::select! {
                     result = listener.accept() => {
                         match result {
@@ -371,7 +382,7 @@ impl HttpChallengeServer {
                                     }
                                 };
 
-                                tokio::spawn(async move {
+                                let task_handle = tokio::spawn(async move {
                                     // Permit is held for the lifetime of this task
                                     let _permit = permit;
 
@@ -399,6 +410,9 @@ impl HttpChallengeServer {
                                         }
                                     }
                                 });
+
+                                // Track this task for graceful shutdown
+                                connection_tasks_for_server.lock().await.push(task_handle);
                             }
                             Err(e) => {
                                 error!(error = %e, "Error accepting connection");
@@ -407,6 +421,18 @@ impl HttpChallengeServer {
                     }
                     _ = &mut shutdown_rx => {
                         info!("HTTP-01 challenge server shutting down");
+                        // Wait for in-flight connection handlers to complete
+                        let tasks: Vec<JoinHandle<()>> = {
+                            let mut guard = connection_tasks_for_server.lock().await;
+                            std::mem::take(&mut *guard)
+                        };
+                        if !tasks.is_empty() {
+                            debug!(count = tasks.len(), "Waiting for in-flight connection handlers");
+                            for task in tasks {
+                                // Ignore join errors (task panics) - they're already logged
+                                let _ = task.await;
+                            }
+                        }
                         break;
                     }
                 }

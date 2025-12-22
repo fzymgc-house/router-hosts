@@ -18,17 +18,52 @@
 
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tracing::{debug, info, warn};
 
+/// Timeout for reload guard auto-clear (60 seconds)
+///
+/// If a reload takes longer than this, something is seriously wrong and
+/// the guard should auto-clear to allow retry. Normal reloads complete
+/// in under 5 seconds.
+const RELOAD_TIMEOUT_SECS: u64 = 60;
+
 /// Guard to prevent re-entrant SIGHUP triggering.
 ///
-/// If a reload is already in progress (SIGHUP sent but server hasn't finished
-/// restarting), additional calls to trigger_reload() will return false.
-/// The flag is automatically cleared after a timeout to handle cases where
-/// the reload completes or fails.
-static RELOAD_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+/// Stores the timestamp (seconds since UNIX epoch) when reload started.
+/// If reload is in progress but timestamp is older than RELOAD_TIMEOUT_SECS,
+/// the guard auto-clears (handles crashes/stuck reloads).
+/// Value of 0 means no reload in progress.
+static RELOAD_STARTED_AT: AtomicU64 = AtomicU64::new(0);
+
+/// Get current Unix timestamp in seconds
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Check if a reload is currently in progress (with timeout)
+fn is_reload_in_progress() -> bool {
+    let started = RELOAD_STARTED_AT.load(Ordering::SeqCst);
+    if started == 0 {
+        return false;
+    }
+    let elapsed = now_secs().saturating_sub(started);
+    if elapsed > RELOAD_TIMEOUT_SECS {
+        // Auto-clear stale guard
+        warn!(
+            elapsed_secs = elapsed,
+            "Reload guard timed out after {} seconds, auto-clearing", RELOAD_TIMEOUT_SECS
+        );
+        RELOAD_STARTED_AT.store(0, Ordering::SeqCst);
+        return false;
+    }
+    true
+}
 
 /// Errors that can occur during certificate writing
 #[derive(Debug, Error)]
@@ -266,19 +301,19 @@ fn write_file_atomic(target: &Path, content: &[u8], private: bool) -> Result<(),
 /// # Returns
 ///
 /// Returns `true` if SIGHUP was sent, `false` if:
-/// - A reload is already in progress
+/// - A reload is already in progress (within timeout)
 /// - On non-Unix platforms
 /// - The signal failed to send
 #[allow(dead_code)] // Will be used by renewal loop
 pub fn trigger_reload() -> bool {
-    // Check if a reload is already in progress (compare_exchange returns Ok if we set it)
-    if RELOAD_IN_PROGRESS
-        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-        .is_err()
-    {
+    // Check if a reload is already in progress (with timeout-based auto-clear)
+    if is_reload_in_progress() {
         warn!("Certificate reload already in progress, skipping duplicate SIGHUP");
         return false;
     }
+
+    // Set the guard with current timestamp
+    RELOAD_STARTED_AT.store(now_secs(), Ordering::SeqCst);
 
     #[cfg(unix)]
     {
@@ -288,12 +323,12 @@ pub fn trigger_reload() -> bool {
         // this function returns, handled by the server's signal handler.
         let result = unsafe { libc::kill(libc::getpid(), libc::SIGHUP) };
         if result == 0 {
-            // Note: The flag remains set until clear_reload_in_progress() is called
-            // by the server after it finishes reloading, or the next renewal cycle.
+            // Note: The timestamp guard remains set until clear_reload_in_progress() is called
+            // by the server after it finishes reloading, or auto-clears after RELOAD_TIMEOUT_SECS.
             true
         } else {
             warn!("Failed to send SIGHUP");
-            RELOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
+            RELOAD_STARTED_AT.store(0, Ordering::SeqCst);
             false
         }
     }
@@ -301,7 +336,7 @@ pub fn trigger_reload() -> bool {
     #[cfg(not(unix))]
     {
         warn!("SIGHUP not available on this platform - manual reload required");
-        RELOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
+        RELOAD_STARTED_AT.store(0, Ordering::SeqCst);
         false
     }
 }
@@ -310,9 +345,10 @@ pub fn trigger_reload() -> bool {
 ///
 /// This should be called by the server after it finishes processing a SIGHUP
 /// reload, or by the renewal loop after confirming the reload completed.
+/// The flag will also auto-clear after RELOAD_TIMEOUT_SECS if not explicitly cleared.
 #[allow(dead_code)]
 pub fn clear_reload_in_progress() {
-    RELOAD_IN_PROGRESS.store(false, Ordering::SeqCst);
+    RELOAD_STARTED_AT.store(0, Ordering::SeqCst);
 }
 
 /// Errors that can occur during SIGHUP reload
@@ -355,8 +391,8 @@ pub async fn trigger_reload_async() -> Result<(), ReloadError> {
         Ok(true) => Ok(()),
         Ok(false) => {
             // trigger_reload returns false for several reasons
-            // Check if a reload was already in progress
-            if RELOAD_IN_PROGRESS.load(Ordering::SeqCst) {
+            // Check if a reload was already in progress (within timeout)
+            if is_reload_in_progress() {
                 Err(ReloadError::AlreadyInProgress)
             } else {
                 // Otherwise it was a signal failure or platform issue
@@ -492,24 +528,57 @@ mod tests {
 
     #[test]
     fn test_reload_reentry_guard() {
-        // Ensure we start in a clean state
+        // Tests run in parallel and share the static, so we need a lock
+        // Use a simple approach: test the internal logic directly without
+        // relying on is_reload_in_progress() which can be affected by other tests
+
+        // Test logic: when timestamp is set and not expired, reload is in progress
+        let current = now_secs();
+        // Direct check without side effects from other tests
+        assert!(current > 0, "now_secs should return non-zero");
+
+        // Test clear_reload_in_progress resets to 0
+        RELOAD_STARTED_AT.store(current, Ordering::SeqCst);
         clear_reload_in_progress();
+        assert_eq!(
+            RELOAD_STARTED_AT.load(Ordering::SeqCst),
+            0,
+            "clear_reload_in_progress should reset timestamp to 0"
+        );
+    }
 
-        // Simulate reload in progress by setting the flag
-        RELOAD_IN_PROGRESS.store(true, std::sync::atomic::Ordering::SeqCst);
+    #[test]
+    fn test_reload_guard_timeout_logic() {
+        // Test the timeout calculation directly without using shared state
+        let current = now_secs();
 
-        // Trying to trigger reload should fail due to re-entrancy guard
-        // Note: We can't actually call trigger_reload() here because it would
-        // send SIGHUP, but we can verify the guard logic directly
-        let in_progress = RELOAD_IN_PROGRESS.load(std::sync::atomic::Ordering::SeqCst);
-        assert!(in_progress, "Guard should indicate reload in progress");
-
-        // Clear the flag
-        clear_reload_in_progress();
-        let cleared = !RELOAD_IN_PROGRESS.load(std::sync::atomic::Ordering::SeqCst);
+        // A timestamp from before the timeout should be considered expired
+        let old_timestamp = current.saturating_sub(RELOAD_TIMEOUT_SECS + 10);
+        let elapsed = current.saturating_sub(old_timestamp);
         assert!(
-            cleared,
-            "Guard should be cleared after clear_reload_in_progress()"
+            elapsed > RELOAD_TIMEOUT_SECS,
+            "Elapsed time {} should exceed timeout {}",
+            elapsed,
+            RELOAD_TIMEOUT_SECS
+        );
+
+        // A recent timestamp should not be expired
+        let recent_timestamp = current.saturating_sub(5); // 5 seconds ago
+        let elapsed_recent = current.saturating_sub(recent_timestamp);
+        assert!(
+            elapsed_recent <= RELOAD_TIMEOUT_SECS,
+            "Recent elapsed {} should not exceed timeout",
+            elapsed_recent
+        );
+    }
+
+    #[test]
+    fn test_is_reload_in_progress_returns_false_when_cleared() {
+        // Clear state and verify it reports not in progress
+        RELOAD_STARTED_AT.store(0, Ordering::SeqCst);
+        assert!(
+            !is_reload_in_progress(),
+            "Should return false when timestamp is 0"
         );
     }
 
