@@ -904,12 +904,10 @@ challenge_type = "dns-01"
 create_url = "https://dns-api.example.com/records"
 # DELETE to remove record, {record_id} replaced with ID from create response
 delete_url = "https://dns-api.example.com/records/{record_id}"
-timeout_seconds = 30
-propagation_delay_seconds = 120  # Wait for DNS propagation
+timeout_seconds = 30  # Request timeout (propagation delay is fixed at 120s)
 
 [acme.dns.webhook.headers]
 Authorization = "Bearer ${DNS_API_TOKEN}"
-Content-Type = "application/json"
 ```
 
 ### Environment Variable Expansion
