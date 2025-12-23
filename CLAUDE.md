@@ -111,7 +111,7 @@ Verify rollback creates backup snapshot and restores state correctly.
 **Coverage Rules:**
 - All new code must include tests
 - PRs that decrease coverage below 80% will be rejected
-- Use `cargo tarpaulin` or `cargo llvm-cov` to measure coverage
+- Use `cargo llvm-cov nextest` to measure coverage (preferred)
 - Coverage is measured per-crate and workspace-wide
 
 **Testing Strategy:**
@@ -129,17 +129,20 @@ Verify rollback creates backup snapshot and restores state correctly.
 
 **Coverage Checking:**
 ```bash
-# Install coverage tool
-cargo install cargo-tarpaulin
+# Install coverage tools (nextest + llvm-cov)
+cargo install cargo-nextest cargo-llvm-cov
 
-# Run coverage check
-cargo tarpaulin --workspace --out Html --output-dir coverage
+# Run coverage check (preferred - uses task)
+task test:coverage
+
+# Or manually:
+cargo llvm-cov nextest --workspace --exclude router-hosts-e2e --html --output-dir coverage
 
 # View coverage report
-open coverage/index.html
+open coverage/html/index.html
 
 # Fail if coverage < 80%
-cargo tarpaulin --workspace --fail-under 80
+task test:coverage:ci
 ```
 
 **Exemptions (excluded from coverage calculation):**
@@ -148,7 +151,7 @@ cargo tarpaulin --workspace --fail-under 80
 - `client/grpc.rs` - gRPC client wrapper (requires live server, tested by E2E)
 - `server/mod.rs` - gRPC server impl (requires network binding, tested by E2E)
 - Trivial getters/setters (if any exist)
-- Mark untestable code with `#[cfg(not(tarpaulin_include))]`
+- Mark untestable code with `#[cfg(not(coverage))]` or use `--ignore-filename-regex` in llvm-cov
 
 ## Project Overview
 
@@ -201,19 +204,29 @@ To temporarily disable Renovate, set `"enabled": false` in `renovate.json` or cl
 
 ## Build and Development Commands
 
-### Using Task (Recommended)
+### Using Task (REQUIRED)
 
-This project uses [Taskfile](https://taskfile.dev/) to orchestrate builds:
+**IMPORTANT:** This project uses [Taskfile](https://taskfile.dev/) to orchestrate all build, test, and E2E operations. You MUST use `task` commands instead of direct `cargo` invocations. This ensures:
+- Consistent environment variables for E2E tests
+- Proper Docker image tagging for local testing
+- Correct tool configurations (nextest, llvm-cov)
+- Cross-platform compatibility (macOS/Linux)
 
 ```bash
 task build          # Build all crates (debug)
 task build:release  # Build all crates (release)
-task test           # Unit + integration tests
+task test           # Unit + integration tests (nextest)
+task test:all       # All tests including doc tests
+task test:coverage  # Coverage report (llvm-cov)
+task test:coverage:ci # Coverage with 80% threshold
 task lint           # All linters (clippy, fmt, buf)
 task fmt            # Format all code
 task e2e            # E2E acceptance tests
+task e2e:quick      # E2E without rebuild
 task ci             # Full CI pipeline locally
 ```
+
+**DO NOT** run `cargo test`, `cargo tarpaulin`, or direct E2E commands. Always use `task` commands.
 
 ### Build
 ```bash
@@ -230,27 +243,30 @@ cargo build --release
 
 ### Testing
 ```bash
-# Run all tests
-cargo test
+# Run all tests with nextest (preferred - faster)
+task test
+
+# Or manually with nextest
+cargo nextest run --workspace --exclude router-hosts-e2e
 
 # Run tests for specific crate
-cargo test -p router-hosts-common
-cargo test -p router-hosts
+cargo nextest run -p router-hosts-common
+cargo nextest run -p router-hosts
 
 # Run specific test
-cargo test test_name
+cargo nextest run -E 'test(test_name)'
 
 # Run with logging
-RUST_LOG=debug cargo test test_name -- --nocapture
+RUST_LOG=debug cargo nextest run -E 'test(test_name)'
 
-# Run tests with coverage (requires cargo-tarpaulin)
-cargo tarpaulin --workspace --out Html --output-dir coverage
+# Run tests with coverage (uses llvm-cov)
+task test:coverage
 
 # Fail if coverage drops below 80%
-cargo tarpaulin --workspace --fail-under 80
+task test:coverage:ci
 
 # Run tests in release mode (for performance testing)
-cargo test --release
+cargo nextest run --release
 ```
 
 ### E2E Tests
@@ -331,13 +347,13 @@ cargo run -- server --config server.toml
 cargo fmt
 
 # 2. Run all tests
-cargo test --workspace
+task test
 
 # 3. Run clippy with strict settings
 cargo clippy --workspace -- -D warnings
 
 # 4. Check test coverage
-cargo tarpaulin --workspace --fail-under 80
+task test:coverage:ci
 
 # 5. Lint and format protobuf
 buf lint && buf format --diff --exit-code
@@ -346,13 +362,9 @@ buf lint && buf format --diff --exit-code
 cargo audit
 ```
 
-**Or use this one-liner:**
+**Or use the task:**
 ```bash
-cargo fmt && \
-cargo test --workspace && \
-cargo clippy --workspace -- -D warnings && \
-buf lint && \
-buf format --diff --exit-code
+task pre-commit  # Runs fmt, lint, test
 ```
 
 ### CI/CD Integration
