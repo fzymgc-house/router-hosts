@@ -37,7 +37,13 @@ fn serialize_json<T: serde::Serialize>(
 ///
 /// chrono 0.4.34+ changed `timestamp_micros()` to return `i64` directly
 /// (previously returned `Option<i64>` via `timestamp_micros_opt()`).
-/// Valid range: 1970-01-01 00:00:00 UTC to 294247-01-10 04:00:54 UTC
+///
+/// # Panics
+///
+/// Panics if the timestamp is outside the representable range for i64
+/// microseconds since Unix epoch. Valid range: 1970-01-01 00:00:00 UTC
+/// to 294247-01-10 04:00:54 UTC. In practice, this is unreachable for
+/// any realistic timestamps.
 fn timestamp_to_micros(ts: &DateTime<Utc>) -> i64 {
     ts.timestamp_micros()
 }

@@ -8,7 +8,7 @@
 //!
 //! Requires PostgreSQL 12+ (tested with PostgreSQL 17). The schema uses
 //! `DISTINCT ON` for "last non-null value" patterns because PostgreSQL
-//! does not support `IGNORE NULLS` in window functions until version 19.
+//! does not currently support `IGNORE NULLS` in window functions.
 //!
 //! # Architecture
 //!
@@ -44,6 +44,30 @@
 //! - Connection pooling for concurrent access
 //! - Standard PostgreSQL SSL via sslmode parameter
 //! - Better concurrent write handling than SQLite
+//!
+//! # Performance Characteristics
+//!
+//! The `host_entries_current` view uses 7 `DISTINCT ON` CTEs (one per field)
+//! joined together. Unlike SQLite's correlated subqueries, PostgreSQL's query
+//! planner can leverage indexes on `(aggregate_id, event_version)` for each CTE.
+//!
+//! Duplicate entry detection queries the `host_entries_current` view, which
+//! materializes the CTEs and applies filters. This scales better than SQLite
+//! for larger datasets but still requires scanning all active aggregates.
+//!
+//! **Ballpark estimates (single-instance):**
+//! - < 1,000 hosts: < 10ms (instant)
+//! - ~10,000 hosts: ~50ms (acceptable)
+//! - ~100,000 hosts: ~500ms (consider caching or read replicas)
+//!
+//! PostgreSQL is suitable for deployments with 10,000+ hosts or requiring
+//! concurrent multi-instance access. For single-instance small deployments
+//! (< 1,000 hosts), SQLite or DuckDB offer simpler operational overhead.
+//!
+//! # Security
+//!
+//! All queries use sqlx's prepared statement bindings to prevent SQL injection.
+//! Connection SSL is controlled via the `sslmode` URL parameter.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -140,7 +164,7 @@ impl PostgresStorage {
     ///
     /// This is primarily for internal use and testing. Direct pool access
     /// bypasses the storage abstraction layer.
-    pub fn pool(&self) -> &PgPool {
+    pub(crate) fn pool(&self) -> &PgPool {
         &self.pool
     }
 }

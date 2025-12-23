@@ -105,8 +105,7 @@ SELECT
 FROM latest_events le
 INNER JOIN host_events e ON e.aggregate_id = le.aggregate_id AND e.rowid = le.max_rowid
 INNER JOIN latest_event_details led ON led.aggregate_id = e.aggregate_id
-WHERE led.latest_event_type != 'HostDeleted'
-GROUP BY e.aggregate_id;
+WHERE led.latest_event_type != 'HostDeleted';
 
 -- Read model: Complete history including deleted entries
 CREATE VIEW IF NOT EXISTS host_entries_history AS
