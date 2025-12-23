@@ -2,7 +2,7 @@
 
 **Date:** 2025-12-22
 **Issue:** #130
-**Status:** In Progress
+**Status:** Implemented (PR #137, merged 2025-12-23)
 
 ## Overview
 

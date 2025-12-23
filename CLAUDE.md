@@ -862,11 +862,52 @@ enabled = true
 directory_url = "https://acme-v02.api.letsencrypt.org/directory"  # Or staging URL for testing
 email = "admin@example.com"
 domains = ["router.example.com", "api.example.com"]
-challenge_type = "http-01"  # or "dns-01" for wildcard certs (Phase 2)
+challenge_type = "http-01"  # or "dns-01" for wildcard certs and internal servers
 
 [acme.renewal]
 days_before_expiry = 30     # Renew when cert expires within 30 days
 jitter_minutes = 60         # Random delay to prevent thundering herd
+```
+
+### DNS-01 Challenge Configuration
+
+For DNS-01 challenges, configure one DNS provider. Supports Cloudflare (built-in) or any
+DNS API via webhook.
+
+**Cloudflare Provider:**
+
+```toml
+[acme]
+enabled = true
+directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+email = "admin@example.com"
+domains = ["*.example.com", "example.com"]  # Wildcard requires DNS-01
+challenge_type = "dns-01"
+
+[acme.dns.cloudflare]
+api_token = "${CF_API_TOKEN}"  # Token with Zone:DNS:Edit permission
+zone_id = "abc123"             # Optional - auto-detected from domain if omitted
+```
+
+**Webhook Provider (generic):**
+
+```toml
+[acme]
+enabled = true
+directory_url = "https://acme-v02.api.letsencrypt.org/directory"
+email = "admin@example.com"
+domains = ["internal.example.com"]
+challenge_type = "dns-01"
+
+[acme.dns.webhook]
+# POST to create TXT record, expects {"id": "record-id"} response
+create_url = "https://dns-api.example.com/records"
+# DELETE to remove record, {record_id} replaced with ID from create response
+delete_url = "https://dns-api.example.com/records/{record_id}"
+timeout_seconds = 30  # Request timeout (propagation delay is fixed at 120s)
+
+[acme.dns.webhook.headers]
+Authorization = "Bearer ${DNS_API_TOKEN}"
 ```
 
 ### Environment Variable Expansion
