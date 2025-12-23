@@ -37,6 +37,11 @@ This project follows **trunk-based development** practices:
 - CI must pass before merge (all tests, lints, formatting)
 - Squash merge is preferred to keep `main` history clean
 
+**Code Review:**
+- When asked to "request a review", use the `/review-pr` skill or `pr-review-toolkit:review-pr` agent
+- Do NOT use `gh pr edit --add-reviewer` to request reviews from GitHub users
+- AI-powered review provides immediate, thorough feedback without waiting for human availability
+
 **Release Strategy:**
 - Tag releases from `main`: `v0.1.0`, `v0.2.0`, etc.
 - Use semantic versioning
