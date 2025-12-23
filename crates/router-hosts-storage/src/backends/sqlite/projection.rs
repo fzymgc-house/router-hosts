@@ -250,7 +250,7 @@ impl SqliteStorage {
     ///
     /// Returns `StorageError::Query` if the database operation fails.
     ///
-    /// # Safety
+    /// # Security
     ///
     /// Uses dynamic WHERE clause construction with parameterized values only - no user input
     /// is interpolated into SQL. All filter patterns are bound via `?` placeholders.
@@ -259,7 +259,7 @@ impl SqliteStorage {
         filter: HostFilter,
     ) -> Result<Vec<HostEntry>, StorageError> {
         // Build dynamic WHERE clause and params
-        // SAFETY: All user input goes through params vector (parameterized), not string interpolation
+        // Security: All user input goes through params vector (parameterized), not string interpolation
         let mut where_clauses: Vec<String> = Vec::new();
         let mut params: Vec<String> = Vec::new();
 
@@ -277,7 +277,16 @@ impl SqliteStorage {
         }
 
         // For tag filtering, check if any tag appears in the JSON array
+        // Limit tag count to prevent query explosion from unbounded OR conditions
+        const MAX_FILTER_TAGS: usize = 20;
         if let Some(tags) = &filter.tags {
+            if tags.len() > MAX_FILTER_TAGS {
+                return Err(StorageError::InvalidData(format!(
+                    "too many filter tags: {} (max {})",
+                    tags.len(),
+                    MAX_FILTER_TAGS
+                )));
+            }
             if !tags.is_empty() {
                 // Build OR conditions for each tag
                 let tag_conditions: Vec<String> =

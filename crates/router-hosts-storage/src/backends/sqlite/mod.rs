@@ -27,9 +27,10 @@
 //! the current state of each host from the event log. This scales as O(n × m × 7)
 //! where n = number of hosts and m = average events per host.
 //!
-//! Additionally, duplicate entry detection queries the `host_entries_current` view
-//! which is not indexable, resulting in a full table scan. This is acceptable for
-//! small datasets but may become noticeable with many hosts.
+//! Additionally, duplicate entry detection (see `event_store.rs:append_event_impl`)
+//! queries the `host_entries_current` view which is not indexable, resulting in a
+//! full table scan. This is acceptable for small datasets but may become noticeable
+//! with many hosts.
 //!
 //! **Ballpark estimates:**
 //! - < 100 hosts: < 10ms (instant)

@@ -631,9 +631,10 @@ impl AcmeRenewalLoop {
                 cert_path = %self.tls_paths.cert_path.display(),
                 "Failed to trigger certificate reload via SIGHUP - server may be using old certificate. Manual restart may be required."
             );
+            info!("Certificate renewed successfully but server reload failed - manual restart required");
+        } else {
+            info!("Certificate successfully renewed and server reloaded");
         }
-
-        info!("Certificate successfully renewed and server reloaded");
 
         Ok(())
     }
