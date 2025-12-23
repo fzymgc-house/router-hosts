@@ -2,7 +2,7 @@
 
 **Date:** 2025-12-19
 **Issue:** #15
-**Status:** Approved
+**Status:** Implemented (PR #126 Phase 1 HTTP-01, PR #137 Phase 2 DNS-01)
 
 ## Overview
 
