@@ -64,6 +64,12 @@ struct EventData {
 /// Contains typed column values extracted from a `HostEvent` plus the
 /// serialized metadata JSON. The timestamp is stored as microseconds
 /// since epoch (i64) rather than `DateTime<Utc>` for direct database binding.
+///
+/// # Timestamp Range
+///
+/// Timestamps are stored as i64 microseconds since Unix epoch (1970-01-01).
+/// Valid range: 1970-01-01 00:00:00 UTC to 294247-01-10 04:00:54 UTC
+/// (i64::MAX microseconds). This exceeds any practical deployment lifetime.
 struct ExtractedEventData {
     ip_address: Option<String>,
     hostname: Option<String>,
@@ -121,6 +127,8 @@ impl SqliteStorage {
         .await
         .map_err(|e| StorageError::query("version check failed", e))?;
 
+        // Transaction is automatically rolled back when dropped on early return.
+        // sqlx transactions implement Drop, so no explicit rollback is needed.
         if expected_version != current_version {
             return Err(StorageError::ConcurrentWriteConflict {
                 aggregate_id: aggregate_id.to_string(),
@@ -201,6 +209,8 @@ impl SqliteStorage {
         .await
         .map_err(|e| StorageError::query("version check failed", e))?;
 
+        // Transaction is automatically rolled back when dropped on early return.
+        // sqlx transactions implement Drop, so no explicit rollback is needed.
         if expected_version != current_version {
             return Err(StorageError::ConcurrentWriteConflict {
                 aggregate_id: aggregate_id.to_string(),

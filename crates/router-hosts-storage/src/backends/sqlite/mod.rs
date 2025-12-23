@@ -302,4 +302,61 @@ mod tests {
         // Verify file was created
         assert!(db_path.exists());
     }
+
+    #[tokio::test]
+    async fn test_pool_exhaustion_returns_error() {
+        // Create a pool with only 1 connection to make exhaustion testable
+        let url = "sqlite::memory:";
+        let pool = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(100)) // Short timeout for test
+            .connect(url)
+            .await
+            .expect("failed to create pool");
+
+        // Hold the only connection
+        let _held_conn = pool.acquire().await.expect("failed to acquire connection");
+
+        // Try to acquire another - should timeout with an error
+        let result = pool.acquire().await;
+        assert!(
+            result.is_err(),
+            "Should fail when pool is exhausted and timeout expires"
+        );
+
+        // Verify the error is a timeout/pool exhaustion error
+        let err = result.unwrap_err();
+        let err_string = err.to_string().to_lowercase();
+        assert!(
+            err_string.contains("timed out") || err_string.contains("timeout"),
+            "Error should indicate timeout: {}",
+            err_string
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pool_releases_connection_after_drop() {
+        let url = "sqlite::memory:";
+        let pool = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(1)
+            .acquire_timeout(Duration::from_millis(500))
+            .connect(url)
+            .await
+            .expect("failed to create pool");
+
+        // Acquire and release a connection
+        {
+            let _conn = pool.acquire().await.expect("failed to acquire connection");
+            // Connection is dropped here
+        }
+
+        // Should be able to acquire again
+        let result = pool.acquire().await;
+        assert!(
+            result.is_ok(),
+            "Should be able to acquire after previous connection is dropped"
+        );
+    }
 }

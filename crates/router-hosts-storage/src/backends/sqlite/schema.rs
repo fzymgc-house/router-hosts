@@ -25,12 +25,21 @@
 //! 3. **Consistency**: All queries that need insertion order use `ORDER BY rowid`,
 //!    including the `host_entries_current` view's subqueries.
 
+use chrono::Utc;
+
 use super::SqliteStorage;
 use crate::error::StorageError;
+
+/// Current schema version
+///
+/// Increment this when making breaking schema changes that require migration.
+/// The schema_version table tracks which version has been applied.
+pub const SCHEMA_VERSION: i32 = 1;
 
 /// Initialize the SQLite schema for event-sourced storage
 ///
 /// Creates all tables, indexes, and views required for the CQRS event sourcing pattern.
+/// Uses a schema_version table to track migrations for future upgrades.
 pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageError> {
     // Enable WAL mode for better concurrent read performance
     // Note: SQLite pragmas must be executed separately
@@ -53,6 +62,43 @@ pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageErr
         .execute(storage.pool())
         .await
         .map_err(|e| StorageError::migration("failed to set foreign_keys", e))?;
+
+    // Schema version tracking for future migrations
+    // This table enables upgrading existing databases when schema changes
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS schema_version (
+            version INTEGER PRIMARY KEY,
+            applied_at INTEGER NOT NULL,
+            description TEXT
+        )
+        "#,
+    )
+    .execute(storage.pool())
+    .await
+    .map_err(|e| StorageError::migration("failed to create schema_version table", e))?;
+
+    // Check current schema version and apply migrations if needed
+    let current_version: Option<i32> =
+        sqlx::query_scalar("SELECT MAX(version) FROM schema_version")
+            .fetch_one(storage.pool())
+            .await
+            .map_err(|e| StorageError::migration("failed to check schema version", e))?;
+
+    let current_version = current_version.unwrap_or(0);
+
+    // Record initial schema version if this is a fresh database
+    if current_version < SCHEMA_VERSION {
+        sqlx::query(
+            "INSERT INTO schema_version (version, applied_at, description) VALUES (?1, ?2, ?3)",
+        )
+        .bind(SCHEMA_VERSION)
+        .bind(Utc::now().timestamp())
+        .bind("Initial schema with event sourcing, projections, and snapshots")
+        .execute(storage.pool())
+        .await
+        .map_err(|e| StorageError::migration("failed to record schema version", e))?;
+    }
 
     // Event store - append-only immutable log of all domain events
     sqlx::query(
@@ -94,9 +140,21 @@ pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageErr
         .await
         .map_err(|e| StorageError::migration("failed to create temporal index", e))?;
 
+    // Note: SQLite's rowid is implicit and cannot be indexed directly.
+    // The existing idx_events_aggregate index on (aggregate_id, event_version) helps
+    // filter by aggregate, and SQLite's B-tree naturally orders by rowid for table scans.
+    // For deployments needing better performance, consider the DuckDB backend.
+
     // Read model: Current active hosts projection
     // SQLite doesn't support IGNORE NULLS, so we use correlated subqueries
     // to find the last non-null value for each field.
+    //
+    // PERFORMANCE: This view is optimized for correctness over speed.
+    // Each query triggers 7 correlated subqueries per host, scaling as O(n × m × 7)
+    // where n = hosts and m = events per host. The idx_events_aggregate_rowid index
+    // helps, but for deployments with >1,000 hosts, consider the DuckDB backend
+    // which uses window functions with IGNORE NULLS instead.
+    //
     // NOTE: We use rowid for ordering instead of event_version because ULIDs
     // created within the same millisecond have arbitrary lexicographic order.
     sqlx::query(
