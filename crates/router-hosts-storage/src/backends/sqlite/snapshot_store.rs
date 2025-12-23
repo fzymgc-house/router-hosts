@@ -8,11 +8,26 @@
 //! - Apply retention policies (max count and max age)
 
 use chrono::{DateTime, Utc};
-use rusqlite::OptionalExtension;
 
 use super::SqliteStorage;
 use crate::error::StorageError;
 use crate::types::{Snapshot, SnapshotId, SnapshotMetadata};
+
+/// Row type for full snapshot queries
+/// Fields: (snapshot_id, created_at, hosts_content, entry_count, trigger, name, event_log_position)
+type SnapshotRow = (
+    String,
+    i64,
+    String,
+    i32,
+    String,
+    Option<String>,
+    Option<i64>,
+);
+
+/// Row type for snapshot metadata queries (no hosts_content)
+/// Fields: (snapshot_id, created_at, entry_count, trigger, name)
+type SnapshotMetadataRow = (String, i64, i32, String, Option<String>);
 
 impl SqliteStorage {
     /// Save a snapshot to the store
@@ -21,39 +36,31 @@ impl SqliteStorage {
     ///
     /// Returns `StorageError::Query` if the database operation fails.
     pub(super) async fn save_snapshot_impl(&self, snapshot: Snapshot) -> Result<(), StorageError> {
-        let conn = self.conn();
-
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-
-            conn.execute(
-                r#"
-                INSERT INTO snapshots (
-                    snapshot_id,
-                    created_at,
-                    hosts_content,
-                    entry_count,
-                    trigger,
-                    name,
-                    event_log_position
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-                "#,
-                rusqlite::params![
-                    snapshot.snapshot_id.as_str(),
-                    snapshot.created_at.timestamp_micros(),
-                    snapshot.hosts_content,
-                    snapshot.entry_count,
-                    snapshot.trigger,
-                    snapshot.name,
-                    snapshot.event_log_position,
-                ],
-            )
-            .map_err(|e| StorageError::query("failed to insert snapshot", e))?;
-
-            Ok(())
-        })
+        sqlx::query(
+            r#"
+            INSERT INTO snapshots (
+                snapshot_id,
+                created_at,
+                hosts_content,
+                entry_count,
+                trigger,
+                name,
+                event_log_position
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "#,
+        )
+        .bind(snapshot.snapshot_id.as_str())
+        .bind(snapshot.created_at.timestamp_micros())
+        .bind(&snapshot.hosts_content)
+        .bind(snapshot.entry_count)
+        .bind(&snapshot.trigger)
+        .bind(&snapshot.name)
+        .bind(snapshot.event_log_position)
+        .execute(self.pool())
         .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during save_snapshot", e))?
+        .map_err(|e| StorageError::query("failed to insert snapshot", e))?;
+
+        Ok(())
     }
 
     /// Get a snapshot by ID
@@ -67,76 +74,59 @@ impl SqliteStorage {
         snapshot_id: &SnapshotId,
     ) -> Result<Snapshot, StorageError> {
         let snapshot_id_str = snapshot_id.as_str().to_string();
-        let conn = self.conn();
 
-        tokio::task::spawn_blocking(move || {
-            let result = conn
-                .lock()
-                .query_row(
-                    r#"
-                    SELECT
-                        snapshot_id,
-                        created_at,
-                        hosts_content,
-                        entry_count,
-                        trigger,
-                        name,
-                        event_log_position
-                    FROM snapshots
-                    WHERE snapshot_id = ?1
-                    "#,
-                    rusqlite::params![&snapshot_id_str],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,         // snapshot_id
-                            row.get::<_, i64>(1)?,            // created_at
-                            row.get::<_, String>(2)?,         // hosts_content
-                            row.get::<_, i32>(3)?,            // entry_count
-                            row.get::<_, String>(4)?,         // trigger
-                            row.get::<_, Option<String>>(5)?, // name
-                            row.get::<_, Option<i64>>(6)?,    // event_log_position
+        let row: Option<SnapshotRow> = sqlx::query_as(
+            r#"
+                SELECT
+                    snapshot_id,
+                    created_at,
+                    hosts_content,
+                    entry_count,
+                    trigger,
+                    name,
+                    event_log_position
+                FROM snapshots
+                WHERE snapshot_id = ?1
+                "#,
+        )
+        .bind(&snapshot_id_str)
+        .fetch_optional(self.pool())
+        .await
+        .map_err(|e| StorageError::query("failed to get snapshot", e))?;
+
+        match row {
+            None => Err(StorageError::NotFound {
+                entity_type: "snapshot",
+                id: snapshot_id_str,
+            }),
+            Some((
+                snapshot_id_from_db,
+                created_at_micros,
+                hosts_content,
+                entry_count,
+                trigger,
+                name,
+                event_log_position,
+            )) => {
+                let created_at =
+                    DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
+                        StorageError::InvalidData(format!(
+                            "invalid created_at timestamp: {}",
+                            created_at_micros
                         ))
-                    },
-                )
-                .optional()
-                .map_err(|e| StorageError::query("failed to get snapshot", e))?;
+                    })?;
 
-            match result {
-                None => Err(StorageError::NotFound {
-                    entity_type: "snapshot",
-                    id: snapshot_id_str,
-                }),
-                Some((
-                    snapshot_id_from_db,
-                    created_at_micros,
+                Ok(Snapshot {
+                    snapshot_id: SnapshotId::from(snapshot_id_from_db),
+                    created_at,
                     hosts_content,
                     entry_count,
                     trigger,
                     name,
                     event_log_position,
-                )) => {
-                    let created_at = DateTime::from_timestamp_micros(created_at_micros)
-                        .ok_or_else(|| {
-                            StorageError::InvalidData(format!(
-                                "invalid created_at timestamp: {}",
-                                created_at_micros
-                            ))
-                        })?;
-
-                    Ok(Snapshot {
-                        snapshot_id: SnapshotId::from(snapshot_id_from_db),
-                        created_at,
-                        hosts_content,
-                        entry_count,
-                        trigger,
-                        name,
-                        event_log_position,
-                    })
-                }
+                })
             }
-        })
-        .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during get_snapshot", e))?
+        }
     }
 
     /// List snapshots with optional pagination (metadata only, no content)
@@ -156,72 +146,51 @@ impl SqliteStorage {
         limit: Option<u32>,
         offset: Option<u32>,
     ) -> Result<Vec<SnapshotMetadata>, StorageError> {
-        let conn = self.conn();
+        // Convert Option<u32> to i64 for SQLite binding
+        // Use i64::MAX for "unlimited" since SQLite doesn't support NULL for LIMIT
+        let limit_param: i64 = limit.map_or(i64::MAX, i64::from);
+        let offset_param: i64 = offset.map_or(0, i64::from);
 
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-
-            // SQLite handles LIMIT -1 as unlimited, but we use a large value for consistency
-            let query = r#"
-                SELECT
-                    snapshot_id,
-                    created_at,
-                    entry_count,
-                    trigger,
-                    name
-                FROM snapshots
-                ORDER BY created_at DESC
-                LIMIT ?1
-                OFFSET ?2
-            "#;
-
-            let mut stmt = conn
-                .prepare(query)
-                .map_err(|e| StorageError::query("failed to prepare list query", e))?;
-
-            // Convert Option<u32> to i64 for SQLite binding
-            // Use i64::MAX for "unlimited" since SQLite doesn't support NULL for LIMIT
-            let limit_param: i64 = limit.map_or(i64::MAX, i64::from);
-            let offset_param: i64 = offset.map_or(0, i64::from);
-
-            let rows = stmt
-                .query_map(rusqlite::params![limit_param, offset_param], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,         // snapshot_id
-                        row.get::<_, i64>(1)?,            // created_at
-                        row.get::<_, i32>(2)?,            // entry_count
-                        row.get::<_, String>(3)?,         // trigger
-                        row.get::<_, Option<String>>(4)?, // name
-                    ))
-                })
-                .map_err(|e| StorageError::query("failed to query snapshots", e))?;
-
-            let mut snapshots = Vec::new();
-            for row_result in rows {
-                let (snapshot_id, created_at_micros, entry_count, trigger, name) = row_result
-                    .map_err(|e| StorageError::query("failed to read snapshot row", e))?;
-
-                let created_at =
-                    DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid created_at timestamp: {}",
-                            created_at_micros
-                        ))
-                    })?;
-
-                snapshots.push(SnapshotMetadata {
-                    snapshot_id: SnapshotId::from(snapshot_id),
-                    created_at,
-                    entry_count,
-                    trigger,
-                    name,
-                });
-            }
-
-            Ok(snapshots)
-        })
+        let rows: Vec<SnapshotMetadataRow> = sqlx::query_as(
+            r#"
+            SELECT
+                snapshot_id,
+                created_at,
+                entry_count,
+                trigger,
+                name
+            FROM snapshots
+            ORDER BY created_at DESC
+            LIMIT ?1
+            OFFSET ?2
+            "#,
+        )
+        .bind(limit_param)
+        .bind(offset_param)
+        .fetch_all(self.pool())
         .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during list_snapshots", e))?
+        .map_err(|e| StorageError::query("failed to query snapshots", e))?;
+
+        let mut snapshots = Vec::new();
+        for (snapshot_id, created_at_micros, entry_count, trigger, name) in rows {
+            let created_at =
+                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
+                    StorageError::InvalidData(format!(
+                        "invalid created_at timestamp: {}",
+                        created_at_micros
+                    ))
+                })?;
+
+            snapshots.push(SnapshotMetadata {
+                snapshot_id: SnapshotId::from(snapshot_id),
+                created_at,
+                entry_count,
+                trigger,
+                name,
+            });
+        }
+
+        Ok(snapshots)
     }
 
     /// Delete a snapshot by ID
@@ -235,30 +204,21 @@ impl SqliteStorage {
         snapshot_id: &SnapshotId,
     ) -> Result<(), StorageError> {
         let snapshot_id_str = snapshot_id.as_str().to_string();
-        let conn = self.conn();
 
-        tokio::task::spawn_blocking(move || {
-            let affected_rows = conn
-                .lock()
-                .execute(
-                    "DELETE FROM snapshots WHERE snapshot_id = ?1",
-                    rusqlite::params![&snapshot_id_str],
-                )
-                .map_err(|e| StorageError::query("failed to delete snapshot", e))?;
+        let result = sqlx::query("DELETE FROM snapshots WHERE snapshot_id = ?1")
+            .bind(&snapshot_id_str)
+            .execute(self.pool())
+            .await
+            .map_err(|e| StorageError::query("failed to delete snapshot", e))?;
 
-            if affected_rows == 0 {
-                Err(StorageError::NotFound {
-                    entity_type: "snapshot",
-                    id: snapshot_id_str,
-                })
-            } else {
-                Ok(())
-            }
-        })
-        .await
-        .map_err(|e| {
-            StorageError::connection("spawn_blocking panicked during delete_snapshot", e)
-        })?
+        if result.rows_affected() == 0 {
+            Err(StorageError::NotFound {
+                entity_type: "snapshot",
+                id: snapshot_id_str,
+            })
+        } else {
+            Ok(())
+        }
     }
 
     /// Apply retention policy to snapshots
@@ -278,65 +238,56 @@ impl SqliteStorage {
         max_count: Option<usize>,
         max_age_days: Option<u32>,
     ) -> Result<usize, StorageError> {
-        let conn = self.conn();
+        let mut total_deleted: usize = 0;
 
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-            let mut total_deleted: usize = 0;
+        // Apply max count policy (delete oldest snapshots beyond limit)
+        if let Some(max_count) = max_count {
+            if max_count > 0 {
+                // SQLite subquery to find snapshots beyond the retention limit
+                let result = sqlx::query(
+                    r#"
+                    DELETE FROM snapshots
+                    WHERE snapshot_id NOT IN (
+                        SELECT snapshot_id
+                        FROM snapshots
+                        ORDER BY created_at DESC
+                        LIMIT ?1
+                    )
+                    "#,
+                )
+                .bind(max_count as i64)
+                .execute(self.pool())
+                .await
+                .map_err(|e| {
+                    StorageError::query("failed to apply max_count retention policy", e)
+                })?;
 
-            // Apply max count policy (delete oldest snapshots beyond limit)
-            if let Some(max_count) = max_count {
-                if max_count > 0 {
-                    // SQLite subquery to find snapshots beyond the retention limit
-                    let deleted = conn
-                        .execute(
-                            r#"
-                            DELETE FROM snapshots
-                            WHERE snapshot_id NOT IN (
-                                SELECT snapshot_id
-                                FROM snapshots
-                                ORDER BY created_at DESC
-                                LIMIT ?1
-                            )
-                            "#,
-                            rusqlite::params![max_count as i64],
-                        )
-                        .map_err(|e| {
-                            StorageError::query("failed to apply max_count retention policy", e)
-                        })?;
-
-                    total_deleted += deleted;
-                }
+                total_deleted += result.rows_affected() as usize;
             }
+        }
 
-            // Apply max age policy (delete snapshots older than N days)
-            if let Some(max_age_days) = max_age_days {
-                if max_age_days > 0 {
-                    let cutoff_time = Utc::now() - chrono::Duration::days(i64::from(max_age_days));
-                    let cutoff_micros = cutoff_time.timestamp_micros();
+        // Apply max age policy (delete snapshots older than N days)
+        if let Some(max_age_days) = max_age_days {
+            if max_age_days > 0 {
+                let cutoff_time = Utc::now() - chrono::Duration::days(i64::from(max_age_days));
+                let cutoff_micros = cutoff_time.timestamp_micros();
 
-                    let deleted = conn
-                        .execute(
-                            r#"
-                            DELETE FROM snapshots
-                            WHERE created_at < ?1
-                            "#,
-                            rusqlite::params![cutoff_micros],
-                        )
-                        .map_err(|e| {
-                            StorageError::query("failed to apply max_age retention policy", e)
-                        })?;
+                let result = sqlx::query(
+                    r#"
+                    DELETE FROM snapshots
+                    WHERE created_at < ?1
+                    "#,
+                )
+                .bind(cutoff_micros)
+                .execute(self.pool())
+                .await
+                .map_err(|e| StorageError::query("failed to apply max_age retention policy", e))?;
 
-                    total_deleted += deleted;
-                }
+                total_deleted += result.rows_affected() as usize;
             }
+        }
 
-            Ok(total_deleted)
-        })
-        .await
-        .map_err(|e| {
-            StorageError::connection("spawn_blocking panicked during apply_retention_policy", e)
-        })?
+        Ok(total_deleted)
     }
 }
 

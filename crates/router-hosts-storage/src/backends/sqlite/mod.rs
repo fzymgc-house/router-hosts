@@ -1,4 +1,4 @@
-//! SQLite storage backend implementation
+//! SQLite storage backend implementation using sqlx
 //!
 //! This module provides event-sourced storage using SQLite as the backing store.
 //! SQLite is a lightweight, file-based database that's widely available and
@@ -13,8 +13,8 @@
 //!
 //! # Connection Management
 //!
-//! SQLite connections are not Send/Sync, so we wrap them in Arc<Mutex<Connection>>
-//! and use tokio::task::spawn_blocking for all database operations.
+//! Uses sqlx's SqlitePool for connection management with async-native operations.
+//! Unlike the rusqlite implementation, no spawn_blocking is needed.
 //!
 //! # Differences from DuckDB
 //!
@@ -36,20 +36,16 @@
 //! For larger deployments, consider using the DuckDB backend which uses window
 //! functions instead of correlated subqueries.
 //!
-//! Additionally, duplicate entry detection queries the `host_entries_current` view
-//! which is not indexable, resulting in a full table scan. This is acceptable for
-//! small datasets but may become noticeable with many hosts.
-//!
 //! # Security
 //!
-//! All queries use parameterized statements (`rusqlite::params!`) to prevent
-//! SQL injection. User-provided data (hostnames, IPs, comments, tags) is never
-//! interpolated into query strings.
+//! All queries use parameterized statements to prevent SQL injection.
+//! User-provided data (hostnames, IPs, comments, tags) is never interpolated
+//! into query strings.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use parking_lot::Mutex;
-use std::sync::Arc;
+use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use std::time::Duration;
 use ulid::Ulid;
 
 use crate::error::StorageError;
@@ -65,9 +61,8 @@ pub use schema::initialize_schema;
 
 /// SQLite storage backend
 ///
-/// Provides event-sourced storage using an embedded SQLite database.
-/// All operations are executed asynchronously using spawn_blocking to
-/// avoid blocking the async runtime.
+/// Provides event-sourced storage using an embedded SQLite database with sqlx.
+/// All operations are truly async using sqlx's native async driver.
 ///
 /// # Examples
 ///
@@ -86,10 +81,9 @@ pub use schema::initialize_schema;
 /// # Ok(())
 /// # }
 /// ```
+#[derive(Debug)]
 pub struct SqliteStorage {
-    /// SQLite connection wrapped in Arc<Mutex> for thread-safe access
-    /// across spawn_blocking boundaries
-    conn: Arc<Mutex<rusqlite::Connection>>,
+    pool: SqlitePool,
 }
 
 impl SqliteStorage {
@@ -102,32 +96,41 @@ impl SqliteStorage {
     ///   - `/path/to/file.sqlite` - File-based database (absolute path)
     ///   - `./relative/path.sqlite` - File-based database (relative path)
     ///
+    /// # Pool Configuration
+    ///
+    /// Default pool settings:
+    /// - min_connections: 1
+    /// - max_connections: 5 (SQLite is single-writer, so less useful to have many)
+    /// - acquire_timeout: 30s
+    /// - idle_timeout: 10min
+    ///
     /// # Errors
     ///
     /// Returns `StorageError::Connection` if the database connection fails.
     pub async fn new(path: &str) -> Result<Self, StorageError> {
-        let path = path.to_string();
+        // Build connection URL for sqlx
+        // sqlx uses sqlite:// prefix
+        let url = if path == ":memory:" {
+            "sqlite::memory:".to_string()
+        } else {
+            format!("sqlite://{}?mode=rwc", path)
+        };
 
-        // Open connection in spawn_blocking since it may do I/O
-        let conn = tokio::task::spawn_blocking(move || {
-            if path == ":memory:" {
-                rusqlite::Connection::open_in_memory()
-            } else {
-                rusqlite::Connection::open(&path)
-            }
-        })
-        .await
-        .map_err(|e| StorageError::connection("failed to spawn blocking task", e))?
-        .map_err(|e| StorageError::connection("failed to open SQLite connection", e))?;
+        let pool = SqlitePoolOptions::new()
+            .min_connections(1)
+            .max_connections(5) // SQLite is single-writer
+            .acquire_timeout(Duration::from_secs(30))
+            .idle_timeout(Duration::from_secs(600))
+            .connect(&url)
+            .await
+            .map_err(|e| StorageError::connection("failed to create SQLite pool", e))?;
 
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
-        })
+        Ok(Self { pool })
     }
 
-    /// Get a reference to the connection for internal use
-    fn conn(&self) -> Arc<Mutex<rusqlite::Connection>> {
-        Arc::clone(&self.conn)
+    /// Get a reference to the connection pool for internal use
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
     }
 }
 
@@ -236,24 +239,40 @@ impl Storage for SqliteStorage {
     }
 
     async fn health_check(&self) -> Result<(), StorageError> {
-        let conn = self.conn();
+        // First check basic connectivity
+        sqlx::query("SELECT 1")
+            .execute(self.pool())
+            .await
+            .map_err(|e| StorageError::connection("health check: database connection failed", e))?;
 
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-
-            // Simple health check: verify we can execute a query
-            conn.query_row("SELECT 1", [], |row| row.get::<_, i32>(0))
-                .map_err(|e| StorageError::connection("health check query failed", e))?;
-
-            Ok(())
-        })
+        // Verify schema exists by checking for our tables
+        let table_exists: bool = sqlx::query_scalar(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = 'host_events'
+            )
+            "#,
+        )
+        .fetch_one(self.pool())
         .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during health check", e))?
+        .map_err(|e| StorageError::connection("health check: failed to verify schema", e))?;
+
+        if !table_exists {
+            return Err(StorageError::connection(
+                "health check: schema not initialized (host_events table missing)",
+                std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    "schema not initialized - call initialize() first",
+                ),
+            ));
+        }
+
+        Ok(())
     }
 
     async fn close(&self) -> Result<(), StorageError> {
-        // SQLite connections don't need explicit close in Rust
-        // The Drop impl handles cleanup
+        self.pool.close().await;
         Ok(())
     }
 }
