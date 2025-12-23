@@ -174,7 +174,7 @@ impl PostgresStorage {
             .await
             .map_err(|e| {
                 StorageError::query(
-                    &format!(
+                    format!(
                         "search failed (ip={:?}, hostname={:?}, tags={:?})",
                         filter.ip_pattern, filter.hostname_pattern, filter.tags
                     ),

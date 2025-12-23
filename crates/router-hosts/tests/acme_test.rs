@@ -285,7 +285,7 @@ async fn test_acme_challenge_type_mapping() {
 // approach to trusting Pebble's CA is needed (e.g., system trust store config,
 // or instant-acme restoring custom HTTP client support).
 //
-// See: https://github.com/fzymgc-house/router-hosts/issues/127
+// See: https://github.com/fzymgc-house/router-hosts/issues/143
 // ============================================================================
 
 // ============================================================================

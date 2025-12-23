@@ -51,6 +51,16 @@ jobs:
                   # Include Cargo.toml in cache key for better invalidation
                   key: ${{ runner.os }}-rust
 
+            - name: Install cargo-nextest
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-nextest
+
+            - name: Install cargo-llvm-cov
+              uses: taiki-e/install-action@v2
+              with:
+                  tool: cargo-llvm-cov
+
             - name: Build
               run: task build
 
@@ -73,13 +83,8 @@ jobs:
             - name: Run E2E tests
               run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
-            - name: Install cargo-tarpaulin
-              uses: taiki-e/install-action@v2
-              with:
-                  tool: cargo-tarpaulin
-
             - name: Check test coverage (≥80% required)
-              # Coverage runs all tests with instrumentation enabled
+              # Coverage runs all tests with llvm-cov instrumentation
               run: task test:coverage:ci
 
             - name: Upload coverage report

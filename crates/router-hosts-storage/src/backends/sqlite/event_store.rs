@@ -1,144 +1,273 @@
-//! Event store implementation for SQLite
+//! EventStore implementation for SQLite using sqlx
 //!
 //! This module implements the event sourcing write side:
 //! - Append events with optimistic concurrency control
 //! - Load event streams for aggregates
 //! - Version management for conflict detection
 //!
+//! All operations use transactions for atomicity.
+//!
 //! # Note on Ordering
 //!
-//! All queries use `ORDER BY rowid` instead of `ORDER BY event_version` because
-//! ULIDs created within the same millisecond have arbitrary lexicographic order.
-//! SQLite's rowid guarantees insertion order. See `schema.rs` for details.
+//! SQLite queries use `ORDER BY rowid` for insertion order because ULIDs
+//! created within the same millisecond have arbitrary lexicographic order.
 
 use chrono::{DateTime, Utc};
-use rusqlite::OptionalExtension;
-use serde::{Deserialize, Serialize};
+use sqlx::Row;
 use ulid::Ulid;
 
 use super::SqliteStorage;
 use crate::error::StorageError;
 use crate::types::{EventEnvelope, HostEvent};
 
-/// Extracted event data for database insertion
-/// (ip_address, hostname, comment, tags, aliases, timestamp, metadata)
-type ExtractedEventData = (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    DateTime<Utc>,
-    EventData,
-);
+/// Serialize a value to JSON, returning an error if serialization fails.
+///
+/// Unlike using `.unwrap_or_else()`, this ensures serialization failures are
+/// propagated as errors rather than silently falling back to default values.
+fn serialize_json<T: serde::Serialize>(
+    value: &T,
+    field_name: &str,
+) -> Result<String, StorageError> {
+    serde_json::to_string(value).map_err(|e| {
+        StorageError::InvalidData(format!("failed to serialize {}: {}", field_name, e))
+    })
+}
 
-/// Event-specific data stored as JSON metadata
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+/// Convert a timestamp to microseconds, returning an error if out of range.
+///
+/// Uses checked conversion to prevent panics on out-of-range timestamps.
+/// Valid range: 1970-01-01 00:00:00 UTC to 294247-01-10 04:00:54 UTC
+fn timestamp_to_micros(ts: &DateTime<Utc>) -> Result<i64, StorageError> {
+    ts.timestamp_micros_opt().ok_or_else(|| {
+        StorageError::InvalidData(format!("timestamp out of i64 microseconds range: {}", ts))
+    })
+}
+
+/// Event-specific metadata serialized as JSON in the database.
+///
+/// Used for storing additional event data that doesn't have dedicated columns,
+/// and for reconstructing events when loading from the database.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 struct EventData {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub comment: Option<String>,
+    comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
+    tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub aliases: Option<Vec<String>>,
+    aliases: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_ip: Option<String>,
+    previous_ip: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_hostname: Option<String>,
+    previous_hostname: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_comment: Option<String>,
+    previous_comment: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_tags: Option<Vec<String>>,
+    previous_tags: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_aliases: Option<Vec<String>>,
+    previous_aliases: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub deleted_reason: Option<String>,
+    deleted_reason: Option<String>,
+}
+
+/// Intermediate struct for database INSERT operations.
+///
+/// Contains typed column values extracted from a `HostEvent` plus the
+/// serialized metadata JSON. The timestamp is stored as microseconds
+/// since epoch (i64) rather than `DateTime<Utc>` for direct database binding.
+///
+/// # Timestamp Range
+///
+/// Timestamps are stored as i64 microseconds since Unix epoch (1970-01-01).
+/// Valid range: 1970-01-01 00:00:00 UTC to 294247-01-10 04:00:54 UTC
+/// (i64::MAX microseconds). This exceeds any practical deployment lifetime.
+struct ExtractedEventData {
+    ip_address: Option<String>,
+    hostname: Option<String>,
+    comment: Option<String>,
+    tags: Option<String>,
+    aliases: Option<String>,
+    event_timestamp: i64,
+    metadata_json: String,
 }
 
 impl SqliteStorage {
-    /// Append a single event to the store
-    pub(super) async fn append_event_impl(
+    /// Append a single event
+    pub(crate) async fn append_event_impl(
         &self,
         aggregate_id: Ulid,
-        envelope: EventEnvelope,
+        event: EventEnvelope,
         expected_version: Option<String>,
     ) -> Result<(), StorageError> {
-        let conn = self.conn();
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::query("failed to begin transaction", e))?;
 
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
+        // Check for duplicate on HostCreated
+        //
+        // Note: This check is within a transaction, but SQLite's single-writer model
+        // (enforced by WAL mode) means only one write transaction can be active at a
+        // time. This prevents the classic TOCTOU race where two transactions both see
+        // "no duplicate" and then both insert. The second writer will block until the
+        // first commits, at which point it will see the committed data.
+        //
+        // For deployments requiring stronger isolation (e.g., multi-instance with
+        // PostgreSQL), consider using a unique constraint on a materialized table.
+        if let HostEvent::HostCreated {
+            ref ip_address,
+            ref hostname,
+            ..
+        } = event.event
+        {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM host_entries_current WHERE ip_address = ?1 AND hostname = ?2)",
+            )
+            .bind(ip_address)
+            .bind(hostname)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| StorageError::query("duplicate check failed", e))?;
 
-            // Begin transaction
-            conn.execute("BEGIN TRANSACTION", [])
-                .map_err(|e| StorageError::query("failed to begin transaction", e))?;
+            if exists {
+                return Err(StorageError::DuplicateEntry {
+                    ip: ip_address.clone(),
+                    hostname: hostname.clone(),
+                });
+            }
+        }
 
-            // Check for duplicate IP+hostname on HostCreated events
+        // Version check - use rowid for ordering, not event_version
+        let current_version: Option<String> = sqlx::query_scalar(
+            "SELECT event_version FROM host_events WHERE aggregate_id = ?1 ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(aggregate_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| StorageError::query("version check failed", e))?;
+
+        // Transaction is automatically rolled back when dropped on early return.
+        // sqlx transactions implement Drop, so no explicit rollback is needed.
+        if expected_version != current_version {
+            return Err(StorageError::ConcurrentWriteConflict {
+                aggregate_id: aggregate_id.to_string(),
+            });
+        }
+
+        // Extract event data
+        let extracted = extract_event_data(&event.event)?;
+
+        // Insert event (SQLite uses INTEGER for timestamps as microseconds)
+        sqlx::query(
+            r#"
+            INSERT INTO host_events (
+                event_id, aggregate_id, event_type, event_version,
+                ip_address, hostname, comment, tags, aliases,
+                event_timestamp, metadata,
+                created_at, created_by, expected_version
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+            "#,
+        )
+        .bind(event.event_id.to_string())
+        .bind(aggregate_id.to_string())
+        .bind(event.event.event_type())
+        .bind(&event.event_version)
+        .bind(&extracted.ip_address)
+        .bind(&extracted.hostname)
+        .bind(&extracted.comment)
+        .bind(&extracted.tags)
+        .bind(&extracted.aliases)
+        .bind(extracted.event_timestamp)
+        .bind(&extracted.metadata_json)
+        .bind(timestamp_to_micros(&event.created_at)?)
+        .bind(&event.created_by)
+        .bind(&expected_version)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| {
+            // Use sqlx's typed error detection instead of string matching
+            if let Some(db_err) = e.as_database_error() {
+                if db_err.is_unique_violation() {
+                    return StorageError::ConcurrentWriteConflict {
+                        aggregate_id: aggregate_id.to_string(),
+                    };
+                }
+            }
+            StorageError::query("insert event failed", e)
+        })?;
+
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::query("commit failed", e))?;
+
+        Ok(())
+    }
+
+    /// Append multiple events atomically
+    pub(crate) async fn append_events_impl(
+        &self,
+        aggregate_id: Ulid,
+        events: Vec<EventEnvelope>,
+        expected_version: Option<String>,
+    ) -> Result<(), StorageError> {
+        if events.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| StorageError::query("failed to begin transaction", e))?;
+
+        // Version check - use rowid for ordering
+        let current_version: Option<String> = sqlx::query_scalar(
+            "SELECT event_version FROM host_events WHERE aggregate_id = ?1 ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(aggregate_id.to_string())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(|e| StorageError::query("version check failed", e))?;
+
+        // Transaction is automatically rolled back when dropped on early return.
+        // sqlx transactions implement Drop, so no explicit rollback is needed.
+        if expected_version != current_version {
+            return Err(StorageError::ConcurrentWriteConflict {
+                aggregate_id: aggregate_id.to_string(),
+            });
+        }
+
+        // Check for duplicates on any HostCreated events
+        for event in &events {
             if let HostEvent::HostCreated {
-                ip_address,
-                hostname,
+                ref ip_address,
+                ref hostname,
                 ..
-            } = &envelope.event
+            } = event.event
             {
-                let exists: bool = conn
-                    .query_row(
-                        r#"
-                        SELECT COUNT(*) > 0
-                        FROM host_entries_current
-                        WHERE ip_address = ?1 AND hostname = ?2
-                        "#,
-                        rusqlite::params![ip_address, hostname],
-                        |row| row.get(0),
-                    )
-                    .map_err(|e| {
-                        let _ = conn.execute("ROLLBACK", []);
-                        StorageError::query("failed to check for duplicate entry", e)
-                    })?;
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM host_entries_current WHERE ip_address = ?1 AND hostname = ?2)",
+                )
+                .bind(ip_address)
+                .bind(hostname)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(|e| StorageError::query("duplicate check failed", e))?;
 
                 if exists {
-                    let _ = conn.execute("ROLLBACK", []);
                     return Err(StorageError::DuplicateEntry {
                         ip: ip_address.clone(),
                         hostname: hostname.clone(),
                     });
                 }
             }
+        }
 
-            // Get current version (use rowid for ordering, not event_version)
-            // ULIDs within the same millisecond have arbitrary lexicographic order,
-            // so we use SQLite's rowid to find the most recent event.
-            let current_version: Option<String> = conn
-                .query_row(
-                    "SELECT event_version FROM host_events WHERE aggregate_id = ?1 ORDER BY rowid DESC LIMIT 1",
-                    [&aggregate_id.to_string()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| {
-                    let _ = conn.execute("ROLLBACK", []);
-                    StorageError::query("failed to get current version", e)
-                })?;
+        // Insert all events
+        for event in events {
+            let extracted = extract_event_data(&event.event)?;
 
-            // Verify expected version
-            if expected_version != current_version {
-                let _ = conn.execute("ROLLBACK", []);
-                return Err(StorageError::ConcurrentWriteConflict {
-                    aggregate_id: aggregate_id.to_string(),
-                });
-            }
-
-            // Extract typed columns and metadata
-            let (ip_address_opt, hostname_opt, comment_opt, tags_opt, aliases_opt, event_timestamp, event_data) =
-                extract_event_data(&envelope.event).inspect_err(|_| {
-                    let _ = conn.execute("ROLLBACK", []);
-                })?;
-
-            let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
-                let _ = conn.execute("ROLLBACK", []);
-                StorageError::InvalidData(format!("failed to serialize event data: {}", e))
-            })?;
-
-            // Insert event (SQLite uses INTEGER for timestamps as microseconds)
-            conn.execute(
+            sqlx::query(
                 r#"
                 INSERT INTO host_events (
                     event_id, aggregate_id, event_type, event_version,
@@ -147,354 +276,147 @@ impl SqliteStorage {
                     created_at, created_by, expected_version
                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                 "#,
-                rusqlite::params![
-                    envelope.event_id.to_string(),
-                    aggregate_id.to_string(),
-                    envelope.event.event_type(),
-                    envelope.event_version,
-                    ip_address_opt,
-                    hostname_opt,
-                    comment_opt,
-                    tags_opt,
-                    aliases_opt,
-                    event_timestamp.timestamp_micros(),
-                    event_data_json,
-                    envelope.created_at.timestamp_micros(),
-                    envelope.created_by.as_deref().unwrap_or("system"),
-                    expected_version,
-                ],
             )
-            .map_err(|e| {
-                let _ = conn.execute("ROLLBACK", []);
-                let error_str = e.to_string();
-                if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
-                    StorageError::ConcurrentWriteConflict {
-                        aggregate_id: aggregate_id.to_string(),
-                    }
-                } else {
-                    StorageError::query("failed to insert event", e)
-                }
-            })?;
-
-            conn.execute("COMMIT", [])
-                .map_err(|e| StorageError::query("failed to commit transaction", e))?;
-
-            Ok(())
-        })
-        .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during append_event", e))?
-    }
-
-    /// Append multiple events atomically
-    pub(super) async fn append_events_impl(
-        &self,
-        aggregate_id: Ulid,
-        envelopes: Vec<EventEnvelope>,
-        expected_version: Option<String>,
-    ) -> Result<(), StorageError> {
-        if envelopes.is_empty() {
-            return Ok(());
+            .bind(event.event_id.to_string())
+            .bind(aggregate_id.to_string())
+            .bind(event.event.event_type())
+            .bind(&event.event_version)
+            .bind(&extracted.ip_address)
+            .bind(&extracted.hostname)
+            .bind(&extracted.comment)
+            .bind(&extracted.tags)
+            .bind(&extracted.aliases)
+            .bind(extracted.event_timestamp)
+            .bind(&extracted.metadata_json)
+            .bind(timestamp_to_micros(&event.created_at)?)
+            .bind(&event.created_by)
+            .bind(&expected_version)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| StorageError::query("insert event failed", e))?;
         }
 
-        let conn = self.conn();
+        tx.commit()
+            .await
+            .map_err(|e| StorageError::query("commit failed", e))?;
 
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-
-            conn.execute("BEGIN TRANSACTION", [])
-                .map_err(|e| StorageError::query("failed to begin transaction", e))?;
-
-            // Get current version (use rowid for ordering, not event_version)
-            // ULIDs within the same millisecond have arbitrary lexicographic order,
-            // so we use SQLite's rowid to find the most recent event.
-            let current_version: Option<String> = conn
-                .query_row(
-                    "SELECT event_version FROM host_events WHERE aggregate_id = ?1 ORDER BY rowid DESC LIMIT 1",
-                    [&aggregate_id.to_string()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| {
-                    let _ = conn.execute("ROLLBACK", []);
-                    StorageError::query("failed to get current version", e)
-                })?;
-
-            if expected_version != current_version {
-                let _ = conn.execute("ROLLBACK", []);
-                return Err(StorageError::ConcurrentWriteConflict {
-                    aggregate_id: aggregate_id.to_string(),
-                });
-            }
-
-            for envelope in envelopes {
-                // Check for duplicate IP+hostname on HostCreated events
-                if let HostEvent::HostCreated {
-                    ip_address,
-                    hostname,
-                    ..
-                } = &envelope.event
-                {
-                    let exists: bool = conn
-                        .query_row(
-                            r#"
-                            SELECT COUNT(*) > 0
-                            FROM host_entries_current
-                            WHERE ip_address = ?1 AND hostname = ?2
-                            "#,
-                            rusqlite::params![ip_address, hostname],
-                            |row| row.get(0),
-                        )
-                        .map_err(|e| {
-                            let _ = conn.execute("ROLLBACK", []);
-                            StorageError::query("failed to check for duplicate entry", e)
-                        })?;
-
-                    if exists {
-                        let _ = conn.execute("ROLLBACK", []);
-                        return Err(StorageError::DuplicateEntry {
-                            ip: ip_address.clone(),
-                            hostname: hostname.clone(),
-                        });
-                    }
-                }
-
-                let (ip_address_opt, hostname_opt, comment_opt, tags_opt, aliases_opt, event_timestamp, event_data) =
-                    extract_event_data(&envelope.event).inspect_err(|_| {
-                        let _ = conn.execute("ROLLBACK", []);
-                    })?;
-
-                let event_data_json = serde_json::to_string(&event_data).map_err(|e| {
-                    let _ = conn.execute("ROLLBACK", []);
-                    StorageError::InvalidData(format!("failed to serialize event data: {}", e))
-                })?;
-
-                conn.execute(
-                    r#"
-                    INSERT INTO host_events (
-                        event_id, aggregate_id, event_type, event_version,
-                        ip_address, hostname, comment, tags, aliases,
-                        event_timestamp, metadata,
-                        created_at, created_by, expected_version
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-                    "#,
-                    rusqlite::params![
-                        envelope.event_id.to_string(),
-                        aggregate_id.to_string(),
-                        envelope.event.event_type(),
-                        envelope.event_version,
-                        ip_address_opt,
-                        hostname_opt,
-                        comment_opt,
-                        tags_opt,
-                        aliases_opt,
-                        event_timestamp.timestamp_micros(),
-                        event_data_json,
-                        envelope.created_at.timestamp_micros(),
-                        envelope.created_by.as_deref().unwrap_or("system"),
-                        expected_version,
-                    ],
-                )
-                .map_err(|e| {
-                    let _ = conn.execute("ROLLBACK", []);
-                    let error_str = e.to_string();
-                    if error_str.contains("UNIQUE") || error_str.contains("unique constraint") {
-                        StorageError::ConcurrentWriteConflict {
-                            aggregate_id: aggregate_id.to_string(),
-                        }
-                    } else {
-                        StorageError::query("failed to insert event", e)
-                    }
-                })?;
-            }
-
-            conn.execute("COMMIT", [])
-                .map_err(|e| StorageError::query("failed to commit transaction", e))?;
-
-            Ok(())
-        })
-        .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during append_events", e))?
+        Ok(())
     }
 
-    /// Load all events for an aggregate in order
-    pub(super) async fn load_events_impl(
+    /// Load all events for an aggregate
+    pub(crate) async fn load_events_impl(
         &self,
         aggregate_id: Ulid,
     ) -> Result<Vec<EventEnvelope>, StorageError> {
-        let conn = self.conn();
-
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT
-                        event_id,
-                        aggregate_id,
-                        event_type,
-                        event_version,
-                        ip_address,
-                        hostname,
-                        metadata,
-                        event_timestamp,
-                        created_at,
-                        created_by
-                    FROM host_events
-                    WHERE aggregate_id = ?1
-                    ORDER BY rowid ASC
-                    "#,
-                )
-                .map_err(|e| StorageError::query("failed to prepare query", e))?;
-
-            let rows = stmt
-                .query_map([&aggregate_id.to_string()], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,         // event_id
-                        row.get::<_, String>(1)?,         // aggregate_id
-                        row.get::<_, String>(2)?,         // event_type
-                        row.get::<_, String>(3)?,         // event_version
-                        row.get::<_, Option<String>>(4)?, // ip_address
-                        row.get::<_, Option<String>>(5)?, // hostname
-                        row.get::<_, String>(6)?,         // metadata
-                        row.get::<_, i64>(7)?,            // event_timestamp
-                        row.get::<_, i64>(8)?,            // created_at
-                        row.get::<_, String>(9)?,         // created_by
-                    ))
-                })
-                .map_err(|e| StorageError::query("failed to query events", e))?;
-
-            let mut envelopes = Vec::new();
-            let mut current_state: Option<(String, String, Option<String>, Vec<String>)> = None;
-
-            for row in rows {
-                let (
-                    event_id_str,
-                    aggregate_id_str,
-                    event_type,
-                    event_version,
-                    ip_address,
-                    hostname,
-                    metadata_json,
-                    event_timestamp_micros,
-                    created_at_micros,
-                    created_by,
-                ) = row.map_err(|e| StorageError::query("failed to read row", e))?;
-
-                let event_id = Ulid::from_string(&event_id_str).map_err(|e| {
-                    StorageError::InvalidData(format!("invalid event_id ULID: {}", e))
-                })?;
-
-                let agg_id = Ulid::from_string(&aggregate_id_str).map_err(|e| {
-                    StorageError::InvalidData(format!("invalid aggregate_id ULID: {}", e))
-                })?;
-
-                let event_timestamp = DateTime::from_timestamp_micros(event_timestamp_micros)
-                    .ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid event timestamp: {}",
-                            event_timestamp_micros
-                        ))
-                    })?;
-
-                let event_data: EventData = serde_json::from_str(&metadata_json).map_err(|e| {
-                    StorageError::InvalidData(format!(
-                        "failed to deserialize event metadata: {}",
-                        e
-                    ))
-                })?;
-
-                let event = reconstruct_event(
-                    &event_type,
-                    ip_address,
-                    hostname,
-                    &event_data,
-                    event_timestamp,
-                    &mut current_state,
-                )?;
-
-                let created_at =
-                    DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid timestamp: {}",
-                            created_at_micros
-                        ))
-                    })?;
-
-                envelopes.push(EventEnvelope {
-                    event_id,
-                    aggregate_id: agg_id,
-                    event,
-                    event_version,
-                    created_at,
-                    created_by: if created_by == "system" {
-                        None
-                    } else {
-                        Some(created_by)
-                    },
-                });
-            }
-
-            Ok(envelopes)
-        })
+        // Use rowid for ordering to ensure insertion order
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                event_id, aggregate_id, event_type, event_version,
+                ip_address, hostname, metadata, event_timestamp,
+                created_at, created_by
+            FROM host_events
+            WHERE aggregate_id = ?1
+            ORDER BY rowid ASC
+            "#,
+        )
+        .bind(aggregate_id.to_string())
+        .fetch_all(self.pool())
         .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during load_events", e))?
+        .map_err(|e| StorageError::query("load_events failed", e))?;
+
+        let mut envelopes = Vec::with_capacity(rows.len());
+
+        for row in rows {
+            let event_id_str: String = row.get("event_id");
+            let event_type: String = row.get("event_type");
+            let event_version: String = row.get("event_version");
+            let ip_address: Option<String> = row.get("ip_address");
+            let hostname: Option<String> = row.get("hostname");
+            let metadata_json: String = row.get("metadata");
+            let event_timestamp_micros: i64 = row.get("event_timestamp");
+            let created_at_micros: i64 = row.get("created_at");
+            let created_by: Option<String> = row.get("created_by");
+
+            let event_id = Ulid::from_string(&event_id_str)
+                .map_err(|e| StorageError::InvalidData(format!("invalid event_id: {}", e)))?;
+
+            let event_timestamp = DateTime::from_timestamp_micros(event_timestamp_micros)
+                .ok_or_else(|| {
+                    StorageError::InvalidData(format!(
+                        "invalid event_timestamp: {}",
+                        event_timestamp_micros
+                    ))
+                })?;
+
+            let created_at =
+                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
+                    StorageError::InvalidData(format!("invalid created_at: {}", created_at_micros))
+                })?;
+
+            let event_data: EventData = serde_json::from_str(&metadata_json)
+                .map_err(|e| StorageError::InvalidData(format!("JSON parse failed: {}", e)))?;
+
+            let event = reconstruct_event(
+                &event_type,
+                ip_address,
+                hostname,
+                event_timestamp,
+                &event_data,
+            )?;
+
+            envelopes.push(EventEnvelope {
+                event_id,
+                aggregate_id,
+                event,
+                event_version,
+                created_at,
+                created_by,
+            });
+        }
+
+        Ok(envelopes)
     }
 
     /// Get current version for an aggregate
-    pub(super) async fn get_current_version_impl(
+    pub(crate) async fn get_current_version_impl(
         &self,
         aggregate_id: Ulid,
     ) -> Result<Option<String>, StorageError> {
-        let conn = self.conn();
-
-        tokio::task::spawn_blocking(move || {
-            // Use created_at for ordering - ULIDs within the same millisecond
-            // have arbitrary lexicographic order
-            let version = conn
-                .lock()
-                .query_row(
-                    "SELECT event_version FROM host_events WHERE aggregate_id = ?1 ORDER BY rowid DESC LIMIT 1",
-                    [&aggregate_id.to_string()],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|e| StorageError::query("failed to get current version", e))?;
-
-            Ok(version)
-        })
+        // Use rowid for ordering
+        let version: Option<String> = sqlx::query_scalar(
+            "SELECT event_version FROM host_events WHERE aggregate_id = ?1 ORDER BY rowid DESC LIMIT 1",
+        )
+        .bind(aggregate_id.to_string())
+        .fetch_optional(self.pool())
         .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during get_current_version", e))?
+        .map_err(|e| StorageError::query("get_current_version failed", e))?;
+
+        Ok(version)
     }
 
-    /// Count total events for an aggregate
-    pub(super) async fn count_events_impl(&self, aggregate_id: Ulid) -> Result<i64, StorageError> {
-        let conn = self.conn();
+    /// Count events for an aggregate
+    pub(crate) async fn count_events_impl(&self, aggregate_id: Ulid) -> Result<i64, StorageError> {
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM host_events WHERE aggregate_id = ?1")
+                .bind(aggregate_id.to_string())
+                .fetch_one(self.pool())
+                .await
+                .map_err(|e| StorageError::query("count_events failed", e))?;
 
-        tokio::task::spawn_blocking(move || {
-            let count = conn
-                .lock()
-                .query_row(
-                    "SELECT COUNT(*) FROM host_events WHERE aggregate_id = ?1",
-                    [&aggregate_id.to_string()],
-                    |row| row.get(0),
-                )
-                .map_err(|e| StorageError::query("failed to count events", e))?;
-
-            Ok(count)
-        })
-        .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during count_events", e))?
+        Ok(count)
     }
 }
 
-/// Extract typed columns and metadata from a HostEvent
+/// Extract column values and metadata JSON from an event.
 ///
-/// # Errors
+/// Separates event data into:
+/// - Typed columns (ip_address, hostname, comment, tags, aliases) for indexed queries
+/// - JSON metadata for event-type-specific data (previous values, deleted_reason)
 ///
-/// Returns `StorageError::InvalidData` if tags cannot be serialized to JSON.
+/// The timestamp is converted to microseconds for SQLite INTEGER storage.
 fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageError> {
-    match event {
+    let (ip_address, hostname, comment, tags, aliases, event_timestamp, event_data) = match event {
         HostEvent::HostCreated {
             ip_address,
             hostname,
@@ -502,16 +424,12 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             comment,
             tags,
             created_at,
-        } => Ok((
+        } => (
             Some(ip_address.clone()),
             Some(hostname.clone()),
             comment.clone(),
-            Some(serde_json::to_string(tags).map_err(|e| {
-                StorageError::InvalidData(format!("failed to serialize tags: {}", e))
-            })?),
-            Some(serde_json::to_string(aliases).map_err(|e| {
-                StorageError::InvalidData(format!("failed to serialize aliases: {}", e))
-            })?),
+            Some(serialize_json(tags, "tags")?),
+            Some(serialize_json(aliases, "aliases")?),
             *created_at,
             EventData {
                 comment: comment.clone(),
@@ -519,12 +437,12 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
                 aliases: Some(aliases.clone()),
                 ..Default::default()
             },
-        )),
+        ),
         HostEvent::IpAddressChanged {
             old_ip,
             new_ip,
             changed_at,
-        } => Ok((
+        } => (
             Some(new_ip.clone()),
             None,
             None,
@@ -535,12 +453,12 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
                 previous_ip: Some(old_ip.clone()),
                 ..Default::default()
             },
-        )),
+        ),
         HostEvent::HostnameChanged {
             old_hostname,
             new_hostname,
             changed_at,
-        } => Ok((
+        } => (
             None,
             Some(new_hostname.clone()),
             None,
@@ -551,12 +469,12 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
                 previous_hostname: Some(old_hostname.clone()),
                 ..Default::default()
             },
-        )),
+        ),
         HostEvent::CommentUpdated {
             old_comment,
             new_comment,
             updated_at,
-        } => Ok((
+        } => (
             None,
             None,
             new_comment.clone(),
@@ -568,18 +486,16 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
                 previous_comment: old_comment.clone(),
                 ..Default::default()
             },
-        )),
+        ),
         HostEvent::TagsModified {
             old_tags,
             new_tags,
             modified_at,
-        } => Ok((
+        } => (
             None,
             None,
             None,
-            Some(serde_json::to_string(new_tags).map_err(|e| {
-                StorageError::InvalidData(format!("failed to serialize tags: {}", e))
-            })?),
+            Some(serialize_json(new_tags, "tags")?),
             None,
             *modified_at,
             EventData {
@@ -587,32 +503,30 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
                 previous_tags: Some(old_tags.clone()),
                 ..Default::default()
             },
-        )),
+        ),
         HostEvent::AliasesModified {
             old_aliases,
             new_aliases,
             modified_at,
-        } => Ok((
+        } => (
             None,
             None,
             None,
             None,
-            Some(serde_json::to_string(new_aliases).map_err(|e| {
-                StorageError::InvalidData(format!("failed to serialize aliases: {}", e))
-            })?),
+            Some(serialize_json(new_aliases, "aliases")?),
             *modified_at,
             EventData {
                 aliases: Some(new_aliases.clone()),
                 previous_aliases: Some(old_aliases.clone()),
                 ..Default::default()
             },
-        )),
+        ),
         HostEvent::HostDeleted {
             ip_address,
             hostname,
             deleted_at,
             reason,
-        } => Ok((
+        } => (
             Some(ip_address.clone()),
             Some(hostname.clone()),
             None,
@@ -623,135 +537,88 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
                 deleted_reason: reason.clone(),
                 ..Default::default()
             },
-        )),
-    }
+        ),
+    };
+
+    let metadata_json = serialize_json(&event_data, "event metadata")?;
+
+    Ok(ExtractedEventData {
+        ip_address,
+        hostname,
+        comment,
+        tags,
+        aliases,
+        event_timestamp: timestamp_to_micros(&event_timestamp)?,
+        metadata_json,
+    })
 }
 
 /// Reconstruct a HostEvent from database columns
 fn reconstruct_event(
     event_type: &str,
-    ip_address: Option<String>,
+    ip: Option<String>,
     hostname: Option<String>,
-    event_data: &EventData,
-    event_timestamp: DateTime<Utc>,
-    current_state: &mut Option<(String, String, Option<String>, Vec<String>)>,
+    event_ts: DateTime<Utc>,
+    data: &EventData,
 ) -> Result<HostEvent, StorageError> {
     match event_type {
-        "HostCreated" => {
-            let ip = ip_address.ok_or_else(|| {
-                StorageError::InvalidData("HostCreated missing ip_address".into())
-            })?;
-            let host = hostname
-                .ok_or_else(|| StorageError::InvalidData("HostCreated missing hostname".into()))?;
-
-            let tags = event_data.tags.clone().unwrap_or_default();
-            let comment = event_data.comment.clone();
-
-            *current_state = Some((ip.clone(), host.clone(), comment.clone(), tags.clone()));
-
-            Ok(HostEvent::HostCreated {
-                ip_address: ip,
-                hostname: host,
-                aliases: event_data.aliases.clone().unwrap_or_default(),
-                comment,
-                tags,
-                created_at: event_timestamp,
-            })
-        }
-        "IpAddressChanged" => {
-            let new_ip = ip_address.ok_or_else(|| {
-                StorageError::InvalidData("IpAddressChanged missing ip_address".into())
-            })?;
-
-            let old_ip = event_data.previous_ip.clone().ok_or_else(|| {
-                StorageError::InvalidData("IpAddressChanged missing previous_ip in metadata".into())
-            })?;
-
-            if let Some((ref mut ip, _, _, _)) = current_state {
-                *ip = new_ip.clone();
-            }
-
-            Ok(HostEvent::IpAddressChanged {
-                old_ip,
-                new_ip,
-                changed_at: event_timestamp,
-            })
-        }
-        "HostnameChanged" => {
-            let new_hostname = hostname.ok_or_else(|| {
-                StorageError::InvalidData("HostnameChanged missing hostname".into())
-            })?;
-
-            let old_hostname = event_data.previous_hostname.clone().ok_or_else(|| {
-                StorageError::InvalidData(
-                    "HostnameChanged missing previous_hostname in metadata".into(),
-                )
-            })?;
-
-            if let Some((_, ref mut host, _, _)) = current_state {
-                *host = new_hostname.clone();
-            }
-
-            Ok(HostEvent::HostnameChanged {
-                old_hostname,
-                new_hostname,
-                changed_at: event_timestamp,
-            })
-        }
-        "CommentUpdated" => {
-            let old_comment = event_data.previous_comment.clone();
-            let new_comment = event_data.comment.clone();
-
-            if let Some((_, _, ref mut c, _)) = current_state {
-                *c = new_comment.clone();
-            }
-
-            Ok(HostEvent::CommentUpdated {
-                old_comment,
-                new_comment,
-                updated_at: event_timestamp,
-            })
-        }
-        "TagsModified" => {
-            let old_tags = event_data.previous_tags.clone().unwrap_or_default();
-            let new_tags = event_data.tags.clone().unwrap_or_default();
-
-            if let Some((_, _, _, ref mut tags)) = current_state {
-                *tags = new_tags.clone();
-            }
-
-            Ok(HostEvent::TagsModified {
-                old_tags,
-                new_tags,
-                modified_at: event_timestamp,
-            })
-        }
-        "AliasesModified" => {
-            let old_aliases = event_data.previous_aliases.clone().unwrap_or_default();
-            let new_aliases = event_data.aliases.clone().unwrap_or_default();
-
-            Ok(HostEvent::AliasesModified {
-                old_aliases,
-                new_aliases,
-                modified_at: event_timestamp,
-            })
-        }
-        "HostDeleted" => {
-            let event = HostEvent::HostDeleted {
-                ip_address: ip_address.ok_or_else(|| {
-                    StorageError::InvalidData("HostDeleted missing ip_address".into())
-                })?,
-                hostname: hostname.ok_or_else(|| {
-                    StorageError::InvalidData("HostDeleted missing hostname".into())
-                })?,
-                deleted_at: event_timestamp,
-                reason: event_data.deleted_reason.clone(),
-            };
-
-            *current_state = None;
-
-            Ok(event)
-        }
+        "HostCreated" => Ok(HostEvent::HostCreated {
+            ip_address: ip.ok_or_else(|| StorageError::InvalidData("missing ip".into()))?,
+            hostname: hostname
+                .ok_or_else(|| StorageError::InvalidData("missing hostname".into()))?,
+            aliases: data.aliases.clone().unwrap_or_default(),
+            comment: data.comment.clone(),
+            tags: data.tags.clone().unwrap_or_default(),
+            created_at: event_ts,
+        }),
+        "IpAddressChanged" => Ok(HostEvent::IpAddressChanged {
+            old_ip: data
+                .previous_ip
+                .clone()
+                .ok_or_else(|| StorageError::InvalidData("missing previous_ip".into()))?,
+            new_ip: ip.ok_or_else(|| StorageError::InvalidData("missing ip".into()))?,
+            changed_at: event_ts,
+        }),
+        "HostnameChanged" => Ok(HostEvent::HostnameChanged {
+            old_hostname: data
+                .previous_hostname
+                .clone()
+                .ok_or_else(|| StorageError::InvalidData("missing previous_hostname".into()))?,
+            new_hostname: hostname
+                .ok_or_else(|| StorageError::InvalidData("missing hostname".into()))?,
+            changed_at: event_ts,
+        }),
+        "CommentUpdated" => Ok(HostEvent::CommentUpdated {
+            old_comment: data.previous_comment.clone(),
+            new_comment: data.comment.clone(),
+            updated_at: event_ts,
+        }),
+        "TagsModified" => Ok(HostEvent::TagsModified {
+            old_tags: data.previous_tags.clone().ok_or_else(|| {
+                StorageError::InvalidData("TagsModified missing previous_tags".into())
+            })?,
+            new_tags: data
+                .tags
+                .clone()
+                .ok_or_else(|| StorageError::InvalidData("TagsModified missing tags".into()))?,
+            modified_at: event_ts,
+        }),
+        "AliasesModified" => Ok(HostEvent::AliasesModified {
+            old_aliases: data.previous_aliases.clone().ok_or_else(|| {
+                StorageError::InvalidData("AliasesModified missing previous_aliases".into())
+            })?,
+            new_aliases: data.aliases.clone().ok_or_else(|| {
+                StorageError::InvalidData("AliasesModified missing aliases".into())
+            })?,
+            modified_at: event_ts,
+        }),
+        "HostDeleted" => Ok(HostEvent::HostDeleted {
+            ip_address: ip.ok_or_else(|| StorageError::InvalidData("missing ip".into()))?,
+            hostname: hostname
+                .ok_or_else(|| StorageError::InvalidData("missing hostname".into()))?,
+            deleted_at: event_ts,
+            reason: data.deleted_reason.clone(),
+        }),
         _ => Err(StorageError::InvalidData(format!(
             "unknown event type: {}",
             event_type

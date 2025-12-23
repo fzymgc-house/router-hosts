@@ -9,129 +9,158 @@
 //!
 //! The projection is built by replaying events from the event store.
 //! It provides optimized queries for the read side of CQRS.
+//!
+//! See `mod.rs` module docs for performance characteristics and scaling guidance.
 
 use chrono::{DateTime, Utc};
-use rusqlite::OptionalExtension;
+use sqlx::FromRow;
+use tracing::error;
 use ulid::Ulid;
 
 use super::SqliteStorage;
 use crate::error::StorageError;
 use crate::types::{HostEntry, HostFilter};
 
+/// Row type for host entry queries from the `host_entries_current` view.
+///
+/// Uses `#[derive(FromRow)]` for automatic mapping from database columns.
+/// Field names must match SQL column names exactly.
+#[derive(Debug, FromRow)]
+struct HostEntryRow {
+    id: String,
+    ip_address: String,
+    hostname: String,
+    comment: Option<String>,
+    tags: Option<String>,
+    aliases: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+    event_version: String,
+}
+
+/// Row type for event queries used in time-travel reconstruction.
+#[derive(Debug, FromRow)]
+struct EventRow {
+    event_type: String,
+    ip_address: Option<String>,
+    hostname: Option<String>,
+    metadata: String,
+    event_timestamp: i64,
+}
+
+/// Intermediate state for rebuilding host from events.
+#[derive(Debug)]
+struct HostState {
+    ip_address: String,
+    hostname: String,
+    comment: Option<String>,
+    tags: Vec<String>,
+    aliases: Vec<String>,
+}
+
+/// Parse a JSON string array, returning an error if parsing fails.
+///
+/// This ensures corrupt or malformed JSON doesn't silently become empty data.
+fn parse_json_array(json: Option<String>, field_name: &str) -> Result<Vec<String>, StorageError> {
+    match json {
+        Some(s) if !s.is_empty() => serde_json::from_str(&s).map_err(|e| {
+            StorageError::InvalidData(format!(
+                "failed to parse {} JSON '{}': {}",
+                field_name, s, e
+            ))
+        }),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Parse a JSON array from event metadata, returning an error if parsing fails.
+///
+/// Used for extracting tags/aliases from event metadata during time-travel queries.
+fn parse_event_json_array(
+    event_data: &serde_json::Value,
+    field_name: &str,
+) -> Result<Vec<String>, StorageError> {
+    match event_data.get(field_name) {
+        Some(value) => serde_json::from_value(value.clone()).map_err(|e| {
+            StorageError::InvalidData(format!(
+                "failed to parse {} from event metadata: {}",
+                field_name, e
+            ))
+        }),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Convert a database row to a HostEntry.
+///
+/// Handles ULID parsing, timestamp conversion, and JSON array parsing
+/// with proper error propagation.
+fn row_to_host_entry(row: HostEntryRow) -> Result<HostEntry, StorageError> {
+    let id = Ulid::from_string(&row.id)
+        .map_err(|e| StorageError::InvalidData(format!("invalid ULID '{}': {}", row.id, e)))?;
+
+    // Empty string means no comment
+    let comment = row.comment.filter(|s| !s.is_empty());
+
+    // Parse JSON arrays with proper error handling
+    let tags = parse_json_array(row.tags, "tags")?;
+    let aliases = parse_json_array(row.aliases, "aliases")?;
+
+    let created_at = DateTime::from_timestamp_micros(row.created_at).ok_or_else(|| {
+        StorageError::InvalidData(format!("invalid created_at timestamp: {}", row.created_at))
+    })?;
+
+    let updated_at = DateTime::from_timestamp_micros(row.updated_at).ok_or_else(|| {
+        StorageError::InvalidData(format!("invalid updated_at timestamp: {}", row.updated_at))
+    })?;
+
+    Ok(HostEntry {
+        id,
+        ip_address: row.ip_address,
+        hostname: row.hostname,
+        aliases,
+        comment,
+        tags,
+        created_at,
+        updated_at,
+        version: row.event_version,
+    })
+}
+
 impl SqliteStorage {
     /// List all active host entries
     ///
-    /// Uses the `host_entries_current` view for O(n) performance
-    /// instead of N+1 queries.
+    /// Uses the `host_entries_current` view which reconstructs current state
+    /// from the event log. See module docs for performance characteristics.
     ///
     /// Results are sorted by IP address, then hostname.
     ///
     /// # Errors
     ///
     /// Returns `StorageError::Query` if the database operation fails.
+    /// Returns `StorageError::InvalidData` if stored JSON is malformed.
     pub(super) async fn list_all_impl(&self) -> Result<Vec<HostEntry>, StorageError> {
-        let conn = self.conn();
-
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT
-                        id,
-                        ip_address,
-                        hostname,
-                        comment,
-                        tags,
-                        aliases,
-                        created_at,
-                        updated_at,
-                        event_version
-                    FROM host_entries_current
-                    ORDER BY ip_address, hostname
-                    "#,
-                )
-                .map_err(|e| StorageError::query("failed to prepare list query", e))?;
-
-            let rows = stmt
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,         // id
-                        row.get::<_, String>(1)?,         // ip_address
-                        row.get::<_, String>(2)?,         // hostname
-                        row.get::<_, Option<String>>(3)?, // comment (nullable)
-                        row.get::<_, Option<String>>(4)?, // tags (JSON array, nullable)
-                        row.get::<_, Option<String>>(5)?, // aliases (JSON array, nullable)
-                        row.get::<_, i64>(6)?,            // created_at
-                        row.get::<_, i64>(7)?,            // updated_at
-                        row.get::<_, String>(8)?,         // event_version
-                    ))
-                })
-                .map_err(|e| StorageError::query("failed to query host entries", e))?;
-
-            let mut entries = Vec::new();
-            for row_result in rows {
-                let (
-                    id_str,
-                    ip_address,
-                    hostname,
-                    comment_str,
-                    tags_json,
-                    aliases_json,
-                    created_at_micros,
-                    updated_at_micros,
-                    version,
-                ) = row_result.map_err(|e| StorageError::query("failed to read row", e))?;
-
-                let id = Ulid::from_string(&id_str)
-                    .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-                // Parse comment: empty string means no comment
-                let comment = comment_str.filter(|s| !s.is_empty());
-
-                // Parse tags from JSON array
-                let tags: Vec<String> = tags_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-
-                // Parse aliases from JSON array
-                let aliases: Vec<String> = aliases_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-
-                let created_at =
-                    DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid created_at timestamp: {}",
-                            created_at_micros
-                        ))
-                    })?;
-
-                let updated_at =
-                    DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid updated_at timestamp: {}",
-                            updated_at_micros
-                        ))
-                    })?;
-
-                entries.push(HostEntry {
-                    id,
-                    ip_address,
-                    hostname,
-                    aliases,
-                    comment,
-                    tags,
-                    created_at,
-                    updated_at,
-                    version,
-                });
-            }
-
-            Ok(entries)
-        })
+        let rows: Vec<HostEntryRow> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                ip_address,
+                hostname,
+                comment,
+                tags,
+                aliases,
+                created_at,
+                updated_at,
+                event_version
+            FROM host_entries_current
+            ORDER BY ip_address, hostname
+            "#,
+        )
+        .fetch_all(self.pool())
         .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during list_all", e))?
+        .map_err(|e| StorageError::query("failed to query host entries", e))?;
+
+        rows.into_iter().map(row_to_host_entry).collect()
     }
 
     /// Get current state of a host entry by ID
@@ -140,105 +169,38 @@ impl SqliteStorage {
     ///
     /// Returns `StorageError::NotFound` if the host doesn't exist or has been deleted.
     /// Returns `StorageError::Query` if the database operation fails.
+    /// Returns `StorageError::InvalidData` if stored JSON is malformed.
     pub(super) async fn get_by_id_impl(&self, id: Ulid) -> Result<HostEntry, StorageError> {
         let id_str = id.to_string();
-        let conn = self.conn();
 
-        tokio::task::spawn_blocking(move || {
-            let result = conn
-                .lock()
-                .query_row(
-                    r#"
-                    SELECT
-                        id,
-                        ip_address,
-                        hostname,
-                        comment,
-                        tags,
-                        aliases,
-                        created_at,
-                        updated_at,
-                        event_version
-                    FROM host_entries_current
-                    WHERE id = ?1
-                    "#,
-                    rusqlite::params![&id_str],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,         // id
-                            row.get::<_, String>(1)?,         // ip_address
-                            row.get::<_, String>(2)?,         // hostname
-                            row.get::<_, Option<String>>(3)?, // comment
-                            row.get::<_, Option<String>>(4)?, // tags
-                            row.get::<_, Option<String>>(5)?, // aliases
-                            row.get::<_, i64>(6)?,            // created_at
-                            row.get::<_, i64>(7)?,            // updated_at
-                            row.get::<_, String>(8)?,         // event_version
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(|e| StorageError::query("failed to get host by id", e))?;
-
-            match result {
-                None => Err(StorageError::NotFound {
-                    entity_type: "host",
-                    id: id_str,
-                }),
-                Some((
-                    id_str,
-                    ip_address,
-                    hostname,
-                    comment_str,
-                    tags_json,
-                    aliases_json,
-                    created_at_micros,
-                    updated_at_micros,
-                    version,
-                )) => {
-                    let id = Ulid::from_string(&id_str)
-                        .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-                    let comment = comment_str.filter(|s| !s.is_empty());
-                    let tags: Vec<String> = tags_json
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default();
-                    let aliases: Vec<String> = aliases_json
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default();
-
-                    let created_at = DateTime::from_timestamp_micros(created_at_micros)
-                        .ok_or_else(|| {
-                            StorageError::InvalidData(format!(
-                                "invalid created_at timestamp: {}",
-                                created_at_micros
-                            ))
-                        })?;
-
-                    let updated_at = DateTime::from_timestamp_micros(updated_at_micros)
-                        .ok_or_else(|| {
-                            StorageError::InvalidData(format!(
-                                "invalid updated_at timestamp: {}",
-                                updated_at_micros
-                            ))
-                        })?;
-
-                    Ok(HostEntry {
-                        id,
-                        ip_address,
-                        hostname,
-                        aliases,
-                        comment,
-                        tags,
-                        created_at,
-                        updated_at,
-                        version,
-                    })
-                }
-            }
-        })
+        let row: Option<HostEntryRow> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                ip_address,
+                hostname,
+                comment,
+                tags,
+                aliases,
+                created_at,
+                updated_at,
+                event_version
+            FROM host_entries_current
+            WHERE id = ?1
+            "#,
+        )
+        .bind(&id_str)
+        .fetch_optional(self.pool())
         .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during get_by_id", e))?
+        .map_err(|e| StorageError::query("failed to get host by id", e))?;
+
+        match row {
+            None => Err(StorageError::NotFound {
+                entity_type: "host",
+                id: id_str,
+            }),
+            Some(row) => row_to_host_entry(row),
+        }
     }
 
     /// Find host by exact IP and hostname match
@@ -248,109 +210,35 @@ impl SqliteStorage {
     /// # Errors
     ///
     /// Returns `StorageError::Query` if the database operation fails.
+    /// Returns `StorageError::InvalidData` if stored JSON is malformed.
     pub(super) async fn find_by_ip_and_hostname_impl(
         &self,
         ip_address: &str,
         hostname: &str,
     ) -> Result<Option<HostEntry>, StorageError> {
-        let ip_address = ip_address.to_string();
-        let hostname = hostname.to_string();
-        let conn = self.conn();
-
-        tokio::task::spawn_blocking(move || {
-            let result = conn
-                .lock()
-                .query_row(
-                    r#"
-                    SELECT
-                        id,
-                        ip_address,
-                        hostname,
-                        comment,
-                        tags,
-                        aliases,
-                        created_at,
-                        updated_at,
-                        event_version
-                    FROM host_entries_current
-                    WHERE ip_address = ?1 AND hostname = ?2
-                    "#,
-                    rusqlite::params![&ip_address, &hostname],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,         // id
-                            row.get::<_, String>(1)?,         // ip_address
-                            row.get::<_, String>(2)?,         // hostname
-                            row.get::<_, Option<String>>(3)?, // comment
-                            row.get::<_, Option<String>>(4)?, // tags
-                            row.get::<_, Option<String>>(5)?, // aliases
-                            row.get::<_, i64>(6)?,            // created_at
-                            row.get::<_, i64>(7)?,            // updated_at
-                            row.get::<_, String>(8)?,         // event_version
-                        ))
-                    },
-                )
-                .optional()
-                .map_err(|e| StorageError::query("failed to find host", e))?;
-
-            match result {
-                None => Ok(None),
-                Some((
-                    id_str,
-                    ip_address,
-                    hostname,
-                    comment_str,
-                    tags_json,
-                    aliases_json,
-                    created_at_micros,
-                    updated_at_micros,
-                    version,
-                )) => {
-                    let id = Ulid::from_string(&id_str)
-                        .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-                    let comment = comment_str.filter(|s| !s.is_empty());
-                    let tags: Vec<String> = tags_json
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default();
-                    let aliases: Vec<String> = aliases_json
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_default();
-
-                    let created_at = DateTime::from_timestamp_micros(created_at_micros)
-                        .ok_or_else(|| {
-                            StorageError::InvalidData(format!(
-                                "invalid created_at timestamp: {}",
-                                created_at_micros
-                            ))
-                        })?;
-
-                    let updated_at = DateTime::from_timestamp_micros(updated_at_micros)
-                        .ok_or_else(|| {
-                            StorageError::InvalidData(format!(
-                                "invalid updated_at timestamp: {}",
-                                updated_at_micros
-                            ))
-                        })?;
-
-                    Ok(Some(HostEntry {
-                        id,
-                        ip_address,
-                        hostname,
-                        aliases,
-                        comment,
-                        tags,
-                        created_at,
-                        updated_at,
-                        version,
-                    }))
-                }
-            }
-        })
+        let row: Option<HostEntryRow> = sqlx::query_as(
+            r#"
+            SELECT
+                id,
+                ip_address,
+                hostname,
+                comment,
+                tags,
+                aliases,
+                created_at,
+                updated_at,
+                event_version
+            FROM host_entries_current
+            WHERE ip_address = ?1 AND hostname = ?2
+            "#,
+        )
+        .bind(ip_address)
+        .bind(hostname)
+        .fetch_optional(self.pool())
         .await
-        .map_err(|e| {
-            StorageError::connection("spawn_blocking panicked during find_by_ip_and_hostname", e)
-        })?
+        .map_err(|e| StorageError::query("failed to find host", e))?;
+
+        row.map(row_to_host_entry).transpose()
     }
 
     /// Search hosts by IP address pattern, hostname pattern, or tags
@@ -362,166 +250,96 @@ impl SqliteStorage {
     ///
     /// Returns `StorageError::Query` if the database operation fails.
     ///
-    /// # Safety (SQL Injection Prevention)
+    /// # Security
     ///
-    /// This function uses dynamic SQL query construction with `format!()` but is safe because:
-    /// 1. **Column names are hardcoded constants** - Only static strings like "ip_address",
-    ///    "hostname", "aliases", "tags" appear in the query structure.
-    /// 2. **All user input is parameterized** - Filter patterns (ip_pattern, hostname_pattern, tags)
-    ///    are bound via `?` placeholders and `params` vector, never interpolated into SQL.
-    /// 3. **Query structure is fixed** - Only the WHERE clause presence changes based on filter,
-    ///    and the clause content uses positional placeholders.
-    /// 4. **SQLite parameterization** - The `query_map(param_refs.as_slice(), ...)` call ensures
-    ///    all values are properly escaped by the database driver.
+    /// Uses dynamic WHERE clause construction with parameterized values only - no user input
+    /// is interpolated into SQL. All filter patterns are bound via `?` placeholders.
     pub(super) async fn search_impl(
         &self,
         filter: HostFilter,
     ) -> Result<Vec<HostEntry>, StorageError> {
-        let conn = self.conn();
+        // Build dynamic WHERE clause and params
+        // Security: All user input goes through params vector (parameterized), not string interpolation
+        let mut where_clauses: Vec<String> = Vec::new();
+        let mut params: Vec<String> = Vec::new();
 
-        tokio::task::spawn_blocking(move || {
-            // Build dynamic WHERE clause and params
-            // SAFETY: All user input goes through params vector (parameterized), not string interpolation
-            let mut where_clauses: Vec<String> = Vec::new();
-            let mut params: Vec<String> = Vec::new();
+        if let Some(ip_pattern) = &filter.ip_pattern {
+            where_clauses.push("ip_address LIKE ?".to_string());
+            params.push(format!("%{}%", ip_pattern));
+        }
 
-            if let Some(ip_pattern) = &filter.ip_pattern {
-                where_clauses.push("ip_address LIKE ?".to_string());
-                params.push(format!("%{}%", ip_pattern));
+        if let Some(hostname_pattern) = &filter.hostname_pattern {
+            // Use LIKE with COLLATE NOCASE for case-insensitive matching (DNS is case-insensitive)
+            where_clauses.push("(hostname LIKE ? COLLATE NOCASE OR EXISTS (SELECT 1 FROM json_each(aliases) WHERE value LIKE ? COLLATE NOCASE))".to_string());
+            let pattern = format!("%{}%", hostname_pattern);
+            params.push(pattern.clone());
+            params.push(pattern);
+        }
+
+        // For tag filtering, check if any tag appears in the JSON array
+        // Limit tag count to prevent query explosion from unbounded OR conditions
+        const MAX_FILTER_TAGS: usize = 20;
+        if let Some(tags) = &filter.tags {
+            if tags.len() > MAX_FILTER_TAGS {
+                return Err(StorageError::InvalidData(format!(
+                    "too many filter tags: {} (max {})",
+                    tags.len(),
+                    MAX_FILTER_TAGS
+                )));
             }
+            if !tags.is_empty() {
+                // Build OR conditions for each tag
+                let tag_conditions: Vec<String> =
+                    tags.iter().map(|_| "tags LIKE ?".to_string()).collect();
 
-            if let Some(hostname_pattern) = &filter.hostname_pattern {
-                // Use LIKE with COLLATE NOCASE for case-insensitive matching (DNS is case-insensitive)
-                where_clauses.push("(hostname LIKE ? COLLATE NOCASE OR EXISTS (SELECT 1 FROM json_each(aliases) WHERE value LIKE ? COLLATE NOCASE))".to_string());
-                let pattern = format!("%{}%", hostname_pattern);
-                params.push(pattern.clone());
-                params.push(pattern);
-            }
+                where_clauses.push(format!("({})", tag_conditions.join(" OR ")));
 
-            // For tag filtering, check if any tag appears in the JSON array
-            if let Some(tags) = &filter.tags {
-                if !tags.is_empty() {
-                    // Build OR conditions for each tag
-                    let tag_conditions: Vec<String> =
-                        tags.iter().map(|_| "tags LIKE ?".to_string()).collect();
-
-                    where_clauses.push(format!("({})", tag_conditions.join(" OR ")));
-
-                    for tag in tags {
-                        // Use LIKE pattern to find tag in JSON array
-                        params.push(format!("%\"{}\"%", tag));
-                    }
+                for tag in tags {
+                    // Use LIKE pattern to find tag in JSON array
+                    params.push(format!("%\"{}\"%", tag));
                 }
             }
+        }
 
-            let where_clause = if where_clauses.is_empty() {
-                String::new()
-            } else {
-                format!("WHERE {}", where_clauses.join(" AND "))
-            };
+        let where_clause = if where_clauses.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", where_clauses.join(" AND "))
+        };
 
-            let query = format!(
-                r#"
-                SELECT
-                    id,
-                    ip_address,
-                    hostname,
-                    comment,
-                    tags,
-                    aliases,
-                    created_at,
-                    updated_at,
-                    event_version
-                FROM host_entries_current
-                {}
-                ORDER BY ip_address, hostname
-                "#,
-                where_clause
-            );
+        let query = format!(
+            r#"
+            SELECT
+                id,
+                ip_address,
+                hostname,
+                comment,
+                tags,
+                aliases,
+                created_at,
+                updated_at,
+                event_version
+            FROM host_entries_current
+            {}
+            ORDER BY ip_address, hostname
+            "#,
+            where_clause
+        );
 
-            let conn = conn.lock();
-            let mut stmt = conn
-                .prepare(&query)
-                .map_err(|e| StorageError::query("failed to prepare search query", e))?;
+        // For dynamic queries with variable parameters, we need to use sqlx::query
+        // and bind each parameter individually
+        let mut query_builder = sqlx::query_as::<_, HostEntryRow>(&query);
 
-            // Convert params to references for query_map
-            let param_refs: Vec<&dyn rusqlite::ToSql> =
-                params.iter().map(|p| p as &dyn rusqlite::ToSql).collect();
+        for param in &params {
+            query_builder = query_builder.bind(param);
+        }
 
-            let rows = stmt
-                .query_map(param_refs.as_slice(), |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,         // id
-                        row.get::<_, String>(1)?,         // ip_address
-                        row.get::<_, String>(2)?,         // hostname
-                        row.get::<_, Option<String>>(3)?, // comment
-                        row.get::<_, Option<String>>(4)?, // tags
-                        row.get::<_, Option<String>>(5)?, // aliases
-                        row.get::<_, i64>(6)?,            // created_at
-                        row.get::<_, i64>(7)?,            // updated_at
-                        row.get::<_, String>(8)?,         // event_version
-                    ))
-                })
-                .map_err(|e| StorageError::query("failed to execute search query", e))?;
+        let rows = query_builder
+            .fetch_all(self.pool())
+            .await
+            .map_err(|e| StorageError::query("failed to execute search query", e))?;
 
-            let mut entries = Vec::new();
-            for row_result in rows {
-                let (
-                    id_str,
-                    ip_address,
-                    hostname,
-                    comment_str,
-                    tags_json,
-                    aliases_json,
-                    created_at_micros,
-                    updated_at_micros,
-                    version,
-                ) = row_result.map_err(|e| StorageError::query("failed to read search row", e))?;
-
-                let id = Ulid::from_string(&id_str)
-                    .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-                let comment = comment_str.filter(|s| !s.is_empty());
-                let tags: Vec<String> = tags_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                let aliases: Vec<String> = aliases_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-
-                let created_at =
-                    DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid created_at timestamp: {}",
-                            created_at_micros
-                        ))
-                    })?;
-
-                let updated_at =
-                    DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid updated_at timestamp: {}",
-                            updated_at_micros
-                        ))
-                    })?;
-
-                entries.push(HostEntry {
-                    id,
-                    ip_address,
-                    hostname,
-                    aliases,
-                    comment,
-                    tags,
-                    created_at,
-                    updated_at,
-                    version,
-                });
-            }
-
-            Ok(entries)
-        })
-        .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during search", e))?
+        rows.into_iter().map(row_to_host_entry).collect()
     }
 
     /// Get historical state of all hosts at a specific point in time
@@ -532,208 +350,167 @@ impl SqliteStorage {
     /// # Errors
     ///
     /// Returns `StorageError::Query` if the database operation fails.
+    /// Returns `StorageError::InvalidData` if event data is malformed.
     pub(super) async fn get_at_time_impl(
         &self,
         at_time: DateTime<Utc>,
     ) -> Result<Vec<HostEntry>, StorageError> {
-        let conn = self.conn();
+        let at_time_micros = at_time.timestamp_micros();
 
-        tokio::task::spawn_blocking(move || {
-            let conn = conn.lock();
-            let at_time_micros = at_time.timestamp_micros();
+        // Get all aggregates that have events before the cutoff time
+        let aggregate_ids: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT DISTINCT aggregate_id
+            FROM host_events
+            WHERE created_at <= ?1
+            "#,
+        )
+        .bind(at_time_micros)
+        .fetch_all(self.pool())
+        .await
+        .map_err(|e| StorageError::query("failed to query aggregate ids", e))?;
 
-            // Get all aggregates that have events before the cutoff time
-            let mut stmt = conn
-                .prepare(
-                    r#"
-                    SELECT DISTINCT aggregate_id
+        let mut entries = Vec::new();
+
+        // For each aggregate, rebuild state from events up to the cutoff time
+        for (aggregate_id_str,) in aggregate_ids {
+            let aggregate_id = Ulid::from_string(&aggregate_id_str)
+                .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
+
+            // Load events for this aggregate up to the cutoff time
+            let event_rows: Vec<EventRow> = sqlx::query_as(
+                r#"
+                    SELECT
+                        event_type,
+                        ip_address,
+                        hostname,
+                        metadata,
+                        event_timestamp
                     FROM host_events
-                    WHERE created_at <= ?1
+                    WHERE aggregate_id = ?1 AND created_at <= ?2
+                    ORDER BY rowid ASC
                     "#,
-                )
-                .map_err(|e| StorageError::query("failed to prepare aggregate query", e))?;
+            )
+            .bind(&aggregate_id_str)
+            .bind(at_time_micros)
+            .fetch_all(self.pool())
+            .await
+            .map_err(|e| StorageError::query("failed to query events", e))?;
 
-            let aggregate_ids: Result<Vec<String>, rusqlite::Error> = stmt
-                .query_map(rusqlite::params![at_time_micros], |row| row.get(0))
-                .map_err(|e| StorageError::query("failed to query aggregate ids", e))?
-                .collect();
+            // Rebuild state by applying events
+            let mut current_state: Option<HostState> = None;
 
-            let aggregate_ids =
-                aggregate_ids.map_err(|e| StorageError::query("failed to get aggregate ids", e))?;
+            for row in event_rows {
+                let _event_timestamp = DateTime::from_timestamp_micros(row.event_timestamp)
+                    .ok_or_else(|| {
+                        StorageError::InvalidData(format!(
+                            "invalid event timestamp: {}",
+                            row.event_timestamp
+                        ))
+                    })?;
 
-            let mut entries = Vec::new();
+                // Deserialize metadata
+                let event_data: serde_json::Value =
+                    serde_json::from_str(&row.metadata).map_err(|e| {
+                        StorageError::InvalidData(format!("failed to deserialize metadata: {}", e))
+                    })?;
 
-            // For each aggregate, rebuild state from events up to the cutoff time
-            for aggregate_id_str in aggregate_ids {
-                let aggregate_id = Ulid::from_string(&aggregate_id_str)
-                    .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-                // Load events for this aggregate up to the cutoff time
-                let mut stmt = conn
-                    .prepare(
-                        r#"
-                        SELECT
-                            event_id,
-                            aggregate_id,
-                            event_type,
-                            event_version,
-                            ip_address,
-                            hostname,
-                            metadata,
-                            event_timestamp,
-                            created_at,
-                            created_by
-                        FROM host_events
-                        WHERE aggregate_id = ?1 AND created_at <= ?2
-                        ORDER BY rowid ASC
-                        "#,
-                    )
-                    .map_err(|e| StorageError::query("failed to prepare event query", e))?;
-
-                let rows = stmt
-                    .query_map(
-                        rusqlite::params![&aggregate_id_str, at_time_micros],
-                        |row| {
-                            Ok((
-                                row.get::<_, String>(2)?,         // event_type
-                                row.get::<_, Option<String>>(4)?, // ip_address
-                                row.get::<_, Option<String>>(5)?, // hostname
-                                row.get::<_, String>(6)?,         // metadata
-                                row.get::<_, i64>(7)?,            // event_timestamp
-                            ))
-                        },
-                    )
-                    .map_err(|e| StorageError::query("failed to query events", e))?;
-
-                // Rebuild state by applying events (ip, hostname, comment, tags, aliases)
-                let mut current_state: Option<(
-                    String,
-                    String,
-                    Option<String>,
-                    Vec<String>,
-                    Vec<String>,
-                )> = None;
-
-                for row in rows {
-                    let (event_type, ip_address, hostname, metadata_json, event_timestamp_micros) =
-                        row.map_err(|e| StorageError::query("failed to read event row", e))?;
-
-                    let _event_timestamp = DateTime::from_timestamp_micros(event_timestamp_micros)
-                        .ok_or_else(|| {
-                            StorageError::InvalidData(format!(
-                                "invalid event timestamp: {}",
-                                event_timestamp_micros
-                            ))
+                // Apply event based on type
+                match row.event_type.as_str() {
+                    "HostCreated" => {
+                        let ip = row.ip_address.ok_or_else(|| {
+                            StorageError::InvalidData("HostCreated missing ip_address".into())
+                        })?;
+                        let host = row.hostname.ok_or_else(|| {
+                            StorageError::InvalidData("HostCreated missing hostname".into())
                         })?;
 
-                    // Deserialize metadata
-                    let event_data: serde_json::Value = serde_json::from_str(&metadata_json)
-                        .map_err(|e| {
-                            StorageError::InvalidData(format!(
-                                "failed to deserialize metadata: {}",
-                                e
-                            ))
-                        })?;
+                        let comment = event_data
+                            .get("comment")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
+                        let tags = parse_event_json_array(&event_data, "tags")?;
+                        let aliases = parse_event_json_array(&event_data, "aliases")?;
 
-                    // Apply event based on type
-                    match event_type.as_str() {
-                        "HostCreated" => {
-                            let ip = ip_address.ok_or_else(|| {
-                                StorageError::InvalidData("HostCreated missing ip_address".into())
-                            })?;
-                            let host = hostname.ok_or_else(|| {
-                                StorageError::InvalidData("HostCreated missing hostname".into())
-                            })?;
-
-                            let comment = event_data
+                        current_state = Some(HostState {
+                            ip_address: ip,
+                            hostname: host,
+                            comment,
+                            tags,
+                            aliases,
+                        });
+                    }
+                    "IpAddressChanged" => {
+                        if let Some(ref mut state) = current_state {
+                            if let Some(new_ip) = row.ip_address {
+                                state.ip_address = new_ip;
+                            }
+                        }
+                    }
+                    "HostnameChanged" => {
+                        if let Some(ref mut state) = current_state {
+                            if let Some(new_hostname) = row.hostname {
+                                state.hostname = new_hostname;
+                            }
+                        }
+                    }
+                    "CommentUpdated" => {
+                        if let Some(ref mut state) = current_state {
+                            state.comment = event_data
                                 .get("comment")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
-                            let tags: Vec<String> = event_data
-                                .get("tags")
-                                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                .unwrap_or_default();
-                            let aliases: Vec<String> = event_data
-                                .get("aliases")
-                                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                .unwrap_or_default();
-
-                            current_state = Some((ip, host, comment, tags, aliases));
                         }
-                        "IpAddressChanged" => {
-                            if let Some((ref mut ip, _, _, _, _)) = current_state {
-                                if let Some(new_ip) = ip_address {
-                                    *ip = new_ip;
-                                }
-                            }
-                        }
-                        "HostnameChanged" => {
-                            if let Some((_, ref mut host, _, _, _)) = current_state {
-                                if let Some(new_hostname) = hostname {
-                                    *host = new_hostname;
-                                }
-                            }
-                        }
-                        "CommentUpdated" => {
-                            if let Some((_, _, ref mut c, _, _)) = current_state {
-                                *c = event_data
-                                    .get("comment")
-                                    .and_then(|v| v.as_str())
-                                    .map(String::from);
-                            }
-                        }
-                        "TagsModified" => {
-                            if let Some((_, _, _, ref mut tags, _)) = current_state {
-                                *tags = event_data
-                                    .get("tags")
-                                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                    .unwrap_or_default();
-                            }
-                        }
-                        "AliasesModified" => {
-                            if let Some((_, _, _, _, ref mut aliases)) = current_state {
-                                *aliases = event_data
-                                    .get("aliases")
-                                    .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                    .unwrap_or_default();
-                            }
-                        }
-                        "HostDeleted" => {
-                            // Clear state - this host was deleted
-                            current_state = None;
-                        }
-                        _ => {}
                     }
-                }
-
-                // If state exists (not deleted), add to results
-                if let Some((ip_address, hostname, comment, tags, aliases)) = current_state {
-                    // For historical queries, we use a synthetic version and timestamp
-                    entries.push(HostEntry {
-                        id: aggregate_id,
-                        ip_address,
-                        hostname,
-                        aliases,
-                        comment,
-                        tags,
-                        created_at: at_time,
-                        updated_at: at_time,
-                        version: format!("historical-{}", at_time_micros),
-                    });
+                    "TagsModified" => {
+                        if let Some(ref mut state) = current_state {
+                            state.tags = parse_event_json_array(&event_data, "tags")?;
+                        }
+                    }
+                    "AliasesModified" => {
+                        if let Some(ref mut state) = current_state {
+                            state.aliases = parse_event_json_array(&event_data, "aliases")?;
+                        }
+                    }
+                    "HostDeleted" => {
+                        // Clear state - this host was deleted
+                        current_state = None;
+                    }
+                    unknown => {
+                        error!(
+                            aggregate_id = %aggregate_id_str,
+                            event_type = %unknown,
+                            "unknown event type in time-travel query - possible version mismatch or data corruption, skipping"
+                        );
+                    }
                 }
             }
 
-            // Sort by IP and hostname for consistency
-            entries.sort_by(|a, b| {
-                a.ip_address
-                    .cmp(&b.ip_address)
-                    .then_with(|| a.hostname.cmp(&b.hostname))
-            });
+            // If state exists (not deleted), add to results
+            if let Some(state) = current_state {
+                // For historical queries, we use a synthetic version and timestamp
+                entries.push(HostEntry {
+                    id: aggregate_id,
+                    ip_address: state.ip_address,
+                    hostname: state.hostname,
+                    aliases: state.aliases,
+                    comment: state.comment,
+                    tags: state.tags,
+                    created_at: at_time,
+                    updated_at: at_time,
+                    version: format!("historical-{}", at_time_micros),
+                });
+            }
+        }
 
-            Ok(entries)
-        })
-        .await
-        .map_err(|e| StorageError::connection("spawn_blocking panicked during get_at_time", e))?
+        // Sort by IP and hostname for consistency
+        entries.sort_by(|a, b| {
+            a.ip_address
+                .cmp(&b.ip_address)
+                .then_with(|| a.hostname.cmp(&b.hostname))
+        });
+
+        Ok(entries)
     }
 }
 

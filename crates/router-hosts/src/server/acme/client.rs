@@ -282,13 +282,19 @@ impl AcmeClient {
         }
 
         // Add all domains as SANs
-        // In rcgen 0.14, use try_into() to convert strings to the internal SAN type
+        // In rcgen 0.14, use try_into() to convert strings to the internal SAN type.
+        // We propagate errors rather than silently filtering invalid domains to avoid
+        // issuing certificates that unexpectedly exclude configured domains.
         params.subject_alt_names = self
             .config
             .domains
             .iter()
-            .filter_map(|d| d.clone().try_into().ok().map(SanType::DnsName))
-            .collect();
+            .map(|d| {
+                d.clone().try_into().map(SanType::DnsName).map_err(|_| {
+                    AcmeError::CertGeneration(format!("invalid domain name for SAN: '{}'", d))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         let csr = params
             .serialize_request(&key_pair)
