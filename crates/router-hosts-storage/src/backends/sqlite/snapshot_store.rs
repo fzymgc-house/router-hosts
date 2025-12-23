@@ -8,26 +8,35 @@
 //! - Apply retention policies (max count and max age)
 
 use chrono::{DateTime, Utc};
+use sqlx::FromRow;
 
 use super::SqliteStorage;
 use crate::error::StorageError;
 use crate::types::{Snapshot, SnapshotId, SnapshotMetadata};
 
-/// Row type for full snapshot queries
-/// Fields: (snapshot_id, created_at, hosts_content, entry_count, trigger, name, event_log_position)
-type SnapshotRow = (
-    String,
-    i64,
-    String,
-    i32,
-    String,
-    Option<String>,
-    Option<i64>,
-);
+/// Row type for full snapshot queries.
+///
+/// Uses `#[derive(FromRow)]` for automatic mapping from database columns.
+#[derive(Debug, FromRow)]
+struct SnapshotRow {
+    snapshot_id: String,
+    created_at: i64,
+    hosts_content: String,
+    entry_count: i32,
+    trigger: String,
+    name: Option<String>,
+    event_log_position: Option<i64>,
+}
 
-/// Row type for snapshot metadata queries (no hosts_content)
-/// Fields: (snapshot_id, created_at, entry_count, trigger, name)
-type SnapshotMetadataRow = (String, i64, i32, String, Option<String>);
+/// Row type for snapshot metadata queries (excludes hosts_content for efficiency).
+#[derive(Debug, FromRow)]
+struct SnapshotMetadataRow {
+    snapshot_id: String,
+    created_at: i64,
+    entry_count: i32,
+    trigger: String,
+    name: Option<String>,
+}
 
 impl SqliteStorage {
     /// Save a snapshot to the store
@@ -99,31 +108,23 @@ impl SqliteStorage {
                 entity_type: "snapshot",
                 id: snapshot_id_str,
             }),
-            Some((
-                snapshot_id_from_db,
-                created_at_micros,
-                hosts_content,
-                entry_count,
-                trigger,
-                name,
-                event_log_position,
-            )) => {
+            Some(row) => {
                 let created_at =
-                    DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
+                    DateTime::from_timestamp_micros(row.created_at).ok_or_else(|| {
                         StorageError::InvalidData(format!(
                             "invalid created_at timestamp: {}",
-                            created_at_micros
+                            row.created_at
                         ))
                     })?;
 
                 Ok(Snapshot {
-                    snapshot_id: SnapshotId::from(snapshot_id_from_db),
+                    snapshot_id: SnapshotId::from(row.snapshot_id),
                     created_at,
-                    hosts_content,
-                    entry_count,
-                    trigger,
-                    name,
-                    event_log_position,
+                    hosts_content: row.hosts_content,
+                    entry_count: row.entry_count,
+                    trigger: row.trigger,
+                    name: row.name,
+                    event_log_position: row.event_log_position,
                 })
             }
         }
@@ -171,26 +172,25 @@ impl SqliteStorage {
         .await
         .map_err(|e| StorageError::query("failed to query snapshots", e))?;
 
-        let mut snapshots = Vec::new();
-        for (snapshot_id, created_at_micros, entry_count, trigger, name) in rows {
-            let created_at =
-                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                    StorageError::InvalidData(format!(
-                        "invalid created_at timestamp: {}",
-                        created_at_micros
-                    ))
-                })?;
+        rows.into_iter()
+            .map(|row| {
+                let created_at =
+                    DateTime::from_timestamp_micros(row.created_at).ok_or_else(|| {
+                        StorageError::InvalidData(format!(
+                            "invalid created_at timestamp: {}",
+                            row.created_at
+                        ))
+                    })?;
 
-            snapshots.push(SnapshotMetadata {
-                snapshot_id: SnapshotId::from(snapshot_id),
-                created_at,
-                entry_count,
-                trigger,
-                name,
-            });
-        }
-
-        Ok(snapshots)
+                Ok(SnapshotMetadata {
+                    snapshot_id: SnapshotId::from(row.snapshot_id),
+                    created_at,
+                    entry_count: row.entry_count,
+                    trigger: row.trigger,
+                    name: row.name,
+                })
+            })
+            .collect()
     }
 
     /// Delete a snapshot by ID

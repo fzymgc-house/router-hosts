@@ -13,8 +13,8 @@
 //!
 //! # Connection Management
 //!
-//! Uses sqlx's SqlitePool for connection management with async-native operations.
-//! Unlike the rusqlite implementation, no spawn_blocking is needed.
+//! Uses sqlx's SqlitePool for true async database operations without blocking
+//! the Tokio runtime.
 //!
 //! # Differences from DuckDB
 //!
@@ -27,6 +27,10 @@
 //! the current state of each host from the event log. This scales as O(n × m × 7)
 //! where n = number of hosts and m = average events per host.
 //!
+//! Additionally, duplicate entry detection queries the `host_entries_current` view
+//! which is not indexable, resulting in a full table scan. This is acceptable for
+//! small datasets but may become noticeable with many hosts.
+//!
 //! **Ballpark estimates:**
 //! - < 100 hosts: < 10ms (instant)
 //! - ~1,000 hosts: ~100ms (acceptable)
@@ -38,9 +42,8 @@
 //!
 //! # Security
 //!
-//! All queries use parameterized statements to prevent SQL injection.
-//! User-provided data (hostnames, IPs, comments, tags) is never interpolated
-//! into query strings.
+//! All queries use sqlx's prepared statement bindings (`bind()`) to prevent
+//! SQL injection. User-provided data is never interpolated into query strings.
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

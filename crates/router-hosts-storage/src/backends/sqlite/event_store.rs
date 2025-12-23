@@ -1,6 +1,10 @@
 //! EventStore implementation for SQLite using sqlx
 //!
-//! Provides append-only event storage with optimistic concurrency control.
+//! This module implements the event sourcing write side:
+//! - Append events with optimistic concurrency control
+//! - Load event streams for aggregates
+//! - Version management for conflict detection
+//!
 //! All operations use transactions for atomicity.
 //!
 //! # Note on Ordering
@@ -16,7 +20,23 @@ use super::SqliteStorage;
 use crate::error::StorageError;
 use crate::types::{EventEnvelope, HostEvent};
 
-/// Helper struct for extracting event data from database rows
+/// Serialize a value to JSON, returning an error if serialization fails.
+///
+/// Unlike using `.unwrap_or_else()`, this ensures serialization failures are
+/// propagated as errors rather than silently falling back to default values.
+fn serialize_json<T: serde::Serialize>(
+    value: &T,
+    field_name: &str,
+) -> Result<String, StorageError> {
+    serde_json::to_string(value).map_err(|e| {
+        StorageError::InvalidData(format!("failed to serialize {}: {}", field_name, e))
+    })
+}
+
+/// Event-specific metadata serialized as JSON in the database.
+///
+/// Used for storing additional event data that doesn't have dedicated columns,
+/// and for reconstructing events when loading from the database.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 struct EventData {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -39,7 +59,11 @@ struct EventData {
     deleted_reason: Option<String>,
 }
 
-/// Extracted event data for database operations
+/// Intermediate struct for database INSERT operations.
+///
+/// Contains typed column values extracted from a `HostEvent` plus the
+/// serialized metadata JSON. The timestamp is stored as microseconds
+/// since epoch (i64) rather than `DateTime<Utc>` for direct database binding.
 struct ExtractedEventData {
     ip_address: Option<String>,
     hostname: Option<String>,
@@ -354,7 +378,13 @@ impl SqliteStorage {
     }
 }
 
-/// Extract column values and metadata JSON from an event
+/// Extract column values and metadata JSON from an event.
+///
+/// Separates event data into:
+/// - Typed columns (ip_address, hostname, comment, tags, aliases) for indexed queries
+/// - JSON metadata for event-type-specific data (previous values, deleted_reason)
+///
+/// The timestamp is converted to microseconds for SQLite INTEGER storage.
 fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageError> {
     let (ip_address, hostname, comment, tags, aliases, event_timestamp, event_data) = match event {
         HostEvent::HostCreated {
@@ -368,8 +398,8 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             Some(ip_address.clone()),
             Some(hostname.clone()),
             comment.clone(),
-            Some(serde_json::to_string(tags).unwrap_or_else(|_| "[]".into())),
-            Some(serde_json::to_string(aliases).unwrap_or_else(|_| "[]".into())),
+            Some(serialize_json(tags, "tags")?),
+            Some(serialize_json(aliases, "aliases")?),
             *created_at,
             EventData {
                 comment: comment.clone(),
@@ -435,7 +465,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             None,
             None,
             None,
-            Some(serde_json::to_string(new_tags).unwrap_or_else(|_| "[]".into())),
+            Some(serialize_json(new_tags, "tags")?),
             None,
             *modified_at,
             EventData {
@@ -453,7 +483,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
             None,
             None,
             None,
-            Some(serde_json::to_string(new_aliases).unwrap_or_else(|_| "[]".into())),
+            Some(serialize_json(new_aliases, "aliases")?),
             *modified_at,
             EventData {
                 aliases: Some(new_aliases.clone()),
@@ -480,8 +510,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
         ),
     };
 
-    let metadata_json = serde_json::to_string(&event_data)
-        .map_err(|e| StorageError::InvalidData(format!("JSON serialization failed: {}", e)))?;
+    let metadata_json = serialize_json(&event_data, "event metadata")?;
 
     Ok(ExtractedEventData {
         ip_address,

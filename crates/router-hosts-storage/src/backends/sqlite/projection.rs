@@ -9,47 +9,140 @@
 //!
 //! The projection is built by replaying events from the event store.
 //! It provides optimized queries for the read side of CQRS.
+//!
+//! # Performance
+//!
+//! See module-level docs in `mod.rs` for performance characteristics.
+//! The `host_entries_current` view uses correlated subqueries that scale
+//! as O(n × m × 7) where n = hosts and m = events per host.
 
 use chrono::{DateTime, Utc};
+use sqlx::FromRow;
+use tracing::warn;
 use ulid::Ulid;
 
 use super::SqliteStorage;
 use crate::error::StorageError;
 use crate::types::{HostEntry, HostFilter};
 
-/// Row type for host entry queries from the `host_entries_current` view
-/// Fields: (id, ip_address, hostname, comment, tags, aliases, created_at, updated_at, event_version)
-type HostEntryRow = (
-    String,
-    String,
-    String,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    i64,
-    i64,
-    String,
-);
+/// Row type for host entry queries from the `host_entries_current` view.
+///
+/// Uses `#[derive(FromRow)]` for automatic mapping from database columns.
+/// Field names must match SQL column names exactly.
+#[derive(Debug, FromRow)]
+struct HostEntryRow {
+    id: String,
+    ip_address: String,
+    hostname: String,
+    comment: Option<String>,
+    tags: Option<String>,
+    aliases: Option<String>,
+    created_at: i64,
+    updated_at: i64,
+    event_version: String,
+}
 
-/// Row type for event queries used in time-travel reconstruction
-/// Fields: (event_type, ip_address, hostname, metadata, event_timestamp)
-type EventRow = (String, Option<String>, Option<String>, String, i64);
+/// Row type for event queries used in time-travel reconstruction.
+#[derive(Debug, FromRow)]
+struct EventRow {
+    event_type: String,
+    ip_address: Option<String>,
+    hostname: Option<String>,
+    metadata: String,
+    event_timestamp: i64,
+}
 
-/// State tuple for rebuilding host state from events
-/// Fields: (ip_address, hostname, comment, tags, aliases)
-type HostState = (String, String, Option<String>, Vec<String>, Vec<String>);
+/// Intermediate state for rebuilding host from events.
+#[derive(Debug)]
+struct HostState {
+    ip_address: String,
+    hostname: String,
+    comment: Option<String>,
+    tags: Vec<String>,
+    aliases: Vec<String>,
+}
+
+/// Parse a JSON string array, returning an error if parsing fails.
+///
+/// This ensures corrupt or malformed JSON doesn't silently become empty data.
+fn parse_json_array(json: Option<String>, field_name: &str) -> Result<Vec<String>, StorageError> {
+    match json {
+        Some(s) if !s.is_empty() => serde_json::from_str(&s).map_err(|e| {
+            StorageError::InvalidData(format!(
+                "failed to parse {} JSON '{}': {}",
+                field_name, s, e
+            ))
+        }),
+        _ => Ok(Vec::new()),
+    }
+}
+
+/// Parse a JSON array from event metadata, returning an error if parsing fails.
+///
+/// Used for extracting tags/aliases from event metadata during time-travel queries.
+fn parse_event_json_array(
+    event_data: &serde_json::Value,
+    field_name: &str,
+) -> Result<Vec<String>, StorageError> {
+    match event_data.get(field_name) {
+        Some(value) => serde_json::from_value(value.clone()).map_err(|e| {
+            StorageError::InvalidData(format!(
+                "failed to parse {} from event metadata: {}",
+                field_name, e
+            ))
+        }),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// Convert a database row to a HostEntry.
+///
+/// Handles ULID parsing, timestamp conversion, and JSON array parsing
+/// with proper error propagation.
+fn row_to_host_entry(row: HostEntryRow) -> Result<HostEntry, StorageError> {
+    let id = Ulid::from_string(&row.id)
+        .map_err(|e| StorageError::InvalidData(format!("invalid ULID '{}': {}", row.id, e)))?;
+
+    // Empty string means no comment
+    let comment = row.comment.filter(|s| !s.is_empty());
+
+    // Parse JSON arrays with proper error handling
+    let tags = parse_json_array(row.tags, "tags")?;
+    let aliases = parse_json_array(row.aliases, "aliases")?;
+
+    let created_at = DateTime::from_timestamp_micros(row.created_at).ok_or_else(|| {
+        StorageError::InvalidData(format!("invalid created_at timestamp: {}", row.created_at))
+    })?;
+
+    let updated_at = DateTime::from_timestamp_micros(row.updated_at).ok_or_else(|| {
+        StorageError::InvalidData(format!("invalid updated_at timestamp: {}", row.updated_at))
+    })?;
+
+    Ok(HostEntry {
+        id,
+        ip_address: row.ip_address,
+        hostname: row.hostname,
+        aliases,
+        comment,
+        tags,
+        created_at,
+        updated_at,
+        version: row.event_version,
+    })
+}
 
 impl SqliteStorage {
     /// List all active host entries
     ///
-    /// Uses the `host_entries_current` view for O(n) performance
-    /// instead of N+1 queries.
+    /// Uses the `host_entries_current` view which reconstructs current state
+    /// from the event log. See module docs for performance characteristics.
     ///
     /// Results are sorted by IP address, then hostname.
     ///
     /// # Errors
     ///
     /// Returns `StorageError::Query` if the database operation fails.
+    /// Returns `StorageError::InvalidData` if stored JSON is malformed.
     pub(super) async fn list_all_impl(&self) -> Result<Vec<HostEntry>, StorageError> {
         let rows: Vec<HostEntryRow> = sqlx::query_as(
             r#"
@@ -71,65 +164,7 @@ impl SqliteStorage {
         .await
         .map_err(|e| StorageError::query("failed to query host entries", e))?;
 
-        let mut entries = Vec::new();
-        for (
-            id_str,
-            ip_address,
-            hostname,
-            comment_str,
-            tags_json,
-            aliases_json,
-            created_at_micros,
-            updated_at_micros,
-            version,
-        ) in rows
-        {
-            let id = Ulid::from_string(&id_str)
-                .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-            // Parse comment: empty string means no comment
-            let comment = comment_str.filter(|s| !s.is_empty());
-
-            // Parse tags from JSON array
-            let tags: Vec<String> = tags_json
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-
-            // Parse aliases from JSON array
-            let aliases: Vec<String> = aliases_json
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-
-            let created_at =
-                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                    StorageError::InvalidData(format!(
-                        "invalid created_at timestamp: {}",
-                        created_at_micros
-                    ))
-                })?;
-
-            let updated_at =
-                DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                    StorageError::InvalidData(format!(
-                        "invalid updated_at timestamp: {}",
-                        updated_at_micros
-                    ))
-                })?;
-
-            entries.push(HostEntry {
-                id,
-                ip_address,
-                hostname,
-                aliases,
-                comment,
-                tags,
-                created_at,
-                updated_at,
-                version,
-            });
-        }
-
-        Ok(entries)
+        rows.into_iter().map(row_to_host_entry).collect()
     }
 
     /// Get current state of a host entry by ID
@@ -138,6 +173,7 @@ impl SqliteStorage {
     ///
     /// Returns `StorageError::NotFound` if the host doesn't exist or has been deleted.
     /// Returns `StorageError::Query` if the database operation fails.
+    /// Returns `StorageError::InvalidData` if stored JSON is malformed.
     pub(super) async fn get_by_id_impl(&self, id: Ulid) -> Result<HostEntry, StorageError> {
         let id_str = id.to_string();
 
@@ -167,56 +203,7 @@ impl SqliteStorage {
                 entity_type: "host",
                 id: id_str,
             }),
-            Some((
-                id_str,
-                ip_address,
-                hostname,
-                comment_str,
-                tags_json,
-                aliases_json,
-                created_at_micros,
-                updated_at_micros,
-                version,
-            )) => {
-                let id = Ulid::from_string(&id_str)
-                    .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-                let comment = comment_str.filter(|s| !s.is_empty());
-                let tags: Vec<String> = tags_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                let aliases: Vec<String> = aliases_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-
-                let created_at =
-                    DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid created_at timestamp: {}",
-                            created_at_micros
-                        ))
-                    })?;
-
-                let updated_at =
-                    DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid updated_at timestamp: {}",
-                            updated_at_micros
-                        ))
-                    })?;
-
-                Ok(HostEntry {
-                    id,
-                    ip_address,
-                    hostname,
-                    aliases,
-                    comment,
-                    tags,
-                    created_at,
-                    updated_at,
-                    version,
-                })
-            }
+            Some(row) => row_to_host_entry(row),
         }
     }
 
@@ -227,6 +214,7 @@ impl SqliteStorage {
     /// # Errors
     ///
     /// Returns `StorageError::Query` if the database operation fails.
+    /// Returns `StorageError::InvalidData` if stored JSON is malformed.
     pub(super) async fn find_by_ip_and_hostname_impl(
         &self,
         ip_address: &str,
@@ -254,59 +242,7 @@ impl SqliteStorage {
         .await
         .map_err(|e| StorageError::query("failed to find host", e))?;
 
-        match row {
-            None => Ok(None),
-            Some((
-                id_str,
-                ip_address,
-                hostname,
-                comment_str,
-                tags_json,
-                aliases_json,
-                created_at_micros,
-                updated_at_micros,
-                version,
-            )) => {
-                let id = Ulid::from_string(&id_str)
-                    .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-                let comment = comment_str.filter(|s| !s.is_empty());
-                let tags: Vec<String> = tags_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-                let aliases: Vec<String> = aliases_json
-                    .and_then(|s| serde_json::from_str(&s).ok())
-                    .unwrap_or_default();
-
-                let created_at =
-                    DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid created_at timestamp: {}",
-                            created_at_micros
-                        ))
-                    })?;
-
-                let updated_at =
-                    DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                        StorageError::InvalidData(format!(
-                            "invalid updated_at timestamp: {}",
-                            updated_at_micros
-                        ))
-                    })?;
-
-                Ok(Some(HostEntry {
-                    id,
-                    ip_address,
-                    hostname,
-                    aliases,
-                    comment,
-                    tags,
-                    created_at,
-                    updated_at,
-                    version,
-                }))
-            }
-        }
+        row.map(row_to_host_entry).transpose()
     }
 
     /// Search hosts by IP address pattern, hostname pattern, or tags
@@ -404,60 +340,7 @@ impl SqliteStorage {
             .await
             .map_err(|e| StorageError::query("failed to execute search query", e))?;
 
-        let mut entries = Vec::new();
-        for (
-            id_str,
-            ip_address,
-            hostname,
-            comment_str,
-            tags_json,
-            aliases_json,
-            created_at_micros,
-            updated_at_micros,
-            version,
-        ) in rows
-        {
-            let id = Ulid::from_string(&id_str)
-                .map_err(|e| StorageError::InvalidData(format!("invalid ULID: {}", e)))?;
-
-            let comment = comment_str.filter(|s| !s.is_empty());
-            let tags: Vec<String> = tags_json
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-            let aliases: Vec<String> = aliases_json
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-
-            let created_at =
-                DateTime::from_timestamp_micros(created_at_micros).ok_or_else(|| {
-                    StorageError::InvalidData(format!(
-                        "invalid created_at timestamp: {}",
-                        created_at_micros
-                    ))
-                })?;
-
-            let updated_at =
-                DateTime::from_timestamp_micros(updated_at_micros).ok_or_else(|| {
-                    StorageError::InvalidData(format!(
-                        "invalid updated_at timestamp: {}",
-                        updated_at_micros
-                    ))
-                })?;
-
-            entries.push(HostEntry {
-                id,
-                ip_address,
-                hostname,
-                aliases,
-                comment,
-                tags,
-                created_at,
-                updated_at,
-                version,
-            });
-        }
-
-        Ok(entries)
+        rows.into_iter().map(row_to_host_entry).collect()
     }
 
     /// Get historical state of all hosts at a specific point in time
@@ -468,6 +351,7 @@ impl SqliteStorage {
     /// # Errors
     ///
     /// Returns `StorageError::Query` if the database operation fails.
+    /// Returns `StorageError::InvalidData` if event data is malformed.
     pub(super) async fn get_at_time_impl(
         &self,
         at_time: DateTime<Utc>,
@@ -514,33 +398,31 @@ impl SqliteStorage {
             .await
             .map_err(|e| StorageError::query("failed to query events", e))?;
 
-            // Rebuild state by applying events (ip, hostname, comment, tags, aliases)
+            // Rebuild state by applying events
             let mut current_state: Option<HostState> = None;
 
-            for (event_type, ip_address, hostname, metadata_json, event_timestamp_micros) in
-                event_rows
-            {
-                let _event_timestamp = DateTime::from_timestamp_micros(event_timestamp_micros)
+            for row in event_rows {
+                let _event_timestamp = DateTime::from_timestamp_micros(row.event_timestamp)
                     .ok_or_else(|| {
                         StorageError::InvalidData(format!(
                             "invalid event timestamp: {}",
-                            event_timestamp_micros
+                            row.event_timestamp
                         ))
                     })?;
 
                 // Deserialize metadata
                 let event_data: serde_json::Value =
-                    serde_json::from_str(&metadata_json).map_err(|e| {
+                    serde_json::from_str(&row.metadata).map_err(|e| {
                         StorageError::InvalidData(format!("failed to deserialize metadata: {}", e))
                     })?;
 
                 // Apply event based on type
-                match event_type.as_str() {
+                match row.event_type.as_str() {
                     "HostCreated" => {
-                        let ip = ip_address.ok_or_else(|| {
+                        let ip = row.ip_address.ok_or_else(|| {
                             StorageError::InvalidData("HostCreated missing ip_address".into())
                         })?;
-                        let host = hostname.ok_or_else(|| {
+                        let host = row.hostname.ok_or_else(|| {
                             StorageError::InvalidData("HostCreated missing hostname".into())
                         })?;
 
@@ -548,73 +430,73 @@ impl SqliteStorage {
                             .get("comment")
                             .and_then(|v| v.as_str())
                             .map(String::from);
-                        let tags: Vec<String> = event_data
-                            .get("tags")
-                            .and_then(|v| serde_json::from_value(v.clone()).ok())
-                            .unwrap_or_default();
-                        let aliases: Vec<String> = event_data
-                            .get("aliases")
-                            .and_then(|v| serde_json::from_value(v.clone()).ok())
-                            .unwrap_or_default();
+                        let tags = parse_event_json_array(&event_data, "tags")?;
+                        let aliases = parse_event_json_array(&event_data, "aliases")?;
 
-                        current_state = Some((ip, host, comment, tags, aliases));
+                        current_state = Some(HostState {
+                            ip_address: ip,
+                            hostname: host,
+                            comment,
+                            tags,
+                            aliases,
+                        });
                     }
                     "IpAddressChanged" => {
-                        if let Some((ref mut ip, _, _, _, _)) = current_state {
-                            if let Some(new_ip) = ip_address {
-                                *ip = new_ip;
+                        if let Some(ref mut state) = current_state {
+                            if let Some(new_ip) = row.ip_address {
+                                state.ip_address = new_ip;
                             }
                         }
                     }
                     "HostnameChanged" => {
-                        if let Some((_, ref mut host, _, _, _)) = current_state {
-                            if let Some(new_hostname) = hostname {
-                                *host = new_hostname;
+                        if let Some(ref mut state) = current_state {
+                            if let Some(new_hostname) = row.hostname {
+                                state.hostname = new_hostname;
                             }
                         }
                     }
                     "CommentUpdated" => {
-                        if let Some((_, _, ref mut c, _, _)) = current_state {
-                            *c = event_data
+                        if let Some(ref mut state) = current_state {
+                            state.comment = event_data
                                 .get("comment")
                                 .and_then(|v| v.as_str())
                                 .map(String::from);
                         }
                     }
                     "TagsModified" => {
-                        if let Some((_, _, _, ref mut tags, _)) = current_state {
-                            *tags = event_data
-                                .get("tags")
-                                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                .unwrap_or_default();
+                        if let Some(ref mut state) = current_state {
+                            state.tags = parse_event_json_array(&event_data, "tags")?;
                         }
                     }
                     "AliasesModified" => {
-                        if let Some((_, _, _, _, ref mut aliases)) = current_state {
-                            *aliases = event_data
-                                .get("aliases")
-                                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                                .unwrap_or_default();
+                        if let Some(ref mut state) = current_state {
+                            state.aliases = parse_event_json_array(&event_data, "aliases")?;
                         }
                     }
                     "HostDeleted" => {
                         // Clear state - this host was deleted
                         current_state = None;
                     }
-                    _ => {}
+                    unknown => {
+                        warn!(
+                            aggregate_id = %aggregate_id_str,
+                            event_type = %unknown,
+                            "unknown event type in time-travel query, skipping"
+                        );
+                    }
                 }
             }
 
             // If state exists (not deleted), add to results
-            if let Some((ip_address, hostname, comment, tags, aliases)) = current_state {
+            if let Some(state) = current_state {
                 // For historical queries, we use a synthetic version and timestamp
                 entries.push(HostEntry {
                     id: aggregate_id,
-                    ip_address,
-                    hostname,
-                    aliases,
-                    comment,
-                    tags,
+                    ip_address: state.ip_address,
+                    hostname: state.hostname,
+                    aliases: state.aliases,
+                    comment: state.comment,
+                    tags: state.tags,
                     created_at: at_time,
                     updated_at: at_time,
                     version: format!("historical-{}", at_time_micros),
