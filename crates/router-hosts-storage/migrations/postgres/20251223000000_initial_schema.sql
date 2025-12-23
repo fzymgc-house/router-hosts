@@ -2,6 +2,18 @@
 --
 -- Creates all tables, indexes, and views for the CQRS event sourcing pattern.
 -- Uses PostgreSQL-specific features like TIMESTAMPTZ and DISTINCT ON.
+--
+-- IMPORTANT: View Update Strategy
+-- --------------------------------
+-- This migration uses CREATE VIEW IF NOT EXISTS which is appropriate for initial
+-- schema creation. However, if a view definition needs to change in a future
+-- migration, you MUST use DROP VIEW + CREATE VIEW pattern:
+--
+--   DROP VIEW IF EXISTS host_entries_current;
+--   CREATE VIEW host_entries_current AS ...
+--
+-- The IF NOT EXISTS clause will NOT update an existing view, so changes would
+-- be silently skipped. Always use the DROP + CREATE pattern for view modifications.
 
 -- Event store - append-only immutable log of all domain events
 CREATE TABLE IF NOT EXISTS host_events (

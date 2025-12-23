@@ -136,8 +136,11 @@ impl PostgresStorage {
         Ok(Self { pool })
     }
 
-    /// Get a reference to the connection pool for internal use
-    fn pool(&self) -> &PgPool {
+    /// Get a reference to the connection pool
+    ///
+    /// This is primarily for internal use and testing. Direct pool access
+    /// bypasses the storage abstraction layer.
+    pub fn pool(&self) -> &PgPool {
         &self.pool
     }
 }
