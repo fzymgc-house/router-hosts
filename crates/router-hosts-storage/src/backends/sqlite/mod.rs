@@ -376,4 +376,79 @@ mod tests {
             "Should be able to acquire after previous connection is dropped"
         );
     }
+
+    #[tokio::test]
+    async fn test_migrations_create_schema() {
+        let storage = SqliteStorage::new(":memory:")
+            .await
+            .expect("failed to create in-memory storage");
+
+        // Run migrations
+        storage
+            .initialize()
+            .await
+            .expect("migrations should succeed");
+
+        // Verify tables exist by querying them
+        let event_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM host_events")
+            .fetch_one(storage.pool())
+            .await
+            .expect("host_events table should exist");
+        assert_eq!(event_count.0, 0);
+
+        let view_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM host_entries_current")
+            .fetch_one(storage.pool())
+            .await
+            .expect("host_entries_current view should exist");
+        assert_eq!(view_count.0, 0);
+
+        let history_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM host_entries_history")
+            .fetch_one(storage.pool())
+            .await
+            .expect("host_entries_history view should exist");
+        assert_eq!(history_count.0, 0);
+
+        let snapshot_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM snapshots")
+            .fetch_one(storage.pool())
+            .await
+            .expect("snapshots table should exist");
+        assert_eq!(snapshot_count.0, 0);
+
+        // Verify migrations table was created by sqlx
+        let migrations_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(storage.pool())
+            .await
+            .expect("_sqlx_migrations table should exist");
+        assert!(
+            migrations_count.0 >= 1,
+            "at least one migration should be recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_migrations_are_idempotent() {
+        let storage = SqliteStorage::new(":memory:")
+            .await
+            .expect("failed to create in-memory storage");
+
+        // Run migrations twice - should not fail
+        storage
+            .initialize()
+            .await
+            .expect("first migration run should succeed");
+        storage
+            .initialize()
+            .await
+            .expect("second migration run should succeed (idempotent)");
+
+        // Verify only one migration recorded (not duplicated)
+        let migrations_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(storage.pool())
+            .await
+            .expect("_sqlx_migrations table should exist");
+        assert_eq!(
+            migrations_count.0, 1,
+            "migration should only be recorded once"
+        );
+    }
 }

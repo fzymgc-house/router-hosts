@@ -33,14 +33,13 @@ fn serialize_json<T: serde::Serialize>(
     })
 }
 
-/// Convert a timestamp to microseconds, returning an error if out of range.
+/// Convert a timestamp to microseconds.
 ///
-/// Uses checked conversion to prevent panics on out-of-range timestamps.
+/// chrono 0.4.34+ changed `timestamp_micros()` to return `i64` directly
+/// (previously returned `Option<i64>` via `timestamp_micros_opt()`).
 /// Valid range: 1970-01-01 00:00:00 UTC to 294247-01-10 04:00:54 UTC
-fn timestamp_to_micros(ts: &DateTime<Utc>) -> Result<i64, StorageError> {
-    ts.timestamp_micros_opt().ok_or_else(|| {
-        StorageError::InvalidData(format!("timestamp out of i64 microseconds range: {}", ts))
-    })
+fn timestamp_to_micros(ts: &DateTime<Utc>) -> i64 {
+    ts.timestamp_micros()
 }
 
 /// Event-specific metadata serialized as JSON in the database.
@@ -179,7 +178,7 @@ impl SqliteStorage {
         .bind(&extracted.aliases)
         .bind(extracted.event_timestamp)
         .bind(&extracted.metadata_json)
-        .bind(timestamp_to_micros(&event.created_at)?)
+        .bind(timestamp_to_micros(&event.created_at))
         .bind(&event.created_by)
         .bind(&expected_version)
         .execute(&mut *tx)
@@ -288,7 +287,7 @@ impl SqliteStorage {
             .bind(&extracted.aliases)
             .bind(extracted.event_timestamp)
             .bind(&extracted.metadata_json)
-            .bind(timestamp_to_micros(&event.created_at)?)
+            .bind(timestamp_to_micros(&event.created_at))
             .bind(&event.created_by)
             .bind(&expected_version)
             .execute(&mut *tx)
@@ -548,7 +547,7 @@ fn extract_event_data(event: &HostEvent) -> Result<ExtractedEventData, StorageEr
         comment,
         tags,
         aliases,
-        event_timestamp: timestamp_to_micros(&event_timestamp)?,
+        event_timestamp: timestamp_to_micros(&event_timestamp),
         metadata_json,
     })
 }
