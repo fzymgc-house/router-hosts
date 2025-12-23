@@ -22,8 +22,8 @@ use super::dns_provider::{
     WebhookProvider,
 };
 use super::http_challenge::{ChallengeStore, HttpChallengeServer};
-use instant_acme::{ChallengeType as AcmeChallengeType, Identifier};
-use rand::Rng;
+use instant_acme::ChallengeType as AcmeChallengeType;
+use rand::Rng as _;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -48,8 +48,7 @@ const ORDER_POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Maximum interval for order polling (caps exponential backoff)
 const ORDER_POLL_MAX_INTERVAL: Duration = Duration::from_secs(30);
 
-/// Number of attempts before doubling the poll interval (for exponential backoff)
-const ORDER_POLL_BACKOFF_STEP: u32 = 10;
+// ORDER_POLL_BACKOFF_STEP removed in instant-acme 0.8+ (library handles backoff internally)
 
 /// Maximum number of polling attempts before timeout
 /// With exponential backoff starting at 2s and capped at 30s, this gives
@@ -65,12 +64,7 @@ const HTTP_SERVER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// blocking the entire renewal process indefinitely.
 const DNS_OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Extract domain value from Identifier enum
-fn identifier_value(id: &Identifier) -> &str {
-    match id {
-        Identifier::Dns(domain) => domain.as_str(),
-    }
-}
+// identifier_value removed in instant-acme 0.8+ (auth.identifier() returns &str directly)
 
 /// Errors that can occur during renewal
 #[derive(Debug, Error)]
@@ -266,7 +260,8 @@ impl AcmeRenewalLoop {
             loop {
                 // Calculate fresh jitter for each sleep cycle
                 let jitter_secs = if jitter_minutes > 0 {
-                    rand::thread_rng().gen_range(0..(jitter_minutes as u64 * 60))
+                    // rand 0.9+: thread_rng() renamed to rng()
+                    rand::rng().random_range(0..(jitter_minutes as u64 * 60))
                 } else {
                     0
                 };
@@ -422,12 +417,6 @@ impl AcmeRenewalLoop {
         // Create order
         let mut order = self.client.create_order().await?;
 
-        // Get authorizations
-        let authorizations = order
-            .authorizations()
-            .await
-            .map_err(|e| RenewalError::Challenge(format!("failed to get authorizations: {}", e)))?;
-
         // Start challenge server if HTTP-01
         let http_handle = if self.config.challenge_type == ChallengeType::Http01 {
             let bind_addr = self
@@ -449,28 +438,34 @@ impl AcmeRenewalLoop {
         // Track created DNS records for cleanup
         let mut dns_records: Vec<DnsRecord> = Vec::new();
 
-        // Process each authorization
+        // Get the configured challenge type
         let challenge_type = self.client.challenge_type();
-        for auth in &authorizations {
-            // Find the appropriate challenge
-            let challenge = auth
-                .challenges
-                .iter()
-                .find(|c| c.r#type == challenge_type)
-                .ok_or_else(|| {
-                    RenewalError::Challenge(format!(
-                        "no {:?} challenge available for {}",
-                        challenge_type,
-                        identifier_value(&auth.identifier)
-                    ))
-                })?;
+
+        // Process each authorization using the async iterator API (instant-acme 0.8+)
+        let mut authorizations = order.authorizations();
+        while let Some(auth_result) = authorizations.next().await {
+            let mut auth = auth_result.map_err(|e| {
+                RenewalError::Challenge(format!("failed to get authorization: {}", e))
+            })?;
+
+            // Get domain identifier before borrowing auth mutably for challenge
+            let domain = auth.identifier().to_string();
+
+            // Get the challenge for our configured type (clone challenge_type since it doesn't impl Copy)
+            let mut challenge = auth.challenge(challenge_type.clone()).ok_or_else(|| {
+                RenewalError::Challenge(format!(
+                    "no {:?} challenge available for {}",
+                    challenge_type, domain
+                ))
+            })?;
 
             match challenge_type {
                 AcmeChallengeType::Http01 => {
-                    // Get key authorization from order
-                    let key_auth = order.key_authorization(challenge);
+                    // Get key authorization from challenge (instant-acme 0.8+)
+                    let key_auth = challenge.key_authorization();
 
                     // Add to challenge store (may fail if store is at capacity)
+                    // instant-acme 0.8+: token is a field, not a method
                     if !self
                         .challenge_store
                         .add_challenge(&challenge.token, key_auth.as_str())
@@ -481,27 +476,18 @@ impl AcmeRenewalLoop {
                         ));
                     }
 
-                    // Notify ACME server we're ready
-                    order
-                        .set_challenge_ready(&challenge.url)
-                        .await
-                        .map_err(|e| {
-                            RenewalError::Challenge(format!("failed to set challenge ready: {}", e))
-                        })?;
-
-                    // Wait for authorization to become valid
-                    self.wait_for_order_ready(&mut order, auth.identifier.clone())
-                        .await?;
+                    // Notify ACME server we're ready (instant-acme 0.8+)
+                    challenge.set_ready().await.map_err(|e| {
+                        RenewalError::Challenge(format!("failed to set challenge ready: {}", e))
+                    })?;
                 }
                 AcmeChallengeType::Dns01 => {
                     let dns_provider = self.dns_provider.as_ref().ok_or_else(|| {
                         RenewalError::Config("DNS-01 challenge requires DNS provider".to_string())
                     })?;
 
-                    let domain = identifier_value(&auth.identifier);
-
-                    // Compute DNS-01 digest from key authorization
-                    let key_auth = order.key_authorization(challenge);
+                    // Compute DNS-01 digest from key authorization (instant-acme 0.8+)
+                    let key_auth = challenge.key_authorization();
                     let digest = compute_dns01_digest(key_auth.as_str());
 
                     // Create TXT record name: _acme-challenge.<domain>
@@ -536,17 +522,10 @@ impl AcmeRenewalLoop {
                     );
                     dns_provider.wait_for_propagation().await;
 
-                    // Notify ACME server we're ready
-                    order
-                        .set_challenge_ready(&challenge.url)
-                        .await
-                        .map_err(|e| {
-                            RenewalError::Challenge(format!("failed to set challenge ready: {}", e))
-                        })?;
-
-                    // Wait for authorization to become valid
-                    self.wait_for_order_ready(&mut order, auth.identifier.clone())
-                        .await?;
+                    // Notify ACME server we're ready (instant-acme 0.8+)
+                    challenge.set_ready().await.map_err(|e| {
+                        RenewalError::Challenge(format!("failed to set challenge ready: {}", e))
+                    })?;
                 }
                 _ => {
                     return Err(RenewalError::Config(format!(
@@ -557,9 +536,11 @@ impl AcmeRenewalLoop {
             }
         }
 
-        // Generate CSR and finalize
-        let (csr, key_pair) = self.client.generate_csr()?;
-        let cert_chain = self.client.finalize_order(&mut order, &csr).await?;
+        // Wait for order to become ready using the new polling API
+        self.wait_for_order_ready(&mut order).await?;
+
+        // Finalize order and get certificate bundle (instant-acme 0.8+ handles key generation)
+        let cert_bundle = self.client.finalize_order(&mut order).await?;
 
         // Stop HTTP challenge server with timeout to prevent indefinite blocking
         if let Some(handle) = http_handle {
@@ -618,11 +599,10 @@ impl AcmeRenewalLoop {
             }
         }
 
-        // Write certificate to disk
-        let key_pem = key_pair.serialize_pem();
+        // Write certificate to disk (instant-acme 0.8+ provides PEM strings directly)
         write_certificate(
-            &cert_chain,
-            &key_pem,
+            &cert_bundle.certificate_chain,
+            &cert_bundle.private_key,
             &self.tls_paths.cert_path,
             &self.tls_paths.key_path,
         )?;
@@ -639,77 +619,41 @@ impl AcmeRenewalLoop {
         Ok(())
     }
 
-    /// Wait for an order's authorization to become ready
+    /// Wait for an order to become ready
     ///
-    /// Polls the ACME server for authorization status. Let's Encrypt recommends
-    /// allowing up to 5 minutes for validation to complete, especially during
-    /// high load periods.
+    /// Polls the ACME server for order status using instant-acme 0.8+ API.
+    /// The RetryPolicy handles exponential backoff and timeout.
     async fn wait_for_order_ready(
         &self,
         order: &mut instant_acme::Order,
-        identifier: Identifier,
     ) -> Result<(), RenewalError> {
-        let domain = identifier_value(&identifier);
+        use instant_acme::{OrderStatus, RetryPolicy};
 
-        // Pre-calculate the attempt threshold where we hit max interval to avoid
-        // redundant min() comparisons. With ORDER_POLL_INTERVAL=2s, ORDER_POLL_MAX_INTERVAL=30s,
-        // and ORDER_POLL_BACKOFF_STEP=10, we hit max at 2^4=16x (32s capped to 30s) after 40 attempts.
-        let max_interval_attempt = {
-            let ratio = ORDER_POLL_MAX_INTERVAL.as_secs() / ORDER_POLL_INTERVAL.as_secs();
-            // Find smallest power of 2 >= ratio, then multiply by step
-            let power = (ratio as f64).log2().ceil() as u32;
-            power * ORDER_POLL_BACKOFF_STEP
-        };
+        // Configure retry policy with our existing backoff parameters
+        let retry_policy = RetryPolicy::new()
+            .initial_delay(ORDER_POLL_INTERVAL)
+            .backoff(2.0)
+            .timeout(Duration::from_secs(
+                ORDER_POLL_MAX_ATTEMPTS as u64 * ORDER_POLL_MAX_INTERVAL.as_secs(),
+            ));
 
-        for attempt in 1..=ORDER_POLL_MAX_ATTEMPTS {
-            // Use exponential backoff to reduce load during long validations
-            // Interval doubles every ORDER_POLL_BACKOFF_STEP attempts, capped at max
-            let poll_interval = if attempt >= max_interval_attempt {
-                ORDER_POLL_MAX_INTERVAL
-            } else {
-                let backoff_multiplier = 2u32.pow(attempt / ORDER_POLL_BACKOFF_STEP);
-                ORDER_POLL_INTERVAL * backoff_multiplier
-            };
-            tokio::time::sleep(poll_interval).await;
-
-            // Refresh order state
-            let state = order.state();
-
-            match state.status {
-                instant_acme::OrderStatus::Ready | instant_acme::OrderStatus::Valid => {
-                    debug!(
-                        domain = domain,
-                        attempts = attempt,
-                        "Authorization validated"
-                    );
-                    return Ok(());
-                }
-                instant_acme::OrderStatus::Invalid => {
-                    return Err(RenewalError::Challenge(format!(
-                        "authorization for {} failed",
-                        domain
-                    )));
-                }
-                instant_acme::OrderStatus::Pending | instant_acme::OrderStatus::Processing => {
-                    debug!(
-                        domain = domain,
-                        attempt = attempt,
-                        max_attempts = ORDER_POLL_MAX_ATTEMPTS,
-                        status = ?state.status,
-                        "Waiting for authorization"
-                    );
-                    // Refresh order to get updated status
-                    order.refresh().await.map_err(|e| {
-                        RenewalError::Challenge(format!("failed to refresh order: {}", e))
-                    })?;
-                }
+        match order.poll_ready(&retry_policy).await {
+            Ok(OrderStatus::Ready) | Ok(OrderStatus::Valid) => {
+                debug!("Order ready for finalization");
+                Ok(())
             }
+            Ok(status) => Err(RenewalError::Challenge(format!(
+                "order ended in unexpected status: {:?}",
+                status
+            ))),
+            Err(instant_acme::Error::Timeout(_)) => Err(RenewalError::Challenge(
+                "order polling timed out waiting for validation".to_string(),
+            )),
+            Err(e) => Err(RenewalError::Challenge(format!(
+                "failed to poll order status: {}",
+                e
+            ))),
         }
-
-        Err(RenewalError::Challenge(format!(
-            "authorization for {} timed out after {} attempts",
-            domain, ORDER_POLL_MAX_ATTEMPTS
-        )))
     }
 }
 
@@ -744,17 +688,8 @@ mod tests {
         assert!(renewal_err.to_string().contains("ACME"));
     }
 
-    #[test]
-    fn test_identifier_value() {
-        let id = Identifier::Dns("example.com".to_string());
-        assert_eq!(identifier_value(&id), "example.com");
-    }
-
-    #[test]
-    fn test_identifier_value_subdomain() {
-        let id = Identifier::Dns("sub.example.com".to_string());
-        assert_eq!(identifier_value(&id), "sub.example.com");
-    }
+    // test_identifier_value and test_identifier_value_subdomain removed
+    // (identifier_value function removed in instant-acme 0.8+ migration)
 
     #[test]
     fn test_tls_paths_debug() {

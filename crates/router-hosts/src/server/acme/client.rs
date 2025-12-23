@@ -3,44 +3,21 @@
 //! This module provides the core ACME protocol client for certificate management.
 
 use super::config::{AcmeConfig, ChallengeType};
-use http_body_util::Full;
-use hyper::body::Bytes;
 use instant_acme::{
-    Account, AccountCredentials, ChallengeType as AcmeChallengeType, HttpClient, Identifier,
-    NewAccount, NewOrder, Order,
+    Account, AccountCredentials, ChallengeType as AcmeChallengeType, Identifier, NewAccount,
+    NewOrder, Order,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
-use std::future::Future;
 use std::path::Path;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::info;
 
 // warn is only used in #[cfg(not(unix))] block
 #[cfg(not(unix))]
 use tracing::warn;
 
-/// Interval for polling certificate availability after order finalization
-const CERT_POLL_INTERVAL: Duration = Duration::from_secs(1);
-
-/// Wrapper around Arc<dyn HttpClient> that implements HttpClient
-///
-/// This allows us to store a shared HTTP client and clone it for each ACME request.
-struct SharedHttpClient(Arc<dyn HttpClient>);
-
-impl HttpClient for SharedHttpClient {
-    fn request(
-        &self,
-        req: hyper::Request<Full<Bytes>>,
-    ) -> Pin<
-        Box<dyn Future<Output = Result<instant_acme::BytesResponse, instant_acme::Error>> + Send>,
-    > {
-        self.0.request(req)
-    }
-}
+// CERT_POLL_INTERVAL removed in instant-acme 0.8+ (library handles polling internally)
 
 /// Errors that can occur during ACME operations
 #[derive(Debug, Error)]
@@ -107,40 +84,17 @@ pub struct AcmeClient {
 
     /// ACME configuration
     config: AcmeConfig,
-
-    /// Custom HTTP client for ACME protocol (used for testing with Pebble)
-    /// If None, uses instant-acme's default HTTP client
-    acme_http_client: Option<Arc<dyn HttpClient>>,
 }
 
 #[allow(dead_code)] // Methods will be used when ACME integration is complete
 impl AcmeClient {
-    /// Create a new ACME client with default HTTP client
+    /// Create a new ACME client
     ///
-    /// Uses instant-acme's default HTTP client which trusts system root certificates.
     /// The account is not created/loaded until `ensure_account` is called.
     pub fn new(config: AcmeConfig) -> Result<Self, AcmeError> {
         Ok(Self {
             account: RwLock::new(None),
             config,
-            acme_http_client: None,
-        })
-    }
-
-    /// Create a new ACME client with a custom HTTP client
-    ///
-    /// This is primarily used for testing with Pebble (Let's Encrypt test server)
-    /// where we need to trust Pebble's self-signed CA certificate.
-    ///
-    /// The account is not created/loaded until `ensure_account` is called.
-    pub fn with_http_client(
-        config: AcmeConfig,
-        http_client: Box<dyn HttpClient>,
-    ) -> Result<Self, AcmeError> {
-        Ok(Self {
-            account: RwLock::new(None),
-            config,
-            acme_http_client: Some(Arc::from(http_client)),
         })
     }
 
@@ -166,19 +120,13 @@ impl AcmeClient {
             let credentials: AccountCredentials = serde_json::from_str(&credentials_json)
                 .map_err(|e| AcmeError::Account(format!("failed to parse credentials: {}", e)))?;
 
-            // Use custom HTTP client if provided, otherwise use default
-            let account = if let Some(ref http) = self.acme_http_client {
-                Account::from_credentials_and_http(
-                    credentials,
-                    Box::new(SharedHttpClient(http.clone())),
-                )
+            let account = Account::builder()
+                .map_err(|e| {
+                    AcmeError::Account(format!("failed to create account builder: {}", e))
+                })?
+                .from_credentials(credentials)
                 .await
-                .map_err(|e| AcmeError::Account(format!("failed to restore account: {}", e)))?
-            } else {
-                Account::from_credentials(credentials)
-                    .await
-                    .map_err(|e| AcmeError::Account(format!("failed to restore account: {}", e)))?
-            };
+                .map_err(|e| AcmeError::Account(format!("failed to restore account: {}", e)))?;
 
             *account_guard = Some(account);
             return Ok(());
@@ -202,21 +150,11 @@ impl AcmeClient {
             only_return_existing: false,
         };
 
-        // Use custom HTTP client if provided, otherwise use default
-        let (account, credentials) = if let Some(ref http) = self.acme_http_client {
-            Account::create_with_http(
-                &new_account,
-                &self.config.directory_url,
-                None,
-                Box::new(SharedHttpClient(http.clone())),
-            )
+        let (account, credentials) = Account::builder()
+            .map_err(|e| AcmeError::Account(format!("failed to create account builder: {}", e)))?
+            .create(&new_account, self.config.directory_url.clone(), None)
             .await
-            .map_err(|e| AcmeError::Account(format!("failed to create account: {}", e)))?
-        } else {
-            Account::create(&new_account, &self.config.directory_url, None)
-                .await
-                .map_err(|e| AcmeError::Account(format!("failed to create account: {}", e)))?
-        };
+            .map_err(|e| AcmeError::Account(format!("failed to create account: {}", e)))?;
 
         // Save credentials
         let credentials_json = serde_json::to_string_pretty(&credentials)
@@ -309,9 +247,8 @@ impl AcmeClient {
             .map(|domain| Identifier::Dns(domain.clone()))
             .collect();
 
-        let new_order = NewOrder {
-            identifiers: &identifiers,
-        };
+        // instant-acme 0.8+ uses NewOrder::new() constructor
+        let new_order = NewOrder::new(&identifiers);
 
         let order = account
             .new_order(&new_order)
@@ -360,31 +297,29 @@ impl AcmeClient {
         Ok((csr.der().to_vec(), key_pair))
     }
 
-    /// Finalize an order and get the certificate
-    pub async fn finalize_order(&self, order: &mut Order, csr: &[u8]) -> Result<String, AcmeError> {
-        order
-            .finalize(csr)
+    /// Finalize an order and get the certificate (instant-acme 0.8+)
+    ///
+    /// In instant-acme 0.8+, the library generates the private key internally
+    /// and finalize() returns the PEM-encoded private key.
+    pub async fn finalize_order(&self, order: &mut Order) -> Result<CertificateBundle, AcmeError> {
+        use instant_acme::RetryPolicy;
+
+        // Finalize returns the private key PEM (instant-acme 0.8+)
+        let private_key = order
+            .finalize()
             .await
             .map_err(|e| AcmeError::Issuance(format!("failed to finalize order: {}", e)))?;
 
-        // Poll for certificate
-        let cert = loop {
-            match order.certificate().await {
-                Ok(Some(cert)) => break cert,
-                Ok(None) => {
-                    debug!("Certificate not ready yet, waiting...");
-                    tokio::time::sleep(CERT_POLL_INTERVAL).await;
-                }
-                Err(e) => {
-                    return Err(AcmeError::Issuance(format!(
-                        "failed to get certificate: {}",
-                        e
-                    )));
-                }
-            }
-        };
+        // Poll for certificate with default retry policy
+        let certificate_chain = order
+            .poll_certificate(&RetryPolicy::default())
+            .await
+            .map_err(|e| AcmeError::Issuance(format!("failed to get certificate: {}", e)))?;
 
-        Ok(cert)
+        Ok(CertificateBundle {
+            certificate_chain,
+            private_key,
+        })
     }
 
     /// Get the ACME configuration
