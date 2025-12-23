@@ -20,7 +20,8 @@
 //!
 //! 2. **rowid guarantee**: SQLite's `rowid` is a 64-bit integer that's guaranteed to
 //!    be unique and monotonically increasing for inserts (without explicit ROWID values).
-//!    This makes it reliable for tracking insertion order.
+//!    Under WAL mode with a single writer (SQLite's default behavior), rowid ordering
+//!    accurately reflects insertion order. This makes it reliable for tracking insertion order.
 //!
 //! 3. **Consistency**: All queries that need insertion order use `ORDER BY rowid`,
 //!    including the `host_entries_current` view's subqueries.
@@ -87,6 +88,12 @@ pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageErr
 
     let current_version = current_version.unwrap_or(0);
 
+    // Apply migrations if needed
+    // NOTE: When SCHEMA_VERSION is incremented, add migration logic here:
+    //   if current_version < 2 { run_migration_v2(storage).await?; }
+    //   if current_version < 3 { run_migration_v3(storage).await?; }
+    // Each migration function should contain the DDL changes for that version.
+
     // Record initial schema version if this is a fresh database
     if current_version < SCHEMA_VERSION {
         sqlx::query(
@@ -150,10 +157,10 @@ pub async fn initialize_schema(storage: &SqliteStorage) -> Result<(), StorageErr
     // to find the last non-null value for each field.
     //
     // PERFORMANCE: This view is optimized for correctness over speed.
-    // Each query triggers 7 correlated subqueries per host, scaling as O(n × m × 7)
-    // where n = hosts and m = events per host. The idx_events_aggregate_rowid index
-    // helps, but for deployments with >1,000 hosts, consider the DuckDB backend
-    // which uses window functions with IGNORE NULLS instead.
+    // Each query triggers 7 correlated subqueries per host, scaling as O(n * m)
+    // where n = hosts and m = events per host. The idx_events_aggregate index
+    // helps filter by aggregate_id, but for deployments with >1,000 hosts,
+    // consider the DuckDB backend which uses window functions with IGNORE NULLS.
     //
     // NOTE: We use rowid for ordering instead of event_version because ULIDs
     // created within the same millisecond have arbitrary lexicographic order.

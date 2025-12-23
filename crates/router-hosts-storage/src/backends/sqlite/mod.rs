@@ -101,11 +101,12 @@ impl SqliteStorage {
     ///
     /// # Pool Configuration
     ///
-    /// Default pool settings:
-    /// - min_connections: 1
-    /// - max_connections: 5 (SQLite is single-writer, so less useful to have many)
-    /// - acquire_timeout: 30s
-    /// - idle_timeout: 10min
+    /// Default pool settings with rationale:
+    /// - min_connections: 1 - keeps one connection warm to avoid cold-start latency
+    /// - max_connections: 5 - SQLite uses single-writer/multiple-reader model; more
+    ///   connections add overhead without write throughput benefit
+    /// - acquire_timeout: 30s - allows time for long transactions to complete
+    /// - idle_timeout: 10min - balances resource usage with connection reuse
     ///
     /// # Errors
     ///

@@ -562,6 +562,9 @@ impl AcmeRenewalLoop {
         if !dns_records.is_empty() {
             if let Some(dns_provider) = &self.dns_provider {
                 let provider_name = dns_provider.name();
+                let mut cleanup_failures = 0usize;
+                let total_records = dns_records.len();
+
                 for record in &dns_records {
                     debug!(
                         record_id = %record.record_id,
@@ -579,6 +582,7 @@ impl AcmeRenewalLoop {
                     match delete_result {
                         Ok(Ok(())) => {}
                         Ok(Err(e)) => {
+                            cleanup_failures += 1;
                             warn!(
                                 error = %e,
                                 record_name = %record.name,
@@ -587,6 +591,7 @@ impl AcmeRenewalLoop {
                             );
                         }
                         Err(_) => {
+                            cleanup_failures += 1;
                             warn!(
                                 record_name = %record.name,
                                 provider = provider_name,
@@ -595,6 +600,16 @@ impl AcmeRenewalLoop {
                             );
                         }
                     }
+                }
+
+                // Log summary if any cleanup failures occurred
+                if cleanup_failures > 0 {
+                    error!(
+                        failed = cleanup_failures,
+                        total = total_records,
+                        provider = provider_name,
+                        "Some DNS challenge records could not be cleaned up. Manual cleanup of _acme-challenge.* TXT records may be required."
+                    );
                 }
             }
         }
@@ -611,7 +626,11 @@ impl AcmeRenewalLoop {
         // The certificate is already written, and reload may fail for various
         // reasons (e.g., platform doesn't support SIGHUP, reload already in progress)
         if let Err(e) = trigger_reload_async().await {
-            warn!(error = %e, "Failed to trigger certificate reload via SIGHUP");
+            error!(
+                error = %e,
+                cert_path = %self.tls_paths.cert_path.display(),
+                "Failed to trigger certificate reload via SIGHUP - server may be using old certificate. Manual restart may be required."
+            );
         }
 
         info!("Certificate successfully renewed and server reloaded");

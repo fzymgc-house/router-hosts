@@ -166,14 +166,15 @@ impl SqliteStorage {
         .execute(&mut *tx)
         .await
         .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("UNIQUE") || msg.contains("unique") {
-                StorageError::ConcurrentWriteConflict {
-                    aggregate_id: aggregate_id.to_string(),
+            // Use sqlx's typed error detection instead of string matching
+            if let Some(db_err) = e.as_database_error() {
+                if db_err.is_unique_violation() {
+                    return StorageError::ConcurrentWriteConflict {
+                        aggregate_id: aggregate_id.to_string(),
+                    };
                 }
-            } else {
-                StorageError::query("insert event failed", e)
             }
+            StorageError::query("insert event failed", e)
         })?;
 
         tx.commit()
@@ -574,13 +575,22 @@ fn reconstruct_event(
             updated_at: event_ts,
         }),
         "TagsModified" => Ok(HostEvent::TagsModified {
-            old_tags: data.previous_tags.clone().unwrap_or_default(),
-            new_tags: data.tags.clone().unwrap_or_default(),
+            old_tags: data.previous_tags.clone().ok_or_else(|| {
+                StorageError::InvalidData("TagsModified missing previous_tags".into())
+            })?,
+            new_tags: data
+                .tags
+                .clone()
+                .ok_or_else(|| StorageError::InvalidData("TagsModified missing tags".into()))?,
             modified_at: event_ts,
         }),
         "AliasesModified" => Ok(HostEvent::AliasesModified {
-            old_aliases: data.previous_aliases.clone().unwrap_or_default(),
-            new_aliases: data.aliases.clone().unwrap_or_default(),
+            old_aliases: data.previous_aliases.clone().ok_or_else(|| {
+                StorageError::InvalidData("AliasesModified missing previous_aliases".into())
+            })?,
+            new_aliases: data.aliases.clone().ok_or_else(|| {
+                StorageError::InvalidData("AliasesModified missing aliases".into())
+            })?,
             modified_at: event_ts,
         }),
         "HostDeleted" => Ok(HostEvent::HostDeleted {

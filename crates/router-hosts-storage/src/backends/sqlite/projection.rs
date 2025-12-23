@@ -10,15 +10,11 @@
 //! The projection is built by replaying events from the event store.
 //! It provides optimized queries for the read side of CQRS.
 //!
-//! # Performance
-//!
-//! See module-level docs in `mod.rs` for performance characteristics.
-//! The `host_entries_current` view uses correlated subqueries that scale
-//! as O(n × m × 7) where n = hosts and m = events per host.
+//! See `mod.rs` module docs for performance characteristics and scaling guidance.
 
 use chrono::{DateTime, Utc};
 use sqlx::FromRow;
-use tracing::warn;
+use tracing::error;
 use ulid::Ulid;
 
 use super::SqliteStorage;
@@ -254,16 +250,10 @@ impl SqliteStorage {
     ///
     /// Returns `StorageError::Query` if the database operation fails.
     ///
-    /// # Safety (SQL Injection Prevention)
+    /// # Safety
     ///
-    /// This function uses dynamic SQL query construction with `format!()` but is safe because:
-    /// 1. **Column names are hardcoded constants** - Only static strings like "ip_address",
-    ///    "hostname", "aliases", "tags" appear in the query structure.
-    /// 2. **All user input is parameterized** - Filter patterns (ip_pattern, hostname_pattern, tags)
-    ///    are bound via `?` placeholders and `params` vector, never interpolated into SQL.
-    /// 3. **Query structure is fixed** - Only the WHERE clause presence changes based on filter,
-    ///    and the clause content uses positional placeholders.
-    /// 4. **sqlx parameterization** - All values are properly escaped by the database driver.
+    /// Uses dynamic WHERE clause construction with parameterized values only - no user input
+    /// is interpolated into SQL. All filter patterns are bound via `?` placeholders.
     pub(super) async fn search_impl(
         &self,
         filter: HostFilter,
@@ -478,10 +468,10 @@ impl SqliteStorage {
                         current_state = None;
                     }
                     unknown => {
-                        warn!(
+                        error!(
                             aggregate_id = %aggregate_id_str,
                             event_type = %unknown,
-                            "unknown event type in time-travel query, skipping"
+                            "unknown event type in time-travel query - possible version mismatch or data corruption, skipping"
                         );
                     }
                 }
