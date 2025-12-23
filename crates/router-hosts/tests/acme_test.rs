@@ -14,10 +14,9 @@
 //!
 //! # CI Integration
 //!
-//! TODO(#127): Configure Pebble CA trust in CI to enable these tests in the
-//! automated test suite. Currently, Pebble tests require Docker and run
-//! locally but are skipped in CI due to Pebble's self-signed CA certificate
-//! not being trusted by the CI environment.
+//! These tests run in CI via `cargo test` with Docker support. Pebble's
+//! self-signed CA is trusted via a custom HTTP client (see `create_pebble_http_client`)
+//! that includes Pebble's CA certificate, avoiding system trust store modifications.
 
 use http_body_util::Full;
 use hyper::body::Bytes;

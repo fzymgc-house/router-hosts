@@ -40,6 +40,7 @@
 pub mod cert_writer;
 pub mod client;
 pub mod config;
+pub mod dns_provider;
 pub mod env_expand;
 pub mod http_challenge;
 pub mod renewal;
@@ -74,3 +75,10 @@ pub use cert_writer::{
 // Renewal loop types (will be used when ACME is integrated into server)
 #[allow(unused_imports)]
 pub use renewal::{AcmeRenewalLoop, RenewalError, RenewalHandle, TlsPaths};
+
+// DNS provider types for DNS-01 challenge
+#[allow(unused_imports)]
+pub use dns_provider::{
+    compute_dns01_digest, CloudflareProvider, DnsProvider, DnsProviderError, DnsRecord,
+    WebhookProvider,
+};
