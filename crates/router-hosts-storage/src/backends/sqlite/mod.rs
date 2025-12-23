@@ -6,7 +6,7 @@
 //!
 //! # Architecture
 //!
-//! - **schema**: Table definitions and migrations
+//! - **migrations**: SQL schema in `migrations/sqlite/` (applied via sqlx)
 //! - **event_store**: Event sourcing write side (append-only events)
 //! - **snapshot_store**: /etc/hosts versioning and snapshots
 //! - **projection**: CQRS read side (materialized view of current state)
@@ -48,7 +48,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use std::str::FromStr;
 use std::time::Duration;
 use ulid::Ulid;
 
@@ -58,10 +59,13 @@ use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotId, S
 
 mod event_store;
 mod projection;
-mod schema;
 mod snapshot_store;
 
-pub use schema::initialize_schema;
+/// Embedded SQLite migrations
+///
+/// These migrations are compiled into the binary and applied at runtime.
+/// Migration files are in `migrations/sqlite/` directory.
+static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 /// SQLite storage backend
 ///
@@ -113,20 +117,28 @@ impl SqliteStorage {
     ///
     /// Returns `StorageError::Connection` if the database connection fails.
     pub async fn new(path: &str) -> Result<Self, StorageError> {
-        // Build connection URL for sqlx
-        // sqlx uses sqlite:// prefix
-        let url = if path == ":memory:" {
-            "sqlite::memory:".to_string()
+        // Build connection options with pragmas
+        // Pragmas are set on each connection via SqliteConnectOptions
+        let options = if path == ":memory:" {
+            SqliteConnectOptions::from_str("sqlite::memory:")
+                .map_err(|e| StorageError::connection("invalid SQLite URL", e))?
         } else {
-            format!("sqlite://{}?mode=rwc", path)
-        };
+            SqliteConnectOptions::from_str(&format!("sqlite://{}?mode=rwc", path))
+                .map_err(|e| StorageError::connection("invalid SQLite URL", e))?
+        }
+        // Performance and durability pragmas applied to each connection
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+        .foreign_keys(true)
+        // WAL auto-checkpoint after 1000 pages (~4MB with default page size)
+        .pragma("wal_autocheckpoint", "1000");
 
         let pool = SqlitePoolOptions::new()
             .min_connections(1)
             .max_connections(5) // SQLite is single-writer
             .acquire_timeout(Duration::from_secs(30))
             .idle_timeout(Duration::from_secs(600))
-            .connect(&url)
+            .connect_with(options)
             .await
             .map_err(|e| StorageError::connection("failed to create SQLite pool", e))?;
 
@@ -240,7 +252,10 @@ impl HostProjection for SqliteStorage {
 #[async_trait]
 impl Storage for SqliteStorage {
     async fn initialize(&self) -> Result<(), StorageError> {
-        schema::initialize_schema(self).await
+        MIGRATIONS
+            .run(self.pool())
+            .await
+            .map_err(|e| StorageError::migration("failed to run SQLite migrations", e))
     }
 
     async fn health_check(&self) -> Result<(), StorageError> {

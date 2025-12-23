@@ -12,7 +12,7 @@
 //!
 //! # Architecture
 //!
-//! - **schema**: Table definitions (CREATE TABLE IF NOT EXISTS)
+//! - **migrations**: SQL schema in `migrations/postgres/` (applied via sqlx)
 //! - **event_store**: Event sourcing write side (append-only events)
 //! - **snapshot_store**: /etc/hosts versioning and snapshots
 //! - **projection**: CQRS read side (DISTINCT ON with CTEs)
@@ -57,10 +57,13 @@ use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotId, S
 
 mod event_store;
 mod projection;
-mod schema;
 mod snapshot_store;
 
-pub use schema::initialize_schema;
+/// Embedded PostgreSQL migrations
+///
+/// These migrations are compiled into the binary and applied at runtime.
+/// Migration files are in `migrations/postgres/` directory.
+static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("migrations/postgres");
 
 /// PostgreSQL storage backend
 ///
@@ -240,7 +243,10 @@ impl HostProjection for PostgresStorage {
 #[async_trait]
 impl Storage for PostgresStorage {
     async fn initialize(&self) -> Result<(), StorageError> {
-        schema::initialize_schema(self).await
+        MIGRATIONS
+            .run(self.pool())
+            .await
+            .map_err(|e| StorageError::migration("failed to run PostgreSQL migrations", e))
     }
 
     async fn health_check(&self) -> Result<(), StorageError> {
