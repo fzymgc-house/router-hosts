@@ -31,6 +31,9 @@ CREATE INDEX IF NOT EXISTS idx_events_aggregate ON host_events(aggregate_id, eve
 -- Index for temporal queries
 CREATE INDEX IF NOT EXISTS idx_events_time ON host_events(created_at);
 
+-- Compound index for duplicate checking and lookups by (ip_address, hostname)
+CREATE INDEX IF NOT EXISTS idx_events_ip_hostname ON host_events(ip_address, hostname);
+
 -- Read model: Current active hosts projection
 -- SQLite doesn't support IGNORE NULLS, so we use correlated subqueries
 -- to find the last non-null value for each field.

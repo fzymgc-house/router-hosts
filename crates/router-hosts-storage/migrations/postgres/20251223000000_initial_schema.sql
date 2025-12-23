@@ -34,7 +34,7 @@ CREATE INDEX IF NOT EXISTS idx_events_ip_hostname ON host_events(ip_address, hos
 -- Read model: Current active hosts projection
 -- PostgreSQL doesn't support IGNORE NULLS, so we use DISTINCT ON with CTEs
 -- to get the last non-null value for each column
-CREATE VIEW host_entries_current AS
+CREATE VIEW IF NOT EXISTS host_entries_current AS
 WITH
 -- Get the latest event for each aggregate to determine if deleted
 latest_events AS (
@@ -119,7 +119,7 @@ LEFT JOIN aliases_values av ON av.aggregate_id = le.aggregate_id
 WHERE le.latest_event_type != 'HostDeleted';
 
 -- Read model: Complete history including deleted entries
-CREATE VIEW host_entries_history AS
+CREATE VIEW IF NOT EXISTS host_entries_history AS
 SELECT
     event_id,
     aggregate_id,

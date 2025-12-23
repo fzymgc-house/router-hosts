@@ -451,4 +451,72 @@ mod tests {
             "migration should only be recorded once"
         );
     }
+
+    #[tokio::test]
+    async fn test_migrations_create_indexes() {
+        let storage = SqliteStorage::new(":memory:")
+            .await
+            .expect("failed to create in-memory storage");
+
+        storage
+            .initialize()
+            .await
+            .expect("migrations should succeed");
+
+        // Query sqlite_master for all indexes on host_events table
+        let indexes: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT name FROM sqlite_master
+            WHERE type = 'index'
+              AND tbl_name = 'host_events'
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+            "#,
+        )
+        .fetch_all(storage.pool())
+        .await
+        .expect("should be able to query indexes");
+
+        let index_names: Vec<&str> = indexes.iter().map(|(name,)| name.as_str()).collect();
+
+        // Verify all expected indexes exist
+        assert!(
+            index_names.contains(&"idx_events_aggregate"),
+            "idx_events_aggregate index should exist, found: {:?}",
+            index_names
+        );
+        assert!(
+            index_names.contains(&"idx_events_time"),
+            "idx_events_time index should exist, found: {:?}",
+            index_names
+        );
+        assert!(
+            index_names.contains(&"idx_events_ip_hostname"),
+            "idx_events_ip_hostname index should exist, found: {:?}",
+            index_names
+        );
+
+        // Also verify snapshots index
+        let snapshot_indexes: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT name FROM sqlite_master
+            WHERE type = 'index'
+              AND tbl_name = 'snapshots'
+              AND name NOT LIKE 'sqlite_%'
+            "#,
+        )
+        .fetch_all(storage.pool())
+        .await
+        .expect("should be able to query snapshot indexes");
+
+        let snapshot_index_names: Vec<&str> = snapshot_indexes
+            .iter()
+            .map(|(name,)| name.as_str())
+            .collect();
+        assert!(
+            snapshot_index_names.contains(&"idx_snapshots_created"),
+            "idx_snapshots_created index should exist, found: {:?}",
+            snapshot_index_names
+        );
+    }
 }
