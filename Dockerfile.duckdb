@@ -1,0 +1,33 @@
+# DuckDB variant of router-hosts
+#
+# This image includes DuckDB storage backend support in addition to
+# SQLite and PostgreSQL. Use this image if you need DuckDB's analytics
+# capabilities or are migrating from a DuckDB-based installation.
+#
+# Image size is larger (~50MB) due to DuckDB dependencies.
+# For a lighter image (~15MB), use the standard router-hosts image.
+
+# Stage 1: Chef - prepare recipe
+FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef
+WORKDIR /app
+
+# Stage 2: Planner - compute dependency graph
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+# Stage 3: Builder - cache dependencies, then build
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+# Build DuckDB variant (includes all three backends)
+RUN cargo chef cook --release --recipe-path recipe.json -p router-hosts-duckdb
+COPY . .
+RUN cargo build --release --bin router-hosts-duckdb
+
+# Stage 4: Runtime - minimal image
+FROM debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y ca-certificates netcat-openbsd && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/router-hosts-duckdb /usr/local/bin/router-hosts
+EXPOSE 50051
+ENTRYPOINT ["router-hosts"]
+CMD ["server", "--config", "/config/server.toml"]

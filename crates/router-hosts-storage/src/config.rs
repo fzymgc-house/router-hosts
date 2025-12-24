@@ -141,11 +141,35 @@ impl StorageConfig {
             pool_size: None,
         }
     }
+
+    /// Create in-memory SQLite configuration for testing
+    #[must_use]
+    pub fn sqlite_memory() -> Self {
+        Self {
+            backend: BackendType::Sqlite,
+            connection_string: ":memory:".to_string(),
+            pool_size: None,
+        }
+    }
+
+    /// Create file-based SQLite configuration
+    #[must_use]
+    pub fn sqlite_file(path: &str) -> Self {
+        Self {
+            backend: BackendType::Sqlite,
+            connection_string: path.to_string(),
+            pool_size: None,
+        }
+    }
 }
 
 impl Default for StorageConfig {
     fn default() -> Self {
-        Self::duckdb_memory()
+        Self {
+            backend: BackendType::Sqlite,
+            connection_string: ":memory:".to_string(),
+            pool_size: None,
+        }
     }
 }
 
@@ -270,7 +294,7 @@ mod tests {
     #[test]
     fn test_default() {
         let config = StorageConfig::default();
-        assert_eq!(config.backend, BackendType::DuckDb);
+        assert_eq!(config.backend, BackendType::Sqlite);
         assert_eq!(config.connection_string, ":memory:");
         assert_eq!(config.pool_size, None);
     }

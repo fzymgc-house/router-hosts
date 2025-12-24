@@ -758,50 +758,18 @@ impl CommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use router_hosts_storage::backends::duckdb::DuckDbStorage;
+    use crate::test_utils::{create_test_config, create_test_hosts_file, create_test_storage};
     use std::env::temp_dir;
-    use std::path::PathBuf;
-
-    fn test_config() -> crate::server::config::Config {
-        crate::server::config::Config {
-            server: crate::server::config::ServerConfig {
-                bind_address: "127.0.0.1:50051".to_string(),
-                hosts_file_path: "/tmp/test_hosts".to_string(),
-            },
-            database: crate::server::config::DatabaseConfig {
-                path: None,
-                url: Some("duckdb://:memory:".to_string()),
-            },
-            tls: crate::server::config::TlsConfig {
-                cert_path: PathBuf::from("/tmp/cert.pem"),
-                key_path: PathBuf::from("/tmp/key.pem"),
-                ca_cert_path: PathBuf::from("/tmp/ca.pem"),
-            },
-            retention: crate::server::config::RetentionConfig {
-                max_snapshots: 50,
-                max_age_days: 30,
-            },
-            hooks: crate::server::config::HooksConfig::default(),
-            acme: crate::server::acme::AcmeConfig::default(),
-        }
-    }
 
     async fn setup() -> CommandHandler {
-        let storage = DuckDbStorage::new(":memory:")
-            .await
-            .expect("failed to create in-memory storage");
-        storage
-            .initialize()
-            .await
-            .expect("failed to initialize storage");
-        let storage: Arc<dyn Storage> = Arc::new(storage);
+        let storage = create_test_storage().await;
 
         // Create a unique temp file for each test
         let temp_file = temp_dir().join(format!("test_hosts_{}", ulid::Ulid::new()));
-        let hosts_file = Arc::new(HostsFileGenerator::new(temp_file));
+        let hosts_file = create_test_hosts_file(temp_file);
 
         let hooks = Arc::new(HookExecutor::default());
-        let config = Arc::new(test_config());
+        let config = Arc::new(create_test_config());
 
         CommandHandler::new(storage, hosts_file, hooks, config)
     }

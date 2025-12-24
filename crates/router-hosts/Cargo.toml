@@ -10,7 +10,7 @@ description.workspace = true
 
 [dependencies]
 router-hosts-common = { path = "../router-hosts-common" }
-router-hosts-storage = { path = "../router-hosts-storage" }
+router-hosts-storage = { path = "../router-hosts-storage", default-features = false, features = ["sqlite", "postgres"] }
 
 # CLI and async runtime
 clap.workspace = true
@@ -37,7 +37,6 @@ chrono.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-duckdb.workspace = true
 parking_lot.workspace = true
 csv.workspace = true
 rustls-pemfile.workspace = true

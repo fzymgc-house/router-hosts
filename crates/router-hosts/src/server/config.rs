@@ -38,8 +38,8 @@ pub struct ServerConfig {
 /// Database/storage configuration
 ///
 /// Supports two formats for backwards compatibility:
-/// - `path = "/path/to/db.duckdb"` - legacy format, converted to duckdb:// URL
-/// - `url = "duckdb:///path/to/db.duckdb"` - new URL format
+/// - `path = "/path/to/hosts.db"` - legacy format, converted to sqlite:// URL
+/// - `url = "sqlite:///path/to/hosts.db"` - new URL format (also supports postgres://)
 ///
 /// If both are specified, `url` takes precedence.
 #[derive(Debug, Deserialize, Clone)]
@@ -48,36 +48,78 @@ pub struct DatabaseConfig {
     #[serde(default)]
     pub path: Option<PathBuf>,
 
-    /// Storage URL (e.g., "duckdb:///path/to/db.duckdb" or "duckdb://:memory:")
+    /// Storage URL (e.g., "sqlite:///path/to/hosts.db" or "sqlite://:memory:")
     #[serde(default)]
     pub url: Option<String>,
 }
 
 impl DatabaseConfig {
-    /// Get the storage URL, converting from legacy path format if needed
+    /// Get the storage URL, converting from legacy path format if needed.
+    ///
+    /// If no `url` or `path` is specified, returns an XDG-compliant default path:
+    /// - Linux: `~/.local/share/router-hosts/hosts.db`
+    /// - macOS: `~/Library/Application Support/router-hosts/hosts.db`
+    /// - Windows: `C:\Users\<user>\AppData\Roaming\router-hosts\hosts.db`
     pub fn storage_url(&self) -> Result<String, ConfigError> {
         // Prefer url if specified
         if let Some(url) = &self.url {
             return Ok(url.clone());
         }
 
-        // Fall back to converting path to duckdb:// URL
+        // Fall back to converting path to sqlite:// URL
         if let Some(path) = &self.path {
             let path_str = path.to_string_lossy();
-            // Convert absolute path to duckdb:// URL
-            if path_str.starts_with('/') {
-                return Ok(format!("duckdb://{}", path_str));
+            // Convert absolute path to sqlite:// URL
+            // Check for Unix absolute paths (/) and Windows absolute paths (C:\)
+            let is_absolute = path_str.starts_with('/')
+                || (path_str.len() >= 2
+                    && path_str
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic())
+                    && path_str.chars().nth(1) == Some(':'));
+            if is_absolute {
+                return Ok(format!("sqlite://{}", path_str));
             } else {
                 // Relative path
-                return Ok(format!("duckdb://./{}", path_str));
+                return Ok(format!("sqlite://./{}", path_str));
             }
         }
 
-        Err(ConfigError::StorageConfig(
-            StorageError::InvalidConnectionString(
-                "database configuration requires either 'path' or 'url'".into(),
-            ),
-        ))
+        // Use XDG-compliant default path
+        Self::default_storage_url()
+    }
+
+    /// Returns the XDG-compliant default storage URL.
+    ///
+    /// Platform-specific paths:
+    /// - Linux: `~/.local/share/router-hosts/hosts.db`
+    /// - macOS: `~/Library/Application Support/router-hosts/hosts.db`
+    /// - Windows: `C:\Users\<user>\AppData\Roaming\router-hosts\hosts.db`
+    pub fn default_storage_url() -> Result<String, ConfigError> {
+        let data_dir = dirs::data_dir().ok_or_else(|| {
+            ConfigError::StorageConfig(StorageError::InvalidConnectionString(
+                "Could not determine user data directory. Please specify database.url explicitly."
+                    .into(),
+            ))
+        })?;
+
+        let db_path = data_dir.join("router-hosts").join("hosts.db");
+
+        // Create directory if it doesn't exist
+        if let Some(parent) = db_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ConfigError::StorageConfig(StorageError::InvalidConnectionString(format!(
+                    "Failed to create storage directory '{}': {}. \
+                     Please create it manually or specify database.url explicitly.",
+                    parent.display(),
+                    e
+                )))
+            })?;
+        }
+
+        let path_str = db_path.to_string_lossy();
+        Ok(format!("sqlite://{}", path_str))
     }
 }
 
@@ -475,7 +517,7 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             url: None,
         };
         let url = config.storage_url().unwrap();
-        assert_eq!(url, "duckdb:///var/lib/router-hosts/hosts.db");
+        assert_eq!(url, "sqlite:///var/lib/router-hosts/hosts.db");
     }
 
     #[test]
@@ -485,37 +527,50 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             url: None,
         };
         let url = config.storage_url().unwrap();
-        assert_eq!(url, "duckdb://./data/hosts.db");
+        assert_eq!(url, "sqlite://./data/hosts.db");
     }
 
     #[test]
     fn test_database_config_url_format() {
         let config = DatabaseConfig {
             path: None,
-            url: Some("duckdb://:memory:".to_string()),
+            url: Some("sqlite://:memory:".to_string()),
         };
         let url = config.storage_url().unwrap();
-        assert_eq!(url, "duckdb://:memory:");
+        assert_eq!(url, "sqlite://:memory:");
     }
 
     #[test]
     fn test_database_config_url_takes_precedence() {
         let config = DatabaseConfig {
             path: Some(PathBuf::from("/ignored/path")),
-            url: Some("duckdb://:memory:".to_string()),
+            url: Some("sqlite://:memory:".to_string()),
         };
         let url = config.storage_url().unwrap();
-        assert_eq!(url, "duckdb://:memory:");
+        assert_eq!(url, "sqlite://:memory:");
     }
 
     #[test]
-    fn test_database_config_missing_both() {
+    fn test_database_config_missing_both_uses_default() {
         let config = DatabaseConfig {
             path: None,
             url: None,
         };
         let result = config.storage_url();
-        assert!(result.is_err());
+        // Should return XDG-compliant default path
+        assert!(result.is_ok());
+        let url = result.unwrap();
+        assert!(url.starts_with("sqlite://"));
+        assert!(url.contains("router-hosts"));
+        assert!(url.ends_with("hosts.db"));
+    }
+
+    #[test]
+    fn test_default_storage_url() {
+        let url = DatabaseConfig::default_storage_url().unwrap();
+        assert!(url.starts_with("sqlite://"));
+        assert!(url.contains("router-hosts"));
+        assert!(url.ends_with("hosts.db"));
     }
 
     #[test]
@@ -526,7 +581,7 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             hosts_file_path = "/etc/hosts"
 
             [database]
-            url = "duckdb://:memory:"
+            url = "sqlite://:memory:"
 
             [tls]
             cert_path = "/etc/router-hosts/server.crt"
@@ -536,7 +591,7 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
 
         let config: Config = toml::from_str(toml_str).unwrap();
         let url = config.database.storage_url().unwrap();
-        assert_eq!(url, "duckdb://:memory:");
+        assert_eq!(url, "sqlite://:memory:");
     }
 
     #[test]

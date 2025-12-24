@@ -3206,7 +3206,6 @@ dependencies = [
  "clap",
  "csv",
  "dirs",
- "duckdb",
  "futures",
  "http-body-util",
  "hyper",
@@ -3262,6 +3261,16 @@ dependencies = [
  "tonic-prost",
  "tonic-prost-build",
  "uuid",
+]
+
+[[package]]
+name = "router-hosts-duckdb"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "router-hosts",
+ "router-hosts-storage",
+ "tokio",
 ]
 
 [[package]]

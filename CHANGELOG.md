@@ -53,6 +53,22 @@ ip_address,hostname,aliases,comment,tags
 - Aliases cannot be IP addresses (e.g., `192.168.1.1` as alias is rejected)
 - Maximum 50 aliases per host entry (prevents resource exhaustion)
 
+#### Default storage backend changed from DuckDB to SQLite
+
+The default storage backend is now SQLite instead of DuckDB. This significantly reduces binary size and compilation time.
+
+**Migration:**
+- Existing DuckDB databases are **not** automatically migrated
+- To continue using DuckDB, install the `router-hosts-duckdb` binary variant
+- New installations use SQLite by default with XDG-compliant paths:
+  - Linux: `~/.local/share/router-hosts/hosts.db`
+  - macOS: `~/Library/Application Support/router-hosts/hosts.db`
+  - Windows: `C:\Users\<user>\AppData\Roaming\router-hosts\hosts.db`
+
+**New binaries:**
+- `router-hosts` - Standard binary with SQLite + PostgreSQL backends
+- `router-hosts-duckdb` - Variant binary with all three backends (DuckDB, SQLite, PostgreSQL)
+
 ### Added
 
 - **Hostname aliases support**: Full hosts(5) alias support per Unix standard
