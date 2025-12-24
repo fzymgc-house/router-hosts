@@ -8,7 +8,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  BASE_IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-amd64:
@@ -18,6 +18,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      matrix:
+        variant:
+          - name: standard
+            dockerfile: Dockerfile
+            suffix: ""
+          - name: duckdb
+            dockerfile: Dockerfile.duckdb
+            suffix: "-duckdb"
 
     steps:
       - uses: runs-on/action@v2
@@ -41,11 +51,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.variant.dockerfile }}
           push: ${{ github.event_name != 'pull_request' }}
           platforms: linux/amd64
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}${{ matrix.variant.suffix }}:${{ github.sha }}-amd64
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
 
   build-arm64:
     runs-on:
@@ -54,6 +65,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      matrix:
+        variant:
+          - name: standard
+            dockerfile: Dockerfile
+            suffix: ""
+          - name: duckdb
+            dockerfile: Dockerfile.duckdb
+            suffix: "-duckdb"
 
     steps:
       - uses: runs-on/action@v2
@@ -77,11 +98,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
+          file: ${{ matrix.variant.dockerfile }}
           push: ${{ github.event_name != 'pull_request' }}
           platforms: linux/arm64
-          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ env.REGISTRY }}/${{ env.BASE_IMAGE_NAME }}${{ matrix.variant.suffix }}:${{ github.sha }}-arm64
+          cache-from: type=gha,scope=${{ matrix.variant.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant.name }}
 
   manifest:
     needs: [build-amd64, build-arm64]
@@ -92,6 +114,12 @@ jobs:
     permissions:
       contents: read
       packages: write
+
+    strategy:
+      matrix:
+        variant:
+          - suffix: ""
+          - suffix: "-duckdb"
 
     steps:
       - uses: runs-on/action@v2
@@ -109,7 +137,7 @@ jobs:
       - name: Create and push multi-arch manifest
         env:
           REGISTRY: ${{ env.REGISTRY }}
-          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          IMAGE_NAME: ${{ env.BASE_IMAGE_NAME }}${{ matrix.variant.suffix }}
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REF: ${{ github.ref }}
         run: |
