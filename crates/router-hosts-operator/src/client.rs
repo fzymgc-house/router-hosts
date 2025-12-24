@@ -134,7 +134,7 @@ impl RouterHostsClient {
             ip_address: ip_address.to_string(),
             aliases,
             tags,
-            comment: Some(format!("Managed by router-hosts-operator")),
+            comment: Some("Managed by router-hosts-operator".to_string()),
         };
 
         let response = client.add_host(request).await?.into_inner();
