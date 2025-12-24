@@ -6,7 +6,7 @@
 //!
 //! # Architecture
 //!
-//! - **schema**: Table definitions and migrations
+//! - **migrations**: SQL schema in `migrations/sqlite/` (applied via sqlx)
 //! - **event_store**: Event sourcing write side (append-only events)
 //! - **snapshot_store**: /etc/hosts versioning and snapshots
 //! - **projection**: CQRS read side (materialized view of current state)
@@ -48,7 +48,8 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use std::str::FromStr;
 use std::time::Duration;
 use ulid::Ulid;
 
@@ -58,10 +59,13 @@ use crate::types::{EventEnvelope, HostEntry, HostFilter, Snapshot, SnapshotId, S
 
 mod event_store;
 mod projection;
-mod schema;
 mod snapshot_store;
 
-pub use schema::initialize_schema;
+/// Embedded SQLite migrations
+///
+/// These migrations are compiled into the binary and applied at runtime.
+/// Migration files are in `migrations/sqlite/` directory.
+static MIGRATIONS: sqlx::migrate::Migrator = sqlx::migrate!("migrations/sqlite");
 
 /// SQLite storage backend
 ///
@@ -113,20 +117,28 @@ impl SqliteStorage {
     ///
     /// Returns `StorageError::Connection` if the database connection fails.
     pub async fn new(path: &str) -> Result<Self, StorageError> {
-        // Build connection URL for sqlx
-        // sqlx uses sqlite:// prefix
-        let url = if path == ":memory:" {
-            "sqlite::memory:".to_string()
+        // Build connection options with pragmas
+        // Pragmas are set on each connection via SqliteConnectOptions
+        let options = if path == ":memory:" {
+            SqliteConnectOptions::from_str("sqlite::memory:")
+                .map_err(|e| StorageError::connection("invalid SQLite URL", e))?
         } else {
-            format!("sqlite://{}?mode=rwc", path)
-        };
+            SqliteConnectOptions::from_str(&format!("sqlite://{}?mode=rwc", path))
+                .map_err(|e| StorageError::connection("invalid SQLite URL", e))?
+        }
+        // Performance and durability pragmas applied to each connection
+        .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
+        .foreign_keys(true)
+        // WAL auto-checkpoint after 1000 pages (~4MB with default page size)
+        .pragma("wal_autocheckpoint", "1000");
 
         let pool = SqlitePoolOptions::new()
             .min_connections(1)
             .max_connections(5) // SQLite is single-writer
             .acquire_timeout(Duration::from_secs(30))
             .idle_timeout(Duration::from_secs(600))
-            .connect(&url)
+            .connect_with(options)
             .await
             .map_err(|e| StorageError::connection("failed to create SQLite pool", e))?;
 
@@ -240,7 +252,10 @@ impl HostProjection for SqliteStorage {
 #[async_trait]
 impl Storage for SqliteStorage {
     async fn initialize(&self) -> Result<(), StorageError> {
-        schema::initialize_schema(self).await
+        MIGRATIONS
+            .run(self.pool())
+            .await
+            .map_err(|e| StorageError::migration("failed to run SQLite migrations", e))
     }
 
     async fn health_check(&self) -> Result<(), StorageError> {
@@ -359,6 +374,149 @@ mod tests {
         assert!(
             result.is_ok(),
             "Should be able to acquire after previous connection is dropped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_migrations_create_schema() {
+        let storage = SqliteStorage::new(":memory:")
+            .await
+            .expect("failed to create in-memory storage");
+
+        // Run migrations
+        storage
+            .initialize()
+            .await
+            .expect("migrations should succeed");
+
+        // Verify tables exist by querying them
+        let event_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM host_events")
+            .fetch_one(storage.pool())
+            .await
+            .expect("host_events table should exist");
+        assert_eq!(event_count.0, 0);
+
+        let view_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM host_entries_current")
+            .fetch_one(storage.pool())
+            .await
+            .expect("host_entries_current view should exist");
+        assert_eq!(view_count.0, 0);
+
+        let history_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM host_entries_history")
+            .fetch_one(storage.pool())
+            .await
+            .expect("host_entries_history view should exist");
+        assert_eq!(history_count.0, 0);
+
+        let snapshot_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM snapshots")
+            .fetch_one(storage.pool())
+            .await
+            .expect("snapshots table should exist");
+        assert_eq!(snapshot_count.0, 0);
+
+        // Verify migrations table was created by sqlx
+        let migrations_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(storage.pool())
+            .await
+            .expect("_sqlx_migrations table should exist");
+        assert!(
+            migrations_count.0 >= 1,
+            "at least one migration should be recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_migrations_are_idempotent() {
+        let storage = SqliteStorage::new(":memory:")
+            .await
+            .expect("failed to create in-memory storage");
+
+        // Run migrations twice - should not fail
+        storage
+            .initialize()
+            .await
+            .expect("first migration run should succeed");
+        storage
+            .initialize()
+            .await
+            .expect("second migration run should succeed (idempotent)");
+
+        // Verify only one migration recorded (not duplicated)
+        let migrations_count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM _sqlx_migrations")
+            .fetch_one(storage.pool())
+            .await
+            .expect("_sqlx_migrations table should exist");
+        assert_eq!(
+            migrations_count.0, 1,
+            "migration should only be recorded once"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_migrations_create_indexes() {
+        let storage = SqliteStorage::new(":memory:")
+            .await
+            .expect("failed to create in-memory storage");
+
+        storage
+            .initialize()
+            .await
+            .expect("migrations should succeed");
+
+        // Query sqlite_master for all indexes on host_events table
+        let indexes: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT name FROM sqlite_master
+            WHERE type = 'index'
+              AND tbl_name = 'host_events'
+              AND name NOT LIKE 'sqlite_%'
+            ORDER BY name
+            "#,
+        )
+        .fetch_all(storage.pool())
+        .await
+        .expect("should be able to query indexes");
+
+        let index_names: Vec<&str> = indexes.iter().map(|(name,)| name.as_str()).collect();
+
+        // Verify all expected indexes exist
+        assert!(
+            index_names.contains(&"idx_events_aggregate"),
+            "idx_events_aggregate index should exist, found: {:?}",
+            index_names
+        );
+        assert!(
+            index_names.contains(&"idx_events_time"),
+            "idx_events_time index should exist, found: {:?}",
+            index_names
+        );
+        assert!(
+            index_names.contains(&"idx_events_ip_hostname"),
+            "idx_events_ip_hostname index should exist, found: {:?}",
+            index_names
+        );
+
+        // Also verify snapshots index
+        let snapshot_indexes: Vec<(String,)> = sqlx::query_as(
+            r#"
+            SELECT name FROM sqlite_master
+            WHERE type = 'index'
+              AND tbl_name = 'snapshots'
+              AND name NOT LIKE 'sqlite_%'
+            "#,
+        )
+        .fetch_all(storage.pool())
+        .await
+        .expect("should be able to query snapshot indexes");
+
+        let snapshot_index_names: Vec<&str> = snapshot_indexes
+            .iter()
+            .map(|(name,)| name.as_str())
+            .collect();
+        assert!(
+            snapshot_index_names.contains(&"idx_snapshots_created"),
+            "idx_snapshots_created index should exist, found: {:?}",
+            snapshot_index_names
         );
     }
 }

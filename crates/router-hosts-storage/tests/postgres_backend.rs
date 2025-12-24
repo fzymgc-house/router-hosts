@@ -181,3 +181,15 @@ async fn postgres_rejects_invalid_connection_string() {
         result
     );
 }
+
+// ============================================================================
+// Schema Validation
+// ============================================================================
+// Note: Detailed migration tests (table/view/index verification) are performed
+// via the shared test suite in common/. The 42-test suite exercises all storage
+// operations which implicitly validates the schema. Additional schema verification
+// using direct pool access would require pub visibility, breaking encapsulation.
+//
+// The health_check test above verifies that:
+// 1. Database connectivity works
+// 2. The host_events table exists (schema was applied)
