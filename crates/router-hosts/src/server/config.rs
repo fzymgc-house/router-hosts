@@ -54,7 +54,12 @@ pub struct DatabaseConfig {
 }
 
 impl DatabaseConfig {
-    /// Get the storage URL, converting from legacy path format if needed
+    /// Get the storage URL, converting from legacy path format if needed.
+    ///
+    /// If no `url` or `path` is specified, returns an XDG-compliant default path:
+    /// - Linux: `~/.local/share/router-hosts/hosts.db`
+    /// - macOS: `~/Library/Application Support/router-hosts/hosts.db`
+    /// - Windows: `C:\Users\<user>\AppData\Roaming\router-hosts\hosts.db`
     pub fn storage_url(&self) -> Result<String, ConfigError> {
         // Prefer url if specified
         if let Some(url) = &self.url {
@@ -73,11 +78,33 @@ impl DatabaseConfig {
             }
         }
 
-        Err(ConfigError::StorageConfig(
-            StorageError::InvalidConnectionString(
-                "database configuration requires either 'path' or 'url'".into(),
-            ),
-        ))
+        // Use XDG-compliant default path
+        Self::default_storage_url()
+    }
+
+    /// Returns the XDG-compliant default storage URL.
+    ///
+    /// Platform-specific paths:
+    /// - Linux: `~/.local/share/router-hosts/hosts.db`
+    /// - macOS: `~/Library/Application Support/router-hosts/hosts.db`
+    /// - Windows: `C:\Users\<user>\AppData\Roaming\router-hosts\hosts.db`
+    pub fn default_storage_url() -> Result<String, ConfigError> {
+        let data_dir = dirs::data_dir().ok_or_else(|| {
+            ConfigError::StorageConfig(StorageError::InvalidConnectionString(
+                "Could not determine user data directory. Please specify database.url explicitly."
+                    .into(),
+            ))
+        })?;
+
+        let db_path = data_dir.join("router-hosts").join("hosts.db");
+        let path_str = db_path.to_string_lossy();
+
+        // Create directory if it doesn't exist (best effort, actual creation happens at storage init)
+        if let Some(parent) = db_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        Ok(format!("sqlite://{}", path_str))
     }
 }
 
@@ -509,13 +536,26 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
     }
 
     #[test]
-    fn test_database_config_missing_both() {
+    fn test_database_config_missing_both_uses_default() {
         let config = DatabaseConfig {
             path: None,
             url: None,
         };
         let result = config.storage_url();
-        assert!(result.is_err());
+        // Should return XDG-compliant default path
+        assert!(result.is_ok());
+        let url = result.unwrap();
+        assert!(url.starts_with("sqlite://"));
+        assert!(url.contains("router-hosts"));
+        assert!(url.ends_with("hosts.db"));
+    }
+
+    #[test]
+    fn test_default_storage_url() {
+        let url = DatabaseConfig::default_storage_url().unwrap();
+        assert!(url.starts_with("sqlite://"));
+        assert!(url.contains("router-hosts"));
+        assert!(url.ends_with("hosts.db"));
     }
 
     #[test]
