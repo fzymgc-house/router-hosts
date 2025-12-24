@@ -6,3 +6,5 @@ pub mod controllers;
 pub mod deletion;
 pub mod matcher;
 pub mod resolver;
+
+pub use config::RouterHostsConfig;
