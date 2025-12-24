@@ -185,4 +185,6 @@ N/A - Initial release
 
 ---
 
-**Full Changelog**: https://github.com/fzymgc-house/router-hosts/commits/main (link will be updated to v0.5.0 tag after release)
+[Unreleased]: https://github.com/fzymgc-house/router-hosts/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/fzymgc-house/router-hosts/compare/v0.5.0...v0.6.0
+[0.5.0]: https://github.com/fzymgc-house/router-hosts/releases/tag/v0.5.0
