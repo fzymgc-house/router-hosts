@@ -1,0 +1,26 @@
+[package]
+name = "router-hosts-duckdb"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "DuckDB variant of router-hosts - DNS host entry manager with DuckDB storage"
+
+[[bin]]
+name = "router-hosts-duckdb"
+path = "src/main.rs"
+
+[dependencies]
+# Core library (provides CLI, server, client)
+router-hosts = { path = "../router-hosts" }
+
+# Storage with DuckDB enabled (in addition to sqlite + postgres from router-hosts)
+router-hosts-storage = { path = "../router-hosts-storage", features = ["duckdb", "sqlite", "postgres"] }
+
+# Async runtime
+tokio.workspace = true
+
+# Error handling
+anyhow.workspace = true

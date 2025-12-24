@@ -3264,6 +3264,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "router-hosts-duckdb"
+version = "0.5.0"
+dependencies = [
+ "anyhow",
+ "router-hosts",
+ "router-hosts-storage",
+ "tokio",
+]
+
+[[package]]
 name = "router-hosts-e2e"
 version = "0.5.0"
 dependencies = [
