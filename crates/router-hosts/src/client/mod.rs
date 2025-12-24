@@ -498,7 +498,7 @@ mod tests {
     fn test_version_string_contains_backends() {
         let version = *VERSION_WITH_BACKENDS;
         assert!(
-            version.contains("0.5.0"),
+            version.contains(env!("CARGO_PKG_VERSION")),
             "Version should contain version number"
         );
         assert!(
