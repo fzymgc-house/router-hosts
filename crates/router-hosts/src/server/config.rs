@@ -70,7 +70,15 @@ impl DatabaseConfig {
         if let Some(path) = &self.path {
             let path_str = path.to_string_lossy();
             // Convert absolute path to sqlite:// URL
-            if path_str.starts_with('/') {
+            // Check for Unix absolute paths (/) and Windows absolute paths (C:\)
+            let is_absolute = path_str.starts_with('/')
+                || (path_str.len() >= 2
+                    && path_str
+                        .chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic())
+                    && path_str.chars().nth(1) == Some(':'));
+            if is_absolute {
                 return Ok(format!("sqlite://{}", path_str));
             } else {
                 // Relative path
@@ -97,13 +105,20 @@ impl DatabaseConfig {
         })?;
 
         let db_path = data_dir.join("router-hosts").join("hosts.db");
-        let path_str = db_path.to_string_lossy();
 
-        // Create directory if it doesn't exist (best effort, actual creation happens at storage init)
+        // Create directory if it doesn't exist
         if let Some(parent) = db_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            std::fs::create_dir_all(parent).map_err(|e| {
+                ConfigError::StorageConfig(StorageError::InvalidConnectionString(format!(
+                    "Failed to create storage directory '{}': {}. \
+                     Please create it manually or specify database.url explicitly.",
+                    parent.display(),
+                    e
+                )))
+            })?;
         }
 
+        let path_str = db_path.to_string_lossy();
         Ok(format!("sqlite://{}", path_str))
     }
 }

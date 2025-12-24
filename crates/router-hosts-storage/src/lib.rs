@@ -4,9 +4,9 @@
 //!
 //! # Supported Backends
 //!
-//! - **DuckDB** (feature: `duckdb`, default) - High-performance embedded analytics database
-//! - **SQLite** (feature: `sqlite`) - Lightweight, widely-available embedded database
+//! - **SQLite** (feature: `sqlite`, default) - Lightweight, widely-available embedded database
 //! - **PostgreSQL** (feature: `postgres`) - Scalable networked database for multi-instance deployments
+//! - **DuckDB** (feature: `duckdb`) - High-performance embedded analytics database
 //!
 //! # Architecture
 //!
@@ -18,19 +18,7 @@
 //!
 //! # Examples
 //!
-//! ## DuckDB (default)
-//!
-//! ```no_run
-//! use router_hosts_storage::{create_storage, StorageConfig};
-//!
-//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
-//! let config = StorageConfig::from_url("duckdb://:memory:")?;
-//! let storage = create_storage(&config).await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! ## SQLite
+//! ## SQLite (default)
 //!
 //! ```no_run
 //! use router_hosts_storage::{create_storage, StorageConfig};
@@ -42,6 +30,18 @@
 //!
 //! // File-based for production
 //! let config = StorageConfig::from_url("sqlite:///var/lib/router-hosts/events.db")?;
+//! let storage = create_storage(&config).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! ## DuckDB
+//!
+//! ```no_run
+//! use router_hosts_storage::{create_storage, StorageConfig};
+//!
+//! # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+//! let config = StorageConfig::from_url("duckdb://:memory:")?;
 //! let storage = create_storage(&config).await?;
 //! # Ok(())
 //! # }
@@ -84,8 +84,9 @@ pub async fn create_storage(
         BackendType::DuckDb => {
             return Err(StorageError::InvalidConnectionString(
                 "DuckDB backend not available in this build.\n\n\
-                 To use DuckDB, install the router-hosts-duckdb binary:\n  \
-                 brew install fzymgc-house/tap/router-hosts-duckdb\n\n\
+                 To use DuckDB, install the router-hosts-duckdb variant:\n  \
+                 macOS:  brew install fzymgc-house/tap/router-hosts-duckdb\n  \
+                 Other:  https://github.com/fzymgc-house/router-hosts/releases\n\n\
                  Or switch to a supported backend:\n  \
                  sqlite:///path/to/hosts.db\n  \
                  postgres://user:pass@host/db"
