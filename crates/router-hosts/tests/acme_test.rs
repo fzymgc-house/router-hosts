@@ -382,6 +382,166 @@ async fn test_acme_full_certificate_flow_with_pebble() {
 }
 
 // ============================================================================
+// Edge Case and Error Handling Tests
+// ============================================================================
+
+/// Test that `create_order()` fails gracefully when account is not initialized
+///
+/// Verifies that calling `create_order()` before `ensure_account()` returns
+/// a clear error message rather than panicking or silently failing.
+#[tokio::test]
+async fn test_acme_order_without_account_fails() {
+    let config = AcmeConfig {
+        enabled: true,
+        directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory".to_string(),
+        domains: vec!["test.example.com".to_string()],
+        ..Default::default()
+    };
+
+    let client = AcmeClient::new(config).expect("Failed to create client");
+
+    // Don't call ensure_account - try to create order directly
+    let result = client.create_order().await;
+
+    assert!(result.is_err(), "Should fail when account not initialized");
+    let err_msg = match result {
+        Ok(_) => panic!("Expected error, got Ok"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err_msg.contains("account not initialized"),
+        "Error should mention account not initialized, got: {}",
+        err_msg
+    );
+}
+
+/// Test that `with_root_ca()` accepts a nonexistent CA path at construction
+/// but fails when the client is used (deferred validation)
+///
+/// This verifies the expected behavior where path validation is deferred
+/// to the first account operation, not at client construction time.
+#[tokio::test]
+async fn test_acme_with_nonexistent_ca_path() {
+    init_crypto_provider();
+
+    let config = AcmeConfig {
+        enabled: true,
+        directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory".to_string(),
+        domains: vec!["test.example.com".to_string()],
+        ..Default::default()
+    };
+
+    // Construction should succeed (path stored, not validated)
+    let client = AcmeClient::with_root_ca(config, "/nonexistent/path/to/ca.pem")
+        .expect("Client construction should succeed with any path");
+
+    // Failure should occur when trying to use the client
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let result = client
+        .ensure_account(&temp_dir.path().join("creds.json"))
+        .await;
+
+    assert!(result.is_err(), "Should fail with nonexistent CA path");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("custom CA") || err_msg.contains("ca.pem"),
+        "Error should reference the CA path, got: {}",
+        err_msg
+    );
+}
+
+/// Test that invalid PEM content in CA file causes a clear error
+///
+/// Verifies that malformed PEM data is detected and reported with
+/// a useful error message.
+#[tokio::test]
+async fn test_acme_with_invalid_ca_pem() {
+    init_crypto_provider();
+
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let ca_path = temp_dir.path().join("invalid-ca.pem");
+    std::fs::write(&ca_path, "not valid pem data - just garbage").expect("Failed to write file");
+
+    let config = AcmeConfig {
+        enabled: true,
+        directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory".to_string(),
+        domains: vec!["test.example.com".to_string()],
+        ..Default::default()
+    };
+
+    let client =
+        AcmeClient::with_root_ca(config, &ca_path).expect("Client construction should succeed");
+
+    let result = client
+        .ensure_account(&temp_dir.path().join("creds.json"))
+        .await;
+
+    assert!(result.is_err(), "Should fail with invalid PEM content");
+}
+
+/// Test that account credentials can be loaded from an existing file
+///
+/// Verifies the account persistence/reload path works correctly by:
+/// 1. Creating an account and saving credentials
+/// 2. Creating a new client and loading the saved credentials
+/// 3. Verifying the loaded account can perform operations
+#[tokio::test]
+async fn test_acme_account_persistence_with_pebble() {
+    init_crypto_provider();
+
+    let env = PebbleTestEnv::start().await;
+    let config = test_acme_config(&env.directory_url);
+
+    // First client: create account
+    let client1 = AcmeClient::with_root_ca(config.clone(), env.ca_path())
+        .expect("Failed to create first client");
+
+    client1
+        .ensure_account(&env.credentials_path())
+        .await
+        .expect("Failed to create account");
+
+    // Verify credentials file was created
+    assert!(
+        env.credentials_path().exists(),
+        "Credentials file should exist after first account creation"
+    );
+
+    // Read the credentials file size for comparison
+    let creds_metadata =
+        std::fs::metadata(&env.credentials_path()).expect("Failed to get credentials metadata");
+    let original_size = creds_metadata.len();
+
+    // Second client: load existing account
+    let client2 =
+        AcmeClient::with_root_ca(config, env.ca_path()).expect("Failed to create second client");
+
+    let result = client2.ensure_account(&env.credentials_path()).await;
+    assert!(
+        result.is_ok(),
+        "Should load existing account from credentials: {:?}",
+        result.err()
+    );
+
+    // Verify credentials file wasn't modified (account was loaded, not recreated)
+    let new_metadata =
+        std::fs::metadata(&env.credentials_path()).expect("Failed to get new metadata");
+    assert_eq!(
+        original_size,
+        new_metadata.len(),
+        "Credentials file should not be modified when loading existing account"
+    );
+
+    // Verify loaded account can perform operations
+    let order_result = client2.create_order().await;
+    assert!(
+        order_result.is_ok(),
+        "Loaded account should be able to create orders: {:?}",
+        order_result.err()
+    );
+}
+
+// ============================================================================
 // Additional Unit Tests (no network required)
 // ============================================================================
 
