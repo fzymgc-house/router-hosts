@@ -1,6 +1,6 @@
 # SQLite Default Storage Design
 
-**Status:** APPROVED (2025-12-24)
+**Status:** IMPLEMENTED (2025-12-24)
 
 ## Problem
 

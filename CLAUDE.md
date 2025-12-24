@@ -128,9 +128,12 @@ All tasks are tracked in GitHub Issues. You MUST:
 | Crate | Purpose |
 |-------|---------|
 | `router-hosts-common` | Protobuf definitions, validation, shared types |
-| `router-hosts-storage` | Storage trait with DuckDB, SQLite, PostgreSQL backends |
-| `router-hosts` | Unified binary (client and server modes) |
+| `router-hosts-storage` | Storage trait with SQLite (default), PostgreSQL, DuckDB backends |
+| `router-hosts` | Main binary (SQLite + PostgreSQL only) |
+| `router-hosts-duckdb` | DuckDB variant binary (all three backends) |
 | `router-hosts-e2e` | Docker-based E2E tests with real mTLS |
+
+**Storage defaults:** SQLite is the default backend. When no database URL is configured, an XDG-compliant path is used (`~/.local/share/router-hosts/hosts.db` on Linux).
 
 For detailed architecture, see `docs/architecture.md`.
 
