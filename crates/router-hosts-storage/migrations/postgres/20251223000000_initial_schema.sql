@@ -5,15 +5,14 @@
 --
 -- IMPORTANT: View Update Strategy
 -- --------------------------------
--- This migration uses CREATE VIEW IF NOT EXISTS which is appropriate for initial
--- schema creation. However, if a view definition needs to change in a future
--- migration, you MUST use DROP VIEW + CREATE VIEW pattern:
+-- Views use plain CREATE VIEW (not IF NOT EXISTS) for PostgreSQL 12+ compatibility.
+-- sqlx tracks applied migrations, so views won't be recreated on re-runs.
+-- If a view definition needs to change in a future migration, use:
 --
 --   DROP VIEW IF EXISTS host_entries_current;
 --   CREATE VIEW host_entries_current AS ...
 --
--- The IF NOT EXISTS clause will NOT update an existing view, so changes would
--- be silently skipped. Always use the DROP + CREATE pattern for view modifications.
+-- Always use DROP + CREATE pattern for view modifications.
 
 -- Event store - append-only immutable log of all domain events
 CREATE TABLE IF NOT EXISTS host_events (
@@ -46,7 +45,9 @@ CREATE INDEX IF NOT EXISTS idx_events_ip_hostname ON host_events(ip_address, hos
 -- Read model: Current active hosts projection
 -- PostgreSQL doesn't support IGNORE NULLS, so we use DISTINCT ON with CTEs
 -- to get the last non-null value for each column
-CREATE VIEW IF NOT EXISTS host_entries_current AS
+-- Note: CREATE VIEW IF NOT EXISTS requires PostgreSQL 17+, use plain CREATE VIEW
+-- for compatibility with PostgreSQL 12+. sqlx tracks applied migrations.
+CREATE VIEW host_entries_current AS
 WITH
 -- Get the latest event for each aggregate to determine if deleted
 latest_events AS (
@@ -131,7 +132,7 @@ LEFT JOIN aliases_values av ON av.aggregate_id = le.aggregate_id
 WHERE le.latest_event_type != 'HostDeleted';
 
 -- Read model: Complete history including deleted entries
-CREATE VIEW IF NOT EXISTS host_entries_history AS
+CREATE VIEW host_entries_history AS
 SELECT
     event_id,
     aggregate_id,
