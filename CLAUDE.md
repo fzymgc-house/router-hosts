@@ -81,7 +81,7 @@ You SHOULD run `task --list` to see all available commands and their purposes.
 
 You MUST NOT run `cargo test` or `cargo tarpaulin` directly.
 
-You MUST maintain ≥80% test coverage. PRs that decrease coverage below 80% SHALL be rejected.
+You MUST maintain ≥80% test coverage. PRs that decrease coverage below 80% MUST be rejected.
 
 ## Code Quality
 
@@ -104,6 +104,20 @@ You MUST maintain ≥80% test coverage. PRs that decrease coverage below 80% SHA
 - You MUST run `cargo clippy -- -D warnings` before committing
 - You MUST NOT add `#[allow(...)]` or suppression directives without explicit justification AND user approval
 - You SHOULD fix lint warnings properly, not suppress them
+
+## Development Setup
+
+### Prerequisites
+
+- **Rust toolchain** (stable): `rustup install stable`
+- **buf CLI** (protobuf): `brew install bufbuild/buf/buf`
+- **pre-commit**: `pip install pre-commit && pre-commit install`
+
+### Issue Tracking
+
+All tasks are tracked in GitHub Issues. You MUST:
+- Reference issues in commits: `Fixes #123`, `Closes #456`
+- Create new issues for discovered work or follow-up tasks
 
 ## Project Context
 

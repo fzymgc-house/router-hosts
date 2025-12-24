@@ -42,7 +42,7 @@ Unified binary (client and server modes):
 
 End-to-end acceptance tests:
 - Docker-based integration tests with real mTLS
-- 8 scenario tests covering CRUD, auth, disaster recovery
+- 10 tests across 4 scenario files covering CRUD, auth, disaster recovery
 
 ## Key Design Decisions
 
@@ -134,7 +134,7 @@ Include detailed error context in response messages.
 - **Integration tests:** Use in-memory DuckDB, self-signed certs
 - **Storage tests:** Shared test suite in `router-hosts-storage/tests/common/` (42 tests)
   - Any new storage backend must pass all tests via `run_all_tests(&storage).await`
-- **E2E tests:** Docker containers with real mTLS (8 scenarios)
+- **E2E tests:** Docker containers with real mTLS (10 tests across 4 scenarios)
 - **No real file system writes** in tests (use tempfiles or mocks)
 
 ## /etc/hosts Format

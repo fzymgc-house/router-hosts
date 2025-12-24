@@ -9,7 +9,7 @@ Server executes shell commands after /etc/hosts updates:
 - `on_success` hooks - after successful regeneration (e.g., reload dnsmasq)
 - `on_failure` hooks - after failed regeneration (e.g., alerting)
 - Hooks run with 30s timeout, failures logged but don't fail operation
-- Environment variables provide context (event type, entry count, snapshot ID)
+- Environment variables provide context (event type, entry count, error message)
 
 ### Configuration Example
 
@@ -30,9 +30,9 @@ Hooks receive these environment variables:
 
 | Variable | Description |
 |----------|-------------|
-| `ROUTER_HOSTS_EVENT` | Event type (add, update, delete, import) |
-| `ROUTER_HOSTS_ENTRY_COUNT` | Number of entries after operation |
-| `ROUTER_HOSTS_SNAPSHOT_ID` | ID of created snapshot (if any) |
+| `ROUTER_HOSTS_EVENT` | "success" or "failure" |
+| `ROUTER_HOSTS_ENTRY_COUNT` | Number of host entries |
+| `ROUTER_HOSTS_ERROR` | Error message (failure hooks only) |
 
 ## Certificate Reload via SIGHUP
 

@@ -127,8 +127,8 @@ Tests run locally with Docker but are not yet integrated into CI.
 cargo test -p router-hosts acme  # Runs Pebble tests via testcontainers
 ```
 
-**CI integration:** Tracked in issue #127. Requires configuring Pebble's self-signed CA
-certificate trust in the CI environment.
+**CI integration:** ACME tests run locally only; CI integration pending due to Pebble's self-signed CA
+certificate trust configuration requirements.
 
 ## Troubleshooting
 
