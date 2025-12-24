@@ -83,7 +83,13 @@ pub async fn create_storage(
         #[cfg(not(feature = "duckdb"))]
         BackendType::DuckDb => {
             return Err(StorageError::InvalidConnectionString(
-                "DuckDB backend not compiled in (enable 'duckdb' feature)".into(),
+                "DuckDB backend not available in this build.\n\n\
+                 To use DuckDB, install the router-hosts-duckdb binary:\n  \
+                 brew install fzymgc-house/tap/router-hosts-duckdb\n\n\
+                 Or switch to a supported backend:\n  \
+                 sqlite:///path/to/hosts.db\n  \
+                 postgres://user:pass@host/db"
+                    .into(),
             ))
         }
         #[cfg(feature = "sqlite")]
@@ -93,7 +99,11 @@ pub async fn create_storage(
         #[cfg(not(feature = "sqlite"))]
         BackendType::Sqlite => {
             return Err(StorageError::InvalidConnectionString(
-                "SQLite backend not compiled in (enable 'sqlite' feature)".into(),
+                "SQLite backend not available in this build.\n\n\
+                 This is unexpected - SQLite is the default backend.\n\
+                 Please report this issue at:\n  \
+                 https://github.com/fzymgc-house/router-hosts/issues"
+                    .into(),
             ))
         }
         #[cfg(feature = "postgres")]
@@ -103,7 +113,12 @@ pub async fn create_storage(
         #[cfg(not(feature = "postgres"))]
         BackendType::Postgres => {
             return Err(StorageError::InvalidConnectionString(
-                "PostgreSQL backend not compiled in (enable 'postgres' feature)".into(),
+                "PostgreSQL backend not available in this build.\n\n\
+                 PostgreSQL support requires the 'postgres' feature.\n\
+                 The standard router-hosts binary includes PostgreSQL support.\n\n\
+                 Or switch to the default SQLite backend:\n  \
+                 sqlite:///path/to/hosts.db"
+                    .into(),
             ))
         }
     };
