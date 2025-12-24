@@ -3206,7 +3206,6 @@ dependencies = [
  "clap",
  "csv",
  "dirs",
- "duckdb",
  "futures",
  "http-body-util",
  "hyper",

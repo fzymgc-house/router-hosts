@@ -758,7 +758,7 @@ impl CommandHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use router_hosts_storage::backends::duckdb::DuckDbStorage;
+    use router_hosts_storage::backends::sqlite::SqliteStorage;
     use std::env::temp_dir;
     use std::path::PathBuf;
 
@@ -770,7 +770,7 @@ mod tests {
             },
             database: crate::server::config::DatabaseConfig {
                 path: None,
-                url: Some("duckdb://:memory:".to_string()),
+                url: Some("sqlite://:memory:".to_string()),
             },
             tls: crate::server::config::TlsConfig {
                 cert_path: PathBuf::from("/tmp/cert.pem"),
@@ -787,7 +787,7 @@ mod tests {
     }
 
     async fn setup() -> CommandHandler {
-        let storage = DuckDbStorage::new(":memory:")
+        let storage = SqliteStorage::new(":memory:")
             .await
             .expect("failed to create in-memory storage");
         storage

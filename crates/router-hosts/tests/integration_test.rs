@@ -33,7 +33,7 @@ use router_hosts_common::proto::{
     ExportHostsRequest, GetHostRequest, ImportHostsRequest, ListHostsRequest, ListSnapshotsRequest,
     RollbackToSnapshotRequest, SearchHostsRequest, UpdateHostRequest,
 };
-use router_hosts_storage::backends::duckdb::DuckDbStorage;
+use router_hosts_storage::backends::sqlite::SqliteStorage;
 use router_hosts_storage::Storage;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -50,7 +50,7 @@ async fn start_test_server() -> (SocketAddr, Arc<tempfile::TempDir>) {
     drop(listener); // Release the port for the server to use
 
     // Create in-memory storage
-    let storage = DuckDbStorage::new(":memory:")
+    let storage = SqliteStorage::new(":memory:")
         .await
         .expect("failed to create in-memory storage");
     storage
@@ -78,7 +78,7 @@ async fn start_test_server() -> (SocketAddr, Arc<tempfile::TempDir>) {
         },
         database: router_hosts::server::config::DatabaseConfig {
             path: None,
-            url: Some("duckdb://:memory:".to_string()),
+            url: Some("sqlite://:memory:".to_string()),
         },
         tls: router_hosts::server::config::TlsConfig {
             cert_path: std::path::PathBuf::from("/tmp/cert.pem"),

@@ -38,8 +38,8 @@ pub struct ServerConfig {
 /// Database/storage configuration
 ///
 /// Supports two formats for backwards compatibility:
-/// - `path = "/path/to/db.duckdb"` - legacy format, converted to duckdb:// URL
-/// - `url = "duckdb:///path/to/db.duckdb"` - new URL format
+/// - `path = "/path/to/hosts.db"` - legacy format, converted to sqlite:// URL
+/// - `url = "sqlite:///path/to/hosts.db"` - new URL format (also supports postgres://)
 ///
 /// If both are specified, `url` takes precedence.
 #[derive(Debug, Deserialize, Clone)]
@@ -48,7 +48,7 @@ pub struct DatabaseConfig {
     #[serde(default)]
     pub path: Option<PathBuf>,
 
-    /// Storage URL (e.g., "duckdb:///path/to/db.duckdb" or "duckdb://:memory:")
+    /// Storage URL (e.g., "sqlite:///path/to/hosts.db" or "sqlite://:memory:")
     #[serde(default)]
     pub url: Option<String>,
 }
@@ -61,15 +61,15 @@ impl DatabaseConfig {
             return Ok(url.clone());
         }
 
-        // Fall back to converting path to duckdb:// URL
+        // Fall back to converting path to sqlite:// URL
         if let Some(path) = &self.path {
             let path_str = path.to_string_lossy();
-            // Convert absolute path to duckdb:// URL
+            // Convert absolute path to sqlite:// URL
             if path_str.starts_with('/') {
-                return Ok(format!("duckdb://{}", path_str));
+                return Ok(format!("sqlite://{}", path_str));
             } else {
                 // Relative path
-                return Ok(format!("duckdb://./{}", path_str));
+                return Ok(format!("sqlite://./{}", path_str));
             }
         }
 
@@ -475,7 +475,7 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             url: None,
         };
         let url = config.storage_url().unwrap();
-        assert_eq!(url, "duckdb:///var/lib/router-hosts/hosts.db");
+        assert_eq!(url, "sqlite:///var/lib/router-hosts/hosts.db");
     }
 
     #[test]
@@ -485,27 +485,27 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             url: None,
         };
         let url = config.storage_url().unwrap();
-        assert_eq!(url, "duckdb://./data/hosts.db");
+        assert_eq!(url, "sqlite://./data/hosts.db");
     }
 
     #[test]
     fn test_database_config_url_format() {
         let config = DatabaseConfig {
             path: None,
-            url: Some("duckdb://:memory:".to_string()),
+            url: Some("sqlite://:memory:".to_string()),
         };
         let url = config.storage_url().unwrap();
-        assert_eq!(url, "duckdb://:memory:");
+        assert_eq!(url, "sqlite://:memory:");
     }
 
     #[test]
     fn test_database_config_url_takes_precedence() {
         let config = DatabaseConfig {
             path: Some(PathBuf::from("/ignored/path")),
-            url: Some("duckdb://:memory:".to_string()),
+            url: Some("sqlite://:memory:".to_string()),
         };
         let url = config.storage_url().unwrap();
-        assert_eq!(url, "duckdb://:memory:");
+        assert_eq!(url, "sqlite://:memory:");
     }
 
     #[test]
@@ -526,7 +526,7 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
             hosts_file_path = "/etc/hosts"
 
             [database]
-            url = "duckdb://:memory:"
+            url = "sqlite://:memory:"
 
             [tls]
             cert_path = "/etc/router-hosts/server.crt"
@@ -536,7 +536,7 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
 
         let config: Config = toml::from_str(toml_str).unwrap();
         let url = config.database.storage_url().unwrap();
-        assert_eq!(url, "duckdb://:memory:");
+        assert_eq!(url, "sqlite://:memory:");
     }
 
     #[test]

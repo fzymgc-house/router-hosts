@@ -117,8 +117,17 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    #[cfg(feature = "duckdb")]
     async fn test_create_storage_duckdb_memory() {
         let config = StorageConfig::from_url("duckdb://:memory:").unwrap();
+        let storage = create_storage(&config).await.unwrap();
+        assert!(storage.health_check().await.is_ok());
+    }
+
+    #[tokio::test]
+    #[cfg(feature = "sqlite")]
+    async fn test_create_storage_sqlite_memory() {
+        let config = StorageConfig::from_url("sqlite://:memory:").unwrap();
         let storage = create_storage(&config).await.unwrap();
         assert!(storage.health_check().await.is_ok());
     }

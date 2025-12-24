@@ -515,7 +515,7 @@ mod tests {
     use crate::server::commands::CommandHandler;
     use crate::server::hooks::HookExecutor;
     use crate::server::hosts_file::HostsFileGenerator;
-    use router_hosts_storage::backends::duckdb::DuckDbStorage;
+    use router_hosts_storage::backends::sqlite::SqliteStorage;
     use router_hosts_storage::Storage;
     use std::sync::Arc;
     use tempfile::TempDir;
@@ -525,7 +525,7 @@ mod tests {
         let hosts_path = temp_dir.path().join("hosts");
 
         // Use in-memory storage for tests
-        let storage = DuckDbStorage::new(":memory:")
+        let storage = SqliteStorage::new(":memory:")
             .await
             .expect("failed to create in-memory storage");
         storage
@@ -544,7 +544,7 @@ mod tests {
             },
             database: crate::server::config::DatabaseConfig {
                 path: None,
-                url: Some("duckdb://:memory:".to_string()),
+                url: Some("sqlite://:memory:".to_string()),
             },
             tls: crate::server::config::TlsConfig {
                 cert_path: std::path::PathBuf::from("/tmp/cert.pem"),

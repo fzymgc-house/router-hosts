@@ -51,3 +51,16 @@ tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 tempfile = { workspace = true }
 testcontainers = "0.26"
 testcontainers-modules = { version = "0.14", features = ["postgres"] }
+
+# Backend-specific integration tests only compile when their feature is enabled
+[[test]]
+name = "duckdb_backend"
+required-features = ["duckdb"]
+
+[[test]]
+name = "sqlite_backend"
+required-features = ["sqlite"]
+
+[[test]]
+name = "postgres_backend"
+required-features = ["postgres"]
