@@ -513,10 +513,9 @@ async fn write_worker(mut rx: mpsc::Receiver<WriteCommand>, handler: Arc<Command
 mod tests {
     use super::*;
     use crate::server::commands::CommandHandler;
-    use crate::server::hooks::HookExecutor;
-    use crate::server::hosts_file::HostsFileGenerator;
-    use router_hosts_storage::backends::sqlite::SqliteStorage;
-    use router_hosts_storage::Storage;
+    use crate::test_utils::{
+        create_test_config, create_test_hooks, create_test_hosts_file, create_test_storage,
+    };
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -524,40 +523,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let hosts_path = temp_dir.path().join("hosts");
 
-        // Use in-memory storage for tests
-        let storage = SqliteStorage::new(":memory:")
-            .await
-            .expect("failed to create in-memory storage");
-        storage
-            .initialize()
-            .await
-            .expect("failed to initialize storage");
-        let storage: Arc<dyn Storage> = Arc::new(storage);
-
-        let hosts_file = Arc::new(HostsFileGenerator::new(hosts_path));
-        let hooks = Arc::new(HookExecutor::new(vec![], vec![], 30));
-
-        let config = Arc::new(crate::server::config::Config {
-            server: crate::server::config::ServerConfig {
-                bind_address: "127.0.0.1:50051".to_string(),
-                hosts_file_path: "/tmp/test_hosts".to_string(),
-            },
-            database: crate::server::config::DatabaseConfig {
-                path: None,
-                url: Some("sqlite://:memory:".to_string()),
-            },
-            tls: crate::server::config::TlsConfig {
-                cert_path: std::path::PathBuf::from("/tmp/cert.pem"),
-                key_path: std::path::PathBuf::from("/tmp/key.pem"),
-                ca_cert_path: std::path::PathBuf::from("/tmp/ca.pem"),
-            },
-            retention: crate::server::config::RetentionConfig {
-                max_snapshots: 50,
-                max_age_days: 30,
-            },
-            hooks: crate::server::config::HooksConfig::default(),
-            acme: crate::server::acme::AcmeConfig::default(),
-        });
+        let storage = create_test_storage().await;
+        let hosts_file = create_test_hosts_file(hosts_path);
+        let hooks = create_test_hooks();
+        let config = Arc::new(create_test_config());
 
         let commands = Arc::new(CommandHandler::new(storage, hosts_file, hooks, config));
 

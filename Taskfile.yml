@@ -20,6 +20,36 @@ tasks:
     cmds:
       - cargo build --workspace --release
 
+  build:router-hosts:
+    desc: Build router-hosts binary only (SQLite + PostgreSQL backends)
+    cmds:
+      - cargo build -p router-hosts
+
+  build:router-hosts:release:
+    desc: Build router-hosts binary only in release mode
+    cmds:
+      - cargo build -p router-hosts --release
+
+  build:duckdb:
+    desc: Build router-hosts-duckdb binary only (all backends including DuckDB)
+    cmds:
+      - cargo build -p router-hosts-duckdb
+
+  build:duckdb:release:
+    desc: Build router-hosts-duckdb binary only in release mode
+    cmds:
+      - cargo build -p router-hosts-duckdb --release
+
+  version:check:
+    desc: Verify version output shows correct backends for each binary
+    deps: ["build:router-hosts", "build:duckdb"]
+    cmds:
+      - echo "=== router-hosts (should NOT have duckdb) ==="
+      - ./target/debug/router-hosts --version
+      - echo ""
+      - echo "=== router-hosts-duckdb (should have duckdb) ==="
+      - ./target/debug/router-hosts-duckdb --version
+
   test:
     desc: Run unit and integration tests with nextest
     cmds:

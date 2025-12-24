@@ -15,9 +15,21 @@ pub use error::{exit_code_for_status, format_grpc_error, EXIT_ERROR, EXIT_USAGE}
 pub use grpc::Client;
 
 use anyhow::Result;
-use clap::{Args, Parser, Subcommand, ValueEnum};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::LazyLock;
+
+/// Version string including available storage backends.
+///
+/// Computed once at first access and cached for the lifetime of the program.
+/// The string is leaked to produce a `&'static str` for clap.
+static VERSION_WITH_BACKENDS: LazyLock<&'static str> = LazyLock::new(|| {
+    let version = env!("CARGO_PKG_VERSION");
+    let backends = router_hosts_storage::available_backends();
+    let s = format!("{version}\nStorage backends: {}", backends.join(", "));
+    Box::leak(s.into_boxed_str())
+});
 
 #[derive(Debug, Clone, Copy, ValueEnum, Default)]
 pub enum OutputFormat {
@@ -235,7 +247,9 @@ pub enum SnapshotCommand {
 }
 
 pub async fn run() -> Result<ExitCode> {
-    let cli = Cli::parse();
+    // Parse CLI with dynamic version string that includes available backends
+    let cli = Cli::from_arg_matches(&Cli::command().version(*VERSION_WITH_BACKENDS).get_matches())
+        .expect("CLI arg parsing should succeed");
 
     // Handle Config command early (doesn't need connection)
     if matches!(cli.command, Commands::Config) {
@@ -478,5 +492,36 @@ mod tests {
             },
             _ => panic!("Expected Host command"),
         }
+    }
+
+    #[test]
+    fn test_version_string_contains_backends() {
+        let version = *VERSION_WITH_BACKENDS;
+        assert!(
+            version.contains("0.5.0"),
+            "Version should contain version number"
+        );
+        assert!(
+            version.contains("Storage backends:"),
+            "Version should list backends"
+        );
+        // At minimum, sqlite should be available (it's the default)
+        let backends = router_hosts_storage::available_backends();
+        assert!(
+            !backends.is_empty(),
+            "At least one backend should be available"
+        );
+    }
+
+    #[test]
+    fn test_cli_version_flag() {
+        // Verify --version flag is recognized (will exit early)
+        let result = Cli::command()
+            .version(*VERSION_WITH_BACKENDS)
+            .try_get_matches_from(["router-hosts", "--version"]);
+        // --version causes early exit with DisplayVersion error
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::DisplayVersion);
     }
 }

@@ -62,6 +62,28 @@ pub use types::{
     EventEnvelope, HostEntry, HostEvent, HostFilter, Snapshot, SnapshotId, SnapshotMetadata,
 };
 
+/// Returns a list of storage backends available in this build.
+///
+/// This is determined at compile time based on enabled features.
+/// Use this to display available backends in `--version` output.
+///
+/// # Example
+///
+/// ```
+/// let backends = router_hosts_storage::available_backends();
+/// println!("Supported backends: {}", backends.join(", "));
+/// ```
+pub fn available_backends() -> &'static [&'static str] {
+    &[
+        #[cfg(feature = "sqlite")]
+        "sqlite",
+        #[cfg(feature = "postgres")]
+        "postgres",
+        #[cfg(feature = "duckdb")]
+        "duckdb",
+    ]
+}
+
 /// Create storage from configuration
 ///
 /// This is the primary entry point for creating a storage backend.

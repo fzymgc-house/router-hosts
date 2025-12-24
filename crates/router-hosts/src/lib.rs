@@ -6,6 +6,9 @@
 pub mod client;
 pub mod server;
 
+#[cfg(test)]
+pub mod test_utils;
+
 use anyhow::Result;
 use std::env;
 use std::process::ExitCode;
