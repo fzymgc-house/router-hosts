@@ -8,7 +8,7 @@ use instant_acme::{
     NewOrder, Order,
 };
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::sync::RwLock;
 use tracing::info;
@@ -84,6 +84,11 @@ pub struct AcmeClient {
 
     /// ACME configuration
     config: AcmeConfig,
+
+    /// Optional path to a custom root CA certificate (PEM format).
+    /// When set, the ACME client will trust this CA for TLS connections.
+    /// This is primarily useful for testing with Pebble or other test ACME servers.
+    root_ca_path: Option<PathBuf>,
 }
 
 #[allow(dead_code)] // Methods will be used when ACME integration is complete
@@ -95,7 +100,47 @@ impl AcmeClient {
         Ok(Self {
             account: RwLock::new(None),
             config,
+            root_ca_path: None,
         })
+    }
+
+    /// Create a new ACME client with a custom root CA certificate
+    ///
+    /// The client will trust the specified CA for TLS connections to the ACME server.
+    /// This is primarily useful for testing with Pebble or other test ACME servers
+    /// that use self-signed certificates.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - ACME configuration
+    /// * `root_ca_path` - Path to a PEM-encoded CA certificate file
+    pub fn with_root_ca(
+        config: AcmeConfig,
+        root_ca_path: impl Into<PathBuf>,
+    ) -> Result<Self, AcmeError> {
+        Ok(Self {
+            account: RwLock::new(None),
+            config,
+            root_ca_path: Some(root_ca_path.into()),
+        })
+    }
+
+    /// Create an account builder, optionally configured with a custom root CA
+    fn create_account_builder(&self) -> Result<instant_acme::AccountBuilder, AcmeError> {
+        match &self.root_ca_path {
+            Some(ca_path) => {
+                info!("Creating ACME client with custom root CA: {:?}", ca_path);
+                Account::builder_with_root(ca_path).map_err(|e| {
+                    AcmeError::Account(format!(
+                        "failed to create account builder with custom CA {:?}: {}",
+                        ca_path, e
+                    ))
+                })
+            }
+            None => Account::builder().map_err(|e| {
+                AcmeError::Account(format!("failed to create account builder: {}", e))
+            }),
+        }
     }
 
     /// Ensure we have a valid ACME account
@@ -120,10 +165,8 @@ impl AcmeClient {
             let credentials: AccountCredentials = serde_json::from_str(&credentials_json)
                 .map_err(|e| AcmeError::Account(format!("failed to parse credentials: {}", e)))?;
 
-            let account = Account::builder()
-                .map_err(|e| {
-                    AcmeError::Account(format!("failed to create account builder: {}", e))
-                })?
+            let account = self
+                .create_account_builder()?
                 .from_credentials(credentials)
                 .await
                 .map_err(|e| AcmeError::Account(format!("failed to restore account: {}", e)))?;
@@ -150,8 +193,8 @@ impl AcmeClient {
             only_return_existing: false,
         };
 
-        let (account, credentials) = Account::builder()
-            .map_err(|e| AcmeError::Account(format!("failed to create account builder: {}", e)))?
+        let (account, credentials) = self
+            .create_account_builder()?
             .create(&new_account, self.config.directory_url.clone(), None)
             .await
             .map_err(|e| AcmeError::Account(format!("failed to create account: {}", e)))?;

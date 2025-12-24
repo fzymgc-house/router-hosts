@@ -15,58 +15,29 @@
 //! # CI Integration
 //!
 //! These tests run in CI via `cargo test` with Docker support. Pebble's
-//! self-signed CA is trusted via a custom HTTP client (see `create_pebble_http_client`)
-//! that includes Pebble's CA certificate, avoiding system trust store modifications.
-//!
-//! # Note on instant-acme 0.8 Migration
-//!
-//! The instant-acme 0.8 update removed custom `HttpClient` support, which was used
-//! to trust Pebble's self-signed CA. The Pebble integration tests are temporarily
-//! ignored until an alternative approach is implemented (e.g., system trust store
-//! configuration or instant-acme restoring the feature).
+//! self-signed CA is trusted via `Account::builder_with_root()` from instant-acme,
+//! which configures the HTTP client to trust a custom root CA certificate.
 
-// Pebble test infrastructure imports - currently unused due to instant-acme 0.8 migration
-#[allow(unused_imports)]
-use http_body_util::Full;
-#[allow(unused_imports)]
-use hyper::body::Bytes;
-#[allow(unused_imports)]
-use hyper_rustls::HttpsConnectorBuilder;
-#[allow(unused_imports)]
-use hyper_util::client::legacy::Client as HyperClient;
-#[allow(unused_imports)]
-use hyper_util::rt::TokioExecutor;
-#[allow(unused_imports)]
-use reqwest::Client;
 use router_hosts::server::acme::client::AcmeClient;
 use router_hosts::server::acme::config::{AcmeConfig, ChallengeType};
-#[allow(unused_imports)]
-use rustls::RootCertStore;
-#[allow(unused_imports)]
 use std::sync::Once;
-#[allow(unused_imports)]
 use std::time::Duration;
-#[allow(unused_imports)]
 use testcontainers::core::{ContainerPort, WaitFor};
-#[allow(unused_imports)]
 use testcontainers::runners::AsyncRunner;
-#[allow(unused_imports)]
 use testcontainers::{GenericImage, ImageExt};
 
 // ============================================================================
-// Pebble Test Infrastructure (temporarily disabled for instant-acme 0.8)
+// Pebble Test Infrastructure
 //
-// The code below was used to run integration tests against Pebble (Let's Encrypt's
-// test ACME server). It required a custom HTTP client that trusts Pebble's self-signed
-// CA certificate. instant-acme 0.8 removed custom HttpClient support, so these tests
-// are temporarily ignored until an alternative approach is implemented.
+// The code below runs integration tests against Pebble (Let's Encrypt's test
+// ACME server). Pebble's self-signed CA is trusted via instant-acme's
+// `Account::builder_with_root()` which configures the HTTP client with a custom
+// root CA certificate.
 // ============================================================================
 
 /// Initialize rustls crypto provider (required when both aws-lc-rs and ring are enabled)
-#[allow(dead_code)]
 static INIT_CRYPTO: Once = Once::new();
 
-#[allow(dead_code)]
 fn init_crypto_provider() {
     INIT_CRYPTO.call_once(|| {
         rustls::crypto::aws_lc_rs::default_provider()
@@ -76,34 +47,31 @@ fn init_crypto_provider() {
 }
 
 /// Pebble's test CA certificate (embedded at compile time)
-#[allow(dead_code)]
 const PEBBLE_CA_PEM: &str = include_str!("pebble-ca.pem");
 
-// NOTE: create_pebble_http_client() removed - instant-acme 0.8 removed HttpClient trait.
-// Original implementation is preserved in git history for reference when re-enabling tests.
-// The function returned Box<dyn instant_acme::HttpClient> using hyper with Pebble's CA.
-
 /// Pebble test infrastructure
-#[allow(dead_code)]
 struct PebbleTestEnv {
     /// Pebble container
     _pebble: testcontainers::ContainerAsync<GenericImage>,
-    /// Challtestsrv container
+    /// Challtestsrv container (needed for DNS resolution even if not directly used)
     _challtestsrv: testcontainers::ContainerAsync<GenericImage>,
     /// Pebble directory URL
     pub directory_url: String,
-    /// Challtestsrv management URL
-    pub challtestsrv_url: String,
-    /// Temp directory for credentials
+    /// Temp directory for credentials and CA file
     pub temp_dir: tempfile::TempDir,
+    /// Path to Pebble's CA certificate file
+    ca_path: std::path::PathBuf,
 }
 
-#[allow(dead_code)]
 impl PebbleTestEnv {
     /// Start Pebble and challtestsrv containers
     async fn start() -> Self {
-        // Create temp directory for ACME credentials
+        // Create temp directory for ACME credentials and CA file
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+
+        // Write Pebble's CA certificate to a file for instant-acme to use
+        let ca_path = temp_dir.path().join("pebble-ca.pem");
+        std::fs::write(&ca_path, PEBBLE_CA_PEM).expect("Failed to write Pebble CA file");
 
         // Start challtestsrv first (Pebble depends on it for DNS)
         // Using host network mode to simplify DNS resolution
@@ -127,7 +95,7 @@ impl PebbleTestEnv {
             .await
             .expect("Failed to get challtestsrv port");
 
-        let challtestsrv_url = format!("http://127.0.0.1:{}", challtestsrv_port);
+        let _challtestsrv_url = format!("http://127.0.0.1:{}", challtestsrv_port);
 
         // Get challtestsrv container IP for Pebble to use
         let challtestsrv_ip = challtestsrv
@@ -167,28 +135,14 @@ impl PebbleTestEnv {
             _pebble: pebble,
             _challtestsrv: challtestsrv,
             directory_url,
-            challtestsrv_url,
             temp_dir,
+            ca_path,
         }
     }
 
-    /// Add an HTTP-01 challenge response to challtestsrv
-    #[allow(dead_code)]
-    async fn add_http01_challenge(
-        &self,
-        token: &str,
-        key_auth: &str,
-    ) -> Result<(), reqwest::Error> {
-        let client = Client::new();
-        client
-            .post(format!("{}/add-http01", self.challtestsrv_url))
-            .json(&serde_json::json!({
-                "token": token,
-                "content": key_auth
-            }))
-            .send()
-            .await?;
-        Ok(())
+    /// Get the path to Pebble's CA certificate file
+    fn ca_path(&self) -> &std::path::Path {
+        &self.ca_path
     }
 
     /// Get the credentials file path
@@ -198,7 +152,6 @@ impl PebbleTestEnv {
 }
 
 /// Create an ACME config for testing with Pebble
-#[allow(dead_code)]
 fn test_acme_config(directory_url: &str) -> AcmeConfig {
     AcmeConfig {
         enabled: true,
@@ -270,23 +223,323 @@ async fn test_acme_challenge_type_mapping() {
 }
 
 // ============================================================================
-// Pebble Integration Tests (TEMPORARILY REMOVED)
+// Pebble Integration Tests
 //
-// These tests use Pebble (Let's Encrypt's test ACME server) with a custom
-// HTTP client that trusts Pebble's self-signed CA certificate. This allows
-// full ACME protocol testing without modifying system trust stores.
-//
-// REMOVED TESTS (due to instant-acme 0.8 migration removing HttpClient support):
-// - test_acme_account_creation_with_pebble
-// - test_acme_order_creation_with_pebble
-// - test_acme_full_certificate_flow_with_pebble
-//
-// These tests are preserved in git history. To restore them, an alternative
-// approach to trusting Pebble's CA is needed (e.g., system trust store config,
-// or instant-acme restoring custom HTTP client support).
-//
-// See: https://github.com/fzymgc-house/router-hosts/issues/143
+// These tests use Pebble (Let's Encrypt's test ACME server) with instant-acme's
+// `Account::builder_with_root()` to trust Pebble's self-signed CA certificate.
+// This enables full ACME protocol testing without modifying system trust stores.
 // ============================================================================
+
+/// Test ACME account creation with Pebble
+///
+/// Verifies that we can create an ACME account using Pebble with
+/// instant-acme's custom root CA support.
+#[tokio::test]
+async fn test_acme_account_creation_with_pebble() {
+    init_crypto_provider();
+
+    let env = PebbleTestEnv::start().await;
+    let config = test_acme_config(&env.directory_url);
+
+    // Create client with Pebble's CA
+    let client = AcmeClient::with_root_ca(config, env.ca_path())
+        .expect("Failed to create ACME client with custom CA");
+
+    // Create account
+    let result = client.ensure_account(&env.credentials_path()).await;
+    assert!(
+        result.is_ok(),
+        "Should create ACME account: {:?}",
+        result.err()
+    );
+
+    // Verify credentials file was created
+    assert!(
+        env.credentials_path().exists(),
+        "Credentials file should exist"
+    );
+}
+
+/// Test ACME order creation with Pebble
+///
+/// Verifies that we can create a certificate order after account registration.
+#[tokio::test]
+async fn test_acme_order_creation_with_pebble() {
+    init_crypto_provider();
+
+    let env = PebbleTestEnv::start().await;
+    let config = test_acme_config(&env.directory_url);
+
+    // Create client with Pebble's CA
+    let client = AcmeClient::with_root_ca(config, env.ca_path())
+        .expect("Failed to create ACME client with custom CA");
+
+    // Create account first
+    client
+        .ensure_account(&env.credentials_path())
+        .await
+        .expect("Failed to create account");
+
+    // Create order
+    let order = client.create_order().await;
+    assert!(
+        order.is_ok(),
+        "Should create certificate order: {:?}",
+        order.err()
+    );
+}
+
+/// Test full ACME certificate flow with Pebble (HTTP-01 challenge)
+///
+/// Verifies the complete certificate issuance workflow:
+/// 1. Account creation
+/// 2. Order creation
+/// 3. Challenge completion (using PEBBLE_VA_ALWAYS_VALID=1)
+/// 4. Certificate finalization and download
+#[tokio::test]
+async fn test_acme_full_certificate_flow_with_pebble() {
+    use instant_acme::{AuthorizationStatus, ChallengeType as AcmeChallengeType, RetryPolicy};
+
+    init_crypto_provider();
+
+    let env = PebbleTestEnv::start().await;
+    let config = test_acme_config(&env.directory_url);
+
+    // Create client with Pebble's CA
+    let client = AcmeClient::with_root_ca(config, env.ca_path())
+        .expect("Failed to create ACME client with custom CA");
+
+    // 1. Create account
+    client
+        .ensure_account(&env.credentials_path())
+        .await
+        .expect("Failed to create account");
+
+    // 2. Create order
+    let mut order = client.create_order().await.expect("Failed to create order");
+
+    // 3. Complete challenges (Pebble with PEBBLE_VA_ALWAYS_VALID=1 auto-validates)
+    // instant-acme 0.8+ uses async stream for authorizations
+    let mut authorizations = order.authorizations();
+    while let Some(result) = authorizations.next().await {
+        let mut authz = result.expect("Failed to get authorization");
+
+        // Skip if already valid
+        if authz.status == AuthorizationStatus::Valid {
+            continue;
+        }
+
+        // Get the HTTP-01 challenge
+        let mut challenge = authz
+            .challenge(AcmeChallengeType::Http01)
+            .expect("No HTTP-01 challenge found");
+
+        // With PEBBLE_VA_ALWAYS_VALID=1, we just need to mark the challenge ready
+        // The challenge token/key_auth would normally be served via HTTP, but
+        // Pebble skips actual validation when this env var is set
+        challenge
+            .set_ready()
+            .await
+            .expect("Failed to set challenge ready");
+    }
+
+    // 4. Wait for order to be ready using poll_ready
+    // With PEBBLE_VA_ALWAYS_VALID=1, this should be quick
+    let status = order
+        .poll_ready(&RetryPolicy::default())
+        .await
+        .expect("Failed to poll order ready");
+
+    assert_eq!(
+        status,
+        instant_acme::OrderStatus::Ready,
+        "Order should be ready"
+    );
+
+    // 5. Finalize order and get certificate
+    let cert_bundle = client
+        .finalize_order(&mut order)
+        .await
+        .expect("Failed to finalize order");
+
+    // Verify we got a certificate
+    assert!(
+        !cert_bundle.certificate_chain.is_empty(),
+        "Should have certificate chain"
+    );
+    assert!(
+        cert_bundle.certificate_chain.contains("BEGIN CERTIFICATE"),
+        "Certificate should be PEM encoded"
+    );
+    assert!(
+        !cert_bundle.private_key.is_empty(),
+        "Should have private key"
+    );
+    assert!(
+        cert_bundle.private_key.contains("BEGIN"),
+        "Private key should be PEM encoded"
+    );
+}
+
+// ============================================================================
+// Edge Case and Error Handling Tests
+// ============================================================================
+
+/// Test that `create_order()` fails gracefully when account is not initialized
+///
+/// Verifies that calling `create_order()` before `ensure_account()` returns
+/// a clear error message rather than panicking or silently failing.
+#[tokio::test]
+async fn test_acme_order_without_account_fails() {
+    let config = AcmeConfig {
+        enabled: true,
+        directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory".to_string(),
+        domains: vec!["test.example.com".to_string()],
+        ..Default::default()
+    };
+
+    let client = AcmeClient::new(config).expect("Failed to create client");
+
+    // Don't call ensure_account - try to create order directly
+    let result = client.create_order().await;
+
+    assert!(result.is_err(), "Should fail when account not initialized");
+    let err_msg = match result {
+        Ok(_) => panic!("Expected error, got Ok"),
+        Err(e) => e.to_string(),
+    };
+    assert!(
+        err_msg.contains("account not initialized"),
+        "Error should mention account not initialized, got: {}",
+        err_msg
+    );
+}
+
+/// Test that `with_root_ca()` accepts a nonexistent CA path at construction
+/// but fails when the client is used (deferred validation)
+///
+/// This verifies the expected behavior where path validation is deferred
+/// to the first account operation, not at client construction time.
+#[tokio::test]
+async fn test_acme_with_nonexistent_ca_path() {
+    init_crypto_provider();
+
+    let config = AcmeConfig {
+        enabled: true,
+        directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory".to_string(),
+        domains: vec!["test.example.com".to_string()],
+        ..Default::default()
+    };
+
+    // Construction should succeed (path stored, not validated)
+    let client = AcmeClient::with_root_ca(config, "/nonexistent/path/to/ca.pem")
+        .expect("Client construction should succeed with any path");
+
+    // Failure should occur when trying to use the client
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let result = client
+        .ensure_account(&temp_dir.path().join("creds.json"))
+        .await;
+
+    assert!(result.is_err(), "Should fail with nonexistent CA path");
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("custom CA") || err_msg.contains("ca.pem"),
+        "Error should reference the CA path, got: {}",
+        err_msg
+    );
+}
+
+/// Test that invalid PEM content in CA file causes a clear error
+///
+/// Verifies that malformed PEM data is detected and reported with
+/// a useful error message.
+#[tokio::test]
+async fn test_acme_with_invalid_ca_pem() {
+    init_crypto_provider();
+
+    let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
+    let ca_path = temp_dir.path().join("invalid-ca.pem");
+    std::fs::write(&ca_path, "not valid pem data - just garbage").expect("Failed to write file");
+
+    let config = AcmeConfig {
+        enabled: true,
+        directory_url: "https://acme-staging-v02.api.letsencrypt.org/directory".to_string(),
+        domains: vec!["test.example.com".to_string()],
+        ..Default::default()
+    };
+
+    let client =
+        AcmeClient::with_root_ca(config, &ca_path).expect("Client construction should succeed");
+
+    let result = client
+        .ensure_account(&temp_dir.path().join("creds.json"))
+        .await;
+
+    assert!(result.is_err(), "Should fail with invalid PEM content");
+}
+
+/// Test that account credentials can be loaded from an existing file
+///
+/// Verifies the account persistence/reload path works correctly by:
+/// 1. Creating an account and saving credentials
+/// 2. Creating a new client and loading the saved credentials
+/// 3. Verifying the loaded account can perform operations
+#[tokio::test]
+async fn test_acme_account_persistence_with_pebble() {
+    init_crypto_provider();
+
+    let env = PebbleTestEnv::start().await;
+    let config = test_acme_config(&env.directory_url);
+
+    // First client: create account
+    let client1 = AcmeClient::with_root_ca(config.clone(), env.ca_path())
+        .expect("Failed to create first client");
+
+    client1
+        .ensure_account(&env.credentials_path())
+        .await
+        .expect("Failed to create account");
+
+    // Verify credentials file was created
+    assert!(
+        env.credentials_path().exists(),
+        "Credentials file should exist after first account creation"
+    );
+
+    // Read the credentials file size for comparison
+    let creds_metadata =
+        std::fs::metadata(&env.credentials_path()).expect("Failed to get credentials metadata");
+    let original_size = creds_metadata.len();
+
+    // Second client: load existing account
+    let client2 =
+        AcmeClient::with_root_ca(config, env.ca_path()).expect("Failed to create second client");
+
+    let result = client2.ensure_account(&env.credentials_path()).await;
+    assert!(
+        result.is_ok(),
+        "Should load existing account from credentials: {:?}",
+        result.err()
+    );
+
+    // Verify credentials file wasn't modified (account was loaded, not recreated)
+    let new_metadata =
+        std::fs::metadata(&env.credentials_path()).expect("Failed to get new metadata");
+    assert_eq!(
+        original_size,
+        new_metadata.len(),
+        "Credentials file should not be modified when loading existing account"
+    );
+
+    // Verify loaded account can perform operations
+    let order_result = client2.create_order().await;
+    assert!(
+        order_result.is_ok(),
+        "Loaded account should be able to create orders: {:?}",
+        order_result.err()
+    );
+}
 
 // ============================================================================
 // Additional Unit Tests (no network required)
