@@ -18,6 +18,8 @@ pub enum ClientError {
     GrpcError(#[from] tonic::Status),
     #[error("TLS configuration error: {0}")]
     TlsError(String),
+    #[error("Server response missing required field: {0}")]
+    MissingResponseField(String),
 }
 
 /// Entry found in router-hosts
@@ -138,7 +140,9 @@ impl RouterHostsClient {
         };
 
         let response = client.add_host(request).await?.into_inner();
-        let entry = response.entry.expect("AddHost returns entry");
+        let entry = response
+            .entry
+            .ok_or(ClientError::MissingResponseField("entry".to_string()))?;
 
         debug!(id = %entry.id, hostname = %entry.hostname, "Added host entry");
 
@@ -175,7 +179,9 @@ impl RouterHostsClient {
         };
 
         let response = client.update_host(request).await?.into_inner();
-        let entry = response.entry.expect("UpdateHost returns entry");
+        let entry = response
+            .entry
+            .ok_or(ClientError::MissingResponseField("entry".to_string()))?;
 
         debug!(id = %entry.id, "Updated host entry");
 
