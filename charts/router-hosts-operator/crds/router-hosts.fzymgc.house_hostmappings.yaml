@@ -1,0 +1,110 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: hostmappings.router-hosts.fzymgc.house
+spec:
+  group: router-hosts.fzymgc.house
+  names:
+    kind: HostMapping
+    listKind: HostMappingList
+    plural: hostmappings
+    shortNames:
+      - hm
+    singular: hostmapping
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Hostname
+          type: string
+          jsonPath: .spec.hostname
+        - name: IP
+          type: string
+          jsonPath: .spec.ipAddress
+        - name: Synced
+          type: string
+          jsonPath: .status.synced
+      schema:
+        openAPIV3Schema:
+          type: object
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              required:
+                - hostname
+              properties:
+                hostname:
+                  type: string
+                  description: The hostname to create in router-hosts
+                ipAddress:
+                  type: string
+                  description: Optional IP address (uses IP resolution if omitted)
+                aliases:
+                  type: array
+                  description: Optional hostname aliases
+                  items:
+                    type: string
+                tags:
+                  type: array
+                  description: Optional additional tags
+                  items:
+                    type: string
+            status:
+              type: object
+              properties:
+                synced:
+                  type: boolean
+                  description: Whether the entry is synced to router-hosts
+                routerHostsId:
+                  type: string
+                  description: The router-hosts entry ID (if synced)
+                lastSyncTime:
+                  type: string
+                  description: Last successful sync time
+                error:
+                  type: string
+                  description: Error message if sync failed
+                conditions:
+                  type: array
+                  description: Status conditions
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                      - lastTransitionTime
+                      - reason
+                      - message
+                    properties:
+                      type:
+                        type: string
+                        description: Type of condition (e.g., "Synced", "Ready")
+                      status:
+                        type: string
+                        enum:
+                          - "True"
+                          - "False"
+                          - Unknown
+                        description: Status of the condition
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: Last time the condition transitioned
+                      reason:
+                        type: string
+                        description: Machine-readable reason for the condition
+                      message:
+                        type: string
+                        description: Human-readable message

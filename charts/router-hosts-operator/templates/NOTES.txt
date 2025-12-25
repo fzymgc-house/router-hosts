@@ -1,0 +1,52 @@
+🎉 router-hosts-operator has been installed!
+
+📋 NEXT STEPS:
+
+1. Verify the operator is running:
+   kubectl get pods -l app.kubernetes.io/name={{ include "router-hosts-operator.name" . }} -n {{ .Release.Namespace }}
+
+2. Check the logs:
+   kubectl logs -l app.kubernetes.io/name={{ include "router-hosts-operator.name" . }} -n {{ .Release.Namespace }} -f
+
+3. Verify the RouterHostsConfig was created:
+   kubectl get routerhostsconfigs
+
+4. Create a HostMapping to test:
+   kubectl apply -f - <<EOF
+   apiVersion: router-hosts.fzymgc.house/v1alpha1
+   kind: HostMapping
+   metadata:
+     name: test-mapping
+     namespace: default
+   spec:
+     hostname: test.example.com
+   EOF
+
+5. Check the HostMapping status:
+   kubectl get hostmappings -A
+
+📖 DOCUMENTATION:
+
+For more information, see:
+- Chart README: https://github.com/fzymgc-house/router-hosts/tree/main/charts/router-hosts-operator
+- Project docs: https://github.com/fzymgc-house/router-hosts
+
+🔧 CONFIGURATION:
+
+Current configuration:
+- Router-hosts endpoint: {{ .Values.routerHosts.endpoint }}
+- TLS secret: {{ .Values.routerHosts.tlsSecretRef.namespace }}/{{ .Values.routerHosts.tlsSecretRef.name }}
+- Deletion grace period: {{ .Values.routerHosts.deletion.gracePeriodSeconds }}s
+
+To update configuration, modify values.yaml and run:
+   helm upgrade {{ .Release.Name }} router-hosts-operator -n {{ .Release.Namespace }}
+
+⚠️  IMPORTANT:
+
+Make sure the mTLS secret exists:
+   kubectl get secret {{ .Values.routerHosts.tlsSecretRef.name }} -n {{ .Values.routerHosts.tlsSecretRef.namespace }}
+
+The secret must contain:
+- ca.crt: CA certificate
+- tls.crt: Client certificate
+- tls.key: Client private key
