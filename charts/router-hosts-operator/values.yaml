@@ -1,0 +1,111 @@
+# Default values for router-hosts-operator
+
+# Image configuration
+image:
+  repository: ghcr.io/fzymgc-house/router-hosts-operator
+  # Overrides the image tag whose default is the chart appVersion
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# Number of operator replicas (only 1 supported currently due to leader election not implemented)
+replicaCount: 1
+
+# ServiceAccount configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+# RBAC configuration
+rbac:
+  # Specifies whether RBAC resources should be created
+  create: true
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+
+# Resource limits and requests
+resources: {}
+  # limits:
+  #   cpu: 200m
+  #   memory: 256Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# Logging configuration
+logging:
+  # Log level (trace, debug, info, warn, error)
+  level: info
+  # Format: json or text
+  format: json
+
+# RouterHostsConfig CRD instance configuration
+# This creates the cluster-scoped RouterHostsConfig resource
+routerHostsConfig:
+  # Whether to create the RouterHostsConfig instance
+  create: true
+  # Name of the RouterHostsConfig resource
+  name: default
+
+# Router-hosts server connection settings
+routerHosts:
+  # gRPC endpoint (host:port)
+  endpoint: router.lan:50051
+
+  # Reference to Secret containing mTLS certificates
+  # Secret must contain: ca.crt, tls.crt, tls.key
+  tlsSecretRef:
+    name: router-hosts-mtls
+    namespace: router-hosts-system
+
+  # IP resolution strategies (tried in order)
+  # Each strategy must have a 'type' field
+  ipResolution:
+    # Example: Discover IP from ingress controller Service
+    - type: ingressController
+      serviceName: traefik
+      serviceNamespace: traefik-system
+    # Example: Fallback to static IP
+    - type: static
+      address: "192.168.1.1"
+
+  # Deletion behavior
+  deletion:
+    # Grace period before deleting entries (seconds)
+    gracePeriodSeconds: 300
+
+  # Default tags added to all managed entries
+  defaultTags:
+    - k8s-operator
