@@ -1,0 +1,14 @@
+FROM mcr.microsoft.com/devcontainers/rust:1-bookworm
+
+# Install cargo tools (not available via Homebrew)
+RUN cargo install cargo-nextest cargo-llvm-cov
+
+# Pre-build DuckDB to cache the slow bundled compilation (~5-10 min)
+# This creates a dummy crate that depends on duckdb with bundled feature,
+# builds it, then removes the dummy crate. The compiled artifacts remain
+# in the cargo cache, making subsequent builds fast.
+RUN cargo new --lib /tmp/duckdb-warmup \
+    && cd /tmp/duckdb-warmup \
+    && echo 'duckdb = { version = "1.1", features = ["bundled"] }' >> Cargo.toml \
+    && cargo build --release \
+    && rm -rf /tmp/duckdb-warmup
