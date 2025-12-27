@@ -47,13 +47,16 @@ Pre-builds DuckDB to cache the slow bundled compilation:
 ```dockerfile
 FROM mcr.microsoft.com/devcontainers/rust:1-bookworm
 
+# DuckDB version - keep in sync with Cargo.toml workspace dependencies
+ARG DUCKDB_VERSION=1.1
+
 # Install cargo tools
 RUN cargo install cargo-nextest cargo-llvm-cov
 
 # Pre-build DuckDB to cache the slow bundled compilation
 RUN cargo new --lib /tmp/duckdb-warmup \
     && cd /tmp/duckdb-warmup \
-    && echo 'duckdb = { version = "1.1", features = ["bundled"] }' >> Cargo.toml \
+    && echo "duckdb = { version = \"${DUCKDB_VERSION}\", features = [\"bundled\"] }" >> Cargo.toml \
     && cargo build --release \
     && rm -rf /tmp/duckdb-warmup
 ```
@@ -86,7 +89,10 @@ RUN cargo new --lib /tmp/duckdb-warmup \
         "vadimcn.vscode-lldb"
       ],
       "settings": {
-        "terminal.integrated.defaultProfile.linux": "fish"
+        "terminal.integrated.defaultProfile.linux": "fish",
+        "editor.formatOnSave": true,
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.check.extraArgs": ["--", "-D", "warnings"]
       }
     }
   },
@@ -125,7 +131,7 @@ uvx pre-commit install
 uvx pre-commit install --hook-type pre-push
 
 echo "==> Building project (first build caches dependencies)..."
-task build
+task build || echo "[WARNING] Initial build failed - you may need to fix compilation errors"
 
 echo "==> Development environment ready!"
 ```

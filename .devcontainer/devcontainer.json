@@ -23,7 +23,10 @@
         "vadimcn.vscode-lldb"
       ],
       "settings": {
-        "terminal.integrated.defaultProfile.linux": "fish"
+        "terminal.integrated.defaultProfile.linux": "fish",
+        "editor.formatOnSave": true,
+        "rust-analyzer.check.command": "clippy",
+        "rust-analyzer.check.extraArgs": ["--", "-D", "warnings"]
       }
     }
   },
