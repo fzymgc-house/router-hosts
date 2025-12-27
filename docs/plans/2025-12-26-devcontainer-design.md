@@ -161,9 +161,12 @@ echo "==> Development environment ready!"
 1. Click "Code" → "Codespaces" → "Create codespace"
 2. Default configuration used automatically
 
-### CLI Only
+### CLI Only (Minimal)
 
 ```bash
+# Note: This is a minimal approach that does NOT run post-create.sh,
+# install Homebrew packages, or set up the full development environment.
+# For full tooling, use VS Code or the devcontainer CLI.
 docker build -t router-hosts-dev -f .devcontainer/Dockerfile .
 docker run -it -v $(pwd):/workspace router-hosts-dev
 ```

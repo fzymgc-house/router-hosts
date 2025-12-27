@@ -19,6 +19,6 @@ uvx pre-commit install
 uvx pre-commit install --hook-type pre-push
 
 echo "==> Building project (first build caches dependencies)..."
-task build
+task build || echo "⚠️  Initial build failed - you may need to fix compilation errors"
 
 echo "==> Development environment ready!"
