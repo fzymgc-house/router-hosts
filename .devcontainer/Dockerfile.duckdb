@@ -1,0 +1,18 @@
+FROM mcr.microsoft.com/devcontainers/rust:1-bookworm
+
+# DuckDB version - keep in sync with Cargo.toml workspace dependencies
+ARG DUCKDB_VERSION=1.1
+ENV DUCKDB_VERSION=${DUCKDB_VERSION}
+
+# Install cargo tools (not available via Homebrew)
+RUN cargo install cargo-nextest cargo-llvm-cov
+
+# Pre-build DuckDB to cache the slow bundled compilation (~5-10 min)
+# This creates a dummy crate that depends on duckdb with bundled feature,
+# builds it, then removes the dummy crate. The compiled artifacts remain
+# in the cargo cache, making subsequent builds fast.
+RUN cargo new --lib /tmp/duckdb-warmup \
+    && cd /tmp/duckdb-warmup \
+    && echo "duckdb = { version = \"${DUCKDB_VERSION}\", features = [\"bundled\"] }" >> Cargo.toml \
+    && cargo build --release \
+    && rm -rf /tmp/duckdb-warmup
