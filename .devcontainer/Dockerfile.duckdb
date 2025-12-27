@@ -2,6 +2,7 @@ FROM mcr.microsoft.com/devcontainers/rust:1-bookworm
 
 # DuckDB version - keep in sync with Cargo.toml workspace dependencies
 ARG DUCKDB_VERSION=1.1
+ENV DUCKDB_VERSION=${DUCKDB_VERSION}
 
 # Install cargo tools (not available via Homebrew)
 RUN cargo install cargo-nextest cargo-llvm-cov
