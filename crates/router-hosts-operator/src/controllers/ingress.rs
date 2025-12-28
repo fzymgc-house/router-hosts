@@ -14,7 +14,7 @@ use kube::runtime::watcher::Config as WatcherConfig;
 use kube::runtime::Controller;
 use kube::{Api, Client};
 use thiserror::Error;
-use tracing::{debug, info, instrument, warn};
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::client::{ClientError, RouterHostsClientTrait};
 use crate::config::{annotations, tags};
@@ -58,6 +58,18 @@ fn extract_hosts(ingress: &Ingress) -> Vec<String> {
     }
 
     hosts
+}
+
+/// Compare two tag lists regardless of order
+fn tags_equal(a: &[String], b: &[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut a_sorted: Vec<_> = a.iter().collect();
+    let mut b_sorted: Vec<_> = b.iter().collect();
+    a_sorted.sort();
+    b_sorted.sort();
+    a_sorted == b_sorted
 }
 
 /// Build ownership tags for the Ingress
@@ -190,10 +202,10 @@ pub(crate) async fn reconcile(
                     pre_existing,
                 );
 
-                // Update entry if needed
+                // Update entry if needed (use set comparison for tags to avoid order-dependent updates)
                 if existing.ip_address != ip
                     || existing.aliases != aliases
-                    || existing.tags != new_tags
+                    || !tags_equal(&existing.tags, &new_tags)
                 {
                     ctx.client
                         .update_host(
@@ -236,7 +248,7 @@ pub(crate) async fn reconcile(
 
     // Reset retry counter on success
     if let Some(uid) = ingress.metadata.uid.as_deref() {
-        ctx.retry_tracker.reset(uid).await;
+        ctx.retry_tracker.reset(uid);
     }
 
     // Requeue for periodic resync
@@ -263,8 +275,8 @@ fn error_policy(
     let uid = ingress.metadata.uid.as_deref().unwrap_or("unknown");
     let kind = classify_error(error);
 
-    // Get current attempt count and increment synchronously
-    let attempt = futures::executor::block_on(ctx.retry_tracker.increment(uid));
+    // RetryTracker uses std::sync::Mutex so we can call this synchronously
+    let attempt = ctx.retry_tracker.increment(uid);
 
     warn!(
         error = %error,
@@ -285,8 +297,11 @@ pub async fn run(client: Client, ctx: Arc<ControllerContext>) {
     Controller::new(ingresses, WatcherConfig::default())
         .shutdown_on_signal()
         .run(reconcile, error_policy, ctx)
-        .filter_map(|x| async move { std::result::Result::ok(x) })
-        .for_each(|_| futures::future::ready(()))
+        .for_each(|result| async move {
+            if let Err(e) = result {
+                error!(error = ?e, "Ingress controller stream error");
+            }
+        })
         .await;
 }
 

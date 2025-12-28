@@ -11,6 +11,7 @@ use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Service;
 use kube::{Api, Client};
 use thiserror::Error;
+use tracing::debug;
 
 use crate::config::{annotations, IpResolutionStrategy};
 
@@ -65,8 +66,14 @@ impl IpResolver {
         // Try each strategy in order
         for strategy in &self.strategies {
             match self.try_strategy(strategy).await {
-                Ok(ip) => return Ok(ip),
-                Err(_) => continue,
+                Ok(ip) => {
+                    debug!(?strategy, ip = %ip, "IP resolution succeeded");
+                    return Ok(ip);
+                }
+                Err(e) => {
+                    debug!(?strategy, error = %e, "IP resolution strategy failed, trying next");
+                    continue;
+                }
             }
         }
 

@@ -49,6 +49,13 @@ pub enum HostMappingError {
     Kube(#[from] kube::Error),
     #[error("Missing required field: {0}")]
     MissingField(String),
+    #[error("Invalid IP address in spec: {0}")]
+    InvalidIp(String),
+}
+
+/// Validate an IP address string
+fn is_valid_ip(ip: &str) -> bool {
+    ip.parse::<std::net::IpAddr>().is_ok()
 }
 
 /// Build ownership tags for the HostMapping
@@ -81,6 +88,18 @@ fn build_tags(
     result.extend_from_slice(default_tags);
 
     result
+}
+
+/// Compare two tag lists regardless of order
+fn tags_equal(a: &[String], b: &[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut a_sorted: Vec<_> = a.iter().collect();
+    let mut b_sorted: Vec<_> = b.iter().collect();
+    a_sorted.sort();
+    b_sorted.sort();
+    a_sorted == b_sorted
 }
 
 /// Update the status subresource of a HostMapping
@@ -137,6 +156,20 @@ async fn reconcile(
     // Resolve IP address
     let ip = match &hostmapping.spec.ip_address {
         Some(ip) => {
+            // Validate the IP address format
+            if !is_valid_ip(ip) {
+                let error_msg = format!("Invalid IP address: {}", ip);
+                warn!(hostname = %hostname, ip = %ip, "Invalid IP address in spec");
+                let status = HostMappingStatus {
+                    synced: false,
+                    router_hosts_id: None,
+                    last_sync_time: None,
+                    error: Some(error_msg.clone()),
+                    conditions: vec![Condition::synced(false, "InvalidIP", &error_msg)],
+                };
+                update_status(&api, name, status).await?;
+                return Err(HostMappingError::InvalidIp(ip.clone()));
+            }
             debug!(hostname = %hostname, ip = %ip, "Using explicit IP from spec");
             ip.clone()
         }
@@ -202,9 +235,10 @@ async fn reconcile(
                 let new_tags =
                     build_tags(&hostmapping, &custom_tags, &ctx.config.default_tags, false);
 
+                // Use set comparison for tags to avoid order-dependent updates
                 if existing.ip_address != ip
                     || existing.aliases != aliases
-                    || existing.tags != new_tags
+                    || !tags_equal(&existing.tags, &new_tags)
                 {
                     match ctx
                         .client
@@ -423,7 +457,7 @@ async fn reconcile(
 
     // Reset retry counter on success
     if let Some(uid) = hostmapping.metadata.uid.as_deref() {
-        ctx.retry_tracker.reset(uid).await;
+        ctx.retry_tracker.reset(uid);
     }
 
     // Requeue for periodic resync
@@ -436,7 +470,9 @@ fn classify_error(error: &HostMappingError) -> ErrorKind {
         HostMappingError::IpResolution(_) => ErrorKind::Transient,
         HostMappingError::Client(_) => ErrorKind::Transient,
         HostMappingError::Kube(_) => ErrorKind::Transient,
+        // Invalid config won't recover without resource change
         HostMappingError::MissingField(_) => ErrorKind::Permanent,
+        HostMappingError::InvalidIp(_) => ErrorKind::Permanent,
     }
 }
 
@@ -449,7 +485,8 @@ fn error_policy(
     let uid = hostmapping.metadata.uid.as_deref().unwrap_or("unknown");
     let kind = classify_error(error);
 
-    let attempt = futures::executor::block_on(ctx.retry_tracker.increment(uid));
+    // RetryTracker uses std::sync::Mutex so we can call this synchronously
+    let attempt = ctx.retry_tracker.increment(uid);
 
     warn!(
         name = %hostmapping.metadata.name.as_deref().unwrap_or("unknown"),

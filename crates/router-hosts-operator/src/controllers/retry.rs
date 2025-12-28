@@ -5,10 +5,10 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 
 use kube::runtime::controller::Action;
-use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
 /// Maximum number of retries before giving up
@@ -21,6 +21,10 @@ const BASE_DELAY_SECS: u64 = 5;
 const MAX_DELAY_SECS: u64 = 3600;
 
 /// Tracks retry attempts per resource
+///
+/// Uses `std::sync::Mutex` instead of `tokio::sync::Mutex` because this tracker
+/// is accessed from synchronous `error_policy` callbacks. Using tokio's async mutex
+/// there would require `block_on()`, which can deadlock the async runtime.
 #[derive(Debug, Default)]
 pub struct RetryTracker {
     /// Map of resource UID to retry count
@@ -36,28 +40,40 @@ impl RetryTracker {
     }
 
     /// Increment retry count for a resource and return the new count
-    pub async fn increment(&self, uid: &str) -> u32 {
-        let mut attempts = self.attempts.lock().await;
+    ///
+    /// # Panics
+    /// Panics if the mutex is poisoned (another thread panicked while holding the lock)
+    pub fn increment(&self, uid: &str) -> u32 {
+        let mut attempts = self.attempts.lock().expect("retry tracker mutex poisoned");
         let count = attempts.entry(uid.to_string()).or_insert(0);
         *count += 1;
         *count
     }
 
     /// Reset retry count for a resource (call on successful reconciliation)
-    pub async fn reset(&self, uid: &str) {
-        let mut attempts = self.attempts.lock().await;
+    ///
+    /// # Panics
+    /// Panics if the mutex is poisoned (another thread panicked while holding the lock)
+    pub fn reset(&self, uid: &str) {
+        let mut attempts = self.attempts.lock().expect("retry tracker mutex poisoned");
         attempts.remove(uid);
     }
 
     /// Get current retry count for a resource
-    pub async fn get(&self, uid: &str) -> u32 {
-        let attempts = self.attempts.lock().await;
+    ///
+    /// # Panics
+    /// Panics if the mutex is poisoned (another thread panicked while holding the lock)
+    pub fn get(&self, uid: &str) -> u32 {
+        let attempts = self.attempts.lock().expect("retry tracker mutex poisoned");
         attempts.get(uid).copied().unwrap_or(0)
     }
 
     /// Clean up entries for resources that no longer exist
-    pub async fn cleanup(&self, active_uids: &[String]) {
-        let mut attempts = self.attempts.lock().await;
+    ///
+    /// # Panics
+    /// Panics if the mutex is poisoned (another thread panicked while holding the lock)
+    pub fn cleanup(&self, active_uids: &[String]) {
+        let mut attempts = self.attempts.lock().expect("retry tracker mutex poisoned");
         attempts.retain(|uid, _| active_uids.contains(uid));
     }
 }
@@ -116,44 +132,42 @@ pub fn new_tracker() -> Arc<RetryTracker> {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn test_retry_tracker_increment() {
+    #[test]
+    fn test_retry_tracker_increment() {
         let tracker = RetryTracker::new();
 
-        assert_eq!(tracker.get("uid-1").await, 0);
-        assert_eq!(tracker.increment("uid-1").await, 1);
-        assert_eq!(tracker.increment("uid-1").await, 2);
-        assert_eq!(tracker.get("uid-1").await, 2);
+        assert_eq!(tracker.get("uid-1"), 0);
+        assert_eq!(tracker.increment("uid-1"), 1);
+        assert_eq!(tracker.increment("uid-1"), 2);
+        assert_eq!(tracker.get("uid-1"), 2);
     }
 
-    #[tokio::test]
-    async fn test_retry_tracker_reset() {
+    #[test]
+    fn test_retry_tracker_reset() {
         let tracker = RetryTracker::new();
 
-        tracker.increment("uid-1").await;
-        tracker.increment("uid-1").await;
-        assert_eq!(tracker.get("uid-1").await, 2);
+        tracker.increment("uid-1");
+        tracker.increment("uid-1");
+        assert_eq!(tracker.get("uid-1"), 2);
 
-        tracker.reset("uid-1").await;
-        assert_eq!(tracker.get("uid-1").await, 0);
+        tracker.reset("uid-1");
+        assert_eq!(tracker.get("uid-1"), 0);
     }
 
-    #[tokio::test]
-    async fn test_retry_tracker_cleanup() {
+    #[test]
+    fn test_retry_tracker_cleanup() {
         let tracker = RetryTracker::new();
 
-        tracker.increment("uid-1").await;
-        tracker.increment("uid-2").await;
-        tracker.increment("uid-3").await;
+        tracker.increment("uid-1");
+        tracker.increment("uid-2");
+        tracker.increment("uid-3");
 
         // Keep only uid-1 and uid-3
-        tracker
-            .cleanup(&["uid-1".to_string(), "uid-3".to_string()])
-            .await;
+        tracker.cleanup(&["uid-1".to_string(), "uid-3".to_string()]);
 
-        assert_eq!(tracker.get("uid-1").await, 1);
-        assert_eq!(tracker.get("uid-2").await, 0); // Cleaned up
-        assert_eq!(tracker.get("uid-3").await, 1);
+        assert_eq!(tracker.get("uid-1"), 1);
+        assert_eq!(tracker.get("uid-2"), 0); // Cleaned up
+        assert_eq!(tracker.get("uid-3"), 1);
     }
 
     #[test]

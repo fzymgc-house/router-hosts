@@ -96,6 +96,18 @@ fn extract_hosts(ingressroute: &IngressRoute) -> Vec<String> {
     hosts
 }
 
+/// Compare two tag lists regardless of order
+fn tags_equal(a: &[String], b: &[String]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut a_sorted: Vec<_> = a.iter().collect();
+    let mut b_sorted: Vec<_> = b.iter().collect();
+    a_sorted.sort();
+    b_sorted.sort();
+    a_sorted == b_sorted
+}
+
 /// Build ownership tags (matches Ingress controller pattern)
 fn build_tags(
     ingressroute: &IngressRoute,
@@ -218,13 +230,13 @@ async fn reconcile(
                 let has_operator_tag = entry.tags.contains(&tags::OPERATOR.to_string());
 
                 if is_ours {
-                    if entry.ip_address != ip || entry.aliases != aliases {
-                        let new_tags = build_tags(
-                            &ingressroute,
-                            &custom_tags,
-                            &ctx.config.default_tags,
-                            false,
-                        );
+                    let new_tags =
+                        build_tags(&ingressroute, &custom_tags, &ctx.config.default_tags, false);
+                    // Use set comparison for tags to avoid order-dependent updates
+                    if entry.ip_address != ip
+                        || entry.aliases != aliases
+                        || !tags_equal(&entry.tags, &new_tags)
+                    {
                         ctx.client
                             .update_host(
                                 &entry.id,
@@ -268,7 +280,7 @@ async fn reconcile(
 
     // Reset retry counter on success
     if let Some(uid) = ingressroute.metadata.uid.as_deref() {
-        ctx.retry_tracker.reset(uid).await;
+        ctx.retry_tracker.reset(uid);
     }
 
     Ok(Action::requeue(Duration::from_secs(300)))
@@ -291,7 +303,8 @@ fn error_policy(
     let uid = ingressroute.metadata.uid.as_deref().unwrap_or("unknown");
     let kind = classify_error(error);
 
-    let attempt = futures::executor::block_on(ctx.retry_tracker.increment(uid));
+    // RetryTracker uses std::sync::Mutex so we can call this synchronously
+    let attempt = ctx.retry_tracker.increment(uid);
 
     warn!(
         name = %ingressroute.metadata.name.as_deref().unwrap_or("unknown"),
