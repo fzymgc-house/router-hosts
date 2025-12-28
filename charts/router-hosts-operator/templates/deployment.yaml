@@ -1,3 +1,6 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount > 1 is not supported: leader election not implemented (see issue #154)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

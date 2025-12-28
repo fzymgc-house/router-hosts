@@ -30,8 +30,10 @@ rules:
     verbs: ["get", "list", "watch"]
 
   # Secrets (for reading mTLS certificates)
+  # Scoped to specific secret name for least-privilege access
   - apiGroups: [""]
     resources: ["secrets"]
+    resourceNames: [{{ .Values.routerHosts.tlsSecretRef.name | quote }}]
     verbs: ["get"]
 
   # Services (for IP resolution)

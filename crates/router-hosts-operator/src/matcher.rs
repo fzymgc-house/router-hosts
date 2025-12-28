@@ -8,11 +8,20 @@
 use regex::Regex;
 use std::sync::LazyLock;
 
-static HOST_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"Host\(`([^`]+)`\)").expect("valid regex"));
+// SAFETY: These regex patterns are compile-time string literals that have been
+// validated to be correct. The .expect() calls cannot fail at runtime because:
+// 1. The patterns are hardcoded, not user-provided
+// 2. The patterns are simple and well-formed (no complex features)
+// 3. They are tested in the unit tests below
+// This is an acceptable use of .expect() per CLAUDE.md guidelines for infallible constants.
 
-static HOST_SNI_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"HostSNI\(`([^`]+)`\)").expect("valid regex"));
+static HOST_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"Host\(`([^`]+)`\)").expect("HOST_REGEX is a valid regex literal")
+});
+
+static HOST_SNI_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"HostSNI\(`([^`]+)`\)").expect("HOST_SNI_REGEX is a valid regex literal")
+});
 
 /// Extract all hostnames from a Traefik match expression.
 ///
