@@ -145,7 +145,8 @@ defaultTags:
   - k8s-operator
   - cluster:homelab
 "#;
-        let spec: RouterHostsConfigSpec = serde_yaml::from_str(yaml).unwrap();
+        let spec: RouterHostsConfigSpec =
+            serde_yaml::from_str(yaml).expect("test YAML should parse successfully");
         assert_eq!(spec.server.endpoint, "router.lan:50051");
         assert_eq!(spec.ip_resolution.len(), 2);
         assert_eq!(spec.deletion.grace_period_seconds, 600);
@@ -162,7 +163,8 @@ server:
     namespace: default
 ipResolution: []
 "#;
-        let spec: RouterHostsConfigSpec = serde_yaml::from_str(yaml).unwrap();
+        let spec: RouterHostsConfigSpec =
+            serde_yaml::from_str(yaml).expect("test YAML should parse successfully");
         assert_eq!(spec.deletion.grace_period_seconds, 300);
     }
 }

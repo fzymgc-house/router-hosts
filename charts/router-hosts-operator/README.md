@@ -131,6 +131,22 @@ The operator requires these cluster-level permissions:
 - **Secrets**: get (for reading mTLS certificates)
 - **Services**: get, list (for IP resolution)
 
+## Known Limitations
+
+### No Leader Election
+
+The operator currently runs as a single replica without leader election. This means:
+
+- **No high availability**: If the pod crashes, there's brief downtime until Kubernetes restarts it
+- **Rolling updates cause gaps**: During upgrades, there's a period where no operator is running
+- **Do not scale beyond 1 replica**: Multiple replicas would cause duplicate processing
+
+For most home lab and small cluster use cases, this is acceptable. The operator is stateless and recovers quickly on restart.
+
+**Workaround**: Use `strategy.type: Recreate` in the Deployment to minimize overlap during updates.
+
+**Tracking issue**: [#154](https://github.com/fzymgc-house/router-hosts/issues/154)
+
 ## Usage
 
 ### Enable Ingress Sync

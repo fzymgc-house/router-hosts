@@ -338,7 +338,13 @@ mod tests {
     #[test]
     fn test_is_enabled() {
         let enabled = make_ingressroute("test", vec!["Host(`app.com`)"], true);
-        assert!(is_enabled(enabled.metadata.annotations.as_ref().unwrap()));
+        assert!(is_enabled(
+            enabled
+                .metadata
+                .annotations
+                .as_ref()
+                .expect("test fixture should have annotations")
+        ));
 
         let disabled = make_ingressroute("test", vec!["Host(`app.com`)"], false);
         assert!(!is_enabled(

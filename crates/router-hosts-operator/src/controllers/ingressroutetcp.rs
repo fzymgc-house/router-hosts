@@ -352,7 +352,13 @@ mod tests {
     #[test]
     fn test_is_enabled() {
         let enabled = make_ingressroutetcp("test", vec!["HostSNI(`db.com`)"], true);
-        assert!(is_enabled(enabled.metadata.annotations.as_ref().unwrap()));
+        assert!(is_enabled(
+            enabled
+                .metadata
+                .annotations
+                .as_ref()
+                .expect("test fixture should have annotations")
+        ));
 
         let disabled = make_ingressroutetcp("test", vec!["HostSNI(`db.com`)"], false);
         assert!(!is_enabled(
