@@ -39,6 +39,7 @@ use crate::config::{annotations, tags};
 use crate::matcher;
 use crate::resolver::ResolverError;
 
+use super::retry::{compute_backoff, ErrorKind};
 use super::ControllerContext;
 
 /// IngressRouteTCP route definition
@@ -280,20 +281,42 @@ async fn reconcile(
         }
     }
 
+    // Reset retry counter on success
+    if let Some(uid) = ingressroutetcp.metadata.uid.as_deref() {
+        ctx.retry_tracker.reset(uid).await;
+    }
+
     Ok(Action::requeue(Duration::from_secs(300)))
+}
+
+/// Classify error type for retry behavior
+fn classify_error(error: &IngressRouteTCPError) -> ErrorKind {
+    match error {
+        IngressRouteTCPError::IpResolution(_) => ErrorKind::Transient,
+        IngressRouteTCPError::Client(_) => ErrorKind::Transient,
+        IngressRouteTCPError::MissingField(_) => ErrorKind::Permanent,
+    }
 }
 
 fn error_policy(
     ingressroutetcp: Arc<IngressRouteTCP>,
     error: &IngressRouteTCPError,
-    _ctx: Arc<ControllerContext>,
+    ctx: Arc<ControllerContext>,
 ) -> Action {
+    let uid = ingressroutetcp.metadata.uid.as_deref().unwrap_or("unknown");
+    let kind = classify_error(error);
+
+    let attempt = futures::executor::block_on(ctx.retry_tracker.increment(uid));
+
     warn!(
         name = %ingressroutetcp.metadata.name.as_deref().unwrap_or("unknown"),
         error = %error,
+        attempt = attempt,
+        error_kind = ?kind,
         "IngressRouteTCP reconciliation failed"
     );
-    Action::requeue(Duration::from_secs(60))
+
+    compute_backoff(attempt, kind)
 }
 
 /// Start the IngressRouteTCP controller

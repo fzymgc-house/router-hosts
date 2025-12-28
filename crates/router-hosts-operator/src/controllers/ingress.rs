@@ -20,6 +20,7 @@ use crate::client::ClientError;
 use crate::config::{annotations, tags};
 use crate::resolver::ResolverError;
 
+use super::retry::{compute_backoff, ErrorKind};
 use super::ControllerContext;
 
 #[derive(Debug, Error)]
@@ -233,18 +234,46 @@ async fn reconcile(
         }
     }
 
+    // Reset retry counter on success
+    if let Some(uid) = ingress.metadata.uid.as_deref() {
+        ctx.retry_tracker.reset(uid).await;
+    }
+
     // Requeue for periodic resync
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
-/// Error policy for the controller
+/// Classify error type for retry behavior
+fn classify_error(error: &IngressError) -> ErrorKind {
+    match error {
+        // Network and client errors are transient
+        IngressError::IpResolution(_) => ErrorKind::Transient,
+        IngressError::Client(_) => ErrorKind::Transient,
+        // Missing fields are permanent - won't resolve without resource change
+        IngressError::MissingField(_) => ErrorKind::Permanent,
+    }
+}
+
+/// Error policy for the controller with exponential backoff
 fn error_policy(
-    _ingress: Arc<Ingress>,
+    ingress: Arc<Ingress>,
     error: &IngressError,
-    _ctx: Arc<ControllerContext>,
+    ctx: Arc<ControllerContext>,
 ) -> Action {
-    warn!(error = %error, "Reconciliation error");
-    Action::requeue(Duration::from_secs(60))
+    let uid = ingress.metadata.uid.as_deref().unwrap_or("unknown");
+    let kind = classify_error(error);
+
+    // Get current attempt count and increment synchronously
+    let attempt = futures::executor::block_on(ctx.retry_tracker.increment(uid));
+
+    warn!(
+        error = %error,
+        attempt = attempt,
+        error_kind = ?kind,
+        "Reconciliation error"
+    );
+
+    compute_backoff(attempt, kind)
 }
 
 /// Run the Ingress controller

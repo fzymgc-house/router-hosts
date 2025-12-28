@@ -29,12 +29,8 @@ rules:
     resources: ["routerhostsconfigs"]
     verbs: ["get", "list", "watch"]
 
-  # Secrets (for reading mTLS certificates)
-  # Scoped to specific secret name for least-privilege access
-  - apiGroups: [""]
-    resources: ["secrets"]
-    resourceNames: [{{ .Values.routerHosts.tlsSecretRef.name | quote }}]
-    verbs: ["get"]
+  # Note: Secret access is handled by a namespaced Role in the tlsSecretRef.namespace
+  # to ensure proper namespace isolation (see role-secret.yaml)
 
   # Services (for IP resolution)
   - apiGroups: [""]

@@ -36,6 +36,7 @@ use crate::config::tags;
 use crate::hostmapping::{Condition, HostMapping, HostMappingStatus};
 use crate::resolver::ResolverError;
 
+use super::retry::{compute_backoff, ErrorKind};
 use super::ControllerContext;
 
 #[derive(Debug, Error)]
@@ -420,22 +421,45 @@ async fn reconcile(
         }
     }
 
+    // Reset retry counter on success
+    if let Some(uid) = hostmapping.metadata.uid.as_deref() {
+        ctx.retry_tracker.reset(uid).await;
+    }
+
     // Requeue for periodic resync
     Ok(Action::requeue(Duration::from_secs(300)))
 }
 
-/// Error policy for the controller
+/// Classify error type for retry behavior
+fn classify_error(error: &HostMappingError) -> ErrorKind {
+    match error {
+        HostMappingError::IpResolution(_) => ErrorKind::Transient,
+        HostMappingError::Client(_) => ErrorKind::Transient,
+        HostMappingError::Kube(_) => ErrorKind::Transient,
+        HostMappingError::MissingField(_) => ErrorKind::Permanent,
+    }
+}
+
+/// Error policy for the controller with exponential backoff
 fn error_policy(
     hostmapping: Arc<HostMapping>,
     error: &HostMappingError,
-    _ctx: Arc<ControllerContext>,
+    ctx: Arc<ControllerContext>,
 ) -> Action {
+    let uid = hostmapping.metadata.uid.as_deref().unwrap_or("unknown");
+    let kind = classify_error(error);
+
+    let attempt = futures::executor::block_on(ctx.retry_tracker.increment(uid));
+
     warn!(
         name = %hostmapping.metadata.name.as_deref().unwrap_or("unknown"),
         error = %error,
+        attempt = attempt,
+        error_kind = ?kind,
         "HostMapping reconciliation failed"
     );
-    Action::requeue(Duration::from_secs(60))
+
+    compute_backoff(attempt, kind)
 }
 
 /// Start the HostMapping controller

@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -8,13 +9,14 @@ use kube::{Api, Client};
 use tokio::select;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::time::{interval, sleep};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
 use router_hosts_operator::client::RouterHostsClient;
 use router_hosts_operator::config::{tags, RouterHostsConfig};
+use router_hosts_operator::controllers::retry::RetryTracker;
 use router_hosts_operator::controllers::ControllerContext;
 use router_hosts_operator::deletion::DeletionScheduler;
 use router_hosts_operator::resolver::IpResolver;
@@ -90,6 +92,7 @@ async fn main() -> Result<()> {
         deletion: Arc::new(deletion_scheduler),
         config: Arc::new(config),
         kube_client: kube_client.clone(),
+        retry_tracker: Arc::new(RetryTracker::new()),
     });
 
     info!("Starting controllers");
@@ -313,6 +316,9 @@ async fn run_gc_cycle(ctx: &ControllerContext) -> Result<()> {
         "Checking operator-managed entries for orphans"
     );
 
+    // Build UID caches once per GC cycle - O(n) instead of O(n*m)
+    let uid_cache = build_uid_cache(&ctx.kube_client).await?;
+
     let mut orphaned = 0;
     let mut verified = 0;
 
@@ -333,13 +339,6 @@ async fn run_gc_cycle(ctx: &ControllerContext) -> Result<()> {
             continue;
         };
 
-        // Extract namespace from tags
-        let namespace = entry
-            .tags
-            .iter()
-            .find(|t| t.starts_with(tags::NAMESPACE_PREFIX))
-            .and_then(|t| t.strip_prefix(tags::NAMESPACE_PREFIX));
-
         // Extract kind from tags
         let kind = entry
             .tags
@@ -347,8 +346,8 @@ async fn run_gc_cycle(ctx: &ControllerContext) -> Result<()> {
             .find(|t| t.starts_with(tags::KIND_PREFIX))
             .and_then(|t| t.strip_prefix(tags::KIND_PREFIX));
 
-        // Check if source resource still exists
-        let exists = check_resource_exists(&ctx.kube_client, kind, namespace, source_uid).await?;
+        // Check if source resource still exists using cached UIDs
+        let exists = uid_cache.contains(kind, source_uid);
 
         if !exists {
             // Check if already pending deletion (has pending-deletion: tag)
@@ -391,81 +390,97 @@ async fn run_gc_cycle(ctx: &ControllerContext) -> Result<()> {
     Ok(())
 }
 
-/// Check if a Kubernetes resource still exists
-async fn check_resource_exists(
-    client: &Client,
-    kind: Option<&str>,
-    namespace: Option<&str>,
-    uid: &str,
-) -> Result<bool> {
-    use k8s_openapi::api::networking::v1::Ingress;
+/// Cache of resource UIDs for efficient orphan detection
+///
+/// Built once per GC cycle to avoid repeated API calls.
+/// This reduces GC complexity from O(n*m) to O(n+m).
+struct UidCache {
+    ingresses: HashSet<String>,
+    ingressroutes: HashSet<String>,
+    ingressroutetcps: HashSet<String>,
+    hostmappings: HashSet<String>,
+}
 
-    let Some(kind) = kind else {
-        return Ok(false);
-    };
-
-    match kind {
-        "Ingress" => {
-            let api = if let Some(ns) = namespace {
-                Api::<Ingress>::namespaced(client.clone(), ns)
-            } else {
-                return Ok(false);
-            };
-
-            let ingresses = api.list(&ListParams::default()).await?;
-            Ok(ingresses
-                .items
-                .iter()
-                .any(|i| i.metadata.uid.as_ref().map(|u| u == uid).unwrap_or(false)))
-        }
-        "IngressRoute" => {
-            use router_hosts_operator::controllers::ingressroute::IngressRoute;
-
-            let api = if let Some(ns) = namespace {
-                Api::<IngressRoute>::namespaced(client.clone(), ns)
-            } else {
-                Api::<IngressRoute>::all(client.clone())
-            };
-
-            let routes = api.list(&ListParams::default()).await?;
-            Ok(routes
-                .items
-                .iter()
-                .any(|r| r.metadata.uid.as_ref().map(|u| u == uid).unwrap_or(false)))
-        }
-        "IngressRouteTCP" => {
-            use router_hosts_operator::controllers::ingressroutetcp::IngressRouteTCP;
-
-            let api = if let Some(ns) = namespace {
-                Api::<IngressRouteTCP>::namespaced(client.clone(), ns)
-            } else {
-                Api::<IngressRouteTCP>::all(client.clone())
-            };
-
-            let routes = api.list(&ListParams::default()).await?;
-            Ok(routes
-                .items
-                .iter()
-                .any(|r| r.metadata.uid.as_ref().map(|u| u == uid).unwrap_or(false)))
-        }
-        "HostMapping" => {
-            use router_hosts_operator::HostMapping;
-
-            let api = if let Some(ns) = namespace {
-                Api::<HostMapping>::namespaced(client.clone(), ns)
-            } else {
-                Api::<HostMapping>::all(client.clone())
-            };
-
-            let mappings = api.list(&ListParams::default()).await?;
-            Ok(mappings
-                .items
-                .iter()
-                .any(|m| m.metadata.uid.as_ref().map(|u| u == uid).unwrap_or(false)))
-        }
-        _ => {
-            warn!(kind = kind, "Unknown resource kind, assuming exists");
-            Ok(true)
+impl UidCache {
+    /// Check if a resource UID exists for the given kind
+    fn contains(&self, kind: Option<&str>, uid: &str) -> bool {
+        match kind {
+            Some("Ingress") => self.ingresses.contains(uid),
+            Some("IngressRoute") => self.ingressroutes.contains(uid),
+            Some("IngressRouteTCP") => self.ingressroutetcps.contains(uid),
+            Some("HostMapping") => self.hostmappings.contains(uid),
+            Some(k) => {
+                warn!(kind = k, "Unknown resource kind, assuming exists");
+                true
+            }
+            None => false,
         }
     }
+}
+
+/// Build UID cache for all watched resource types
+///
+/// Lists each resource type once and extracts UIDs into HashSets
+/// for O(1) lookup during orphan checking.
+async fn build_uid_cache(client: &Client) -> Result<UidCache> {
+    use k8s_openapi::api::networking::v1::Ingress;
+    use router_hosts_operator::controllers::ingressroute::IngressRoute;
+    use router_hosts_operator::controllers::ingressroutetcp::IngressRouteTCP;
+    use router_hosts_operator::HostMapping;
+
+    // Create API clients - must be bound to variables for lifetime reasons
+    let ingress_api: Api<Ingress> = Api::all(client.clone());
+    let ingressroute_api: Api<IngressRoute> = Api::all(client.clone());
+    let ingressroutetcp_api: Api<IngressRouteTCP> = Api::all(client.clone());
+    let hostmapping_api: Api<HostMapping> = Api::all(client.clone());
+
+    let params = ListParams::default();
+
+    // List all resources in parallel for efficiency
+    let (ingresses, ingressroutes, ingressroutetcps, hostmappings) = tokio::try_join!(
+        ingress_api.list(&params),
+        ingressroute_api.list(&params),
+        ingressroutetcp_api.list(&params),
+        hostmapping_api.list(&params),
+    )?;
+
+    // Extract UIDs into HashSets for O(1) lookup
+    let ingresses: HashSet<String> = ingresses
+        .items
+        .into_iter()
+        .filter_map(|i| i.metadata.uid)
+        .collect();
+
+    let ingressroutes: HashSet<String> = ingressroutes
+        .items
+        .into_iter()
+        .filter_map(|r| r.metadata.uid)
+        .collect();
+
+    let ingressroutetcps: HashSet<String> = ingressroutetcps
+        .items
+        .into_iter()
+        .filter_map(|r| r.metadata.uid)
+        .collect();
+
+    let hostmappings: HashSet<String> = hostmappings
+        .items
+        .into_iter()
+        .filter_map(|m| m.metadata.uid)
+        .collect();
+
+    debug!(
+        ingresses = ingresses.len(),
+        ingressroutes = ingressroutes.len(),
+        ingressroutetcps = ingressroutetcps.len(),
+        hostmappings = hostmappings.len(),
+        "Built UID cache for GC"
+    );
+
+    Ok(UidCache {
+        ingresses,
+        ingressroutes,
+        ingressroutetcps,
+        hostmappings,
+    })
 }
