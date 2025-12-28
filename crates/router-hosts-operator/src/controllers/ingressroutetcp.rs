@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
-use crate::client::ClientError;
+use crate::client::{ClientError, RouterHostsClientTrait};
 use crate::config::{annotations, tags};
 use crate::matcher;
 use crate::resolver::ResolverError;
@@ -235,10 +235,10 @@ async fn reconcile(
                         ctx.client
                             .update_host(
                                 &entry.id,
-                                Some(&ip),
+                                Some(ip.clone()),
                                 Some(aliases.clone()),
                                 Some(new_tags),
-                                Some(&entry.version),
+                                Some(entry.version.clone()),
                             )
                             .await?;
                         info!(hostname = %hostname, "Updated host entry");
@@ -256,10 +256,10 @@ async fn reconcile(
                     ctx.client
                         .update_host(
                             &entry.id,
-                            Some(&ip),
+                            Some(ip.clone()),
                             Some(aliases.clone()),
                             Some(new_tags),
-                            Some(&entry.version),
+                            Some(entry.version.clone()),
                         )
                         .await?;
                     info!(hostname = %hostname, "Adopted pre-existing entry");

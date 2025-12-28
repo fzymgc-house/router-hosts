@@ -14,7 +14,7 @@ use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
-use router_hosts_operator::client::RouterHostsClient;
+use router_hosts_operator::client::{RouterHostsClient, RouterHostsClientTrait};
 use router_hosts_operator::config::{tags, RouterHostsConfig};
 use router_hosts_operator::controllers::retry::RetryTracker;
 use router_hosts_operator::controllers::ControllerContext;

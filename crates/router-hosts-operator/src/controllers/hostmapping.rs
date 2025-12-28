@@ -31,7 +31,7 @@ use kube::Client as KubeClient;
 use thiserror::Error;
 use tracing::{debug, info, instrument, warn};
 
-use crate::client::ClientError;
+use crate::client::{ClientError, RouterHostsClientTrait};
 use crate::config::tags;
 use crate::hostmapping::{Condition, HostMapping, HostMappingStatus};
 use crate::resolver::ResolverError;
@@ -210,10 +210,10 @@ async fn reconcile(
                         .client
                         .update_host(
                             &existing.id,
-                            Some(&ip),
+                            Some(ip.clone()),
                             Some(aliases.clone()),
                             Some(new_tags),
-                            Some(&existing.version),
+                            Some(existing.version.clone()),
                         )
                         .await
                     {
@@ -291,10 +291,10 @@ async fn reconcile(
                     .client
                     .update_host(
                         &existing.id,
-                        Some(&ip),
+                        Some(ip.clone()),
                         Some(aliases.clone()),
                         Some(new_tags),
-                        Some(&existing.version),
+                        Some(existing.version.clone()),
                     )
                     .await
                 {

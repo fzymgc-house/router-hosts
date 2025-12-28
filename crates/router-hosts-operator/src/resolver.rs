@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use async_trait::async_trait;
 use k8s_openapi::api::core::v1::Service;
 use kube::{Api, Client};
 use thiserror::Error;
@@ -27,6 +28,17 @@ pub enum ResolverError {
     KubeError(#[from] kube::Error),
 }
 
+/// Trait for IP resolution (enables mocking in tests)
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait IpResolverTrait: Send + Sync {
+    /// Resolve IP for a resource, checking annotation override first
+    async fn resolve(
+        &self,
+        annotations: &BTreeMap<String, String>,
+    ) -> Result<String, ResolverError>;
+}
+
 /// Resolves IP addresses for host entries
 pub struct IpResolver {
     client: Client,
@@ -38,8 +50,7 @@ impl IpResolver {
         Self { client, strategies }
     }
 
-    /// Resolve IP for a resource, checking annotation override first
-    pub async fn resolve(
+    async fn resolve_internal(
         &self,
         annotations: &BTreeMap<String, String>,
     ) -> Result<String, ResolverError> {
@@ -123,6 +134,16 @@ impl IpResolver {
     }
 }
 
+#[async_trait]
+impl IpResolverTrait for IpResolver {
+    async fn resolve(
+        &self,
+        annotations: &BTreeMap<String, String>,
+    ) -> Result<String, ResolverError> {
+        self.resolve_internal(annotations).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,12 +152,18 @@ mod tests {
     fn test_valid_ipv4() {
         assert!(IpResolver::is_valid_ip("192.168.1.1"));
         assert!(IpResolver::is_valid_ip("10.0.0.1"));
+        assert!(IpResolver::is_valid_ip("0.0.0.0"));
+        assert!(IpResolver::is_valid_ip("255.255.255.255"));
+        assert!(IpResolver::is_valid_ip("172.16.0.1"));
     }
 
     #[test]
     fn test_valid_ipv6() {
         assert!(IpResolver::is_valid_ip("::1"));
         assert!(IpResolver::is_valid_ip("2001:db8::1"));
+        assert!(IpResolver::is_valid_ip("fe80::1"));
+        assert!(IpResolver::is_valid_ip("::"));
+        assert!(IpResolver::is_valid_ip("::ffff:192.168.1.1"));
     }
 
     #[test]
@@ -144,5 +171,85 @@ mod tests {
         assert!(!IpResolver::is_valid_ip("not-an-ip"));
         assert!(!IpResolver::is_valid_ip("192.168.1.999"));
         assert!(!IpResolver::is_valid_ip(""));
+        assert!(!IpResolver::is_valid_ip("example.com"));
+        assert!(!IpResolver::is_valid_ip("192.168.1"));
+        assert!(!IpResolver::is_valid_ip("192.168.1.1.1"));
+        assert!(!IpResolver::is_valid_ip("::gggg"));
+    }
+
+    #[test]
+    fn test_resolver_error_display_no_ip() {
+        let err = ResolverError::NoIpResolved;
+        assert_eq!(err.to_string(), "No IP resolution strategy succeeded");
+    }
+
+    #[test]
+    fn test_resolver_error_display_service_not_found() {
+        let err = ResolverError::ServiceNotFound {
+            namespace: "kube-system".to_string(),
+            name: "traefik".to_string(),
+        };
+        assert_eq!(err.to_string(), "Service kube-system/traefik not found");
+    }
+
+    #[test]
+    fn test_resolver_error_display_no_external_ip() {
+        let err = ResolverError::NoExternalIp {
+            namespace: "default".to_string(),
+            name: "my-service".to_string(),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Service default/my-service has no external IP"
+        );
+    }
+
+    #[test]
+    fn test_resolver_error_display_invalid_annotation() {
+        let err = ResolverError::InvalidAnnotationIp("not-valid".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Invalid IP address in annotation: not-valid"
+        );
+    }
+
+    #[test]
+    fn test_resolver_error_debug() {
+        // Ensure Debug is implemented
+        let err = ResolverError::NoIpResolved;
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("NoIpResolved"));
+    }
+
+    #[test]
+    fn test_ip_resolution_strategy_static() {
+        // Static strategy should work without k8s client
+        let strategy = IpResolutionStrategy::Static {
+            address: "192.168.1.100".to_string(),
+        };
+        match &strategy {
+            IpResolutionStrategy::Static { address } => {
+                assert_eq!(address, "192.168.1.100");
+            }
+            _ => panic!("Expected Static strategy"),
+        }
+    }
+
+    #[test]
+    fn test_ip_resolution_strategy_ingress_controller() {
+        let strategy = IpResolutionStrategy::IngressController {
+            service_name: "traefik".to_string(),
+            service_namespace: "kube-system".to_string(),
+        };
+        match &strategy {
+            IpResolutionStrategy::IngressController {
+                service_name,
+                service_namespace,
+            } => {
+                assert_eq!(service_name, "traefik");
+                assert_eq!(service_namespace, "kube-system");
+            }
+            _ => panic!("Expected IngressController strategy"),
+        }
     }
 }

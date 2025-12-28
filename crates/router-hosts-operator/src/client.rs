@@ -2,6 +2,9 @@
 //!
 //! Provides a high-level interface for interacting with the router-hosts server.
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
 use router_hosts_common::proto::router_hosts::v1::{
     hosts_service_client::HostsServiceClient, AddHostRequest, DeleteHostRequest, ListHostsRequest,
     SearchHostsRequest, TagsUpdate, UpdateHostRequest,
@@ -9,6 +12,42 @@ use router_hosts_common::proto::router_hosts::v1::{
 use thiserror::Error;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
 use tracing::{debug, instrument};
+
+/// Trait for router-hosts client operations
+///
+/// This trait allows for mocking in tests while keeping the concrete
+/// implementation for production use.
+#[cfg_attr(test, mockall::automock)]
+#[async_trait]
+pub trait RouterHostsClientTrait: Send + Sync {
+    /// Search for entries by hostname
+    async fn find_by_hostname(&self, hostname: &str) -> Result<Option<HostEntry>, ClientError>;
+
+    /// Search for entries by tag
+    async fn find_by_tag(&self, tag: &str) -> Result<Vec<HostEntry>, ClientError>;
+
+    /// Add a new host entry
+    async fn add_host(
+        &self,
+        hostname: &str,
+        ip_address: &str,
+        aliases: Vec<String>,
+        tags: Vec<String>,
+    ) -> Result<HostEntry, ClientError>;
+
+    /// Update an existing host entry
+    async fn update_host(
+        &self,
+        id: &str,
+        ip_address: Option<String>,
+        aliases: Option<Vec<String>>,
+        tags: Option<Vec<String>>,
+        expected_version: Option<String>,
+    ) -> Result<HostEntry, ClientError>;
+
+    /// Delete a host entry
+    async fn delete_host(&self, id: &str) -> Result<bool, ClientError>;
+}
 
 #[derive(Debug, Error)]
 pub enum ClientError {
@@ -61,10 +100,12 @@ impl RouterHostsClient {
             inner: HostsServiceClient::new(channel),
         })
     }
+}
 
-    /// Search for entries by hostname
+#[async_trait]
+impl RouterHostsClientTrait for RouterHostsClient {
     #[instrument(skip(self))]
-    pub async fn find_by_hostname(&self, hostname: &str) -> Result<Option<HostEntry>, ClientError> {
+    async fn find_by_hostname(&self, hostname: &str) -> Result<Option<HostEntry>, ClientError> {
         let mut client = self.inner.clone();
         let request = SearchHostsRequest {
             query: hostname.to_string(),
@@ -90,9 +131,8 @@ impl RouterHostsClient {
         Ok(None)
     }
 
-    /// Search for entries by tag
     #[instrument(skip(self))]
-    pub async fn find_by_tag(&self, tag: &str) -> Result<Vec<HostEntry>, ClientError> {
+    async fn find_by_tag(&self, tag: &str) -> Result<Vec<HostEntry>, ClientError> {
         let mut client = self.inner.clone();
         let request = ListHostsRequest {
             filter: Some(format!("tag:{tag}")),
@@ -121,9 +161,8 @@ impl RouterHostsClient {
         Ok(entries)
     }
 
-    /// Add a new host entry
     #[instrument(skip(self))]
-    pub async fn add_host(
+    async fn add_host(
         &self,
         hostname: &str,
         ip_address: &str,
@@ -156,23 +195,22 @@ impl RouterHostsClient {
         })
     }
 
-    /// Update an existing host entry
     #[instrument(skip(self))]
-    pub async fn update_host(
+    async fn update_host(
         &self,
         id: &str,
-        ip_address: Option<&str>,
+        ip_address: Option<String>,
         aliases: Option<Vec<String>>,
         tags: Option<Vec<String>>,
-        expected_version: Option<&str>,
+        expected_version: Option<String>,
     ) -> Result<HostEntry, ClientError> {
         let mut client = self.inner.clone();
         let request = UpdateHostRequest {
             id: id.to_string(),
-            ip_address: ip_address.map(String::from),
+            ip_address,
             hostname: None,
             comment: None,
-            expected_version: expected_version.map(String::from),
+            expected_version,
             aliases: aliases
                 .map(|v| router_hosts_common::proto::router_hosts::v1::AliasesUpdate { values: v }),
             tags: tags.map(|v| TagsUpdate { values: v }),
@@ -195,9 +233,8 @@ impl RouterHostsClient {
         })
     }
 
-    /// Delete a host entry
     #[instrument(skip(self))]
-    pub async fn delete_host(&self, id: &str) -> Result<bool, ClientError> {
+    async fn delete_host(&self, id: &str) -> Result<bool, ClientError> {
         let mut client = self.inner.clone();
         let request = DeleteHostRequest { id: id.to_string() };
 
@@ -205,5 +242,112 @@ impl RouterHostsClient {
         debug!(id = %id, success = %response.success, "Deleted host entry");
 
         Ok(response.success)
+    }
+}
+
+/// Implement trait for Arc-wrapped clients to support shared ownership
+#[async_trait]
+impl<T: RouterHostsClientTrait + ?Sized> RouterHostsClientTrait for Arc<T> {
+    async fn find_by_hostname(&self, hostname: &str) -> Result<Option<HostEntry>, ClientError> {
+        (**self).find_by_hostname(hostname).await
+    }
+
+    async fn find_by_tag(&self, tag: &str) -> Result<Vec<HostEntry>, ClientError> {
+        (**self).find_by_tag(tag).await
+    }
+
+    async fn add_host(
+        &self,
+        hostname: &str,
+        ip_address: &str,
+        aliases: Vec<String>,
+        tags: Vec<String>,
+    ) -> Result<HostEntry, ClientError> {
+        (**self).add_host(hostname, ip_address, aliases, tags).await
+    }
+
+    async fn update_host(
+        &self,
+        id: &str,
+        ip_address: Option<String>,
+        aliases: Option<Vec<String>>,
+        tags: Option<Vec<String>>,
+        expected_version: Option<String>,
+    ) -> Result<HostEntry, ClientError> {
+        (**self)
+            .update_host(id, ip_address, aliases, tags, expected_version)
+            .await
+    }
+
+    async fn delete_host(&self, id: &str) -> Result<bool, ClientError> {
+        (**self).delete_host(id).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_error_display_connection() {
+        // Test TlsError display
+        let err = ClientError::TlsError("invalid certificate".to_string());
+        assert_eq!(
+            err.to_string(),
+            "TLS configuration error: invalid certificate"
+        );
+    }
+
+    #[test]
+    fn test_client_error_display_missing_field() {
+        let err = ClientError::MissingResponseField("entry".to_string());
+        assert_eq!(
+            err.to_string(),
+            "Server response missing required field: entry"
+        );
+    }
+
+    #[test]
+    fn test_client_error_debug() {
+        let err = ClientError::TlsError("test".to_string());
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("TlsError"));
+        assert!(debug_str.contains("test"));
+    }
+
+    #[test]
+    fn test_host_entry_clone() {
+        let entry = HostEntry {
+            id: "test-id".to_string(),
+            hostname: "example.com".to_string(),
+            ip_address: "192.168.1.1".to_string(),
+            aliases: vec!["alias1.com".to_string()],
+            tags: vec!["tag1".to_string()],
+            version: "v1".to_string(),
+        };
+
+        let cloned = entry.clone();
+        assert_eq!(entry.id, cloned.id);
+        assert_eq!(entry.hostname, cloned.hostname);
+        assert_eq!(entry.ip_address, cloned.ip_address);
+        assert_eq!(entry.aliases, cloned.aliases);
+        assert_eq!(entry.tags, cloned.tags);
+        assert_eq!(entry.version, cloned.version);
+    }
+
+    #[test]
+    fn test_host_entry_debug() {
+        let entry = HostEntry {
+            id: "test-id".to_string(),
+            hostname: "example.com".to_string(),
+            ip_address: "192.168.1.1".to_string(),
+            aliases: vec![],
+            tags: vec![],
+            version: "v1".to_string(),
+        };
+
+        let debug_str = format!("{:?}", entry);
+        assert!(debug_str.contains("example.com"));
+        assert!(debug_str.contains("192.168.1.1"));
     }
 }

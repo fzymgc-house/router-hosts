@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
-use crate::client::{ClientError, RouterHostsClient};
+use crate::client::{ClientError, RouterHostsClientTrait};
 use crate::config::tags;
 
 /// Entry scheduled for deletion
@@ -86,9 +86,9 @@ impl DeletionScheduler {
     }
 
     /// Process expired deletions
-    pub async fn process_expired(
+    pub async fn process_expired<C: RouterHostsClientTrait>(
         &self,
-        client: &RouterHostsClient,
+        client: &C,
     ) -> Result<ProcessResult, ClientError> {
         let now = Instant::now();
         let mut expired = Vec::new();
@@ -159,9 +159,9 @@ impl DeletionScheduler {
         Ok(result)
     }
 
-    async fn remove_operator_tags(
+    async fn remove_operator_tags<C: RouterHostsClientTrait>(
         &self,
-        client: &RouterHostsClient,
+        client: &C,
         entry_id: &str,
     ) -> Result<(), ClientError> {
         // Get current entry to filter tags
@@ -183,7 +183,13 @@ impl DeletionScheduler {
             .collect();
 
         client
-            .update_host(entry_id, None, None, Some(new_tags), Some(&entry.version))
+            .update_host(
+                entry_id,
+                None,
+                None,
+                Some(new_tags),
+                Some(entry.version.clone()),
+            )
             .await?;
 
         Ok(())
@@ -219,6 +225,7 @@ pub struct ProcessResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::client::{HostEntry, MockRouterHostsClientTrait};
 
     #[test]
     fn test_is_operator_tag() {
@@ -231,6 +238,15 @@ mod tests {
 
         assert!(!DeletionScheduler::is_operator_tag("custom-tag"));
         assert!(!DeletionScheduler::is_operator_tag("production"));
+    }
+
+    #[test]
+    fn test_is_operator_tag_pending_deletion() {
+        // pending-deletion: with timestamp suffix
+        assert!(DeletionScheduler::is_operator_tag(
+            "pending-deletion:2024-01-15T12:00:00Z"
+        ));
+        assert!(DeletionScheduler::is_operator_tag("pending-deletion:"));
     }
 
     #[tokio::test]
@@ -252,5 +268,277 @@ mod tests {
         scheduler.cancel("entry-1").await;
         assert!(!scheduler.is_pending("entry-1").await);
         assert_eq!(scheduler.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_schedule_with_custom_grace_period() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(300));
+
+        // Schedule with custom 10 second grace period
+        scheduler
+            .schedule(
+                "entry-1".to_string(),
+                "test.example.com".to_string(),
+                false,
+                Some(Duration::from_secs(10)),
+            )
+            .await;
+
+        assert!(scheduler.is_pending("entry-1").await);
+    }
+
+    #[tokio::test]
+    async fn test_schedule_multiple_entries() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(300));
+
+        scheduler
+            .schedule(
+                "entry-1".to_string(),
+                "host1.example.com".to_string(),
+                false,
+                None,
+            )
+            .await;
+        scheduler
+            .schedule(
+                "entry-2".to_string(),
+                "host2.example.com".to_string(),
+                true,
+                None,
+            )
+            .await;
+        scheduler
+            .schedule(
+                "entry-3".to_string(),
+                "host3.example.com".to_string(),
+                false,
+                None,
+            )
+            .await;
+
+        assert_eq!(scheduler.pending_count().await, 3);
+        assert!(scheduler.is_pending("entry-1").await);
+        assert!(scheduler.is_pending("entry-2").await);
+        assert!(scheduler.is_pending("entry-3").await);
+    }
+
+    #[tokio::test]
+    async fn test_cancel_nonexistent_entry() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(300));
+
+        // Cancel should return false for non-existent entry
+        let result = scheduler.cancel("nonexistent").await;
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_process_expired_deletes_entry() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(0)); // Zero grace period
+
+        // Schedule for immediate expiry
+        scheduler
+            .schedule(
+                "entry-1".to_string(),
+                "test.example.com".to_string(),
+                false,
+                None,
+            )
+            .await;
+
+        // Create mock client that returns success
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        mock_client
+            .expect_delete_host()
+            .with(mockall::predicate::eq("entry-1"))
+            .times(1)
+            .returning(|_| Ok(true));
+
+        let result = scheduler.process_expired(&mock_client).await.unwrap();
+
+        assert_eq!(result.deleted, 1);
+        assert_eq!(result.tags_removed, 0);
+        assert_eq!(result.errors, 0);
+        assert!(!scheduler.is_pending("entry-1").await);
+    }
+
+    #[tokio::test]
+    async fn test_process_expired_removes_tags_for_pre_existing() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(0));
+
+        // Schedule pre-existing entry
+        scheduler
+            .schedule(
+                "entry-1".to_string(),
+                "test.example.com".to_string(),
+                true,
+                None,
+            )
+            .await;
+
+        // Mock client: find_by_tag returns the entry, update_host succeeds
+        let mut mock_client = MockRouterHostsClientTrait::new();
+
+        mock_client
+            .expect_find_by_tag()
+            .with(mockall::predicate::eq(tags::OPERATOR))
+            .times(1)
+            .returning(|_| {
+                Ok(vec![HostEntry {
+                    id: "entry-1".to_string(),
+                    hostname: "test.example.com".to_string(),
+                    ip_address: "192.168.1.1".to_string(),
+                    aliases: vec![],
+                    tags: vec![
+                        tags::OPERATOR.to_string(),
+                        tags::PRE_EXISTING.to_string(),
+                        "source:abc-123".to_string(),
+                        "custom-tag".to_string(),
+                    ],
+                    version: "v1".to_string(),
+                }])
+            });
+
+        mock_client
+            .expect_update_host()
+            .withf(|id, _ip, _aliases, tags, version| {
+                id == "entry-1"
+                    && tags.as_ref().map_or(false, |t| {
+                        t.len() == 1 && t.contains(&"custom-tag".to_string())
+                    })
+                    && version == &Some("v1".to_string())
+            })
+            .times(1)
+            .returning(|_, _, _, _, _| {
+                Ok(HostEntry {
+                    id: "entry-1".to_string(),
+                    hostname: "test.example.com".to_string(),
+                    ip_address: "192.168.1.1".to_string(),
+                    aliases: vec![],
+                    tags: vec!["custom-tag".to_string()],
+                    version: "v2".to_string(),
+                })
+            });
+
+        let result = scheduler.process_expired(&mock_client).await.unwrap();
+
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.tags_removed, 1);
+        assert_eq!(result.errors, 0);
+        assert!(!scheduler.is_pending("entry-1").await);
+    }
+
+    #[tokio::test]
+    async fn test_process_expired_handles_delete_failure() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(0));
+
+        scheduler
+            .schedule(
+                "entry-1".to_string(),
+                "test.example.com".to_string(),
+                false,
+                None,
+            )
+            .await;
+
+        // Mock client that returns error
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        mock_client.expect_delete_host().times(1).returning(|_| {
+            Err(ClientError::GrpcError(tonic::Status::internal(
+                "test error",
+            )))
+        });
+
+        let result = scheduler.process_expired(&mock_client).await.unwrap();
+
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.errors, 1);
+        // Entry should still be pending (will retry)
+        assert!(scheduler.is_pending("entry-1").await);
+    }
+
+    #[tokio::test]
+    async fn test_process_expired_handles_delete_false() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(0));
+
+        scheduler
+            .schedule(
+                "entry-1".to_string(),
+                "test.example.com".to_string(),
+                false,
+                None,
+            )
+            .await;
+
+        // Mock client that returns false (delete failed on server)
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        mock_client
+            .expect_delete_host()
+            .times(1)
+            .returning(|_| Ok(false));
+
+        let result = scheduler.process_expired(&mock_client).await.unwrap();
+
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.errors, 1);
+    }
+
+    #[tokio::test]
+    async fn test_process_expired_with_nonexpired_entries() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(3600)); // 1 hour grace
+
+        scheduler
+            .schedule(
+                "entry-1".to_string(),
+                "test.example.com".to_string(),
+                false,
+                None,
+            )
+            .await;
+
+        // Mock client - should not be called
+        let mock_client = MockRouterHostsClientTrait::new();
+
+        let result = scheduler.process_expired(&mock_client).await.unwrap();
+
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.tags_removed, 0);
+        assert_eq!(result.errors, 0);
+        // Entry still pending
+        assert!(scheduler.is_pending("entry-1").await);
+    }
+
+    #[tokio::test]
+    async fn test_remove_tags_entry_not_found() {
+        let scheduler = DeletionScheduler::new(Duration::from_secs(0));
+
+        scheduler
+            .schedule(
+                "entry-1".to_string(),
+                "test.example.com".to_string(),
+                true,
+                None,
+            )
+            .await;
+
+        // Mock: entry not found when searching by tag
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        mock_client
+            .expect_find_by_tag()
+            .times(1)
+            .returning(|_| Ok(vec![])); // Empty result - entry not found
+
+        let result = scheduler.process_expired(&mock_client).await.unwrap();
+
+        // Should count as tags_removed (entry may have been deleted externally)
+        assert_eq!(result.tags_removed, 1);
+        assert_eq!(result.errors, 0);
+    }
+
+    #[tokio::test]
+    async fn test_process_result_default() {
+        let result = ProcessResult::default();
+        assert_eq!(result.deleted, 0);
+        assert_eq!(result.tags_removed, 0);
+        assert_eq!(result.errors, 0);
     }
 }
