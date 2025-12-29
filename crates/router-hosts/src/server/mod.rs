@@ -13,6 +13,7 @@ pub mod export;
 pub mod hooks;
 pub mod hosts_file;
 pub mod import;
+pub mod metrics;
 pub mod service;
 pub mod write_queue;
 
