@@ -172,9 +172,22 @@ impl HookExecutor {
                     Err(HookError::Failed(code, hook.name.clone()))
                 }
             }
-            Ok(Err(e)) => Err(HookError::Io(e)),
+            Ok(Err(e)) => {
+                error!(
+                    hook_name = %hook.name,
+                    error = %e,
+                    "Hook failed to wait for process"
+                );
+                Err(HookError::Io(e))
+            }
             Err(_) => {
-                let _ = child.kill().await;
+                if let Err(kill_err) = child.kill().await {
+                    warn!(
+                        hook_name = %hook.name,
+                        error = %kill_err,
+                        "Failed to kill timed out hook process"
+                    );
+                }
                 error!(hook_name = %hook.name, "Hook timed out");
                 Err(HookError::Timeout(self.timeout_secs))
             }

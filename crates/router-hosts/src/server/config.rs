@@ -158,7 +158,7 @@ const MAX_HOOK_NAME_LENGTH: usize = 50;
 ///
 /// Hook names must be kebab-case (lowercase alphanumeric with hyphens)
 /// and at most 50 characters.
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct HookDefinition {
     /// Human-readable name for the hook (kebab-case, max 50 chars).
     /// Used in logs, health endpoints, and metrics.
@@ -169,13 +169,36 @@ pub struct HookDefinition {
 }
 
 impl HookDefinition {
+    /// Create a new hook definition with validation.
+    ///
+    /// Returns an error if the name or command is invalid.
+    /// Use this constructor when creating hooks programmatically
+    /// to ensure validation is performed.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConfigError::InvalidHook` if:
+    /// - name is empty or whitespace-only
+    /// - name is not valid kebab-case
+    /// - name exceeds 50 characters
+    /// - command is empty or whitespace-only
+    pub fn new(name: impl Into<String>, command: impl Into<String>) -> Result<Self, ConfigError> {
+        let hook = Self {
+            name: name.into(),
+            command: command.into(),
+        };
+        hook.validate()?;
+        Ok(hook)
+    }
+
     /// Validate the hook definition.
     ///
     /// Returns an error if:
-    /// - name is empty
+    /// - name is empty or whitespace-only
     /// - name is not valid kebab-case
     /// - name exceeds 50 characters
-    /// - command is empty
+    /// - command is empty or whitespace-only
+    #[must_use = "validation errors should be handled"]
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Validate name is non-empty
         if self.name.is_empty() {
@@ -200,10 +223,10 @@ impl HookDefinition {
             )));
         }
 
-        // Validate command is non-empty
-        if self.command.is_empty() {
+        // Validate command is non-empty and not whitespace-only
+        if self.command.is_empty() || self.command.trim().is_empty() {
             return Err(ConfigError::InvalidHook(format!(
-                "hook '{}' has empty command",
+                "hook '{}' has empty or whitespace-only command",
                 self.name
             )));
         }
@@ -834,7 +857,81 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
         };
         let err = hook.validate().unwrap_err();
         assert!(matches!(err, ConfigError::InvalidHook(_)));
-        assert!(err.to_string().contains("empty command"));
+        assert!(err.to_string().contains("empty or whitespace-only command"));
+    }
+
+    #[test]
+    fn test_hook_definition_whitespace_only_command() {
+        let hook = HookDefinition {
+            name: "test-hook".to_string(),
+            command: "   \t\n  ".to_string(),
+        };
+        let err = hook.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("empty or whitespace-only command"));
+    }
+
+    #[test]
+    fn test_hook_definition_unicode_in_name_rejected() {
+        // Unicode characters should be rejected (not lowercase ASCII)
+        let hook = HookDefinition {
+            name: "héllo-wörld".to_string(),
+            command: "echo test".to_string(),
+        };
+        let err = hook.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("kebab-case"));
+    }
+
+    #[test]
+    fn test_hook_definition_emoji_in_name_rejected() {
+        let hook = HookDefinition {
+            name: "reload-🚀-dns".to_string(),
+            command: "echo test".to_string(),
+        };
+        let err = hook.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("kebab-case"));
+    }
+
+    #[test]
+    fn test_hook_definition_new_valid() {
+        let hook = HookDefinition::new("reload-dns", "systemctl reload dnsmasq").unwrap();
+        assert_eq!(hook.name, "reload-dns");
+        assert_eq!(hook.command, "systemctl reload dnsmasq");
+    }
+
+    #[test]
+    fn test_hook_definition_new_invalid_name() {
+        let err = HookDefinition::new("Invalid Name", "echo test").unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("kebab-case"));
+    }
+
+    #[test]
+    fn test_hook_definition_new_invalid_command() {
+        let err = HookDefinition::new("test-hook", "   ").unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("empty or whitespace-only"));
+    }
+
+    #[test]
+    fn test_hook_definition_equality() {
+        let hook1 = HookDefinition {
+            name: "reload-dns".to_string(),
+            command: "systemctl reload dnsmasq".to_string(),
+        };
+        let hook2 = HookDefinition {
+            name: "reload-dns".to_string(),
+            command: "systemctl reload dnsmasq".to_string(),
+        };
+        let hook3 = HookDefinition {
+            name: "reload-dns".to_string(),
+            command: "different command".to_string(),
+        };
+
+        assert_eq!(hook1, hook2);
+        assert_ne!(hook1, hook3);
     }
 
     #[test]
@@ -955,5 +1052,147 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
         );
         assert_eq!(config.hooks.on_failure.len(), 1);
         assert_eq!(config.hooks.on_failure[0].name, "alert-ops");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_config_from_file_invalid_hook_name() {
+        use std::fs;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let toml_str = r#"
+[server]
+bind_address = "0.0.0.0:50051"
+hosts_file_path = "/etc/hosts"
+
+[database]
+url = "sqlite://:memory:"
+
+[tls]
+cert_path = "/etc/router-hosts/server.crt"
+key_path = "/etc/router-hosts/server.key"
+ca_cert_path = "/etc/router-hosts/ca.crt"
+
+[[hooks.on_success]]
+name = "Invalid Hook Name"
+command = "echo test"
+"#;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_str.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        // Set secure permissions
+        let path = temp_file.path();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let result = Config::from_file(path.to_str().unwrap());
+        assert!(result.is_err());
+        match result {
+            Err(ConfigError::InvalidHook(msg)) => {
+                assert!(msg.contains("kebab-case"));
+            }
+            _ => panic!(
+                "Expected ConfigError::InvalidHook for invalid hook name, got {:?}",
+                result
+            ),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_config_from_file_duplicate_hook_names() {
+        use std::fs;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let toml_str = r#"
+[server]
+bind_address = "0.0.0.0:50051"
+hosts_file_path = "/etc/hosts"
+
+[database]
+url = "sqlite://:memory:"
+
+[tls]
+cert_path = "/etc/router-hosts/server.crt"
+key_path = "/etc/router-hosts/server.key"
+ca_cert_path = "/etc/router-hosts/ca.crt"
+
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+
+[[hooks.on_success]]
+name = "reload-dns"
+command = "different command"
+"#;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_str.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        // Set secure permissions
+        let path = temp_file.path();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let result = Config::from_file(path.to_str().unwrap());
+        assert!(result.is_err());
+        match result {
+            Err(ConfigError::InvalidHook(msg)) => {
+                assert!(msg.contains("duplicate"));
+            }
+            _ => panic!(
+                "Expected ConfigError::InvalidHook for duplicate hook names, got {:?}",
+                result
+            ),
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_config_from_file_empty_hook_command() {
+        use std::fs;
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+
+        let toml_str = r#"
+[server]
+bind_address = "0.0.0.0:50051"
+hosts_file_path = "/etc/hosts"
+
+[database]
+url = "sqlite://:memory:"
+
+[tls]
+cert_path = "/etc/router-hosts/server.crt"
+key_path = "/etc/router-hosts/server.key"
+ca_cert_path = "/etc/router-hosts/ca.crt"
+
+[[hooks.on_success]]
+name = "reload-dns"
+command = ""
+"#;
+
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        temp_file.write_all(toml_str.as_bytes()).unwrap();
+        temp_file.flush().unwrap();
+
+        // Set secure permissions
+        let path = temp_file.path();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600)).unwrap();
+
+        let result = Config::from_file(path.to_str().unwrap());
+        assert!(result.is_err());
+        match result {
+            Err(ConfigError::InvalidHook(msg)) => {
+                assert!(msg.contains("empty or whitespace-only command"));
+            }
+            _ => panic!(
+                "Expected ConfigError::InvalidHook for empty command, got {:?}",
+                result
+            ),
+        }
     }
 }
