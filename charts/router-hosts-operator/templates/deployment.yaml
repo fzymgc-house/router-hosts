@@ -65,10 +65,11 @@ spec:
             periodSeconds: {{ .Values.healthCheck.readinessProbe.periodSeconds }}
             timeoutSeconds: {{ .Values.healthCheck.readinessProbe.timeoutSeconds }}
             failureThreshold: {{ .Values.healthCheck.readinessProbe.failureThreshold }}
-          # Startup probe - allows longer startup time for initial connection
+          # Startup probe - verifies server connectivity before pod is ready
+          # Uses /readyz to ensure router-hosts server is reachable
           startupProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: health
             initialDelaySeconds: {{ .Values.healthCheck.startupProbe.initialDelaySeconds }}
             periodSeconds: {{ .Values.healthCheck.startupProbe.periodSeconds }}

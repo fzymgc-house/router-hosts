@@ -128,12 +128,20 @@ ipResolution:
 
 The operator exposes HTTP health check endpoints for Kubernetes probes:
 
-| Endpoint | Probe | Behavior |
-|----------|-------|----------|
+| Endpoint | Purpose | Behavior |
+|----------|---------|----------|
 | `/healthz` | Liveness | Returns 200 OK if process is alive |
-| `/readyz` | Readiness | Returns 200 OK if startup complete AND router-hosts server reachable |
+| `/readyz` | Readiness + Startup | Returns 200 OK if startup complete AND router-hosts server reachable |
 
-The readiness probe performs a lightweight gRPC call to verify connectivity to the router-hosts server. If the server becomes unreachable, the pod is marked as not ready, preventing traffic routing until connectivity is restored.
+#### Probe Configuration
+
+| Probe | Endpoint | Purpose |
+|-------|----------|---------|
+| **Startup** | `/readyz` | Verifies server connectivity before pod is considered started (allows 150s) |
+| **Liveness** | `/healthz` | Checks process is alive; restarts pod if unresponsive |
+| **Readiness** | `/readyz` | Checks server connectivity; removes pod from service if unreachable |
+
+The readiness probe performs a gRPC call to verify connectivity to the router-hosts server. If the server becomes unreachable (network partition, server restart, certificate expiration), the pod transitions to NotReady state, preventing new work while allowing in-flight operations to complete.
 
 Configure the health check port if needed:
 
