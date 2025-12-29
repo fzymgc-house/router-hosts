@@ -56,6 +56,9 @@ impl<C: RouterHostsClientTrait> HealthState<C> {
 ///
 /// This function runs until the server encounters a fatal error.
 /// It should be spawned as a separate task alongside the controllers.
+///
+/// The operator is marked as started only after the server successfully binds,
+/// eliminating any race condition between startup and probe availability.
 pub async fn run_health_server<C: RouterHostsClientTrait + Send + Sync + 'static>(
     state: Arc<HealthState<C>>,
     port: u16,
@@ -63,7 +66,7 @@ pub async fn run_health_server<C: RouterHostsClientTrait + Send + Sync + 'static
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz::<C>))
-        .with_state(state);
+        .with_state(state.clone());
 
     // Bind to localhost only - health endpoints should only be accessible
     // within the pod via the kubelet, not externally
@@ -71,6 +74,10 @@ pub async fn run_health_server<C: RouterHostsClientTrait + Send + Sync + 'static
     let listener = TcpListener::bind(addr).await?;
 
     info!(port = port, "Health check server listening");
+
+    // Mark as started only after successful bind - ensures readiness probes
+    // can't succeed before the health server is actually listening
+    state.mark_started();
 
     axum::serve(listener, app).await
 }

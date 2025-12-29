@@ -123,10 +123,8 @@ async fn main() -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate()).context("Failed to setup SIGTERM handler")?;
     let mut sigint = signal(SignalKind::interrupt()).context("Failed to setup SIGINT handler")?;
 
-    // Mark health state as started after all initialization is complete
-    health_state.mark_started();
-
     // Start controllers, health server, and GC loop concurrently
+    // Note: mark_started() is called inside run_health_server after successful bind
     select! {
         result = run_controllers(kube_client.clone(), ctx.clone()) => {
             // Controller failure should trigger pod restart
