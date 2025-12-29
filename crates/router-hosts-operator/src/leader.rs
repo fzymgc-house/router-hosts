@@ -32,6 +32,14 @@ use tracing::{error, info, warn};
 /// with default 5-second renewal interval before giving up).
 const MAX_RENEWAL_FAILURES: u32 = 3;
 
+/// Exit code when leadership is definitively lost to another pod.
+/// Distinct from renewal failure to aid debugging and monitoring.
+const EXIT_CODE_LEADERSHIP_LOST: i32 = 2;
+
+/// Exit code when lease renewal fails after MAX_RENEWAL_FAILURES attempts.
+/// Indicates network/API issues rather than leadership transfer.
+const EXIT_CODE_RENEWAL_FAILED: i32 = 3;
+
 /// Configuration for leader election.
 ///
 /// Fields are private to enforce invariants. Use [`LeaderElectionConfig::from_env()`]
@@ -169,6 +177,18 @@ impl LeaderElectionConfig {
     }
 }
 
+/// Extract holder identity from a lease result.
+///
+/// Returns "unknown" if the holder identity cannot be determined.
+fn extract_holder_identity(lease: &Option<k8s_openapi::api::coordination::v1::Lease>) -> &str {
+    lease
+        .as_ref()
+        .and_then(|l| l.spec.as_ref())
+        .and_then(|s| s.holder_identity.as_ref())
+        .map(|s| s.as_str())
+        .unwrap_or("unknown")
+}
+
 /// Parse a duration from an environment variable with logging on failure.
 fn parse_duration_env(var_name: &str, default: Duration) -> Duration {
     match std::env::var(var_name) {
@@ -233,24 +253,12 @@ impl LeaderElection {
         loop {
             match self.lease_lock.try_acquire_or_renew().await {
                 Ok(result) if result.acquired_lease => {
-                    let holder = result
-                        .lease
-                        .as_ref()
-                        .and_then(|l| l.spec.as_ref())
-                        .and_then(|s| s.holder_identity.as_ref())
-                        .map(|s| s.as_str())
-                        .unwrap_or("unknown");
+                    let holder = extract_holder_identity(&result.lease);
                     info!(holder = %holder, "Leadership acquired");
                     return Ok(());
                 }
                 Ok(result) => {
-                    let current_holder = result
-                        .lease
-                        .as_ref()
-                        .and_then(|l| l.spec.as_ref())
-                        .and_then(|s| s.holder_identity.as_ref())
-                        .map(|s| s.as_str())
-                        .unwrap_or("unknown");
+                    let current_holder = extract_holder_identity(&result.lease);
                     info!(current_holder = %current_holder, "Another pod is leader, waiting...");
                 }
                 Err(e) => {
@@ -305,18 +313,13 @@ impl LeaderElection {
                     }
                     Ok(result) => {
                         // Lost leadership to another pod - this is definitive, exit immediately
-                        let new_holder = result
-                            .lease
-                            .as_ref()
-                            .and_then(|l| l.spec.as_ref())
-                            .and_then(|s| s.holder_identity.as_ref())
-                            .map(|s| s.as_str())
-                            .unwrap_or("unknown");
+                        let new_holder = extract_holder_identity(&result.lease);
                         error!(
                             new_holder = %new_holder,
+                            exit_code = EXIT_CODE_LEADERSHIP_LOST,
                             "Lost leadership to another pod, exiting"
                         );
-                        std::process::exit(1);
+                        std::process::exit(EXIT_CODE_LEADERSHIP_LOST);
                     }
                     Err(e) => {
                         // Transient failure - retry up to MAX_RENEWAL_FAILURES times
@@ -326,10 +329,11 @@ impl LeaderElection {
                                 error = %e,
                                 consecutive_failures = consecutive_failures,
                                 max_failures = MAX_RENEWAL_FAILURES,
+                                exit_code = EXIT_CODE_RENEWAL_FAILED,
                                 "Failed to renew lease after {} consecutive attempts, exiting",
                                 MAX_RENEWAL_FAILURES
                             );
-                            std::process::exit(1);
+                            std::process::exit(EXIT_CODE_RENEWAL_FAILED);
                         }
                         warn!(
                             error = %e,

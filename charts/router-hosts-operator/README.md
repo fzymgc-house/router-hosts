@@ -165,7 +165,7 @@ The operator requires these cluster-level permissions:
 - **Secrets**: get (for reading mTLS certificates)
 - **Services**: get, list (for IP resolution)
 
-When leader election is enabled (including auto-enabled for replicas >= 2):
+When leader election is enabled (including auto-enabled for `replicaCount >= 2`):
 - **Leases** (`coordination.k8s.io/v1`): get, create, update (in release namespace)
 
 ## High Availability

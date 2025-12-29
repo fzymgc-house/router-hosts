@@ -2,6 +2,9 @@
 {{- if and (not (hasKey .Values.leaderElection "enabled")) (ge (int .Values.replicaCount) 2) -}}
   {{- $leaderElectionEnabled = true -}}
 {{- end -}}
+{{- if and $leaderElectionEnabled (not .Values.rbac.create) -}}
+  {{- fail "Leader election requires RBAC. Set rbac.create=true or disable leader election." -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
