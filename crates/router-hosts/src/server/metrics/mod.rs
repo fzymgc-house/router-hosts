@@ -77,8 +77,12 @@ pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, Metri
         let (tx, rx) = tokio::sync::oneshot::channel();
         handle.prometheus_shutdown = Some(tx);
 
-        prometheus::start_server(addr, rx).await?;
-        tracing::info!(%addr, "Prometheus metrics endpoint started");
+        let actual_addr = prometheus::start_server(addr, rx).await?;
+        tracing::info!(
+            requested = %addr,
+            actual = %actual_addr,
+            "Prometheus metrics endpoint started on /metrics"
+        );
     }
 
     // Initialize OTEL if configured
