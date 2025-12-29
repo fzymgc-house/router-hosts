@@ -28,7 +28,8 @@ use tokio::task::JoinHandle;
 use tracing::{error, info, warn};
 
 /// Maximum consecutive renewal failures before exiting.
-/// Allows recovery from transient network issues.
+/// Allows recovery from transient network issues (~15 seconds of tolerance
+/// with default 5-second renewal interval before giving up).
 const MAX_RENEWAL_FAILURES: u32 = 3;
 
 /// Configuration for leader election.
@@ -217,6 +218,15 @@ impl LeaderElection {
     ///
     /// This method will retry indefinitely until leadership is acquired.
     /// It should be called before starting controllers.
+    ///
+    /// # Note on Race Conditions
+    ///
+    /// There is a brief window between `acquire()` returning and
+    /// `spawn_renewal_task()` starting where controllers could run without
+    /// active lease renewal. This is acceptable because:
+    /// 1. The lease TTL (default 15s) provides a buffer
+    /// 2. Kubernetes won't schedule conflicting leaders in this window
+    /// 3. The renewal task starts immediately after in practice
     pub async fn acquire(&self) -> Result<()> {
         info!("Attempting to acquire leadership...");
 
@@ -259,7 +269,7 @@ impl LeaderElection {
     /// re-acquire leadership or wait as a standby.
     ///
     /// Transient failures (network issues, API timeouts) are retried up to
-    /// [`MAX_RENEWAL_FAILURES`] times before exiting.
+    /// [`MAX_RENEWAL_FAILURES`] consecutive times before exiting.
     ///
     /// # Panics
     ///

@@ -15,13 +15,11 @@ fullnameOverride: ""
 # When using multiple replicas, leader election is automatically enabled
 replicaCount: 1
 
-# Leader election configuration for running multiple replicas safely
-# Only one replica actively reconciles at a time; others wait as standby
+# Leader election configuration for running multiple replicas safely.
+# Only one replica actively reconciles at a time; others wait as standby.
 leaderElection:
-  # Enable leader election - Smart default behavior:
-  #   - Not set (default): auto-enabled when replicaCount >= 2
-  #   - true: explicitly enable regardless of replica count
-  #   - false: explicitly disable even with multiple replicas
+  # Enable leader election. If not set, auto-enabled when replicaCount >= 2.
+  # Set to true to explicitly enable, or false to explicitly disable.
   # enabled:
   # Lease resource name (default: release fullname + "-leader")
   leaseName: ""

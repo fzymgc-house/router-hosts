@@ -52,8 +52,9 @@ async fn main() -> Result<()> {
     let leader_config =
         LeaderElectionConfig::from_env().context("Failed to load leader election configuration")?;
 
-    // If leader election is enabled, acquire leadership before proceeding
-    // This blocks until we become the leader
+    // If leader election is enabled, acquire leadership before proceeding.
+    // This blocks until we become the leader.
+    // Hold the task handle to prevent cancellation on drop.
     let _leader_renewal_task = if leader_config.enabled() {
         info!(
             lease_name = %leader_config.lease_name(),
@@ -67,10 +68,11 @@ async fn main() -> Result<()> {
         let leader_election = LeaderElection::new(kube_client.clone(), &leader_config);
 
         // Block until we acquire leadership
+        let lease_name = leader_config.lease_name().to_string();
         leader_election
             .acquire()
             .await
-            .context("Failed to acquire leadership")?;
+            .with_context(|| format!("Failed to acquire leadership for lease '{}'", lease_name))?;
 
         info!("Leadership acquired, starting controllers");
 

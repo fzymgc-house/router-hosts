@@ -203,6 +203,17 @@ leaderElection:
 5. If leadership is lost, the pod exits and Kubernetes restarts it
 6. The restarted pod re-enters the acquire-or-wait cycle
 
+### Upgrading to HA Mode
+
+To upgrade an existing single-replica deployment to HA:
+
+1. Update `replicaCount: 2` in your values
+2. Leader election auto-enables (or set `leaderElection.enabled: true` explicitly)
+3. Run `helm upgrade` - new RBAC resources for Lease access are created automatically
+4. No data migration needed (operator is stateless)
+
+The existing pod continues running as leader while the second replica starts in standby mode.
+
 ## Usage
 
 ### Enable Ingress Sync
