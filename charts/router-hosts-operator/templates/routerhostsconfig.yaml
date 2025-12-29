@@ -1,0 +1,20 @@
+{{- if .Values.routerHostsConfig.create -}}
+apiVersion: router-hosts.fzymgc.house/v1alpha1
+kind: RouterHostsConfig
+metadata:
+  name: {{ .Values.routerHostsConfig.name }}
+  labels:
+    {{- include "router-hosts-operator.labels" . | nindent 4 }}
+spec:
+  server:
+    endpoint: {{ .Values.routerHosts.endpoint | quote }}
+    tlsSecretRef:
+      name: {{ .Values.routerHosts.tlsSecretRef.name }}
+      namespace: {{ .Values.routerHosts.tlsSecretRef.namespace }}
+  ipResolution:
+    {{- toYaml .Values.routerHosts.ipResolution | nindent 4 }}
+  deletion:
+    gracePeriodSeconds: {{ .Values.routerHosts.deletion.gracePeriodSeconds }}
+  defaultTags:
+    {{- toYaml .Values.routerHosts.defaultTags | nindent 4 }}
+{{- end }}
