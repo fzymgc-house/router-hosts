@@ -217,6 +217,10 @@ impl HostProjection for DuckDbStorage {
 
 #[async_trait]
 impl Storage for DuckDbStorage {
+    fn backend_name(&self) -> &'static str {
+        "duckdb"
+    }
+
     async fn initialize(&self) -> Result<(), StorageError> {
         schema::initialize_schema(self).await
     }

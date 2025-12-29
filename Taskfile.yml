@@ -75,6 +75,7 @@ tasks:
     desc: Run tests with llvm-cov coverage report (excludes E2E)
     cmds:
       - cargo llvm-cov nextest --workspace --exclude router-hosts-e2e --html --output-dir coverage
+      - cargo llvm-cov report --json --output-path coverage/coverage.json
 
   test:coverage:ci:
     desc: Run tests with coverage (CI mode - enforces 80% threshold)
@@ -87,6 +88,9 @@ tasks:
         cargo llvm-cov nextest --workspace --exclude router-hosts-e2e
         --html --output-dir coverage
         --fail-under-lines 80
+        --ignore-filename-regex "(main\.rs|client/grpc\.rs|server/mod\.rs)"
+      - >-
+        cargo llvm-cov report --json --output-path coverage/coverage.json
         --ignore-filename-regex "(main\.rs|client/grpc\.rs|server/mod\.rs)"
 
   test:coverage:report:

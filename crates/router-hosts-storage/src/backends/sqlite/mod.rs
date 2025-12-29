@@ -251,6 +251,10 @@ impl HostProjection for SqliteStorage {
 
 #[async_trait]
 impl Storage for SqliteStorage {
+    fn backend_name(&self) -> &'static str {
+        "sqlite"
+    }
+
     async fn initialize(&self) -> Result<(), StorageError> {
         MIGRATIONS
             .run(self.pool())

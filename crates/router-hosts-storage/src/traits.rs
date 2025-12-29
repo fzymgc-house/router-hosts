@@ -233,6 +233,12 @@ pub trait HostProjection: Send + Sync {
 /// methods for initialization, health checks, and cleanup.
 #[async_trait]
 pub trait Storage: EventStore + SnapshotStore + HostProjection {
+    /// Get the storage backend name for health/diagnostic reporting
+    ///
+    /// Returns a human-readable identifier for the storage backend type.
+    /// Examples: "sqlite", "postgresql", "duckdb"
+    fn backend_name(&self) -> &'static str;
+
     /// Initialize storage (schema setup, migrations)
     ///
     /// Must be called before any other operations. Idempotent - safe to

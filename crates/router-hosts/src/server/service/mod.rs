@@ -4,23 +4,28 @@
 //! all gRPC requests and delegates to the command handler layer.
 
 mod bulk;
+mod health;
 mod hosts;
 mod snapshots;
 
 use crate::server::commands::CommandHandler;
+use crate::server::hooks::HookExecutor;
 use crate::server::write_queue::WriteQueue;
 use router_hosts_common::proto::hosts_service_server::HostsService;
 use router_hosts_common::proto::{
     AddHostRequest, AddHostResponse, CreateSnapshotRequest, CreateSnapshotResponse,
     DeleteHostRequest, DeleteHostResponse, DeleteSnapshotRequest, DeleteSnapshotResponse,
-    ExportHostsRequest, ExportHostsResponse, GetHostRequest, GetHostResponse, ImportHostsRequest,
-    ImportHostsResponse, ListHostsRequest, ListHostsResponse, ListSnapshotsRequest,
-    ListSnapshotsResponse, RollbackToSnapshotRequest, RollbackToSnapshotResponse,
+    ExportHostsRequest, ExportHostsResponse, GetHostRequest, GetHostResponse, HealthRequest,
+    HealthResponse, ImportHostsRequest, ImportHostsResponse, ListHostsRequest, ListHostsResponse,
+    ListSnapshotsRequest, ListSnapshotsResponse, LivenessRequest, LivenessResponse,
+    ReadinessRequest, ReadinessResponse, RollbackToSnapshotRequest, RollbackToSnapshotResponse,
     SearchHostsRequest, SearchHostsResponse, UpdateHostRequest, UpdateHostResponse,
 };
 use router_hosts_storage::Storage;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio_stream::Stream;
 use tonic::{Request, Response, Status, Streaming};
 
@@ -32,6 +37,14 @@ pub struct HostsServiceImpl {
     pub(crate) commands: Arc<CommandHandler>,
     /// Storage backend (used by export and snapshot handlers)
     pub(crate) storage: Arc<dyn Storage>,
+    /// Hook executor for health reporting
+    pub(crate) hooks: Arc<HookExecutor>,
+    /// Server start time for uptime calculation
+    pub(crate) start_time: Instant,
+    /// Whether ACME certificate management is enabled
+    pub(crate) acme_enabled: bool,
+    /// Path to TLS certificate (for reading expiry in health checks)
+    pub(crate) tls_cert_path: Option<PathBuf>,
 }
 
 impl HostsServiceImpl {
@@ -40,11 +53,18 @@ impl HostsServiceImpl {
         write_queue: WriteQueue,
         commands: Arc<CommandHandler>,
         storage: Arc<dyn Storage>,
+        hooks: Arc<HookExecutor>,
+        acme_enabled: bool,
+        tls_cert_path: Option<PathBuf>,
     ) -> Self {
         Self {
             write_queue,
             commands,
             storage,
+            hooks,
+            start_time: Instant::now(),
+            acme_enabled,
+            tls_cert_path,
         }
     }
 }
@@ -161,5 +181,27 @@ impl HostsService for HostsServiceImpl {
         request: Request<DeleteSnapshotRequest>,
     ) -> Result<Response<DeleteSnapshotResponse>, Status> {
         self.handle_delete_snapshot(request).await
+    }
+
+    // Health checks
+    async fn liveness(
+        &self,
+        request: Request<LivenessRequest>,
+    ) -> Result<Response<LivenessResponse>, Status> {
+        self.handle_liveness(request).await
+    }
+
+    async fn readiness(
+        &self,
+        request: Request<ReadinessRequest>,
+    ) -> Result<Response<ReadinessResponse>, Status> {
+        self.handle_readiness(request).await
+    }
+
+    async fn health(
+        &self,
+        request: Request<HealthRequest>,
+    ) -> Result<Response<HealthResponse>, Status> {
+        self.handle_health(request).await
     }
 }
