@@ -94,6 +94,10 @@ helm install router-hosts-operator charts/router-hosts-operator \
 | `serviceAccount.create` | Create ServiceAccount | `true` |
 | `rbac.create` | Create RBAC resources | `true` |
 | `logging.level` | Log level (trace/debug/info/warn/error) | `info` |
+| `healthCheck.port` | Port for health check HTTP server | `8081` |
+| `healthCheck.livenessProbe.*` | Liveness probe timing settings | See values.yaml |
+| `healthCheck.readinessProbe.*` | Readiness probe timing settings | See values.yaml |
+| `healthCheck.startupProbe.*` | Startup probe timing settings | See values.yaml |
 
 ### IP Resolution Strategies
 
@@ -118,6 +122,24 @@ Uses a fixed IP address:
 ipResolution:
   - type: static
     address: "192.168.1.100"
+```
+
+### Health Check Endpoints
+
+The operator exposes HTTP health check endpoints for Kubernetes probes:
+
+| Endpoint | Probe | Behavior |
+|----------|-------|----------|
+| `/healthz` | Liveness | Returns 200 OK if process is alive |
+| `/readyz` | Readiness | Returns 200 OK if startup complete AND router-hosts server reachable |
+
+The readiness probe performs a lightweight gRPC call to verify connectivity to the router-hosts server. If the server becomes unreachable, the pod is marked as not ready, preventing traffic routing until connectivity is restored.
+
+Configure the health check port if needed:
+
+```yaml
+healthCheck:
+  port: 8081  # Default port
 ```
 
 ### RBAC Permissions
