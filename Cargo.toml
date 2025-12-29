@@ -87,6 +87,14 @@ regex = "1.11"       # For ${VAR} expansion parsing
 x509-parser = "0.18" # Certificate expiry parsing for renewal
 async-trait = "0.1"  # For dyn-compatible async traits in DNS providers
 
+# Metrics and observability
+metrics = "0.24"
+metrics-exporter-prometheus = { version = "0.16", features = ["http-listener"] }
+opentelemetry = { version = "0.27", features = ["trace", "metrics"] }
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+tracing-opentelemetry = "0.28"
+
 [workspace.lints.clippy]
 # Deny common mistakes per CLAUDE.md best practices
 # Note: Some lints relaxed during initial setup (dead_code, todo, unimplemented)

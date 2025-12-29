@@ -56,6 +56,14 @@ async-trait.workspace = true
 sha2 = "0.10"
 base64 = "0.22"
 
+# Metrics and observability
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+opentelemetry.workspace = true
+opentelemetry_sdk.workspace = true
+opentelemetry-otlp.workspace = true
+tracing-opentelemetry.workspace = true
+
 # Unix system calls (for SIGHUP cert reload)
 [target.'cfg(unix)'.dependencies]
 libc.workspace = true
