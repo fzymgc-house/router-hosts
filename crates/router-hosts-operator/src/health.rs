@@ -11,7 +11,7 @@ use axum::http::StatusCode;
 use axum::routing::get;
 use axum::Router;
 use tokio::net::TcpListener;
-use tracing::{debug, error, info};
+use tracing::{debug, info, warn};
 
 use crate::client::RouterHostsClientTrait;
 
@@ -114,7 +114,8 @@ async fn readyz<C: RouterHostsClientTrait + Send + Sync + 'static>(
             StatusCode::OK
         }
         Err(e) => {
-            error!(error = %e, "Readiness probe: NOT READY (server unreachable)");
+            // Log at WARN level - transient failures are expected during server restarts
+            warn!(error = %e, "Readiness probe: NOT READY (server unreachable)");
             StatusCode::SERVICE_UNAVAILABLE
         }
     }
