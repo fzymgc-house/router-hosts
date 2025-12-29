@@ -14,7 +14,7 @@ env:
 jobs:
   build-amd64:
     runs-on:
-      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price/volume=100gb
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price/volume=150gb:600mbs:4000iops
 
     permissions:
       contents: read
@@ -61,7 +61,7 @@ jobs:
 
   build-arm64:
     runs-on:
-      - runs-on=${{ github.run_id }}/runner=4cpu-linux-arm64/image=ubuntu24-full-arm64/extras=s3-cache/spot=lowest-price/volume=100gb
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-arm64/image=ubuntu24-full-arm64/extras=s3-cache/spot=lowest-price/volume=150gb:600mbs:4000iops
 
     permissions:
       contents: read

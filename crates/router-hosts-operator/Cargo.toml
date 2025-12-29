@@ -14,8 +14,9 @@ router-hosts-common = { path = "../router-hosts-common" }
 async-trait.workspace = true
 
 # Kubernetes
-kube = { version = "0.98", features = ["runtime", "derive", "client"] }
-k8s-openapi = { version = "0.24", features = ["v1_31"] }
+kube = { version = "2.0", features = ["runtime", "derive", "client"] }
+k8s-openapi = { version = "0.26", features = ["v1_34"] }
+kube-leader-election = "0.42"
 
 # Async
 tokio.workspace = true
@@ -28,7 +29,7 @@ tonic = { workspace = true, features = ["tls-ring", "tls-native-roots"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
-schemars = "0.8"
+schemars = "1.0"
 
 # Error handling
 thiserror.workspace = true
@@ -52,3 +53,4 @@ tower = "0.5"
 http = "1"
 http-body-util = "0.1"
 bytes = "1"
+serial_test = "3.2"

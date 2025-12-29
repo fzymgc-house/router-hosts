@@ -6,6 +6,7 @@ pub mod controllers;
 pub mod deletion;
 pub mod health;
 pub mod hostmapping;
+pub mod leader;
 pub mod matcher;
 pub mod resolver;
 

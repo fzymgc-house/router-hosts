@@ -85,6 +85,10 @@ helm install router-hosts-operator charts/router-hosts-operator \
 | `image.tag` | Image tag | Chart appVersion (`0.6.0`) |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `replicaCount` | Number of replicas | `1` |
+| `leaderElection.enabled` | Enable leader election | `false` (auto-enabled if replicas >= 2) |
+| `leaderElection.leaseName` | Lease resource name | `<fullname>-leader` |
+| `leaderElection.leaseDurationSeconds` | Lease TTL in seconds | `15` |
+| `leaderElection.renewIntervalSeconds` | Lease renewal interval | `5` |
 | `routerHosts.endpoint` | gRPC endpoint (host:port) | `router.lan:50051` |
 | `routerHosts.tlsSecretRef.name` | mTLS Secret name | `router-hosts-mtls` |
 | `routerHosts.tlsSecretRef.namespace` | mTLS Secret namespace | `router-hosts-system` |
@@ -161,21 +165,54 @@ The operator requires these cluster-level permissions:
 - **Secrets**: get (for reading mTLS certificates)
 - **Services**: get, list (for IP resolution)
 
-## Known Limitations
+When leader election is enabled (including auto-enabled for `replicaCount >= 2`):
+- **Leases** (`coordination.k8s.io/v1`): get, create, update (in release namespace)
 
-### No Leader Election
+## High Availability
 
-The operator currently runs as a single replica without leader election. This means:
+### Leader Election
 
-- **No high availability**: If the pod crashes, there's brief downtime until Kubernetes restarts it
-- **Rolling updates cause gaps**: During upgrades, there's a period where no operator is running
-- **Do not scale beyond 1 replica**: Multiple replicas would cause duplicate processing
+The operator supports running multiple replicas for high availability using Kubernetes Lease-based leader election. Only one replica (the leader) actively reconciles resources at a time; other replicas wait as standby.
 
-For most home lab and small cluster use cases, this is acceptable. The operator is stateless and recovers quickly on restart.
+**Features:**
+- Automatic failover: If the leader crashes, a standby acquires leadership
+- Zero-downtime upgrades: Standby pods can take over during rolling updates
+- Acquire-or-exit pattern: Pods exit on leadership loss, letting Kubernetes restart them
 
-**Workaround**: Use `strategy.type: Recreate` in the Deployment to minimize overlap during updates.
+**Smart defaults:**
+- Leader election is automatically enabled when `replicaCount >= 2`
+- Can be explicitly enabled/disabled via `leaderElection.enabled`
 
-**Tracking issue**: [#154](https://github.com/fzymgc-house/router-hosts/issues/154)
+**To run with HA:**
+
+```yaml
+replicaCount: 2
+
+# Optional: customize leader election (defaults work for most cases)
+leaderElection:
+  enabled: true                  # Auto-enabled when replicas >= 2
+  leaseDurationSeconds: 15       # Lease TTL
+  renewIntervalSeconds: 5        # Renewal interval
+```
+
+**How it works:**
+1. On startup, each pod attempts to acquire the Kubernetes Lease
+2. The first pod to acquire becomes leader and starts controllers
+3. Other pods block waiting for leadership
+4. Leader renews the lease every 5 seconds
+5. If leadership is lost, the pod exits and Kubernetes restarts it
+6. The restarted pod re-enters the acquire-or-wait cycle
+
+### Upgrading to HA Mode
+
+To upgrade an existing single-replica deployment to HA:
+
+1. Update `replicaCount: 2` in your values
+2. Leader election auto-enables (or set `leaderElection.enabled: true` explicitly)
+3. Run `helm upgrade` - new RBAC resources for Lease access are created automatically
+4. No data migration needed (operator is stateless)
+
+The existing pod continues running as leader while the second replica starts in standby mode.
 
 ## Usage
 

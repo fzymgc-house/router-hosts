@@ -12,7 +12,7 @@ env:
 jobs:
     build:
         runs-on:
-            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=100gb
+            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
 
         steps:
             - uses: runs-on/action@v2

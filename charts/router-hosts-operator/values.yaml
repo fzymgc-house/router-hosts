@@ -11,8 +11,22 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# Number of operator replicas (only 1 supported currently due to leader election not implemented)
+# Number of operator replicas
+# When using multiple replicas, leader election is automatically enabled
 replicaCount: 1
+
+# Leader election configuration for running multiple replicas safely.
+# Only one replica actively reconciles at a time; others wait as standby.
+leaderElection:
+  # Enable leader election. If not set, auto-enabled when replicaCount >= 2.
+  # Set to true to explicitly enable, or false to explicitly disable.
+  # enabled:
+  # Lease resource name (default: release fullname + "-leader")
+  leaseName: ""
+  # Lease TTL in seconds - how long before an expired lease can be claimed
+  leaseDurationSeconds: 15
+  # Renewal interval in seconds - how often the leader renews its lease
+  renewIntervalSeconds: 5
 
 # ServiceAccount configuration
 serviceAccount:
