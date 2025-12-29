@@ -65,7 +65,9 @@ pub async fn run_health_server<C: RouterHostsClientTrait + Send + Sync + 'static
         .route("/readyz", get(readyz::<C>))
         .with_state(state);
 
-    let addr = SocketAddr::from(([0, 0, 0, 0], port));
+    // Bind to localhost only - health endpoints should only be accessible
+    // within the pod via the kubelet, not externally
+    let addr = SocketAddr::from(([127, 0, 0, 1], port));
     let listener = TcpListener::bind(addr).await?;
 
     info!(port = port, "Health check server listening");
