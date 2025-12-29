@@ -90,26 +90,29 @@ async fn handle_request(
     let response = match (req.method(), req.uri().path()) {
         (&Method::GET, "/metrics") => {
             let metrics = handle.render();
-            Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "text/plain; version=0.0.4")
-                .body(Full::new(Bytes::from(metrics)))
-                .expect("building response should not fail")
+            build_response(StatusCode::OK, "text/plain; version=0.0.4", metrics)
         }
-        _ => Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .body(Full::new(Bytes::from("Not Found")))
-            .expect("building response should not fail"),
+        _ => build_response(StatusCode::NOT_FOUND, "text/plain", "Not Found".to_string()),
     };
     Ok(response)
+}
+
+fn build_response(status: StatusCode, content_type: &str, body: String) -> Response<Full<Bytes>> {
+    Response::builder()
+        .status(status)
+        .header("Content-Type", content_type)
+        .body(Full::new(Bytes::from(body)))
+        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("Internal Server Error"))))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use std::time::Duration;
 
     #[tokio::test]
+    #[serial]
     async fn test_prometheus_server_responds_to_metrics() {
         let addr: SocketAddr = "127.0.0.1:0".parse().expect("valid socket addr");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
@@ -135,6 +138,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_prometheus_server_404_for_other_paths() {
         let addr: SocketAddr = "127.0.0.1:0".parse().expect("valid socket addr");
         let (shutdown_tx, shutdown_rx) = oneshot::channel();
