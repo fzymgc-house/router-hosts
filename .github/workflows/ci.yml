@@ -41,15 +41,16 @@ jobs:
             - name: Install Task
               uses: arduino/setup-task@v2
 
-            # Use Swatinem/rust-cache for better Rust caching
-            # This caches ~/.cargo and target/ with smart invalidation
+            # Use Swatinem/rust-cache for Rust caching
+            # Only cache ~/.cargo registry, not target/ (too large with DuckDB ~16GB)
             - name: Cache Rust dependencies
               uses: Swatinem/rust-cache@v2
               with:
-                  # Cache the protobuf-src build which takes 10+ minutes
-                  cache-all-crates: "true"
-                  # Include Cargo.toml in cache key for better invalidation
-                  key: ${{ runner.os }}-rust
+                  # Don't cache target/ - DuckDB artifacts are huge
+                  cache-targets: "false"
+                  # Only save cache on main branch to avoid PR cache pollution
+                  save-if: ${{ github.ref == 'refs/heads/main' }}
+                  key: ${{ runner.os }}-cargo
 
             - name: Install cargo-nextest
               uses: taiki-e/install-action@v2
