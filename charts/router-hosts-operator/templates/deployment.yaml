@@ -1,6 +1,7 @@
-{{- if gt (int .Values.replicaCount) 1 }}
-{{- fail "replicaCount > 1 is not supported: leader election not implemented (see issue #154)" }}
-{{- end }}
+{{- $leaderElectionEnabled := .Values.leaderElection.enabled -}}
+{{- if and (not (hasKey .Values.leaderElection "enabled")) (ge (int .Values.replicaCount) 2) -}}
+  {{- $leaderElectionEnabled = true -}}
+{{- end -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -43,6 +44,26 @@ spec:
               value: "1"
             - name: HEALTH_PORT
               value: {{ .Values.healthCheck.port | quote }}
+            # Pod identity for leader election
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            {{- if $leaderElectionEnabled }}
+            # Leader election configuration
+            - name: LEADER_ELECTION_ENABLED
+              value: "true"
+            - name: LEADER_ELECTION_LEASE_NAME
+              value: {{ default (printf "%s-leader" (include "router-hosts-operator.fullname" .)) .Values.leaderElection.leaseName }}
+            - name: LEADER_ELECTION_LEASE_DURATION
+              value: {{ .Values.leaderElection.leaseDurationSeconds | quote }}
+            - name: LEADER_ELECTION_RENEW_INTERVAL
+              value: {{ .Values.leaderElection.renewIntervalSeconds | quote }}
+            {{- end }}
           ports:
             - name: health
               containerPort: {{ .Values.healthCheck.port }}

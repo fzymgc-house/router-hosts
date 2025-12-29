@@ -20,6 +20,7 @@ use router_hosts_operator::controllers::retry::RetryTracker;
 use router_hosts_operator::controllers::ControllerContext;
 use router_hosts_operator::deletion::DeletionScheduler;
 use router_hosts_operator::health::{self, HealthState};
+use router_hosts_operator::leader::{LeaderElection, LeaderElectionConfig};
 use router_hosts_operator::resolver::IpResolver;
 
 const GC_INTERVAL_SECS: u64 = 60;
@@ -46,6 +47,39 @@ async fn main() -> Result<()> {
         .context("Failed to create Kubernetes client")?;
 
     info!("Connected to Kubernetes cluster");
+
+    // Load leader election config from environment
+    let leader_config =
+        LeaderElectionConfig::from_env().context("Failed to load leader election configuration")?;
+
+    // If leader election is enabled, acquire leadership before proceeding
+    // This blocks until we become the leader
+    let _leader_renewal_task = if leader_config.enabled {
+        info!(
+            lease_name = %leader_config.lease_name,
+            namespace = %leader_config.namespace,
+            holder_id = %leader_config.holder_id,
+            lease_duration_secs = leader_config.lease_duration.as_secs(),
+            renew_interval_secs = leader_config.renew_interval.as_secs(),
+            "Leader election enabled"
+        );
+
+        let leader_election = LeaderElection::new(kube_client.clone(), &leader_config);
+
+        // Block until we acquire leadership
+        leader_election
+            .acquire()
+            .await
+            .context("Failed to acquire leadership")?;
+
+        info!("Leadership acquired, starting controllers");
+
+        // Spawn renewal task - exits process if leadership is lost
+        Some(leader_election.spawn_renewal_task())
+    } else {
+        info!("Leader election disabled, running as single instance");
+        None
+    };
 
     // Load RouterHostsConfig (singleton cluster-scoped CRD)
     let config = load_config(&kube_client)
