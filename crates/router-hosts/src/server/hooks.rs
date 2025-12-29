@@ -21,6 +21,8 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 
+use super::config::HookDefinition;
+
 #[derive(Debug, Error)]
 pub enum HookError {
     #[error("Hook timed out after {0} seconds")]
@@ -34,13 +36,17 @@ pub enum HookError {
 }
 
 pub struct HookExecutor {
-    on_success: Vec<String>,
-    on_failure: Vec<String>,
+    on_success: Vec<HookDefinition>,
+    on_failure: Vec<HookDefinition>,
     timeout_secs: u64,
 }
 
 impl HookExecutor {
-    pub fn new(on_success: Vec<String>, on_failure: Vec<String>, timeout_secs: u64) -> Self {
+    pub fn new(
+        on_success: Vec<HookDefinition>,
+        on_failure: Vec<HookDefinition>,
+        timeout_secs: u64,
+    ) -> Self {
         Self {
             on_success,
             on_failure,
@@ -48,30 +54,20 @@ impl HookExecutor {
         }
     }
 
-    /// Get sanitized names of all configured hooks for health reporting
+    /// Get names of all configured hooks for health reporting
     ///
     /// Returns both success and failure hooks with prefixes indicating their type.
-    /// Only the command basename is returned (not full path or arguments) to avoid
-    /// exposing sensitive information like system paths or command arguments.
+    /// Uses the explicit hook names from configuration, which are safe to expose
+    /// as they don't contain sensitive command details.
     pub fn hook_names(&self) -> Vec<String> {
         let mut names = Vec::with_capacity(self.on_success.len() + self.on_failure.len());
-        for cmd in &self.on_success {
-            names.push(format!("on_success: {}", Self::sanitize_command(cmd)));
+        for hook in &self.on_success {
+            names.push(format!("on_success: {}", hook.name));
         }
-        for cmd in &self.on_failure {
-            names.push(format!("on_failure: {}", Self::sanitize_command(cmd)));
+        for hook in &self.on_failure {
+            names.push(format!("on_failure: {}", hook.name));
         }
         names
-    }
-
-    /// Extract only the command basename from a full command string.
-    ///
-    /// This prevents exposing full paths and arguments in health responses.
-    fn sanitize_command(cmd: &str) -> &str {
-        // Get the first word (the command itself, before any arguments)
-        let first_word = cmd.split_whitespace().next().unwrap_or(cmd);
-        // Get just the basename (after the last /)
-        first_word.rsplit('/').next().unwrap_or(first_word)
     }
 
     /// Get count of configured hooks
@@ -85,10 +81,10 @@ impl HookExecutor {
     /// observability or to take corrective action.
     pub async fn run_success(&self, entry_count: usize) -> usize {
         let mut failures = 0;
-        for cmd in &self.on_success {
-            if let Err(e) = self.run_hook(cmd, "success", entry_count).await {
+        for hook in &self.on_success {
+            if let Err(e) = self.run_hook(hook, "success", entry_count).await {
                 error!(
-                    hook = %cmd,
+                    hook_name = %hook.name,
                     error = %e,
                     "Success hook failed - hosts file was updated but hook did not run successfully"
                 );
@@ -111,13 +107,13 @@ impl HookExecutor {
     /// observability or to take corrective action.
     pub async fn run_failure(&self, entry_count: usize, error: &str) -> usize {
         let mut failures = 0;
-        for cmd in &self.on_failure {
+        for hook in &self.on_failure {
             if let Err(e) = self
-                .run_hook_with_error(cmd, "failure", entry_count, error)
+                .run_hook_with_error(hook, "failure", entry_count, error)
                 .await
             {
                 error!(
-                    hook = %cmd,
+                    hook_name = %hook.name,
                     error = %e,
                     original_error = %error,
                     "Failure hook failed - hosts file regeneration failed and hook also failed"
@@ -135,22 +131,27 @@ impl HookExecutor {
         failures
     }
 
-    async fn run_hook(&self, cmd: &str, event: &str, entry_count: usize) -> Result<(), HookError> {
-        self.run_hook_with_error(cmd, event, entry_count, "").await
+    async fn run_hook(
+        &self,
+        hook: &HookDefinition,
+        event: &str,
+        entry_count: usize,
+    ) -> Result<(), HookError> {
+        self.run_hook_with_error(hook, event, entry_count, "").await
     }
 
     async fn run_hook_with_error(
         &self,
-        cmd: &str,
+        hook: &HookDefinition,
         event: &str,
         entry_count: usize,
         error_msg: &str,
     ) -> Result<(), HookError> {
-        info!("Running hook: {}", cmd);
+        info!(hook_name = %hook.name, "Running hook");
 
         let mut child = Command::new("sh")
             .arg("-c")
-            .arg(cmd)
+            .arg(&hook.command)
             .env("ROUTER_HOSTS_EVENT", event)
             .env("ROUTER_HOSTS_ENTRY_COUNT", entry_count.to_string())
             .env("ROUTER_HOSTS_ERROR", error_msg)
@@ -163,18 +164,31 @@ impl HookExecutor {
         match result {
             Ok(Ok(status)) => {
                 if status.success() {
-                    info!("Hook completed successfully: {}", cmd);
+                    info!(hook_name = %hook.name, "Hook completed successfully");
                     Ok(())
                 } else {
                     let code = status.code().unwrap_or(-1);
-                    error!("Hook failed with code {}: {}", code, cmd);
-                    Err(HookError::Failed(code, cmd.to_string()))
+                    error!(hook_name = %hook.name, exit_code = code, "Hook failed");
+                    Err(HookError::Failed(code, hook.name.clone()))
                 }
             }
-            Ok(Err(e)) => Err(HookError::Io(e)),
+            Ok(Err(e)) => {
+                error!(
+                    hook_name = %hook.name,
+                    error = %e,
+                    "Hook failed to wait for process"
+                );
+                Err(HookError::Io(e))
+            }
             Err(_) => {
-                let _ = child.kill().await;
-                error!("Hook timed out: {}", cmd);
+                if let Err(kill_err) = child.kill().await {
+                    warn!(
+                        hook_name = %hook.name,
+                        error = %kill_err,
+                        "Failed to kill timed out hook process"
+                    );
+                }
+                error!(hook_name = %hook.name, "Hook timed out");
                 Err(HookError::Timeout(self.timeout_secs))
             }
         }
@@ -191,9 +205,17 @@ impl Default for HookExecutor {
 mod tests {
     use super::*;
 
+    /// Helper to create a HookDefinition for tests
+    fn hook(name: &str, command: &str) -> HookDefinition {
+        HookDefinition {
+            name: name.to_string(),
+            command: command.to_string(),
+        }
+    }
+
     #[tokio::test]
     async fn test_run_success_hook() {
-        let executor = HookExecutor::new(vec!["echo success".to_string()], vec![], 5);
+        let executor = HookExecutor::new(vec![hook("log-success", "echo success")], vec![], 5);
         executor.run_success(10).await;
         // Should complete without error
     }
@@ -201,7 +223,10 @@ mod tests {
     #[tokio::test]
     async fn test_hook_with_env_vars() {
         let executor = HookExecutor::new(
-            vec!["test \"$ROUTER_HOSTS_EVENT\" = \"success\"".to_string()],
+            vec![hook(
+                "check-event",
+                "test \"$ROUTER_HOSTS_EVENT\" = \"success\"",
+            )],
             vec![],
             5,
         );
@@ -211,7 +236,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_hook_timeout() {
-        let executor = HookExecutor::new(vec!["sleep 10".to_string()], vec![], 1);
+        let executor = HookExecutor::new(vec![hook("slow-hook", "sleep 10")], vec![], 1);
         // This will timeout but continue
         executor.run_success(10).await;
     }
@@ -226,7 +251,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_success_hook_failure() {
-        let executor = HookExecutor::new(vec!["exit 1".to_string()], vec![], 5);
+        let executor = HookExecutor::new(vec![hook("fail-hook", "exit 1")], vec![], 5);
         let failures = executor.run_success(10).await;
         assert_eq!(failures, 1, "Should report 1 failed hook");
     }
@@ -235,10 +260,10 @@ mod tests {
     async fn test_multiple_success_hooks_partial_failure() {
         let executor = HookExecutor::new(
             vec![
-                "echo success1".to_string(),
-                "exit 1".to_string(),
-                "echo success3".to_string(),
-                "exit 2".to_string(),
+                hook("success1", "echo success1"),
+                hook("fail1", "exit 1"),
+                hook("success3", "echo success3"),
+                hook("fail2", "exit 2"),
             ],
             vec![],
             5,
@@ -251,7 +276,10 @@ mod tests {
     async fn test_run_failure_hooks() {
         let executor = HookExecutor::new(
             vec![],
-            vec!["test \"$ROUTER_HOSTS_ERROR\" = \"test error\"".to_string()],
+            vec![hook(
+                "check-error",
+                "test \"$ROUTER_HOSTS_ERROR\" = \"test error\"",
+            )],
             5,
         );
         let failures = executor.run_failure(10, "test error").await;
@@ -263,7 +291,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_failure_hook_failure() {
-        let executor = HookExecutor::new(vec![], vec!["exit 1".to_string()], 5);
+        let executor = HookExecutor::new(vec![], vec![hook("fail-hook", "exit 1")], 5);
         let failures = executor.run_failure(10, "original error").await;
         assert_eq!(failures, 1, "Should report 1 failed failure hook");
     }
@@ -273,9 +301,9 @@ mod tests {
         let executor = HookExecutor::new(
             vec![],
             vec![
-                "echo failure1".to_string(),
-                "exit 1".to_string(),
-                "echo failure3".to_string(),
+                hook("failure1", "echo failure1"),
+                hook("fail", "exit 1"),
+                hook("failure3", "echo failure3"),
             ],
             5,
         );
@@ -287,7 +315,10 @@ mod tests {
     #[tokio::test]
     async fn test_entry_count_env_var() {
         let executor = HookExecutor::new(
-            vec!["test \"$ROUTER_HOSTS_ENTRY_COUNT\" = \"42\"".to_string()],
+            vec![hook(
+                "check-count",
+                "test \"$ROUTER_HOSTS_ENTRY_COUNT\" = \"42\"",
+            )],
             vec![],
             5,
         );
@@ -307,7 +338,7 @@ mod tests {
             test "$ROUTER_HOSTS_ENTRY_COUNT" = "100" && \
             test -z "$ROUTER_HOSTS_ERROR"
         "#;
-        let executor = HookExecutor::new(vec![script.to_string()], vec![], 5);
+        let executor = HookExecutor::new(vec![hook("check-all-vars", script)], vec![], 5);
         let failures = executor.run_success(100).await;
         assert_eq!(
             failures, 0,
@@ -324,7 +355,7 @@ mod tests {
             test "$ROUTER_HOSTS_ENTRY_COUNT" = "50" && \
             test "$ROUTER_HOSTS_ERROR" = "Database connection failed"
         "#;
-        let executor = HookExecutor::new(vec![], vec![script.to_string()], 5);
+        let executor = HookExecutor::new(vec![], vec![hook("check-all-vars", script)], 5);
         let failures = executor.run_failure(50, "Database connection failed").await;
         assert_eq!(
             failures, 0,
@@ -335,7 +366,7 @@ mod tests {
     /// Test hook timeout returns correct failure count
     #[tokio::test]
     async fn test_hook_timeout_returns_failure() {
-        let executor = HookExecutor::new(vec!["sleep 10".to_string()], vec![], 1);
+        let executor = HookExecutor::new(vec![hook("slow-hook", "sleep 10")], vec![], 1);
         let failures = executor.run_success(10).await;
         assert_eq!(failures, 1, "Timed out hook should count as failure");
     }
@@ -353,9 +384,9 @@ mod tests {
         // Use printf for portable output without newlines
         let executor = HookExecutor::new(
             vec![
-                format!("printf '1' >> {}", order_file.display()),
-                format!("printf '2' >> {}", order_file.display()),
-                format!("printf '3' >> {}", order_file.display()),
+                hook("hook1", &format!("printf '1' >> {}", order_file.display())),
+                hook("hook2", &format!("printf '2' >> {}", order_file.display())),
+                hook("hook3", &format!("printf '3' >> {}", order_file.display())),
             ],
             vec![],
             5,
@@ -377,9 +408,9 @@ mod tests {
         let err = HookError::Timeout(30);
         assert!(err.to_string().contains("30"));
 
-        let err = HookError::Failed(1, "test cmd".to_string());
+        let err = HookError::Failed(1, "test-hook".to_string());
         assert!(err.to_string().contains("1"));
-        assert!(err.to_string().contains("test cmd"));
+        assert!(err.to_string().contains("test-hook"));
     }
 
     #[test]
@@ -392,71 +423,45 @@ mod tests {
     #[test]
     fn test_hook_names_success_only() {
         let executor = HookExecutor::new(
-            vec!["echo success".to_string(), "/usr/bin/reload".to_string()],
+            vec![
+                hook("reload-dns", "/usr/bin/reload-dns --config /etc/dns.conf"),
+                hook("log-success", "logger 'hosts updated'"),
+            ],
             vec![],
             5,
         );
         let names = executor.hook_names();
         assert_eq!(names.len(), 2);
-        // Only basename is returned, not full command or path
-        assert_eq!(names[0], "on_success: echo");
-        assert_eq!(names[1], "on_success: reload");
+        // Returns explicit hook names, not sanitized command basenames
+        assert_eq!(names[0], "on_success: reload-dns");
+        assert_eq!(names[1], "on_success: log-success");
         assert_eq!(executor.hook_count(), 2);
     }
 
     #[test]
     fn test_hook_names_failure_only() {
-        let executor = HookExecutor::new(vec![], vec!["notify failure".to_string()], 5);
+        let executor = HookExecutor::new(vec![], vec![hook("alert-ops", "notify failure")], 5);
         let names = executor.hook_names();
         assert_eq!(names.len(), 1);
-        // Only basename is returned
-        assert_eq!(names[0], "on_failure: notify");
+        assert_eq!(names[0], "on_failure: alert-ops");
         assert_eq!(executor.hook_count(), 1);
     }
 
     #[test]
     fn test_hook_names_both_types() {
         let executor = HookExecutor::new(
-            vec!["success1".to_string()],
-            vec!["failure1".to_string(), "failure2".to_string()],
+            vec![hook("success-hook", "echo success")],
+            vec![
+                hook("failure-hook-1", "echo fail1"),
+                hook("failure-hook-2", "echo fail2"),
+            ],
             5,
         );
         let names = executor.hook_names();
         assert_eq!(names.len(), 3);
-        assert_eq!(names[0], "on_success: success1");
-        assert_eq!(names[1], "on_failure: failure1");
-        assert_eq!(names[2], "on_failure: failure2");
+        assert_eq!(names[0], "on_success: success-hook");
+        assert_eq!(names[1], "on_failure: failure-hook-1");
+        assert_eq!(names[2], "on_failure: failure-hook-2");
         assert_eq!(executor.hook_count(), 3);
-    }
-
-    #[test]
-    fn test_sanitize_command_strips_path() {
-        assert_eq!(
-            HookExecutor::sanitize_command("/usr/bin/reload-dns"),
-            "reload-dns"
-        );
-        assert_eq!(
-            HookExecutor::sanitize_command("/home/user/scripts/my-hook.sh"),
-            "my-hook.sh"
-        );
-    }
-
-    #[test]
-    fn test_sanitize_command_strips_arguments() {
-        assert_eq!(HookExecutor::sanitize_command("echo hello world"), "echo");
-        assert_eq!(
-            HookExecutor::sanitize_command("/usr/bin/notify --secret=abc123 --verbose"),
-            "notify"
-        );
-    }
-
-    #[test]
-    fn test_sanitize_command_handles_simple_command() {
-        assert_eq!(HookExecutor::sanitize_command("reload"), "reload");
-    }
-
-    #[test]
-    fn test_sanitize_command_handles_empty() {
-        assert_eq!(HookExecutor::sanitize_command(""), "");
     }
 }

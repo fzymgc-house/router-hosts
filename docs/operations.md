@@ -13,16 +13,31 @@ Server executes shell commands after /etc/hosts updates:
 
 ### Configuration Example
 
+Each hook requires a `name` and `command`:
+
 ```toml
-[hooks]
-on_success = [
-    "systemctl reload dnsmasq",
-    "/usr/local/bin/notify-slack.sh"
-]
-on_failure = [
-    "/usr/local/bin/alert-ops.sh"
-]
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+
+[[hooks.on_success]]
+name = "notify-slack"
+command = "/usr/local/bin/notify-slack.sh"
+
+[[hooks.on_failure]]
+name = "alert-ops"
+command = "/usr/local/bin/alert-ops.sh"
 ```
+
+### Hook Name Requirements
+
+Hook names must follow these rules:
+- **Format**: Kebab-case only (lowercase letters, numbers, hyphens)
+- **Length**: Maximum 50 characters
+- **Uniqueness**: No duplicate names within the same hook type
+- **Examples**: `reload-dns`, `alert-ops-team`, `log-update`
+
+Hook names appear in health endpoints and logs, providing meaningful identification without exposing sensitive command details.
 
 ### Environment Variables
 

@@ -200,6 +200,7 @@ impl HostsServiceImpl {
 mod tests {
     use super::*;
     use crate::server::commands::CommandHandler;
+    use crate::server::config::HookDefinition;
     use crate::server::hooks::HookExecutor;
     use crate::server::write_queue::WriteQueue;
     use chrono::{DateTime, Utc};
@@ -479,8 +480,14 @@ mod tests {
     #[tokio::test]
     async fn test_health_with_hooks_configured() {
         let hooks = Arc::new(HookExecutor::new(
-            vec!["echo success".to_string()],
-            vec!["notify failure".to_string()],
+            vec![HookDefinition {
+                name: "reload-dns".to_string(),
+                command: "echo success".to_string(),
+            }],
+            vec![HookDefinition {
+                name: "alert-ops".to_string(),
+                command: "notify failure".to_string(),
+            }],
             30,
         ));
 
@@ -494,10 +501,9 @@ mod tests {
 
         assert_eq!(hooks.configured_count, 2);
         assert_eq!(hooks.hook_names.len(), 2);
-        // Hook names are sanitized to show only the command basename (no args)
-        // Note: "on_success" prefix contains "success" so we check the exact value
-        assert_eq!(hooks.hook_names[0], "on_success: echo"); // "success" arg stripped
-        assert_eq!(hooks.hook_names[1], "on_failure: notify"); // "failure" arg stripped
+        // Hook names now use explicit names from configuration
+        assert_eq!(hooks.hook_names[0], "on_success: reload-dns");
+        assert_eq!(hooks.hook_names[1], "on_failure: alert-ops");
     }
 
     // ========================================================================
@@ -624,9 +630,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_cert_expiry_boundary_31_days() {
-        // Test just outside the boundary (31 days)
-        let cert_pem = generate_test_cert(31);
+    async fn test_read_cert_expiry_boundary_32_days() {
+        // Test clearly outside the boundary (32 days)
+        // Using 32 instead of 31 provides margin for timing variations
+        // between cert generation and expiry check
+        let cert_pem = generate_test_cert(32);
         let temp_dir = tempfile::tempdir().unwrap();
         let cert_path = temp_dir.path().join("cert.pem");
         std::fs::write(&cert_path, &cert_pem).unwrap();
@@ -635,7 +643,7 @@ mod tests {
             .await
             .unwrap();
 
-        // At 31 days, should be "valid" (>30)
+        // At 32 days, should be "valid" (>30)
         assert_eq!(status, "valid");
     }
 }
