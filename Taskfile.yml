@@ -172,6 +172,19 @@ tasks:
       - cargo test -p router-hosts-e2e --release -- {{.CLI_ARGS}}
 
   # ─────────────────────────────────────────────────────────────
+  # Release
+  # ─────────────────────────────────────────────────────────────
+  dist:generate:
+    desc: Regenerate cargo-dist release workflow (after updating dist-workspace.toml)
+    cmds:
+      - dist generate
+
+  dist:plan:
+    desc: Preview what cargo-dist would build (dry-run)
+    cmds:
+      - dist plan
+
+  # ─────────────────────────────────────────────────────────────
   # CI Shortcuts
   # ─────────────────────────────────────────────────────────────
   ci:
