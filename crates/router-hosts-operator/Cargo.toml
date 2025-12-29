@@ -48,7 +48,7 @@ axum = "0.8"
 
 [dev-dependencies]
 tokio-test = "0.4"
-mockall = "0.13"
+mockall = "0.14"
 tower = "0.5"
 http = "1"
 http-body-util = "0.1"
