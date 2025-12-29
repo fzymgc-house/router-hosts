@@ -71,6 +71,29 @@ logging:
   # Format: json or text
   format: json
 
+# Health check configuration
+healthCheck:
+  # Port for health check HTTP server
+  port: 8081
+  # Liveness probe configuration
+  livenessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  # Readiness probe configuration
+  readinessProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+  # Startup probe configuration (allows longer initial startup)
+  startupProbe:
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 5
+    failureThreshold: 30
+
 # RouterHostsConfig CRD instance configuration
 # This creates the cluster-scoped RouterHostsConfig resource
 routerHostsConfig:

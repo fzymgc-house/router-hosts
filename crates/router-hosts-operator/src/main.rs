@@ -19,6 +19,7 @@ use router_hosts_operator::config::{tags, RouterHostsConfig};
 use router_hosts_operator::controllers::retry::RetryTracker;
 use router_hosts_operator::controllers::ControllerContext;
 use router_hosts_operator::deletion::DeletionScheduler;
+use router_hosts_operator::health::{self, HealthState};
 use router_hosts_operator::resolver::IpResolver;
 
 const GC_INTERVAL_SECS: u64 = 60;
@@ -74,8 +75,29 @@ async fn main() -> Result<()> {
         RouterHostsClient::new(&config.server.endpoint, &ca_cert, &client_cert, &client_key)
             .await
             .context("Failed to create router-hosts client")?;
+    let router_client = Arc::new(router_client);
 
     info!(endpoint = %config.server.endpoint, "Connected to router-hosts server");
+
+    // Create health state for health check server
+    let health_state = Arc::new(HealthState::new(router_client.clone()));
+
+    // Get health port from environment, defaulting to 8081
+    let health_port: u16 = match std::env::var("HEALTH_PORT") {
+        Ok(port_str) => match port_str.parse() {
+            Ok(port) => port,
+            Err(e) => {
+                warn!(
+                    HEALTH_PORT = %port_str,
+                    error = %e,
+                    default = health::DEFAULT_HEALTH_PORT,
+                    "Failed to parse HEALTH_PORT, using default"
+                );
+                health::DEFAULT_HEALTH_PORT
+            }
+        },
+        Err(_) => health::DEFAULT_HEALTH_PORT,
+    };
 
     // Create IpResolver with strategies from config
     let resolver = IpResolver::new(kube_client.clone(), config.ip_resolution.clone());
@@ -87,7 +109,7 @@ async fn main() -> Result<()> {
 
     // Create ControllerContext shared across all controllers
     let ctx = Arc::new(ControllerContext {
-        client: Arc::new(router_client),
+        client: router_client,
         resolver: Arc::new(resolver),
         deletion: Arc::new(deletion_scheduler),
         config: Arc::new(config),
@@ -101,7 +123,8 @@ async fn main() -> Result<()> {
     let mut sigterm = signal(SignalKind::terminate()).context("Failed to setup SIGTERM handler")?;
     let mut sigint = signal(SignalKind::interrupt()).context("Failed to setup SIGINT handler")?;
 
-    // Start controllers and GC loop concurrently
+    // Start controllers, health server, and GC loop concurrently
+    // Note: mark_started() is called inside run_health_server after successful bind
     select! {
         result = run_controllers(kube_client.clone(), ctx.clone()) => {
             // Controller failure should trigger pod restart
@@ -110,6 +133,13 @@ async fn main() -> Result<()> {
         _ = run_garbage_collection(ctx.clone()) => {
             // GC loop should never exit
             bail!("Garbage collection loop exited unexpectedly");
+        }
+        result = health::run_health_server(health_state.clone(), health_port) => {
+            // Health server failure should trigger pod restart
+            match result {
+                Ok(()) => bail!("Health server exited unexpectedly"),
+                Err(e) => bail!("Health server failed: {}", e),
+            }
         }
         _ = sigterm.recv() => {
             info!("Received SIGTERM, shutting down gracefully");

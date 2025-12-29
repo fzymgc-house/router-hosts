@@ -4,6 +4,7 @@ pub mod client;
 pub mod config;
 pub mod controllers;
 pub mod deletion;
+pub mod health;
 pub mod hostmapping;
 pub mod matcher;
 pub mod resolver;

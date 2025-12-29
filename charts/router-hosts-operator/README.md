@@ -94,6 +94,10 @@ helm install router-hosts-operator charts/router-hosts-operator \
 | `serviceAccount.create` | Create ServiceAccount | `true` |
 | `rbac.create` | Create RBAC resources | `true` |
 | `logging.level` | Log level (trace/debug/info/warn/error) | `info` |
+| `healthCheck.port` | Port for health check HTTP server | `8081` |
+| `healthCheck.livenessProbe.*` | Liveness probe timing settings | See values.yaml |
+| `healthCheck.readinessProbe.*` | Readiness probe timing settings | See values.yaml |
+| `healthCheck.startupProbe.*` | Startup probe timing settings | See values.yaml |
 
 ### IP Resolution Strategies
 
@@ -118,6 +122,32 @@ Uses a fixed IP address:
 ipResolution:
   - type: static
     address: "192.168.1.100"
+```
+
+### Health Check Endpoints
+
+The operator exposes HTTP health check endpoints for Kubernetes probes:
+
+| Endpoint | Purpose | Behavior |
+|----------|---------|----------|
+| `/healthz` | Liveness | Returns 200 OK if process is alive |
+| `/readyz` | Readiness + Startup | Returns 200 OK if startup complete AND router-hosts server reachable |
+
+#### Probe Configuration
+
+| Probe | Endpoint | Purpose |
+|-------|----------|---------|
+| **Startup** | `/readyz` | Verifies server connectivity before pod is considered started (allows 150s) |
+| **Liveness** | `/healthz` | Checks process is alive; restarts pod if unresponsive |
+| **Readiness** | `/readyz` | Checks server connectivity; removes pod from service if unreachable |
+
+The readiness probe performs a gRPC call to verify connectivity to the router-hosts server. If the server becomes unreachable (network partition, server restart, certificate expiration), the pod transitions to NotReady state, preventing new work while allowing in-flight operations to complete.
+
+Configure the health check port if needed:
+
+```yaml
+healthCheck:
+  port: 8081  # Default port
 ```
 
 ### RBAC Permissions
