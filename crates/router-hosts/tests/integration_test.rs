@@ -91,6 +91,7 @@ async fn start_test_server() -> (SocketAddr, Arc<tempfile::TempDir>) {
         },
         hooks: router_hosts::server::config::HooksConfig::default(),
         acme: router_hosts::server::acme::AcmeConfig::default(),
+        metrics: None,
     });
 
     // Create command handler

@@ -1,6 +1,7 @@
 use crate::server::acme::{AcmeConfig, AcmeConfigError};
 use router_hosts_storage::StorageError;
 use serde::Deserialize;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing::warn;
@@ -349,6 +350,40 @@ impl HooksConfig {
     }
 }
 
+/// OpenTelemetry exporter configuration
+#[derive(Debug, Deserialize, Clone)]
+pub struct OtelConfig {
+    /// gRPC endpoint for OTEL collector (e.g., "http://otel-collector:4317")
+    pub endpoint: String,
+
+    /// Service name for traces/metrics (defaults to "router-hosts")
+    #[serde(default)]
+    pub service_name: Option<String>,
+}
+
+impl OtelConfig {
+    /// Get the service name, defaulting to "router-hosts"
+    pub fn service_name(&self) -> &str {
+        self.service_name.as_deref().unwrap_or("router-hosts")
+    }
+}
+
+/// Metrics and observability configuration
+///
+/// When this section is absent from config, no metrics are collected
+/// and no ports are opened. This is the default (opt-in) behavior.
+#[derive(Debug, Deserialize, Clone)]
+pub struct MetricsConfig {
+    /// Address to bind Prometheus HTTP endpoint (e.g., "0.0.0.0:9090")
+    /// If set, exposes /metrics endpoint on plaintext HTTP
+    #[serde(default)]
+    pub prometheus_bind: Option<SocketAddr>,
+
+    /// OpenTelemetry configuration for metrics and traces export
+    #[serde(default)]
+    pub otel: Option<OtelConfig>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 #[allow(dead_code)]
 pub struct Config {
@@ -365,6 +400,10 @@ pub struct Config {
     /// ACME certificate management configuration
     #[serde(default)]
     pub acme: AcmeConfig,
+
+    /// Metrics and observability configuration (opt-in)
+    #[serde(default)]
+    pub metrics: Option<MetricsConfig>,
 }
 
 impl Default for RetentionConfig {
@@ -1222,5 +1261,83 @@ command = ""
                 result
             ),
         }
+    }
+
+    #[test]
+    fn test_metrics_config_default_is_none() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "sqlite://:memory:"
+
+            [tls]
+            cert_path = "/cert.pem"
+            key_path = "/key.pem"
+            ca_cert_path = "/ca.pem"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert!(config.metrics.is_none());
+    }
+
+    #[test]
+    fn test_metrics_config_prometheus_only() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "sqlite://:memory:"
+
+            [tls]
+            cert_path = "/cert.pem"
+            key_path = "/key.pem"
+            ca_cert_path = "/ca.pem"
+
+            [metrics]
+            prometheus_bind = "0.0.0.0:9090"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let metrics = config.metrics.unwrap();
+        assert_eq!(
+            metrics.prometheus_bind,
+            Some("0.0.0.0:9090".parse().unwrap())
+        );
+        assert!(metrics.otel.is_none());
+    }
+
+    #[test]
+    fn test_metrics_config_with_otel() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "sqlite://:memory:"
+
+            [tls]
+            cert_path = "/cert.pem"
+            key_path = "/key.pem"
+            ca_cert_path = "/ca.pem"
+
+            [metrics]
+            prometheus_bind = "0.0.0.0:9090"
+
+            [metrics.otel]
+            endpoint = "http://otel-collector:4317"
+            service_name = "my-router-hosts"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let metrics = config.metrics.unwrap();
+        let otel = metrics.otel.unwrap();
+        assert_eq!(otel.endpoint, "http://otel-collector:4317");
+        assert_eq!(otel.service_name, Some("my-router-hosts".to_string()));
     }
 }
