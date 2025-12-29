@@ -198,7 +198,7 @@ impl HookDefinition {
     /// - name is not valid kebab-case
     /// - name exceeds 50 characters
     /// - command is empty or whitespace-only
-    #[must_use = "validation errors should be handled"]
+    #[must_use = "validation errors must be checked; invalid hooks will cause runtime failures"]
     pub fn validate(&self) -> Result<(), ConfigError> {
         // Validate name is non-empty
         if self.name.is_empty() {
@@ -218,7 +218,8 @@ impl HookDefinition {
         // Validate kebab-case format
         if !is_valid_kebab_case(&self.name) {
             return Err(ConfigError::InvalidHook(format!(
-                "hook name '{}' is invalid (must be kebab-case: lowercase letters, numbers, hyphens)",
+                "hook name '{}' is invalid (must be kebab-case: lowercase letters, numbers, \
+                 and hyphens; no consecutive hyphens or leading/trailing hyphens)",
                 self.name
             )));
         }
@@ -1017,6 +1018,33 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
     fn test_hooks_config_empty() {
         let config = HooksConfig::default();
         assert!(config.validate().is_ok());
+    }
+
+    /// Test that validation order returns invalid name error before duplicate check
+    #[test]
+    fn test_hooks_config_invalid_before_duplicate_check() {
+        // Hook has both an invalid name AND is a duplicate
+        // Validation should fail on invalid name first
+        let config = HooksConfig {
+            on_success: vec![
+                HookDefinition {
+                    name: "Invalid Name".to_string(), // Invalid: has space and uppercase
+                    command: "cmd1".to_string(),
+                },
+                HookDefinition {
+                    name: "Invalid Name".to_string(), // Same invalid name (would be duplicate)
+                    command: "cmd2".to_string(),
+                },
+            ],
+            on_failure: vec![],
+        };
+        let err = config.validate().unwrap_err();
+        // Should fail on invalid name (kebab-case), not duplicate detection
+        assert!(
+            err.to_string().contains("kebab-case"),
+            "Expected kebab-case error, got: {}",
+            err
+        );
     }
 
     #[test]

@@ -25,12 +25,16 @@ use super::config::HookDefinition;
 
 #[derive(Debug, Error)]
 pub enum HookError {
+    /// Hook process exceeded the configured timeout and was killed
     #[error("Hook timed out after {0} seconds")]
     Timeout(u64),
 
-    #[error("Hook failed with exit code {0}: {1}")]
+    /// Hook process exited with non-zero exit code
+    /// Parameters: (exit_code, hook_name)
+    #[error("Hook '{1}' failed with exit code {0}")]
     Failed(i32, String),
 
+    /// IO error spawning or waiting for hook process
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
