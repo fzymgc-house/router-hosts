@@ -83,10 +83,21 @@ async fn main() -> Result<()> {
     let health_state = Arc::new(HealthState::new(router_client.clone()));
 
     // Get health port from environment, defaulting to 8081
-    let health_port: u16 = std::env::var("HEALTH_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(health::DEFAULT_HEALTH_PORT);
+    let health_port: u16 = match std::env::var("HEALTH_PORT") {
+        Ok(port_str) => match port_str.parse() {
+            Ok(port) => port,
+            Err(e) => {
+                warn!(
+                    HEALTH_PORT = %port_str,
+                    error = %e,
+                    default = health::DEFAULT_HEALTH_PORT,
+                    "Failed to parse HEALTH_PORT, using default"
+                );
+                health::DEFAULT_HEALTH_PORT
+            }
+        },
+        Err(_) => health::DEFAULT_HEALTH_PORT,
+    };
 
     // Create IpResolver with strategies from config
     let resolver = IpResolver::new(kube_client.clone(), config.ip_resolution.clone());

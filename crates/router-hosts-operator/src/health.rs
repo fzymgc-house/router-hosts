@@ -21,9 +21,9 @@ pub const DEFAULT_HEALTH_PORT: u16 = 8081;
 /// Shared state for health check endpoints.
 pub struct HealthState<C: RouterHostsClientTrait> {
     /// Whether the operator has completed startup.
-    pub started: AtomicBool,
+    started: AtomicBool,
     /// Client for checking router-hosts server connectivity.
-    pub client: Arc<C>,
+    client: Arc<C>,
 }
 
 impl<C: RouterHostsClientTrait> HealthState<C> {
@@ -39,6 +39,16 @@ impl<C: RouterHostsClientTrait> HealthState<C> {
     pub fn mark_started(&self) {
         self.started.store(true, Ordering::SeqCst);
         info!("Health check: operator marked as started");
+    }
+
+    /// Check if the operator has completed startup.
+    pub fn is_started(&self) -> bool {
+        self.started.load(Ordering::SeqCst)
+    }
+
+    /// Get a reference to the client.
+    pub fn client(&self) -> &C {
+        &self.client
     }
 }
 
@@ -82,14 +92,14 @@ async fn readyz<C: RouterHostsClientTrait + Send + Sync + 'static>(
     State(state): State<Arc<HealthState<C>>>,
 ) -> StatusCode {
     // Check if startup completed
-    if !state.started.load(Ordering::SeqCst) {
+    if !state.is_started() {
         debug!("Readiness probe: NOT READY (startup incomplete)");
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
     // Check router-hosts server connectivity using a lightweight call
     // Use find_by_hostname with empty string - exercises full gRPC/mTLS path
-    match state.client.find_by_hostname("").await {
+    match state.client().find_by_hostname("").await {
         Ok(_) => {
             debug!("Readiness probe: OK");
             StatusCode::OK
