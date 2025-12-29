@@ -630,9 +630,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_cert_expiry_boundary_31_days() {
-        // Test just outside the boundary (31 days)
-        let cert_pem = generate_test_cert(31);
+    async fn test_read_cert_expiry_boundary_32_days() {
+        // Test clearly outside the boundary (32 days)
+        // Using 32 instead of 31 provides margin for timing variations
+        // between cert generation and expiry check
+        let cert_pem = generate_test_cert(32);
         let temp_dir = tempfile::tempdir().unwrap();
         let cert_path = temp_dir.path().join("cert.pem");
         std::fs::write(&cert_path, &cert_pem).unwrap();
@@ -641,7 +643,7 @@ mod tests {
             .await
             .unwrap();
 
-        // At 31 days, should be "valid" (>30)
+        // At 32 days, should be "valid" (>30)
         assert_eq!(status, "valid");
     }
 }
