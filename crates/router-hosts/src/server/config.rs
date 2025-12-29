@@ -27,6 +27,9 @@ pub enum ConfigError {
 
     #[error("ACME configuration error: {0}")]
     AcmeConfig(#[from] AcmeConfigError),
+
+    #[error("Hook configuration error: {0}")]
+    InvalidHook(String),
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -148,6 +151,100 @@ fn default_max_age_days() -> u32 {
     30
 }
 
+/// Maximum length for hook names.
+const MAX_HOOK_NAME_LENGTH: usize = 50;
+
+/// A single hook definition with a name and command.
+///
+/// Hook names must be kebab-case (lowercase alphanumeric with hyphens)
+/// and at most 50 characters.
+#[derive(Debug, Deserialize, Clone)]
+pub struct HookDefinition {
+    /// Human-readable name for the hook (kebab-case, max 50 chars).
+    /// Used in logs, health endpoints, and metrics.
+    pub name: String,
+
+    /// Shell command to execute.
+    pub command: String,
+}
+
+impl HookDefinition {
+    /// Validate the hook definition.
+    ///
+    /// Returns an error if:
+    /// - name is empty
+    /// - name is not valid kebab-case
+    /// - name exceeds 50 characters
+    /// - command is empty
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        // Validate name is non-empty
+        if self.name.is_empty() {
+            return Err(ConfigError::InvalidHook(
+                "hook name must be non-empty".into(),
+            ));
+        }
+
+        // Validate name length
+        if self.name.len() > MAX_HOOK_NAME_LENGTH {
+            return Err(ConfigError::InvalidHook(format!(
+                "hook name '{}' exceeds {} character limit",
+                self.name, MAX_HOOK_NAME_LENGTH
+            )));
+        }
+
+        // Validate kebab-case format
+        if !is_valid_kebab_case(&self.name) {
+            return Err(ConfigError::InvalidHook(format!(
+                "hook name '{}' is invalid (must be kebab-case: lowercase letters, numbers, hyphens)",
+                self.name
+            )));
+        }
+
+        // Validate command is non-empty
+        if self.command.is_empty() {
+            return Err(ConfigError::InvalidHook(format!(
+                "hook '{}' has empty command",
+                self.name
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+/// Check if a string is valid kebab-case.
+///
+/// Valid kebab-case: lowercase alphanumeric segments separated by single hyphens.
+/// Examples: "reload-dns", "log-success", "alert-ops-team"
+/// Invalid: "Reload-DNS", "reload--dns", "-reload", "reload-"
+fn is_valid_kebab_case(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+
+    // Must not start or end with hyphen
+    if s.starts_with('-') || s.ends_with('-') {
+        return false;
+    }
+
+    // Check each character and no consecutive hyphens
+    let mut prev_was_hyphen = false;
+    for c in s.chars() {
+        if c == '-' {
+            if prev_was_hyphen {
+                return false; // No consecutive hyphens
+            }
+            prev_was_hyphen = true;
+        } else if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            prev_was_hyphen = false;
+        } else {
+            return false; // Invalid character
+        }
+    }
+
+    true
+}
+
 /// Configuration for post-edit hook commands
 ///
 /// # Security Warning
@@ -177,17 +274,55 @@ fn default_max_age_days() -> u32 {
 /// ## Example Configuration
 ///
 /// ```toml
-/// [hooks]
-/// on_success = ["systemctl reload dnsmasq"]
-/// on_failure = ["/usr/local/bin/alert-failure"]
+/// [[hooks.on_success]]
+/// name = "reload-dns"
+/// command = "systemctl reload dnsmasq"
+///
+/// [[hooks.on_failure]]
+/// name = "alert-ops"
+/// command = "/usr/local/bin/alert-failure"
 /// ```
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct HooksConfig {
     #[serde(default)]
-    pub on_success: Vec<String>,
+    pub on_success: Vec<HookDefinition>,
 
     #[serde(default)]
-    pub on_failure: Vec<String>,
+    pub on_failure: Vec<HookDefinition>,
+}
+
+impl HooksConfig {
+    /// Validate all hook definitions.
+    ///
+    /// Checks that all hooks have valid names and commands,
+    /// and that there are no duplicate names within each hook type.
+    pub fn validate(&self) -> Result<(), ConfigError> {
+        // Validate and check for duplicates in on_success
+        let mut seen_names = std::collections::HashSet::new();
+        for hook in &self.on_success {
+            hook.validate()?;
+            if !seen_names.insert(&hook.name) {
+                return Err(ConfigError::InvalidHook(format!(
+                    "duplicate hook name '{}' in on_success hooks",
+                    hook.name
+                )));
+            }
+        }
+
+        // Validate and check for duplicates in on_failure
+        seen_names.clear();
+        for hook in &self.on_failure {
+            hook.validate()?;
+            if !seen_names.insert(&hook.name) {
+                return Err(ConfigError::InvalidHook(format!(
+                    "duplicate hook name '{}' in on_failure hooks",
+                    hook.name
+                )));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -238,6 +373,9 @@ impl Config {
 
         // Validate and expand ACME configuration (handles ${VAR} expansion)
         config.acme.validate_and_expand()?;
+
+        // Validate hook definitions
+        config.hooks.validate()?;
 
         Ok(config)
     }
@@ -612,5 +750,210 @@ ca_cert_path = "/etc/router-hosts/ca.crt"
         let retention = RetentionConfig::default();
         assert_eq!(retention.max_snapshots, 50);
         assert_eq!(retention.max_age_days, 30);
+    }
+
+    // Hook validation tests
+
+    #[test]
+    fn test_is_valid_kebab_case() {
+        // Valid cases
+        assert!(is_valid_kebab_case("reload-dns"));
+        assert!(is_valid_kebab_case("log-success"));
+        assert!(is_valid_kebab_case("alert-ops-team"));
+        assert!(is_valid_kebab_case("a"));
+        assert!(is_valid_kebab_case("abc123"));
+        assert!(is_valid_kebab_case("reload2dns"));
+
+        // Invalid cases
+        assert!(!is_valid_kebab_case("")); // empty
+        assert!(!is_valid_kebab_case("Reload-DNS")); // uppercase
+        assert!(!is_valid_kebab_case("reload_dns")); // underscore
+        assert!(!is_valid_kebab_case("reload--dns")); // consecutive hyphens
+        assert!(!is_valid_kebab_case("-reload")); // leading hyphen
+        assert!(!is_valid_kebab_case("reload-")); // trailing hyphen
+        assert!(!is_valid_kebab_case("reload dns")); // space
+        assert!(!is_valid_kebab_case("reload.dns")); // dot
+    }
+
+    #[test]
+    fn test_hook_definition_valid() {
+        let hook = HookDefinition {
+            name: "reload-dns".to_string(),
+            command: "systemctl reload dnsmasq".to_string(),
+        };
+        assert!(hook.validate().is_ok());
+    }
+
+    #[test]
+    fn test_hook_definition_empty_name() {
+        let hook = HookDefinition {
+            name: "".to_string(),
+            command: "echo test".to_string(),
+        };
+        let err = hook.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("non-empty"));
+    }
+
+    #[test]
+    fn test_hook_definition_invalid_name_format() {
+        let hook = HookDefinition {
+            name: "Reload DNS".to_string(),
+            command: "echo test".to_string(),
+        };
+        let err = hook.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("kebab-case"));
+    }
+
+    #[test]
+    fn test_hook_definition_name_too_long() {
+        let hook = HookDefinition {
+            name: "a".repeat(51),
+            command: "echo test".to_string(),
+        };
+        let err = hook.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("50 character limit"));
+    }
+
+    #[test]
+    fn test_hook_definition_name_exactly_50_chars() {
+        let hook = HookDefinition {
+            name: "a".repeat(50),
+            command: "echo test".to_string(),
+        };
+        assert!(hook.validate().is_ok());
+    }
+
+    #[test]
+    fn test_hook_definition_empty_command() {
+        let hook = HookDefinition {
+            name: "test-hook".to_string(),
+            command: "".to_string(),
+        };
+        let err = hook.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("empty command"));
+    }
+
+    #[test]
+    fn test_hooks_config_valid() {
+        let config = HooksConfig {
+            on_success: vec![
+                HookDefinition {
+                    name: "reload-dns".to_string(),
+                    command: "systemctl reload dnsmasq".to_string(),
+                },
+                HookDefinition {
+                    name: "log-success".to_string(),
+                    command: "logger 'updated'".to_string(),
+                },
+            ],
+            on_failure: vec![HookDefinition {
+                name: "alert-ops".to_string(),
+                command: "/usr/local/bin/alert".to_string(),
+            }],
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_hooks_config_duplicate_on_success() {
+        let config = HooksConfig {
+            on_success: vec![
+                HookDefinition {
+                    name: "reload-dns".to_string(),
+                    command: "cmd1".to_string(),
+                },
+                HookDefinition {
+                    name: "reload-dns".to_string(),
+                    command: "cmd2".to_string(),
+                },
+            ],
+            on_failure: vec![],
+        };
+        let err = config.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("duplicate"));
+        assert!(err.to_string().contains("on_success"));
+    }
+
+    #[test]
+    fn test_hooks_config_duplicate_on_failure() {
+        let config = HooksConfig {
+            on_success: vec![],
+            on_failure: vec![
+                HookDefinition {
+                    name: "alert-ops".to_string(),
+                    command: "cmd1".to_string(),
+                },
+                HookDefinition {
+                    name: "alert-ops".to_string(),
+                    command: "cmd2".to_string(),
+                },
+            ],
+        };
+        let err = config.validate().unwrap_err();
+        assert!(matches!(err, ConfigError::InvalidHook(_)));
+        assert!(err.to_string().contains("duplicate"));
+        assert!(err.to_string().contains("on_failure"));
+    }
+
+    #[test]
+    fn test_hooks_config_same_name_different_types_allowed() {
+        // Same name in on_success and on_failure is allowed
+        let config = HooksConfig {
+            on_success: vec![HookDefinition {
+                name: "notify".to_string(),
+                command: "notify-success".to_string(),
+            }],
+            on_failure: vec![HookDefinition {
+                name: "notify".to_string(),
+                command: "notify-failure".to_string(),
+            }],
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_hooks_config_empty() {
+        let config = HooksConfig::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_config_with_structured_hooks() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "sqlite://:memory:"
+
+            [tls]
+            cert_path = "/etc/router-hosts/server.crt"
+            key_path = "/etc/router-hosts/server.key"
+            ca_cert_path = "/etc/router-hosts/ca.crt"
+
+            [[hooks.on_success]]
+            name = "reload-dns"
+            command = "systemctl reload dnsmasq"
+
+            [[hooks.on_failure]]
+            name = "alert-ops"
+            command = "/usr/local/bin/alert-failure"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.hooks.on_success.len(), 1);
+        assert_eq!(config.hooks.on_success[0].name, "reload-dns");
+        assert_eq!(
+            config.hooks.on_success[0].command,
+            "systemctl reload dnsmasq"
+        );
+        assert_eq!(config.hooks.on_failure.len(), 1);
+        assert_eq!(config.hooks.on_failure[0].name, "alert-ops");
     }
 }

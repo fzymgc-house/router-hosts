@@ -200,6 +200,7 @@ impl HostsServiceImpl {
 mod tests {
     use super::*;
     use crate::server::commands::CommandHandler;
+    use crate::server::config::HookDefinition;
     use crate::server::hooks::HookExecutor;
     use crate::server::write_queue::WriteQueue;
     use chrono::{DateTime, Utc};
@@ -479,8 +480,14 @@ mod tests {
     #[tokio::test]
     async fn test_health_with_hooks_configured() {
         let hooks = Arc::new(HookExecutor::new(
-            vec!["echo success".to_string()],
-            vec!["notify failure".to_string()],
+            vec![HookDefinition {
+                name: "reload-dns".to_string(),
+                command: "echo success".to_string(),
+            }],
+            vec![HookDefinition {
+                name: "alert-ops".to_string(),
+                command: "notify failure".to_string(),
+            }],
             30,
         ));
 
@@ -494,10 +501,9 @@ mod tests {
 
         assert_eq!(hooks.configured_count, 2);
         assert_eq!(hooks.hook_names.len(), 2);
-        // Hook names are sanitized to show only the command basename (no args)
-        // Note: "on_success" prefix contains "success" so we check the exact value
-        assert_eq!(hooks.hook_names[0], "on_success: echo"); // "success" arg stripped
-        assert_eq!(hooks.hook_names[1], "on_failure: notify"); // "failure" arg stripped
+        // Hook names now use explicit names from configuration
+        assert_eq!(hooks.hook_names[0], "on_success: reload-dns");
+        assert_eq!(hooks.hook_names[1], "on_failure: alert-ops");
     }
 
     // ========================================================================
