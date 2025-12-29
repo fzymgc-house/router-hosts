@@ -48,6 +48,25 @@ impl HookExecutor {
         }
     }
 
+    /// Get names of all configured hooks for health reporting
+    ///
+    /// Returns both success and failure hooks with prefixes indicating their type.
+    pub fn hook_names(&self) -> Vec<String> {
+        let mut names = Vec::with_capacity(self.on_success.len() + self.on_failure.len());
+        for cmd in &self.on_success {
+            names.push(format!("on_success: {}", cmd));
+        }
+        for cmd in &self.on_failure {
+            names.push(format!("on_failure: {}", cmd));
+        }
+        names
+    }
+
+    /// Get count of configured hooks
+    pub fn hook_count(&self) -> usize {
+        self.on_success.len() + self.on_failure.len()
+    }
+
     /// Run success hooks after successful hosts file regeneration
     ///
     /// Returns the number of hooks that failed. Callers can use this for
@@ -349,5 +368,50 @@ mod tests {
         let err = HookError::Failed(1, "test cmd".to_string());
         assert!(err.to_string().contains("1"));
         assert!(err.to_string().contains("test cmd"));
+    }
+
+    #[test]
+    fn test_hook_names_empty() {
+        let executor = HookExecutor::default();
+        assert!(executor.hook_names().is_empty());
+        assert_eq!(executor.hook_count(), 0);
+    }
+
+    #[test]
+    fn test_hook_names_success_only() {
+        let executor = HookExecutor::new(
+            vec!["echo success".to_string(), "/usr/bin/reload".to_string()],
+            vec![],
+            5,
+        );
+        let names = executor.hook_names();
+        assert_eq!(names.len(), 2);
+        assert_eq!(names[0], "on_success: echo success");
+        assert_eq!(names[1], "on_success: /usr/bin/reload");
+        assert_eq!(executor.hook_count(), 2);
+    }
+
+    #[test]
+    fn test_hook_names_failure_only() {
+        let executor = HookExecutor::new(vec![], vec!["notify failure".to_string()], 5);
+        let names = executor.hook_names();
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0], "on_failure: notify failure");
+        assert_eq!(executor.hook_count(), 1);
+    }
+
+    #[test]
+    fn test_hook_names_both_types() {
+        let executor = HookExecutor::new(
+            vec!["success1".to_string()],
+            vec!["failure1".to_string(), "failure2".to_string()],
+            5,
+        );
+        let names = executor.hook_names();
+        assert_eq!(names.len(), 3);
+        assert_eq!(names[0], "on_success: success1");
+        assert_eq!(names[1], "on_failure: failure1");
+        assert_eq!(names[2], "on_failure: failure2");
+        assert_eq!(executor.hook_count(), 3);
     }
 }

@@ -7,7 +7,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use router_hosts_common::proto::router_hosts::v1::{
     hosts_service_client::HostsServiceClient, AddHostRequest, DeleteHostRequest, ListHostsRequest,
-    SearchHostsRequest, TagsUpdate, UpdateHostRequest,
+    ReadinessRequest, SearchHostsRequest, TagsUpdate, UpdateHostRequest,
 };
 use thiserror::Error;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Identity};
@@ -47,6 +47,12 @@ pub trait RouterHostsClientTrait: Send + Sync {
 
     /// Delete a host entry
     async fn delete_host(&self, id: &str) -> Result<bool, ClientError>;
+
+    /// Check server readiness (database connectivity)
+    ///
+    /// Returns `Ok(true)` if ready, `Ok(false)` if not ready (with reason logged).
+    /// Returns `Err` on connection/transport failures.
+    async fn check_readiness(&self) -> Result<bool, ClientError>;
 }
 
 #[derive(Debug, Error)]
@@ -243,6 +249,20 @@ impl RouterHostsClientTrait for RouterHostsClient {
 
         Ok(response.success)
     }
+
+    #[instrument(skip(self))]
+    async fn check_readiness(&self) -> Result<bool, ClientError> {
+        let mut client = self.inner.clone();
+        let response = client.readiness(ReadinessRequest {}).await?.into_inner();
+
+        if response.ready {
+            debug!("Server readiness check: OK");
+        } else {
+            debug!(reason = %response.reason, "Server readiness check: NOT READY");
+        }
+
+        Ok(response.ready)
+    }
 }
 
 /// Implement trait for Arc-wrapped clients to support shared ownership
@@ -281,6 +301,10 @@ impl<T: RouterHostsClientTrait + ?Sized> RouterHostsClientTrait for Arc<T> {
 
     async fn delete_host(&self, id: &str) -> Result<bool, ClientError> {
         (**self).delete_host(id).await
+    }
+
+    async fn check_readiness(&self) -> Result<bool, ClientError> {
+        (**self).check_readiness().await
     }
 }
 

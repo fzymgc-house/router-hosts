@@ -269,6 +269,10 @@ impl HostProjection for PostgresStorage {
 
 #[async_trait]
 impl Storage for PostgresStorage {
+    fn backend_name(&self) -> &'static str {
+        "postgresql"
+    }
+
     async fn initialize(&self) -> Result<(), StorageError> {
         MIGRATIONS
             .run(self.pool())

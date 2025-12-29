@@ -76,6 +76,43 @@ impl CommandHandler {
         }
     }
 
+    /// Create a CommandHandler for testing without a full Config
+    ///
+    /// Uses default retention config. Only use in tests that don't exercise
+    /// config-dependent code paths.
+    #[cfg(test)]
+    pub fn new_for_testing(
+        storage: Arc<dyn Storage>,
+        hosts_file: Arc<HostsFileGenerator>,
+        hooks: Arc<HookExecutor>,
+    ) -> Self {
+        // Create a minimal config for testing
+        let config = Arc::new(crate::server::config::Config {
+            server: crate::server::config::ServerConfig {
+                bind_address: "[::1]:50051".to_string(),
+                hosts_file_path: "/dev/null".to_string(),
+            },
+            database: crate::server::config::DatabaseConfig {
+                path: None,
+                url: None,
+            },
+            tls: crate::server::config::TlsConfig {
+                cert_path: std::path::PathBuf::from("/dev/null"),
+                key_path: std::path::PathBuf::from("/dev/null"),
+                ca_cert_path: std::path::PathBuf::from("/dev/null"),
+            },
+            retention: crate::server::config::RetentionConfig::default(),
+            hooks: crate::server::config::HooksConfig::default(),
+            acme: crate::server::acme::AcmeConfig::default(),
+        });
+        Self {
+            storage,
+            hosts_file,
+            hooks,
+            config,
+        }
+    }
+
     /// Create an event envelope from a HostEvent
     fn create_envelope(&self, aggregate_id: Ulid, event: HostEvent) -> EventEnvelope {
         EventEnvelope {

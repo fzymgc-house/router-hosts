@@ -105,7 +105,14 @@ async fn start_test_server() -> (SocketAddr, Arc<tempfile::TempDir>) {
     let write_queue = WriteQueue::new(Arc::clone(&commands));
 
     // Create service
-    let service = HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&storage));
+    let service = HostsServiceImpl::new(
+        write_queue,
+        Arc::clone(&commands),
+        Arc::clone(&storage),
+        hooks,
+        false, // acme_enabled
+        None,  // tls_cert_path
+    );
 
     // Spawn server task
     tokio::spawn(async move {

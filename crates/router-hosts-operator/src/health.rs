@@ -106,15 +106,19 @@ async fn readyz<C: RouterHostsClientTrait + Send + Sync + 'static>(
         return StatusCode::SERVICE_UNAVAILABLE;
     }
 
-    // Check router-hosts server connectivity using a lightweight call
-    // Use find_by_hostname with empty string - exercises full gRPC/mTLS path
-    match state.client().find_by_hostname("").await {
-        Ok(_) => {
+    // Check router-hosts server connectivity using the dedicated readiness RPC
+    match state.client().check_readiness().await {
+        Ok(true) => {
             debug!("Readiness probe: OK");
             StatusCode::OK
         }
+        Ok(false) => {
+            // Server responded but isn't ready (e.g., DB not connected)
+            debug!("Readiness probe: NOT READY (server not ready)");
+            StatusCode::SERVICE_UNAVAILABLE
+        }
         Err(e) => {
-            // Log at WARN level - transient failures are expected during server restarts
+            // Transport/connection failure
             warn!(error = %e, "Readiness probe: NOT READY (server unreachable)");
             StatusCode::SERVICE_UNAVAILABLE
         }
@@ -136,7 +140,7 @@ mod tests {
     async fn test_readyz_returns_unavailable_before_startup() {
         let mut mock_client = MockRouterHostsClientTrait::new();
         // Should not be called since startup is false
-        mock_client.expect_find_by_hostname().never();
+        mock_client.expect_check_readiness().never();
 
         let state = Arc::new(HealthState::new(Arc::new(mock_client)));
 
@@ -145,11 +149,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_readyz_returns_ok_when_server_reachable() {
+    async fn test_readyz_returns_ok_when_server_ready() {
         let mut mock_client = MockRouterHostsClientTrait::new();
-        mock_client
-            .expect_find_by_hostname()
-            .returning(|_| Ok(None));
+        mock_client.expect_check_readiness().returning(|| Ok(true));
 
         let state = Arc::new(HealthState::new(Arc::new(mock_client)));
         state.mark_started();
@@ -159,9 +161,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_readyz_returns_unavailable_when_server_not_ready() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        mock_client.expect_check_readiness().returning(|| Ok(false));
+
+        let state = Arc::new(HealthState::new(Arc::new(mock_client)));
+        state.mark_started();
+
+        let result = readyz(State(state)).await;
+        assert_eq!(result, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
     async fn test_readyz_returns_unavailable_when_server_unreachable() {
         let mut mock_client = MockRouterHostsClientTrait::new();
-        mock_client.expect_find_by_hostname().returning(|_| {
+        mock_client.expect_check_readiness().returning(|| {
             Err(crate::client::ClientError::GrpcError(
                 tonic::Status::unavailable("test"),
             ))

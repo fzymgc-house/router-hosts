@@ -329,8 +329,19 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
         let tls_config = load_tls(&config.tls).await?;
 
         let write_queue = WriteQueue::new(Arc::clone(&commands));
-        let service =
-            HostsServiceImpl::new(write_queue, Arc::clone(&commands), Arc::clone(&storage));
+        let tls_cert_path = if config.acme.enabled {
+            Some(config.tls.cert_path.clone())
+        } else {
+            None
+        };
+        let service = HostsServiceImpl::new(
+            write_queue,
+            Arc::clone(&commands),
+            Arc::clone(&storage),
+            Arc::clone(&hooks),
+            config.acme.enabled,
+            tls_cert_path,
+        );
 
         info!("Starting gRPC server on {}", addr);
 

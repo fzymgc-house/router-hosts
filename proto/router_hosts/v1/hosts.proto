@@ -332,6 +332,87 @@ message DeleteSnapshotResponse {
   bool success = 1;
 }
 
+// Health check messages
+
+// Request for liveness check (is the process alive?)
+message LivenessRequest {}
+
+// Response for liveness check
+message LivenessResponse {
+  // Always true if the server can respond
+  bool alive = 1;
+}
+
+// Request for readiness check (is the server ready to handle requests?)
+message ReadinessRequest {}
+
+// Response for readiness check
+message ReadinessResponse {
+  // Whether the server is ready to handle requests
+  bool ready = 1;
+  // Reason for not being ready (empty if ready)
+  string reason = 2;
+}
+
+// Request for detailed health status
+message HealthRequest {}
+
+// Response containing detailed health status of all components
+message HealthResponse {
+  // Overall health status (true if all critical components are healthy)
+  bool healthy = 1;
+  // Server information
+  ServerInfo server = 2;
+  // Database health status
+  DatabaseHealth database = 3;
+  // ACME certificate health status
+  AcmeHealth acme = 4;
+  // Hooks configuration status
+  HooksHealth hooks = 5;
+}
+
+// Server information and metadata
+message ServerInfo {
+  // Server version (e.g., "0.6.0")
+  string version = 1;
+  // Server uptime in seconds
+  int64 uptime_seconds = 2;
+  // Build information (e.g., "v0.6.0 (abc1234)")
+  string build_info = 3;
+}
+
+// Database health status
+message DatabaseHealth {
+  // Whether the database connection is working
+  bool connected = 1;
+  // Database backend type: "sqlite", "postgresql", "duckdb"
+  string backend = 2;
+  // Last health check latency in milliseconds
+  int64 latency_ms = 3;
+  // Error message if not connected (empty if healthy)
+  string error = 4;
+}
+
+// ACME certificate health status
+message AcmeHealth {
+  // Whether ACME is enabled
+  bool enabled = 1;
+  // Certificate status: "valid", "renewing", "expired", "disabled"
+  string status = 2;
+  // Certificate expiry timestamp (Unix seconds, 0 if disabled)
+  int64 expires_at = 3;
+  // Error message if there's an issue (empty if healthy)
+  string error = 4;
+}
+
+// Hooks configuration status
+message HooksHealth {
+  // Number of configured hooks
+  int32 configured_count = 1;
+  // Names of configured hooks
+  repeated string hook_names = 2;
+}
+
 // Service definition for managing /etc/hosts entries via gRPC
 service HostsService {
   // Host management
@@ -375,4 +456,15 @@ service HostsService {
 
   // Delete a snapshot by its ID
   rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
+
+  // Health checks
+
+  // Check if the server process is alive (minimal check, no I/O)
+  rpc Liveness(LivenessRequest) returns (LivenessResponse);
+
+  // Check if the server is ready to handle requests (verifies database connectivity)
+  rpc Readiness(ReadinessRequest) returns (ReadinessResponse);
+
+  // Get detailed health status of all server components
+  rpc Health(HealthRequest) returns (HealthResponse);
 }
