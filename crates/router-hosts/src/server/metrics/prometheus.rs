@@ -102,7 +102,12 @@ fn build_response(status: StatusCode, content_type: &str, body: String) -> Respo
         .status(status)
         .header("Content-Type", content_type)
         .body(Full::new(Bytes::from(body)))
-        .unwrap_or_else(|_| Response::new(Full::new(Bytes::from("Internal Server Error"))))
+        .unwrap_or_else(|e| {
+            tracing::error!(error = %e, "Failed to build HTTP response");
+            let mut response = Response::new(Full::new(Bytes::from("Internal Server Error")));
+            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
+            response
+        })
 }
 
 #[cfg(test)]

@@ -49,11 +49,24 @@ impl MetricsHandle {
     }
 
     /// Gracefully shut down metrics subsystem
-    pub async fn shutdown(self) {
-        if let Some(tx) = self.prometheus_shutdown {
-            let _ = tx.send(());
+    pub async fn shutdown(mut self) {
+        if let Some(tx) = self.prometheus_shutdown.take() {
+            if tx.send(()).is_err() {
+                tracing::warn!("Prometheus server already shut down (receiver dropped)");
+            }
         }
         // TODO: Flush OTEL exporter
+    }
+}
+
+impl Drop for MetricsHandle {
+    fn drop(&mut self) {
+        if self.prometheus_shutdown.is_some() {
+            tracing::warn!(
+                "MetricsHandle dropped without calling shutdown() - \
+                 Prometheus server will continue running until process exit"
+            );
+        }
     }
 }
 

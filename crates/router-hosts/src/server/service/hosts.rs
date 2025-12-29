@@ -52,16 +52,32 @@ impl HostsServiceImpl {
         &self,
         request: Request<GetHostRequest>,
     ) -> Result<Response<GetHostResponse>, Status> {
+        let timer = TimedOperation::new("GetHost");
         let req = request.into_inner();
 
-        let id = Ulid::from_string(&req.id)
-            .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
+        let id = match Ulid::from_string(&req.id) {
+            Ok(id) => id,
+            Err(e) => {
+                timer.finish("error");
+                return Err(Status::invalid_argument(format!(
+                    "Invalid ID format: {}",
+                    e
+                )));
+            }
+        };
 
-        let entry = self.commands.get_host(id).await.map_err(Status::from)?;
-
-        Ok(Response::new(GetHostResponse {
-            entry: Some(host_entry_to_proto(entry)),
-        }))
+        match self.commands.get_host(id).await {
+            Ok(entry) => {
+                timer.finish("ok");
+                Ok(Response::new(GetHostResponse {
+                    entry: Some(host_entry_to_proto(entry)),
+                }))
+            }
+            Err(e) => {
+                timer.finish("error");
+                Err(Status::from(e))
+            }
+        }
     }
 
     /// Update an existing host entry
@@ -69,10 +85,19 @@ impl HostsServiceImpl {
         &self,
         request: Request<UpdateHostRequest>,
     ) -> Result<Response<UpdateHostResponse>, Status> {
+        let timer = TimedOperation::new("UpdateHost");
         let req = request.into_inner();
 
-        let id = Ulid::from_string(&req.id)
-            .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
+        let id = match Ulid::from_string(&req.id) {
+            Ok(id) => id,
+            Err(e) => {
+                timer.finish("error");
+                return Err(Status::invalid_argument(format!(
+                    "Invalid ID format: {}",
+                    e
+                )));
+            }
+        };
 
         // Convert optional fields properly from proto optional fields
         // For comment: None = no change, Some(None) = clear, Some(Some(val)) = set value
@@ -86,7 +111,7 @@ impl HostsServiceImpl {
         // For tags: wrapper pattern - None = no change, Some(wrapper) = update
         let tags = req.tags.map(|wrapper| wrapper.values);
 
-        let entry = self
+        match self
             .write_queue
             .update_host(
                 id,
@@ -98,11 +123,18 @@ impl HostsServiceImpl {
                 req.expected_version, // For optimistic concurrency
             )
             .await
-            .map_err(Status::from)?;
-
-        Ok(Response::new(UpdateHostResponse {
-            entry: Some(host_entry_to_proto(entry)),
-        }))
+        {
+            Ok(entry) => {
+                timer.finish("ok");
+                Ok(Response::new(UpdateHostResponse {
+                    entry: Some(host_entry_to_proto(entry)),
+                }))
+            }
+            Err(e) => {
+                timer.finish("error");
+                Err(Status::from(e))
+            }
+        }
     }
 
     /// Delete a host entry
@@ -110,17 +142,30 @@ impl HostsServiceImpl {
         &self,
         request: Request<DeleteHostRequest>,
     ) -> Result<Response<DeleteHostResponse>, Status> {
+        let timer = TimedOperation::new("DeleteHost");
         let req = request.into_inner();
 
-        let id = Ulid::from_string(&req.id)
-            .map_err(|e| Status::invalid_argument(format!("Invalid ID format: {}", e)))?;
+        let id = match Ulid::from_string(&req.id) {
+            Ok(id) => id,
+            Err(e) => {
+                timer.finish("error");
+                return Err(Status::invalid_argument(format!(
+                    "Invalid ID format: {}",
+                    e
+                )));
+            }
+        };
 
-        self.write_queue
-            .delete_host(id, None)
-            .await
-            .map_err(Status::from)?;
-
-        Ok(Response::new(DeleteHostResponse { success: true }))
+        match self.write_queue.delete_host(id, None).await {
+            Ok(()) => {
+                timer.finish("ok");
+                Ok(Response::new(DeleteHostResponse { success: true }))
+            }
+            Err(e) => {
+                timer.finish("error");
+                Err(Status::from(e))
+            }
+        }
     }
 
     /// List all host entries (server streaming)
@@ -128,16 +173,24 @@ impl HostsServiceImpl {
         &self,
         _request: Request<ListHostsRequest>,
     ) -> Result<Response<Vec<ListHostsResponse>>, Status> {
-        let entries = self.commands.list_hosts().await.map_err(Status::from)?;
+        let timer = TimedOperation::new("ListHosts");
 
-        let responses: Vec<ListHostsResponse> = entries
-            .into_iter()
-            .map(|entry| ListHostsResponse {
-                entry: Some(host_entry_to_proto(entry)),
-            })
-            .collect();
-
-        Ok(Response::new(responses))
+        match self.commands.list_hosts().await {
+            Ok(entries) => {
+                timer.finish("ok");
+                let responses: Vec<ListHostsResponse> = entries
+                    .into_iter()
+                    .map(|entry| ListHostsResponse {
+                        entry: Some(host_entry_to_proto(entry)),
+                    })
+                    .collect();
+                Ok(Response::new(responses))
+            }
+            Err(e) => {
+                timer.finish("error");
+                Err(Status::from(e))
+            }
+        }
     }
 
     /// Search for host entries (server streaming)
@@ -145,22 +198,25 @@ impl HostsServiceImpl {
         &self,
         request: Request<SearchHostsRequest>,
     ) -> Result<Response<Vec<SearchHostsResponse>>, Status> {
+        let timer = TimedOperation::new("SearchHosts");
         let req = request.into_inner();
 
-        let entries = self
-            .commands
-            .search_hosts(&req.query)
-            .await
-            .map_err(Status::from)?;
-
-        let responses: Vec<SearchHostsResponse> = entries
-            .into_iter()
-            .map(|entry| SearchHostsResponse {
-                entry: Some(host_entry_to_proto(entry)),
-            })
-            .collect();
-
-        Ok(Response::new(responses))
+        match self.commands.search_hosts(&req.query).await {
+            Ok(entries) => {
+                timer.finish("ok");
+                let responses: Vec<SearchHostsResponse> = entries
+                    .into_iter()
+                    .map(|entry| SearchHostsResponse {
+                        entry: Some(host_entry_to_proto(entry)),
+                    })
+                    .collect();
+                Ok(Response::new(responses))
+            }
+            Err(e) => {
+                timer.finish("error");
+                Err(Status::from(e))
+            }
+        }
     }
 }
 
