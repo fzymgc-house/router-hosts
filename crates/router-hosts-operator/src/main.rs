@@ -54,13 +54,13 @@ async fn main() -> Result<()> {
 
     // If leader election is enabled, acquire leadership before proceeding
     // This blocks until we become the leader
-    let _leader_renewal_task = if leader_config.enabled {
+    let _leader_renewal_task = if leader_config.enabled() {
         info!(
-            lease_name = %leader_config.lease_name,
-            namespace = %leader_config.namespace,
-            holder_id = %leader_config.holder_id,
-            lease_duration_secs = leader_config.lease_duration.as_secs(),
-            renew_interval_secs = leader_config.renew_interval.as_secs(),
+            lease_name = %leader_config.lease_name(),
+            namespace = %leader_config.namespace(),
+            holder_id = %leader_config.holder_id(),
+            lease_duration_secs = leader_config.lease_duration().as_secs(),
+            renew_interval_secs = leader_config.renew_interval().as_secs(),
             "Leader election enabled"
         );
 
