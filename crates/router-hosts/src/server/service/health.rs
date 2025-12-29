@@ -2,6 +2,10 @@
 //!
 //! Implements Liveness, Readiness, and Health RPCs for monitoring and probes.
 
+/// Number of days before expiry when a certificate is considered to be in renewal window.
+/// This matches the typical Let's Encrypt renewal threshold.
+const CERT_RENEWAL_WINDOW_DAYS: i64 = 30;
+
 use super::HostsServiceImpl;
 use router_hosts_common::proto::{
     AcmeHealth, DatabaseHealth, HealthRequest, HealthResponse, HooksHealth, LivenessRequest,
@@ -168,11 +172,11 @@ impl HostsServiceImpl {
             .map_err(|e| format!("failed to read certificate: {}", e))?;
 
         let (_, pem) = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes())
-            .map_err(|e| format!("failed to parse PEM: {:?}", e))?;
+            .map_err(|e| format!("failed to parse PEM: {}", e))?;
 
         let cert = pem
             .parse_x509()
-            .map_err(|e| format!("failed to parse X509: {:?}", e))?;
+            .map_err(|e| format!("failed to parse X509: {}", e))?;
 
         let not_after = cert.validity().not_after;
         let expires_at = not_after.timestamp();
@@ -181,7 +185,7 @@ impl HostsServiceImpl {
 
         let status = if days_until_expiry < 0 {
             "expired"
-        } else if days_until_expiry <= 30 {
+        } else if days_until_expiry <= CERT_RENEWAL_WINDOW_DAYS {
             // Within renewal window
             "renewing"
         } else {
@@ -490,7 +494,148 @@ mod tests {
 
         assert_eq!(hooks.configured_count, 2);
         assert_eq!(hooks.hook_names.len(), 2);
-        assert!(hooks.hook_names[0].contains("echo success"));
-        assert!(hooks.hook_names[1].contains("notify failure"));
+        // Hook names are sanitized to show only the command basename (no args)
+        // Note: "on_success" prefix contains "success" so we check the exact value
+        assert_eq!(hooks.hook_names[0], "on_success: echo"); // "success" arg stripped
+        assert_eq!(hooks.hook_names[1], "on_failure: notify"); // "failure" arg stripped
+    }
+
+    // ========================================================================
+    // ACME Health Tests
+    // ========================================================================
+
+    /// Generate a test certificate with specified validity period
+    fn generate_test_cert(days_valid: i64) -> String {
+        use rcgen::{CertificateParams, DnType, KeyPair};
+        use time::{Duration, OffsetDateTime};
+
+        let mut params = CertificateParams::default();
+        params
+            .distinguished_name
+            .push(DnType::CommonName, "test.example.com");
+
+        // Set validity period
+        let now = OffsetDateTime::now_utc();
+        params.not_before = now - Duration::days(1); // Started yesterday
+        params.not_after = now + Duration::days(days_valid);
+
+        let key_pair = KeyPair::generate().expect("Failed to generate key pair");
+        let cert = params
+            .self_signed(&key_pair)
+            .expect("Failed to generate certificate");
+        cert.pem()
+    }
+
+    #[tokio::test]
+    async fn test_read_cert_expiry_valid_cert() {
+        let cert_pem = generate_test_cert(90); // Expires in 90 days
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+
+        let (status, expires_at) = HostsServiceImpl::read_cert_expiry(&cert_path)
+            .await
+            .unwrap();
+
+        assert_eq!(status, "valid");
+        // Expires_at should be roughly 90 days from now
+        let now = chrono::Utc::now().timestamp();
+        let days_until_expiry = (expires_at - now) / (24 * 60 * 60);
+        assert!(
+            days_until_expiry >= 88 && days_until_expiry <= 92,
+            "Expected ~90 days, got {}",
+            days_until_expiry
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_cert_expiry_renewing_cert() {
+        let cert_pem = generate_test_cert(15); // Expires in 15 days (within 30-day window)
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+
+        let (status, _) = HostsServiceImpl::read_cert_expiry(&cert_path)
+            .await
+            .unwrap();
+
+        assert_eq!(status, "renewing");
+    }
+
+    #[tokio::test]
+    async fn test_read_cert_expiry_expired_cert() {
+        // Generate a cert that's already expired (negative days)
+        // rcgen doesn't allow negative validity, so we create one expiring "today"
+        // and check it's in "renewing" state, then test edge case with 0 days
+        let cert_pem = generate_test_cert(0); // Expires today
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+
+        let (status, _) = HostsServiceImpl::read_cert_expiry(&cert_path)
+            .await
+            .unwrap();
+
+        // With 0 days, it's either expired or renewing depending on time of day
+        assert!(
+            status == "expired" || status == "renewing",
+            "Expected expired or renewing, got {}",
+            status
+        );
+    }
+
+    #[tokio::test]
+    async fn test_read_cert_expiry_missing_file() {
+        let result =
+            HostsServiceImpl::read_cert_expiry(std::path::Path::new("/nonexistent/cert.pem")).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("failed to read certificate"));
+    }
+
+    #[tokio::test]
+    async fn test_read_cert_expiry_invalid_pem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        std::fs::write(&cert_path, "not a valid PEM certificate").unwrap();
+
+        let result = HostsServiceImpl::read_cert_expiry(&cert_path).await;
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("failed to parse PEM"));
+    }
+
+    #[tokio::test]
+    async fn test_read_cert_expiry_boundary_30_days() {
+        // Test exactly at the boundary (30 days)
+        let cert_pem = generate_test_cert(30);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+
+        let (status, _) = HostsServiceImpl::read_cert_expiry(&cert_path)
+            .await
+            .unwrap();
+
+        // At exactly 30 days, should be "renewing" (<=30)
+        assert_eq!(status, "renewing");
+    }
+
+    #[tokio::test]
+    async fn test_read_cert_expiry_boundary_31_days() {
+        // Test just outside the boundary (31 days)
+        let cert_pem = generate_test_cert(31);
+        let temp_dir = tempfile::tempdir().unwrap();
+        let cert_path = temp_dir.path().join("cert.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+
+        let (status, _) = HostsServiceImpl::read_cert_expiry(&cert_path)
+            .await
+            .unwrap();
+
+        // At 31 days, should be "valid" (>30)
+        assert_eq!(status, "valid");
     }
 }

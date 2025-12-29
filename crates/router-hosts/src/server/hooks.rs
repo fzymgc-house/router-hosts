@@ -48,18 +48,30 @@ impl HookExecutor {
         }
     }
 
-    /// Get names of all configured hooks for health reporting
+    /// Get sanitized names of all configured hooks for health reporting
     ///
     /// Returns both success and failure hooks with prefixes indicating their type.
+    /// Only the command basename is returned (not full path or arguments) to avoid
+    /// exposing sensitive information like system paths or command arguments.
     pub fn hook_names(&self) -> Vec<String> {
         let mut names = Vec::with_capacity(self.on_success.len() + self.on_failure.len());
         for cmd in &self.on_success {
-            names.push(format!("on_success: {}", cmd));
+            names.push(format!("on_success: {}", Self::sanitize_command(cmd)));
         }
         for cmd in &self.on_failure {
-            names.push(format!("on_failure: {}", cmd));
+            names.push(format!("on_failure: {}", Self::sanitize_command(cmd)));
         }
         names
+    }
+
+    /// Extract only the command basename from a full command string.
+    ///
+    /// This prevents exposing full paths and arguments in health responses.
+    fn sanitize_command(cmd: &str) -> &str {
+        // Get the first word (the command itself, before any arguments)
+        let first_word = cmd.split_whitespace().next().unwrap_or(cmd);
+        // Get just the basename (after the last /)
+        first_word.rsplit('/').next().unwrap_or(first_word)
     }
 
     /// Get count of configured hooks
@@ -386,8 +398,9 @@ mod tests {
         );
         let names = executor.hook_names();
         assert_eq!(names.len(), 2);
-        assert_eq!(names[0], "on_success: echo success");
-        assert_eq!(names[1], "on_success: /usr/bin/reload");
+        // Only basename is returned, not full command or path
+        assert_eq!(names[0], "on_success: echo");
+        assert_eq!(names[1], "on_success: reload");
         assert_eq!(executor.hook_count(), 2);
     }
 
@@ -396,7 +409,8 @@ mod tests {
         let executor = HookExecutor::new(vec![], vec!["notify failure".to_string()], 5);
         let names = executor.hook_names();
         assert_eq!(names.len(), 1);
-        assert_eq!(names[0], "on_failure: notify failure");
+        // Only basename is returned
+        assert_eq!(names[0], "on_failure: notify");
         assert_eq!(executor.hook_count(), 1);
     }
 
@@ -413,5 +427,36 @@ mod tests {
         assert_eq!(names[1], "on_failure: failure1");
         assert_eq!(names[2], "on_failure: failure2");
         assert_eq!(executor.hook_count(), 3);
+    }
+
+    #[test]
+    fn test_sanitize_command_strips_path() {
+        assert_eq!(
+            HookExecutor::sanitize_command("/usr/bin/reload-dns"),
+            "reload-dns"
+        );
+        assert_eq!(
+            HookExecutor::sanitize_command("/home/user/scripts/my-hook.sh"),
+            "my-hook.sh"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_command_strips_arguments() {
+        assert_eq!(HookExecutor::sanitize_command("echo hello world"), "echo");
+        assert_eq!(
+            HookExecutor::sanitize_command("/usr/bin/notify --secret=abc123 --verbose"),
+            "notify"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_command_handles_simple_command() {
+        assert_eq!(HookExecutor::sanitize_command("reload"), "reload");
+    }
+
+    #[test]
+    fn test_sanitize_command_handles_empty() {
+        assert_eq!(HookExecutor::sanitize_command(""), "");
     }
 }
