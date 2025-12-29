@@ -167,16 +167,44 @@ grpc_health_probe -addr=localhost:50051 -tls \
   -tls-client-key=/path/to/client.key
 ```
 
-### Metrics
+## Prometheus Metrics
 
-Metrics are logged but not yet exposed via Prometheus endpoint (future enhancement).
+### Configuration
 
-Key metrics to monitor:
-- Request latency (p50, p95, p99)
-- Request error rate
-- Active connections
-- Storage operation duration
-- Hook execution time
+Metrics are opt-in. Add a `[metrics]` section to enable:
+
+```toml
+[metrics]
+# Prometheus HTTP endpoint (plaintext)
+prometheus_bind = "0.0.0.0:9090"
+
+# Optional: OpenTelemetry export
+[metrics.otel]
+endpoint = "http://otel-collector:4317"
+service_name = "router-hosts"  # defaults to "router-hosts"
+```
+
+### Available Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `router_hosts_requests_total` | Counter | `method`, `status` | Total gRPC requests |
+| `router_hosts_request_duration_seconds` | Histogram | `method` | Request latency |
+| `router_hosts_storage_operations_total` | Counter | `operation`, `status` | DB operations count |
+| `router_hosts_storage_duration_seconds` | Histogram | `operation` | DB operation latency |
+| `router_hosts_hook_executions_total` | Counter | `name`, `type`, `status` | Hook execution count |
+| `router_hosts_hook_duration_seconds` | Histogram | `name`, `type` | Hook execution time |
+| `router_hosts_hosts_entries` | Gauge | - | Current host entry count |
+
+### Scraping
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'router-hosts'
+    static_configs:
+      - targets: ['router-hosts:9090']
+```
 
 ## Backup and Recovery
 
