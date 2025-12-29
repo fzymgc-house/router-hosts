@@ -172,4 +172,25 @@ mod tests {
         let result = readyz(State(state)).await;
         assert_eq!(result, StatusCode::SERVICE_UNAVAILABLE);
     }
+
+    #[tokio::test]
+    async fn test_mark_started_is_idempotent() {
+        let mock_client = MockRouterHostsClientTrait::new();
+        let state = Arc::new(HealthState::new(Arc::new(mock_client)));
+
+        // Initially not started
+        assert!(!state.is_started());
+
+        // First call marks as started
+        state.mark_started();
+        assert!(state.is_started());
+
+        // Second call should be safe (idempotent)
+        state.mark_started();
+        assert!(state.is_started());
+
+        // Third call still safe
+        state.mark_started();
+        assert!(state.is_started());
+    }
 }
