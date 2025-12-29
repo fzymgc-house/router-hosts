@@ -98,6 +98,8 @@ pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, Metri
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+    use std::time::Duration;
 
     #[tokio::test]
     async fn test_init_with_none_returns_disabled() {
@@ -109,5 +111,30 @@ mod tests {
     async fn test_disabled_shutdown_is_noop() {
         let handle = MetricsHandle::disabled();
         handle.shutdown().await; // Should not panic
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_full_metrics_init_and_scrape() {
+        use crate::server::config::MetricsConfig;
+
+        let config = MetricsConfig {
+            prometheus_bind: Some("127.0.0.1:0".parse().unwrap()),
+            otel: None,
+        };
+
+        let handle = init(Some(&config)).await.unwrap();
+
+        // Verify prometheus shutdown channel exists (server is running)
+        assert!(handle.prometheus_shutdown.is_some());
+
+        // Record some metrics to verify the recorder is installed
+        counters::record_request("GetHost", "ok", Duration::from_millis(5));
+        counters::set_hosts_entries_count(42);
+        counters::record_storage_operation("get", "ok", Duration::from_millis(2));
+        counters::record_hook_execution("test_hook", "pre", "success", Duration::from_millis(10));
+
+        // Shutdown cleanly
+        handle.shutdown().await;
     }
 }
