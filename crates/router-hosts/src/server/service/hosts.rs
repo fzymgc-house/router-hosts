@@ -1,6 +1,7 @@
 //! Host CRUD operation handlers
 
 use crate::server::commands::CommandError;
+use crate::server::metrics::counters::TimedOperation;
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
     self, AddHostRequest, AddHostResponse, DeleteHostRequest, DeleteHostResponse, GetHostRequest,
@@ -17,9 +18,10 @@ impl HostsServiceImpl {
         &self,
         request: Request<AddHostRequest>,
     ) -> Result<Response<AddHostResponse>, Status> {
+        let timer = TimedOperation::new("AddHost");
         let req = request.into_inner();
 
-        let entry = self
+        let result = self
             .write_queue
             .add_host(
                 req.ip_address,
@@ -28,13 +30,21 @@ impl HostsServiceImpl {
                 req.comment,
                 req.tags,
             )
-            .await
-            .map_err(Status::from)?;
+            .await;
 
-        Ok(Response::new(AddHostResponse {
-            id: entry.id.to_string(),
-            entry: Some(host_entry_to_proto(entry)),
-        }))
+        match result {
+            Ok(entry) => {
+                timer.finish("ok");
+                Ok(Response::new(AddHostResponse {
+                    id: entry.id.to_string(),
+                    entry: Some(host_entry_to_proto(entry)),
+                }))
+            }
+            Err(e) => {
+                timer.finish("error");
+                Err(Status::from(e))
+            }
+        }
     }
 
     /// Get a host entry by ID

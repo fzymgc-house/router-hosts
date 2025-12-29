@@ -16,6 +16,7 @@
 //! endpoint = "http://otel-collector:4317"
 //! ```
 
+pub mod counters;
 mod prometheus;
 
 use crate::server::config::MetricsConfig;
