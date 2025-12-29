@@ -13,6 +13,7 @@ pub mod export;
 pub mod hooks;
 pub mod hosts_file;
 pub mod import;
+pub mod metrics;
 pub mod service;
 pub mod write_queue;
 
@@ -323,6 +324,11 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
         None
     };
 
+    // Initialize metrics if configured
+    let metrics_handle = metrics::init(config.metrics.as_ref())
+        .await
+        .map_err(|e| ServerError::Config(format!("Metrics initialization failed: {}", e)))?;
+
     // Server loop
     loop {
         info!("Loading TLS certificates");
@@ -448,6 +454,10 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
                     info!("Shutting down ACME renewal loop");
                     handle.shutdown().await;
                 }
+
+                // Shutdown metrics
+                info!("Shutting down metrics");
+                metrics_handle.shutdown().await;
 
                 info!("Server shutdown complete");
                 break;

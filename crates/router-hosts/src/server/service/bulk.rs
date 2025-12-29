@@ -4,6 +4,7 @@ use crate::server::export::{
     format_csv_entry, format_csv_header, format_hosts_entry, format_hosts_header,
     format_json_entry, ExportFormat,
 };
+use crate::server::metrics::counters::TimedOperation;
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
     ExportHostsRequest, ExportHostsResponse, ImportHostsRequest, ImportHostsResponse,
@@ -48,6 +49,7 @@ impl HostsServiceImpl {
         use crate::server::write_queue::ConflictMode;
         use tokio_stream::StreamExt;
 
+        let timer = TimedOperation::new("ImportHosts");
         let mut stream = request.into_inner();
         let mut data = Vec::new();
         let mut format: Option<String> = None;
@@ -56,11 +58,18 @@ impl HostsServiceImpl {
 
         // Collect all chunks with size and count limit checks
         while let Some(chunk_result) = stream.next().await {
-            let chunk = chunk_result?;
+            let chunk = match chunk_result {
+                Ok(c) => c,
+                Err(e) => {
+                    timer.finish("error");
+                    return Err(e);
+                }
+            };
 
             // Check chunk count limit to prevent DoS via endless small chunks
             chunk_count += 1;
             if chunk_count > MAX_CHUNKS {
+                timer.finish("error");
                 return Err(Status::resource_exhausted(format!(
                     "Import stream exceeds maximum chunk count of {}",
                     MAX_CHUNKS
@@ -69,6 +78,7 @@ impl HostsServiceImpl {
 
             // Check size limit before extending buffer
             if data.len() + chunk.chunk.len() > MAX_IMPORT_SIZE {
+                timer.finish("error");
                 return Err(Status::resource_exhausted(format!(
                     "Import data exceeds maximum size of {} bytes",
                     MAX_IMPORT_SIZE
@@ -91,49 +101,62 @@ impl HostsServiceImpl {
         }
 
         // Parse format
-        let import_format: ImportFormat =
-            format.as_deref().unwrap_or("").parse().map_err(|_| {
-                Status::invalid_argument(format!(
+        let import_format: ImportFormat = match format.as_deref().unwrap_or("").parse() {
+            Ok(f) => f,
+            Err(_) => {
+                timer.finish("error");
+                return Err(Status::invalid_argument(format!(
                     "Invalid format '{}'. Supported: hosts, json, csv",
                     format.as_deref().unwrap_or("")
-                ))
-            })?;
+                )));
+            }
+        };
 
         // Parse conflict mode
-        let mode: ConflictMode = conflict_mode
-            .as_deref()
-            .unwrap_or("")
-            .parse()
-            .map_err(Status::invalid_argument)?;
+        let mode: ConflictMode = match conflict_mode.as_deref().unwrap_or("").parse() {
+            Ok(m) => m,
+            Err(e) => {
+                timer.finish("error");
+                return Err(Status::invalid_argument(e));
+            }
+        };
 
         // Parse the import data
-        let entries = parse_import(&data, import_format)
-            .map_err(|e| Status::invalid_argument(format!("Parse error: {}", e)))?;
+        let entries = match parse_import(&data, import_format) {
+            Ok(e) => e,
+            Err(e) => {
+                timer.finish("error");
+                return Err(Status::invalid_argument(format!("Parse error: {}", e)));
+            }
+        };
 
         // Import via write queue for serialization
-        let result = self
-            .write_queue
-            .import_hosts(entries, mode)
-            .await
-            .map_err(|e| match e {
-                crate::server::commands::CommandError::DuplicateEntry(msg) => {
-                    Status::already_exists(msg)
-                }
-                crate::server::commands::CommandError::ValidationFailed(msg) => {
-                    Status::invalid_argument(msg)
-                }
-                other => Status::internal(other.to_string()),
-            })?;
-
-        Ok(Response::new(vec![ImportHostsResponse {
-            processed: result.processed,
-            created: result.created,
-            updated: result.updated,
-            skipped: result.skipped,
-            failed: result.failed,
-            error: None,
-            validation_errors: result.validation_errors,
-        }]))
+        match self.write_queue.import_hosts(entries, mode).await {
+            Ok(result) => {
+                timer.finish("ok");
+                Ok(Response::new(vec![ImportHostsResponse {
+                    processed: result.processed,
+                    created: result.created,
+                    updated: result.updated,
+                    skipped: result.skipped,
+                    failed: result.failed,
+                    error: None,
+                    validation_errors: result.validation_errors,
+                }]))
+            }
+            Err(e) => {
+                timer.finish("error");
+                Err(match e {
+                    crate::server::commands::CommandError::DuplicateEntry(msg) => {
+                        Status::already_exists(msg)
+                    }
+                    crate::server::commands::CommandError::ValidationFailed(msg) => {
+                        Status::invalid_argument(msg)
+                    }
+                    other => Status::internal(other.to_string()),
+                })
+            }
+        }
     }
 
     /// Export hosts in specified format via streaming
@@ -145,21 +168,29 @@ impl HostsServiceImpl {
         request: Request<ExportHostsRequest>,
         storage: Arc<dyn Storage>,
     ) -> Result<Response<Vec<ExportHostsResponse>>, Status> {
+        let timer = TimedOperation::new("ExportHosts");
         let req = request.into_inner();
 
         // Parse and validate format
-        let format: ExportFormat = req.format.parse().map_err(|_| {
-            Status::invalid_argument(format!(
-                "Invalid format '{}'. Supported: hosts, json, csv",
-                req.format
-            ))
-        })?;
+        let format: ExportFormat = match req.format.parse() {
+            Ok(f) => f,
+            Err(_) => {
+                timer.finish("error");
+                return Err(Status::invalid_argument(format!(
+                    "Invalid format '{}'. Supported: hosts, json, csv",
+                    req.format
+                )));
+            }
+        };
 
         // Query all hosts from storage
-        let entries = storage
-            .list_all()
-            .await
-            .map_err(|e| Status::internal(format!("Failed to query hosts: {}", e)))?;
+        let entries = match storage.list_all().await {
+            Ok(e) => e,
+            Err(e) => {
+                timer.finish("error");
+                return Err(Status::internal(format!("Failed to query hosts: {}", e)));
+            }
+        };
 
         let mut responses = Vec::new();
 
@@ -184,13 +215,19 @@ impl HostsServiceImpl {
         for entry in entries {
             let chunk = match format {
                 ExportFormat::Hosts => format_hosts_entry(&entry),
-                ExportFormat::Json => format_json_entry(&entry)
-                    .map_err(|e| Status::internal(format!("Failed to format entry: {}", e)))?,
+                ExportFormat::Json => match format_json_entry(&entry) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        timer.finish("error");
+                        return Err(Status::internal(format!("Failed to format entry: {}", e)));
+                    }
+                },
                 ExportFormat::Csv => format_csv_entry(&entry),
             };
             responses.push(ExportHostsResponse { chunk });
         }
 
+        timer.finish("ok");
         Ok(Response::new(responses))
     }
 }

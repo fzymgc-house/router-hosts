@@ -104,6 +104,7 @@ impl CommandHandler {
             retention: crate::server::config::RetentionConfig::default(),
             hooks: crate::server::config::HooksConfig::default(),
             acme: crate::server::acme::AcmeConfig::default(),
+            metrics: None,
         });
         Self {
             storage,

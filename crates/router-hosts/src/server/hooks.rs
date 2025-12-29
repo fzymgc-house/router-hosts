@@ -15,13 +15,14 @@
 //! - Implementing retry logic in the hook script itself
 
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{error, info, warn};
 
 use super::config::HookDefinition;
+use super::metrics::counters::record_hook_execution;
 
 #[derive(Debug, Error)]
 pub enum HookError {
@@ -152,8 +153,9 @@ impl HookExecutor {
         error_msg: &str,
     ) -> Result<(), HookError> {
         info!(hook_name = %hook.name, "Running hook");
+        let start = Instant::now();
 
-        let mut child = Command::new("sh")
+        let child_result = Command::new("sh")
             .arg("-c")
             .arg(&hook.command)
             .env("ROUTER_HOSTS_EVENT", event)
@@ -161,22 +163,38 @@ impl HookExecutor {
             .env("ROUTER_HOSTS_ERROR", error_msg)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()?;
+            .spawn();
+
+        let mut child = match child_result {
+            Ok(c) => c,
+            Err(e) => {
+                record_hook_execution(&hook.name, event, "error", start.elapsed());
+                error!(
+                    hook_name = %hook.name,
+                    error = %e,
+                    "Hook failed to spawn"
+                );
+                return Err(HookError::Io(e));
+            }
+        };
 
         let result = timeout(Duration::from_secs(self.timeout_secs), child.wait()).await;
 
         match result {
             Ok(Ok(status)) => {
                 if status.success() {
+                    record_hook_execution(&hook.name, event, "success", start.elapsed());
                     info!(hook_name = %hook.name, "Hook completed successfully");
                     Ok(())
                 } else {
                     let code = status.code().unwrap_or(-1);
+                    record_hook_execution(&hook.name, event, "failed", start.elapsed());
                     error!(hook_name = %hook.name, exit_code = code, "Hook failed");
                     Err(HookError::Failed(code, hook.name.clone()))
                 }
             }
             Ok(Err(e)) => {
+                record_hook_execution(&hook.name, event, "error", start.elapsed());
                 error!(
                     hook_name = %hook.name,
                     error = %e,
@@ -185,6 +203,7 @@ impl HookExecutor {
                 Err(HookError::Io(e))
             }
             Err(_) => {
+                record_hook_execution(&hook.name, event, "timeout", start.elapsed());
                 if let Err(kill_err) = child.kill().await {
                     warn!(
                         hook_name = %hook.name,

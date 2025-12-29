@@ -54,6 +54,7 @@ pub fn create_test_config() -> Config {
         },
         hooks: HooksConfig::default(),
         acme: AcmeConfig::default(),
+        metrics: None,
     }
 }
 
