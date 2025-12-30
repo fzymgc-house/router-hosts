@@ -421,4 +421,382 @@ mod tests {
 
         assert!(tags.contains(&"pre-existing:true".to_string()));
     }
+
+    mod reconcile_tests {
+        use super::*;
+        use crate::client::{HostEntry, MockRouterHostsClientTrait};
+        use crate::config::{DeletionConfig, RouterHostsConfigSpec, SecretReference, ServerConfig};
+        use crate::controllers::retry::RetryTracker;
+        use crate::deletion::DeletionScheduler;
+        use crate::resolver::MockIpResolverTrait;
+        use std::time::Duration;
+
+        fn test_config() -> RouterHostsConfigSpec {
+            RouterHostsConfigSpec {
+                server: ServerConfig {
+                    endpoint: "localhost:50051".to_string(),
+                    tls_secret_ref: SecretReference {
+                        name: "tls-secret".to_string(),
+                        namespace: "default".to_string(),
+                    },
+                },
+                ip_resolution: vec![],
+                deletion: DeletionConfig {
+                    grace_period_seconds: 300,
+                },
+                default_tags: vec!["env:test".to_string()],
+            }
+        }
+
+        /// Mock service for creating a kube Client in tests
+        #[derive(Clone)]
+        struct MockKubeService;
+
+        impl tower::Service<http::Request<kube::client::Body>> for MockKubeService {
+            type Response = http::Response<kube::client::Body>;
+            type Error = std::convert::Infallible;
+            type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+            fn poll_ready(
+                &mut self,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<(), Self::Error>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, _req: http::Request<kube::client::Body>) -> Self::Future {
+                panic!("MockKubeService should not be called in reconcile tests")
+            }
+        }
+
+        fn mock_kube_client() -> Client {
+            Client::new(MockKubeService, "default")
+        }
+
+        fn make_context(
+            client: MockRouterHostsClientTrait,
+            resolver: MockIpResolverTrait,
+        ) -> Arc<ControllerContext> {
+            Arc::new(ControllerContext {
+                client: Arc::new(client),
+                resolver: Arc::new(resolver),
+                deletion: Arc::new(DeletionScheduler::new(Duration::from_secs(300))),
+                config: Arc::new(test_config()),
+                kube_client: mock_kube_client(),
+                retry_tracker: Arc::new(RetryTracker::new()),
+            })
+        }
+
+        fn test_ingressroute(
+            annotations: BTreeMap<String, String>,
+            uid: &str,
+            match_expr: &str,
+        ) -> IngressRoute {
+            IngressRoute {
+                metadata: kube::api::ObjectMeta {
+                    name: Some("test-ingressroute".to_string()),
+                    namespace: Some("default".to_string()),
+                    uid: Some(uid.to_string()),
+                    annotations: Some(annotations),
+                    ..Default::default()
+                },
+                spec: IngressRouteSpec {
+                    entry_points: vec!["web".to_string()],
+                    routes: vec![IngressRouteRoute {
+                        match_expr: match_expr.to_string(),
+                        kind: "Rule".to_string(),
+                    }],
+                },
+            }
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_not_enabled() {
+            let ir = Arc::new(test_ingressroute(
+                BTreeMap::new(),
+                "test-uid",
+                "Host(`test.example.com`)",
+            ));
+
+            let client = MockRouterHostsClientTrait::new();
+            let resolver = MockIpResolverTrait::new();
+            let ctx = make_context(client, resolver);
+
+            let result = reconcile(ir, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_enabled_false() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "false".to_string());
+            let ir = Arc::new(test_ingressroute(
+                annotations,
+                "test-uid",
+                "Host(`test.example.com`)",
+            ));
+
+            let client = MockRouterHostsClientTrait::new();
+            let resolver = MockIpResolverTrait::new();
+            let ctx = make_context(client, resolver);
+
+            let result = reconcile(ir, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_creates_new_entry() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            let ir = Arc::new(test_ingressroute(
+                annotations,
+                "test-uid-123",
+                "Host(`test.example.com`)",
+            ));
+
+            let mut client = MockRouterHostsClientTrait::new();
+            let mut resolver = MockIpResolverTrait::new();
+
+            resolver
+                .expect_resolve()
+                .times(1)
+                .returning(|_| Ok("10.0.0.1".to_string()));
+
+            client
+                .expect_find_by_hostname()
+                .with(mockall::predicate::eq("test.example.com"))
+                .times(1)
+                .returning(|_| Ok(None));
+
+            client
+                .expect_add_host()
+                .withf(|hostname, ip, _aliases, tags| {
+                    hostname == "test.example.com"
+                        && ip == "10.0.0.1"
+                        && tags.contains(&"k8s-operator".to_string())
+                        && tags.contains(&"source:test-uid-123".to_string())
+                        && tags.contains(&"kind:IngressRoute".to_string())
+                })
+                .times(1)
+                .returning(|hostname, ip, aliases, tags| {
+                    Ok(HostEntry {
+                        id: "new-entry-id".to_string(),
+                        hostname: hostname.to_string(),
+                        ip_address: ip.to_string(),
+                        aliases,
+                        tags,
+                        version: "v1".to_string(),
+                    })
+                });
+
+            let ctx = make_context(client, resolver);
+            let result = reconcile(ir, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_updates_existing_entry() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            let ir = Arc::new(test_ingressroute(
+                annotations,
+                "test-uid-123",
+                "Host(`test.example.com`)",
+            ));
+
+            let mut client = MockRouterHostsClientTrait::new();
+            let mut resolver = MockIpResolverTrait::new();
+
+            resolver
+                .expect_resolve()
+                .times(1)
+                .returning(|_| Ok("10.0.0.2".to_string()));
+
+            client
+                .expect_find_by_hostname()
+                .with(mockall::predicate::eq("test.example.com"))
+                .times(1)
+                .returning(|_| {
+                    Ok(Some(HostEntry {
+                        id: "existing-id".to_string(),
+                        hostname: "test.example.com".to_string(),
+                        ip_address: "10.0.0.1".to_string(),
+                        aliases: vec![],
+                        tags: vec![
+                            "k8s-operator".to_string(),
+                            "source:test-uid-123".to_string(),
+                        ],
+                        version: "v1".to_string(),
+                    }))
+                });
+
+            client
+                .expect_update_host()
+                .withf(|id, ip, _aliases, _tags, version| {
+                    id == "existing-id"
+                        && ip.as_ref().map(|s| s.as_str()) == Some("10.0.0.2")
+                        && version == &Some("v1".to_string())
+                })
+                .times(1)
+                .returning(|id, ip, aliases, tags, _| {
+                    Ok(HostEntry {
+                        id: id.to_string(),
+                        hostname: "test.example.com".to_string(),
+                        ip_address: ip.unwrap_or_default(),
+                        aliases: aliases.unwrap_or_default(),
+                        tags: tags.unwrap_or_default(),
+                        version: "v2".to_string(),
+                    })
+                });
+
+            let ctx = make_context(client, resolver);
+            let result = reconcile(ir, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_no_update_when_unchanged() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            let ir = Arc::new(test_ingressroute(
+                annotations,
+                "test-uid-123",
+                "Host(`test.example.com`)",
+            ));
+
+            let mut client = MockRouterHostsClientTrait::new();
+            let mut resolver = MockIpResolverTrait::new();
+
+            resolver
+                .expect_resolve()
+                .times(1)
+                .returning(|_| Ok("10.0.0.1".to_string()));
+
+            client.expect_find_by_hostname().times(1).returning(|_| {
+                Ok(Some(HostEntry {
+                    id: "existing-id".to_string(),
+                    hostname: "test.example.com".to_string(),
+                    ip_address: "10.0.0.1".to_string(),
+                    aliases: vec![],
+                    tags: vec![
+                        "k8s-operator".to_string(),
+                        "source:test-uid-123".to_string(),
+                        "namespace:default".to_string(),
+                        "kind:IngressRoute".to_string(),
+                        "env:test".to_string(),
+                    ],
+                    version: "v1".to_string(),
+                }))
+            });
+
+            // update_host should NOT be called
+            let ctx = make_context(client, resolver);
+            let result = reconcile(ir, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_ip_resolution_error() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            let ir = Arc::new(test_ingressroute(
+                annotations,
+                "test-uid",
+                "Host(`test.example.com`)",
+            ));
+
+            let client = MockRouterHostsClientTrait::new();
+            let mut resolver = MockIpResolverTrait::new();
+
+            resolver
+                .expect_resolve()
+                .times(1)
+                .returning(|_| Err(crate::resolver::ResolverError::NoIpResolved));
+
+            let ctx = make_context(client, resolver);
+            let result = reconcile(ir, ctx).await;
+
+            assert!(result.is_err());
+            assert!(matches!(
+                result.unwrap_err(),
+                IngressRouteError::IpResolution(_)
+            ));
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_no_hosts_in_spec() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+
+            // IngressRoute with match expression that has no hosts
+            let ir = Arc::new(test_ingressroute(
+                annotations,
+                "test-uid",
+                "PathPrefix(`/api`)", // No Host() matcher
+            ));
+
+            let client = MockRouterHostsClientTrait::new();
+            let resolver = MockIpResolverTrait::new();
+            let ctx = make_context(client, resolver);
+
+            let result = reconcile(ir, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_with_aliases_and_custom_tags() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            annotations.insert(
+                annotations::ALIASES.to_string(),
+                "alias1.com, alias2.com".to_string(),
+            );
+            annotations.insert(
+                annotations::TAGS.to_string(),
+                "custom-tag, another-tag".to_string(),
+            );
+            let ir = Arc::new(test_ingressroute(
+                annotations,
+                "test-uid",
+                "Host(`test.example.com`)",
+            ));
+
+            let mut client = MockRouterHostsClientTrait::new();
+            let mut resolver = MockIpResolverTrait::new();
+
+            resolver
+                .expect_resolve()
+                .times(1)
+                .returning(|_| Ok("10.0.0.1".to_string()));
+
+            client
+                .expect_find_by_hostname()
+                .times(1)
+                .returning(|_| Ok(None));
+
+            client
+                .expect_add_host()
+                .withf(|_, _, aliases, tags| {
+                    aliases.contains(&"alias1.com".to_string())
+                        && aliases.contains(&"alias2.com".to_string())
+                        && tags.contains(&"custom-tag".to_string())
+                        && tags.contains(&"another-tag".to_string())
+                })
+                .times(1)
+                .returning(|hostname, ip, aliases, tags| {
+                    Ok(HostEntry {
+                        id: "new-id".to_string(),
+                        hostname: hostname.to_string(),
+                        ip_address: ip.to_string(),
+                        aliases,
+                        tags,
+                        version: "v1".to_string(),
+                    })
+                });
+
+            let ctx = make_context(client, resolver);
+            let result = reconcile(ir, ctx).await;
+            assert!(result.is_ok());
+        }
+    }
 }
