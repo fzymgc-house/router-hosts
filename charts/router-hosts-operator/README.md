@@ -10,6 +10,30 @@ Kubernetes operator for syncing Ingress hostnames to router-hosts server.
 
 ## Installation
 
+### From OCI Registry (Recommended)
+
+The chart is published to GitHub Container Registry:
+
+```bash
+# Create namespace and mTLS secret first (see below)
+kubectl create namespace router-hosts-system
+
+# Install from OCI registry
+helm install router-hosts-operator \
+  oci://ghcr.io/fzymgc-house/charts/router-hosts-operator \
+  --namespace router-hosts-system \
+  --version 0.7.0
+```
+
+### From Source
+
+Alternatively, install directly from the repository:
+
+```bash
+helm install router-hosts-operator charts/router-hosts-operator \
+  --namespace router-hosts-system
+```
+
 ### 1. Create mTLS Secret
 
 First, create a Secret containing the mTLS certificates for connecting to the router-hosts server:
@@ -82,7 +106,7 @@ helm install router-hosts-operator charts/router-hosts-operator \
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `image.repository` | Image repository | `ghcr.io/fzymgc-house/router-hosts-operator` |
-| `image.tag` | Image tag | Chart appVersion (`0.6.0`) |
+| `image.tag` | Image tag | Chart appVersion |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `replicaCount` | Number of replicas | `1` |
 | `leaderElection.enabled` | Enable leader election | `false` (auto-enabled if replicas >= 2) |
