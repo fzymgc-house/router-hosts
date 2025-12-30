@@ -13,7 +13,7 @@ See `docs/plans/2025-12-01-router-hosts-v1-design.md` for complete design specif
 
 ## Workspace Structure
 
-Four crates in a Cargo workspace:
+Six crates in a Cargo workspace:
 
 ### router-hosts-common
 
@@ -26,17 +26,34 @@ Shared library containing:
 
 Storage abstraction layer:
 - `Storage` trait defining EventStore, SnapshotStore, and HostProjection
-- DuckDB backend (default, embedded, feature-rich)
-- SQLite backend (lightweight, embedded, single-file)
+- SQLite backend (default, lightweight, embedded, single-file)
 - PostgreSQL backend (multi-instance, cloud deployments, connection pooling)
+- DuckDB backend (embedded, feature-rich analytics) - requires separate binary
 - Shared test suite for backend compliance (42 tests)
 
 ### router-hosts
 
-Unified binary (client and server modes):
+Main binary (client and server modes):
 - **Client mode (default):** CLI interface using clap, gRPC client wrapper, command handlers
-- **Server mode:** gRPC service implementation, storage integration, hosts file generation with atomic writes, post-edit hook execution
+- **Server mode:** gRPC service implementation, storage integration, hosts file generation with atomic writes, post-edit hook execution, Prometheus metrics
 - Mode selection: runs in server mode when first argument is "server", otherwise client mode
+- Includes SQLite and PostgreSQL backends
+
+### router-hosts-duckdb
+
+Variant binary with DuckDB support:
+- Same functionality as router-hosts
+- Includes all three storage backends (SQLite, PostgreSQL, DuckDB)
+- Larger binary size due to DuckDB dependencies
+
+### router-hosts-operator
+
+Kubernetes operator for automated DNS registration:
+- Watches Traefik IngressRoute, IngressRouteTCP, and custom HostMapping CRDs
+- Automatically registers/updates host entries with router-hosts server
+- Leader election for high availability
+- Health endpoints for Kubernetes probes
+- See [Operator Documentation](operator.md) for details
 
 ### router-hosts-e2e
 
@@ -85,6 +102,24 @@ See `docs/architecture/event-sourcing.md` for detailed event sourcing documentat
 - No fallback to insecure connections
 - Server validates client certificates against configured CA
 
+## Observability
+
+### Prometheus Metrics
+
+The server exposes Prometheus metrics on a configurable HTTP endpoint:
+
+- **Request metrics**: `grpc_requests_total`, `grpc_request_duration_seconds`
+- **Storage metrics**: `storage_operations_total`, `storage_operation_duration_seconds`
+- **Host metrics**: `hosts_total`, `host_operations_total`
+- **Hook metrics**: `hook_executions_total`, `hook_execution_duration_seconds`
+
+See [Operations Guide](operations.md#prometheus-metrics) for configuration.
+
+### Health Endpoints
+
+- **Server**: `Health` gRPC service with `Check` RPC for readiness probes
+- **Operator**: HTTP endpoints at `/healthz` (liveness) and `/readyz` (readiness)
+
 ## Configuration
 
 ### Server Configuration
@@ -92,8 +127,8 @@ See `docs/architecture/event-sourcing.md` for detailed event sourcing documentat
 Server requires:
 - `hosts_file_path` setting (no default) - prevents accidental overwrites
 - TLS certificate paths
-- Storage backend configuration (DuckDB path, SQLite path, or PostgreSQL URL)
-- Optional: retention policy, hooks, timeout settings
+- Storage backend: SQLite (default), PostgreSQL URL, or DuckDB path
+- Optional: retention policy, hooks, metrics endpoint, timeout settings
 
 ### Client Configuration
 
@@ -104,10 +139,11 @@ Server requires:
 
 - **Storage trait** in `router-hosts-storage` abstracts database operations
 - **Available backends:**
-  - **DuckDB** (default): Embedded, single file, feature-rich analytics
-  - **SQLite**: Lightweight embedded, single file, wide compatibility
+  - **SQLite** (default): Lightweight embedded, single file, wide compatibility
   - **PostgreSQL**: Multi-instance deployments, connection pooling, cloud-ready
-- Use in-memory mode for tests: `DuckDbStorage::new(":memory:")`
+  - **DuckDB**: Embedded, single file, feature-rich analytics (requires `router-hosts-duckdb` binary)
+- Default path: `~/.local/share/router-hosts/hosts.db` (XDG-compliant)
+- Use in-memory mode for tests: `SqliteStorage::new(":memory:")`
 - Shared test suite validates any `Storage` implementation (42 tests)
 
 ## Validation

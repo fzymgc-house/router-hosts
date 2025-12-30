@@ -158,7 +158,17 @@ RUST_LOG=info,tonic=trace router-hosts server
 
 ### Health Checks
 
-The server exposes gRPC health checking (future enhancement):
+The server exposes a gRPC `Health` service for readiness probes. This is useful for container orchestration systems (Kubernetes, Nomad) that need to verify the server is ready to accept connections.
+
+**gRPC Health Service:**
+
+```protobuf
+service Health {
+  rpc Check(HealthCheckRequest) returns (HealthCheckResponse);
+}
+```
+
+**Using grpc-health-probe:**
 
 ```bash
 grpc_health_probe -addr=localhost:50051 -tls \
@@ -166,6 +176,42 @@ grpc_health_probe -addr=localhost:50051 -tls \
   -tls-client-cert=/path/to/client.crt \
   -tls-client-key=/path/to/client.key
 ```
+
+**Kubernetes Integration:**
+
+```yaml
+readinessProbe:
+  exec:
+    command:
+      - /bin/grpc_health_probe
+      - -addr=localhost:50051
+      - -tls
+      - -tls-ca-cert=/certs/ca.crt
+      - -tls-client-cert=/certs/client.crt
+      - -tls-client-key=/certs/client.key
+  initialDelaySeconds: 5
+  periodSeconds: 10
+```
+
+**Response:**
+
+| Status | Meaning |
+|--------|---------|
+| `SERVING` | Server is ready to accept requests |
+| `NOT_SERVING` | Server is starting up or shutting down |
+
+The Health check verifies the gRPC service is responsive. It does not validate storage backend connectivity (that's the responsibility of the client making actual requests).
+
+### Operator Health Endpoints
+
+The Kubernetes operator exposes HTTP health endpoints (separate from the server's gRPC Health service):
+
+| Endpoint | Purpose | Behavior |
+|----------|---------|----------|
+| `/healthz` | Liveness | Returns 200 if process is alive |
+| `/readyz` | Readiness | Returns 200 if startup complete AND router-hosts server reachable |
+
+See [Operator Documentation](operator.md#observability) for details on probe configuration.
 
 ## Prometheus Metrics
 

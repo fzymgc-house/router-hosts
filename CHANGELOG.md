@@ -7,6 +7,85 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2025-12-29
+
+### Breaking Changes
+
+#### Hook configuration now requires structured definitions
+
+Hooks now require both a `name` and `command` field. The hook name provides a stable identifier for logging, metrics, and health endpoints without exposing command details.
+
+**Old format (no longer supported):**
+```toml
+[[hooks.on_success]]
+command = "systemctl reload dnsmasq"
+```
+
+**New format:**
+```toml
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+```
+
+**Name requirements:**
+- Kebab-case only (lowercase letters, numbers, hyphens)
+- Maximum 50 characters
+- Must be unique within each hook type
+
+### Added
+
+#### Kubernetes Operator (#152)
+
+New `router-hosts-operator` crate provides automated DNS registration for Kubernetes workloads:
+
+- **Resource watching**: IngressRoute, IngressRouteTCP (Traefik), and custom HostMapping CRD
+- **Automatic sync**: Creates/updates/deletes host entries based on resource state
+- **IP resolution**: Discovers IPs from ingress controller Services or static configuration
+- **Graceful deletion**: Configurable grace period before removing entries
+- **Helm chart**: Full deployment with RBAC, health probes, and configuration
+
+See [Operator Documentation](docs/operator.md) for details.
+
+#### Health Endpoints (#158, #164)
+
+- **Server**: gRPC `Health` service with `Check` RPC for readiness probes
+- **Operator**: HTTP `/healthz` (liveness) and `/readyz` (readiness) endpoints
+- Readiness probe verifies router-hosts server connectivity
+
+#### Prometheus Metrics (#170)
+
+Server-side observability with Prometheus metrics:
+
+- `router_hosts_requests_total` - gRPC request counter by method/status
+- `router_hosts_request_duration_seconds` - Request latency histogram
+- `router_hosts_storage_operations_total` - Storage operation counter
+- `router_hosts_storage_duration_seconds` - Storage operation latency
+- `router_hosts_hook_executions_total` - Hook execution counter
+- `router_hosts_hook_duration_seconds` - Hook execution latency
+- `router_hosts_hosts_entries` - Current host entry gauge
+
+Configure via `[metrics]` section in server config.
+
+#### Leader Election for Operator HA (#171)
+
+Run multiple operator replicas for high availability:
+
+- Kubernetes Lease-based leader election
+- Only one active replica reconciles at a time
+- Automatic failover on leader failure
+- Zero-downtime rolling updates
+- Auto-enabled when `replicaCount >= 2`
+
+### Changed
+
+- **Docker images**: Version tags added on release (e.g., `v0.7.0`) in addition to SHA tags (#151)
+- **cargo-dist**: Updated to v0.30.3 for release workflow (#173)
+
+### Fixed
+
+- Operator test assertions improved for clarity (#174)
+
 ## [0.6.0] - 2025-12-24
 
 ### Breaking Changes
@@ -185,6 +264,7 @@ N/A - Initial release
 
 ---
 
-[Unreleased]: https://github.com/fzymgc-house/router-hosts/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/fzymgc-house/router-hosts/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/fzymgc-house/router-hosts/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/fzymgc-house/router-hosts/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/fzymgc-house/router-hosts/releases/tag/v0.5.0
