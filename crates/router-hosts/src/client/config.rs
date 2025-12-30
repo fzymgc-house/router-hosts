@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Client configuration with all connection settings
@@ -99,36 +100,115 @@ impl ClientConfig {
     }
 
     fn load_from_file(path: Option<&PathBuf>) -> Result<Option<ConfigFile>> {
-        let config_path = match path {
-            Some(p) => p.clone(),
-            None => {
-                // Try default location
-                let default = Self::default_config_path();
-                if !default.exists() {
-                    return Ok(None);
-                }
-                default
-            }
+        // Determine config path: explicit path or auto-discovered
+        let (config_path, is_explicit) = match path {
+            Some(p) => (p.as_path(), true),
+            None => match Self::find_config_file() {
+                Some(found) => return Self::parse_config_file(&found),
+                None => return Ok(None),
+            },
         };
 
-        if !config_path.exists() {
-            if path.is_some() {
-                // Explicitly specified path must exist
-                return Err(anyhow!("Config file not found: {:?}", config_path));
+        // Read file directly - avoid TOCTOU by not pre-checking exists()
+        let content = match std::fs::read_to_string(config_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && is_explicit => {
+                return Err(anyhow!("Config file not found: {}", config_path.display()));
             }
-            return Ok(None);
-        }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Auto-discovered file was removed between find and read (rare race)
+                return Ok(None);
+            }
+            Err(e) => return Err(e.into()),
+        };
 
-        let content = std::fs::read_to_string(&config_path)?;
         let config: ConfigFile = toml::from_str(&content)?;
         Ok(Some(config))
     }
 
-    fn default_config_path() -> PathBuf {
-        dirs::config_dir()
-            .unwrap_or_else(|| PathBuf::from("."))
-            .join("router-hosts")
-            .join("client.toml")
+    /// Parse a config file that's known to exist (from find_config_file).
+    fn parse_config_file(path: &std::path::Path) -> Result<Option<ConfigFile>> {
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let config: ConfigFile = toml::from_str(&content)?;
+                Ok(Some(config))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File was removed between find and read (rare race)
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Find the first existing config file from candidate paths.
+    ///
+    /// Search order (stops at first match):
+    /// 1. `$XDG_CONFIG_HOME/router-hosts/` (if XDG_CONFIG_HOME is set)
+    /// 2. `~/.config/router-hosts/` (XDG default)
+    /// 3. Platform-native config dir (macOS: ~/Library/Application Support/...)
+    ///
+    /// Within each directory, `client.toml` is preferred over `config.toml`.
+    ///
+    /// # Symlink Behavior
+    ///
+    /// Symlinks are followed transparently - both the config directory and config
+    /// file may be symlinks. Deduplication uses canonicalized paths, so if two
+    /// search directories resolve to the same location (e.g., `~/.config` symlinked
+    /// to another path), only the first is searched.
+    ///
+    /// # Platform Notes
+    ///
+    /// - **Linux/BSD**: `~/.config` is typically used (XDG default)
+    /// - **macOS**: `~/Library/Application Support` is native, but `~/.config` is also searched
+    /// - **Windows**: `%APPDATA%` is native; `~/.config` is also searched for WSL compatibility
+    fn find_config_file() -> Option<PathBuf> {
+        let filenames = ["client.toml", "config.toml"];
+
+        for base_dir in Self::config_search_dirs() {
+            let router_hosts_dir = base_dir.join("router-hosts");
+            for filename in &filenames {
+                let candidate = router_hosts_dir.join(filename);
+                if candidate.exists() {
+                    return Some(candidate);
+                }
+            }
+        }
+        None
+    }
+
+    /// Get config directories to search, in priority order.
+    fn config_search_dirs() -> Vec<PathBuf> {
+        let mut dirs = Vec::with_capacity(3);
+        let mut seen = HashSet::new();
+
+        // Helper to add path if not already seen (uses canonical path for deduplication)
+        let mut add_if_unique = |path: PathBuf| {
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if seen.insert(canonical) {
+                dirs.push(path);
+            }
+        };
+
+        // 1. XDG_CONFIG_HOME if explicitly set
+        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+            let xdg_path = PathBuf::from(xdg);
+            if xdg_path.is_absolute() {
+                add_if_unique(xdg_path);
+            }
+        }
+
+        // 2. ~/.config (XDG default, works on all platforms)
+        if let Some(home) = dirs::home_dir() {
+            add_if_unique(home.join(".config"));
+        }
+
+        // 3. Platform-native config dir (may duplicate ~/.config on Linux)
+        if let Some(native) = dirs::config_dir() {
+            add_if_unique(native);
+        }
+
+        dirs
     }
 
     fn expand_tilde(path: PathBuf) -> PathBuf {
@@ -274,11 +354,18 @@ ca_cert_path = "/file/ca.crt"
     #[test]
     #[serial]
     fn test_missing_required_fields() {
+        use tempfile::TempDir;
+
         // Clear any env vars - guards ensure cleanup even on panic
         let _g1 = EnvGuard::remove("ROUTER_HOSTS_SERVER");
         let _g2 = EnvGuard::remove("ROUTER_HOSTS_CERT");
         let _g3 = EnvGuard::remove("ROUTER_HOSTS_KEY");
         let _g4 = EnvGuard::remove("ROUTER_HOSTS_CA");
+
+        // Point XDG_CONFIG_HOME and HOME to empty temp dir so no config is found
+        let temp = TempDir::new().unwrap();
+        let _xdg_guard = EnvGuard::set("XDG_CONFIG_HOME", temp.path().to_str().unwrap());
+        let _home_guard = EnvGuard::set("HOME", temp.path().to_str().unwrap());
 
         let result = ClientConfig::load(None, None, None, None, None);
         assert!(result.is_err());
@@ -371,5 +458,227 @@ ca_cert_path = "/file/ca.crt"
 
         // Cleanup
         std::env::remove_var(TEST_KEY);
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_search_dirs_includes_xdg_default() {
+        let _guard = EnvGuard::remove("XDG_CONFIG_HOME");
+
+        let dirs = ClientConfig::config_search_dirs();
+        let home = dirs::home_dir().expect("home dir should exist");
+        let xdg_default = home.join(".config");
+
+        assert!(
+            dirs.contains(&xdg_default),
+            "Should include ~/.config in search dirs"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_search_dirs_xdg_config_home_priority() {
+        let _guard = EnvGuard::set("XDG_CONFIG_HOME", "/custom/xdg/config");
+
+        let dirs = ClientConfig::config_search_dirs();
+
+        assert_eq!(
+            dirs[0],
+            PathBuf::from("/custom/xdg/config"),
+            "XDG_CONFIG_HOME should be first in search order"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_config_file_prefers_client_toml() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let router_hosts_dir = temp.path().join("router-hosts");
+        std::fs::create_dir_all(&router_hosts_dir).unwrap();
+
+        // Create both files
+        std::fs::write(router_hosts_dir.join("client.toml"), "[server]").unwrap();
+        std::fs::write(router_hosts_dir.join("config.toml"), "[server]").unwrap();
+
+        let _guard = EnvGuard::set("XDG_CONFIG_HOME", temp.path().to_str().unwrap());
+
+        let found = ClientConfig::find_config_file();
+        assert!(found.is_some());
+        assert!(
+            found.unwrap().ends_with("client.toml"),
+            "Should prefer client.toml over config.toml"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_config_file_falls_back_to_config_toml() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let router_hosts_dir = temp.path().join("router-hosts");
+        std::fs::create_dir_all(&router_hosts_dir).unwrap();
+
+        // Create only config.toml
+        std::fs::write(router_hosts_dir.join("config.toml"), "[server]").unwrap();
+
+        let _guard = EnvGuard::set("XDG_CONFIG_HOME", temp.path().to_str().unwrap());
+
+        let found = ClientConfig::find_config_file();
+        assert!(found.is_some());
+        assert!(
+            found.unwrap().ends_with("config.toml"),
+            "Should find config.toml when client.toml doesn't exist"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_load_from_default_location_with_config_toml() {
+        use tempfile::TempDir;
+
+        // Clear env vars
+        let _g1 = EnvGuard::remove("ROUTER_HOSTS_SERVER");
+        let _g2 = EnvGuard::remove("ROUTER_HOSTS_CERT");
+        let _g3 = EnvGuard::remove("ROUTER_HOSTS_KEY");
+        let _g4 = EnvGuard::remove("ROUTER_HOSTS_CA");
+
+        let temp = TempDir::new().unwrap();
+        let router_hosts_dir = temp.path().join("router-hosts");
+        std::fs::create_dir_all(&router_hosts_dir).unwrap();
+
+        // Write config.toml (not client.toml)
+        let config_content = r#"
+[server]
+address = "found-via-config-toml:50051"
+
+[tls]
+cert_path = "/etc/certs/client.crt"
+key_path = "/etc/certs/client.key"
+ca_cert_path = "/etc/certs/ca.crt"
+"#;
+        std::fs::write(router_hosts_dir.join("config.toml"), config_content).unwrap();
+
+        let _xdg_guard = EnvGuard::set("XDG_CONFIG_HOME", temp.path().to_str().unwrap());
+
+        let config = ClientConfig::load(None, None, None, None, None).unwrap();
+        assert_eq!(
+            config.server_address, "found-via-config-toml:50051",
+            "Should load from config.toml in XDG location"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_search_dirs_ignores_relative_xdg_config_home() {
+        // Set XDG_CONFIG_HOME to a relative path (should be ignored)
+        let _guard = EnvGuard::set("XDG_CONFIG_HOME", "relative/path");
+
+        let dirs = ClientConfig::config_search_dirs();
+
+        // Should skip the relative path
+        assert!(
+            !dirs.contains(&PathBuf::from("relative/path")),
+            "Should ignore relative XDG_CONFIG_HOME"
+        );
+
+        // Should still include ~/.config
+        let home = dirs::home_dir().expect("home dir should exist");
+        assert!(
+            dirs.contains(&home.join(".config")),
+            "Should still include ~/.config when XDG_CONFIG_HOME is relative"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_config_file_respects_directory_priority() {
+        use tempfile::TempDir;
+
+        // Create two temp directories to simulate XDG and fallback
+        let xdg_dir = TempDir::new().unwrap();
+        let fallback_dir = TempDir::new().unwrap();
+
+        // Create config in fallback dir (lower priority)
+        let fallback_router_hosts = fallback_dir.path().join("router-hosts");
+        std::fs::create_dir_all(&fallback_router_hosts).unwrap();
+        std::fs::write(fallback_router_hosts.join("client.toml"), "[server]").unwrap();
+
+        // Create config in XDG dir (higher priority)
+        let xdg_router_hosts = xdg_dir.path().join("router-hosts");
+        std::fs::create_dir_all(&xdg_router_hosts).unwrap();
+        std::fs::write(xdg_router_hosts.join("client.toml"), "[server]").unwrap();
+
+        // Set XDG_CONFIG_HOME to xdg_dir, HOME to fallback_dir
+        let _xdg_guard = EnvGuard::set("XDG_CONFIG_HOME", xdg_dir.path().to_str().unwrap());
+        let _home_guard = EnvGuard::set("HOME", fallback_dir.path().to_str().unwrap());
+
+        let found = ClientConfig::find_config_file();
+        assert!(found.is_some());
+
+        let found_path = found.unwrap();
+        assert!(
+            found_path.starts_with(xdg_dir.path()),
+            "Should find config from XDG_CONFIG_HOME ({:?}) before ~/.config ({:?}), found: {:?}",
+            xdg_dir.path(),
+            fallback_dir.path(),
+            found_path
+        );
+    }
+
+    #[test]
+    fn test_load_from_file_propagates_io_errors() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        // Create a directory where a file is expected - will cause "is a directory" error
+        let dir_as_file = temp.path().join("not-a-file.toml");
+        std::fs::create_dir(&dir_as_file).unwrap();
+
+        // Explicitly specifying a directory should fail with an I/O error, not NotFound
+        let result = ClientConfig::load(Some(&dir_as_file), None, None, None, None);
+
+        assert!(result.is_err(), "Should fail when path is a directory");
+        let err = result.unwrap_err().to_string();
+        // Error message should NOT be "Config file not found" since the path exists
+        assert!(
+            !err.contains("not found"),
+            "Should propagate I/O error, not report as missing. Got: {}",
+            err
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_from_file_propagates_permission_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::NamedTempFile;
+
+        // Skip this test if running as root (root can read any file)
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let mut file = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut file, b"[server]\naddress = \"test:1234\"").unwrap();
+
+        // Make file unreadable
+        let path = file.path().to_path_buf();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = ClientConfig::load(Some(&path), None, None, None, None);
+
+        // Restore permissions before assertions (cleanup)
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(result.is_err(), "Should fail with permission denied");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            !err.contains("not found"),
+            "Should propagate permission error, not report as missing. Got: {}",
+            err
+        );
     }
 }
