@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 /// Client configuration with all connection settings
@@ -103,7 +104,7 @@ impl ClientConfig {
             Some(p) => {
                 // Explicitly specified path must exist
                 if !p.exists() {
-                    return Err(anyhow!("Config file not found: {:?}", p));
+                    return Err(anyhow!("Config file not found: {}", p.display()));
                 }
                 p.clone()
             }
@@ -123,10 +124,12 @@ impl ClientConfig {
 
     /// Find the first existing config file from candidate paths.
     ///
-    /// Search order:
-    /// 1. `$XDG_CONFIG_HOME/router-hosts/{client,config}.toml` (if XDG_CONFIG_HOME is set)
-    /// 2. `~/.config/router-hosts/{client,config}.toml` (XDG default)
+    /// Search order (stops at first match):
+    /// 1. `$XDG_CONFIG_HOME/router-hosts/` (if XDG_CONFIG_HOME is set)
+    /// 2. `~/.config/router-hosts/` (XDG default)
     /// 3. Platform-native config dir (macOS: ~/Library/Application Support/...)
+    ///
+    /// Within each directory, `client.toml` is preferred over `config.toml`.
     fn find_config_file() -> Option<PathBuf> {
         let filenames = ["client.toml", "config.toml"];
 
@@ -144,29 +147,33 @@ impl ClientConfig {
 
     /// Get config directories to search, in priority order.
     fn config_search_dirs() -> Vec<PathBuf> {
-        let mut dirs = Vec::new();
+        let mut dirs = Vec::with_capacity(3);
+        let mut seen = HashSet::new();
+
+        // Helper to add path if not already seen (uses canonical path for deduplication)
+        let mut add_if_unique = |path: PathBuf| {
+            let canonical = path.canonicalize().unwrap_or_else(|_| path.clone());
+            if seen.insert(canonical) {
+                dirs.push(path);
+            }
+        };
 
         // 1. XDG_CONFIG_HOME if explicitly set
         if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
             let xdg_path = PathBuf::from(xdg);
             if xdg_path.is_absolute() {
-                dirs.push(xdg_path);
+                add_if_unique(xdg_path);
             }
         }
 
         // 2. ~/.config (XDG default, works on all platforms)
         if let Some(home) = dirs::home_dir() {
-            let xdg_default = home.join(".config");
-            if !dirs.contains(&xdg_default) {
-                dirs.push(xdg_default);
-            }
+            add_if_unique(home.join(".config"));
         }
 
         // 3. Platform-native config dir (may duplicate ~/.config on Linux)
         if let Some(native) = dirs::config_dir() {
-            if !dirs.contains(&native) {
-                dirs.push(native);
-            }
+            add_if_unique(native);
         }
 
         dirs
@@ -528,6 +535,64 @@ ca_cert_path = "/etc/certs/ca.crt"
         assert_eq!(
             config.server_address, "found-via-config-toml:50051",
             "Should load from config.toml in XDG location"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_config_search_dirs_ignores_relative_xdg_config_home() {
+        // Set XDG_CONFIG_HOME to a relative path (should be ignored)
+        let _guard = EnvGuard::set("XDG_CONFIG_HOME", "relative/path");
+
+        let dirs = ClientConfig::config_search_dirs();
+
+        // Should skip the relative path
+        assert!(
+            !dirs.contains(&PathBuf::from("relative/path")),
+            "Should ignore relative XDG_CONFIG_HOME"
+        );
+
+        // Should still include ~/.config
+        let home = dirs::home_dir().expect("home dir should exist");
+        assert!(
+            dirs.contains(&home.join(".config")),
+            "Should still include ~/.config when XDG_CONFIG_HOME is relative"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn test_find_config_file_respects_directory_priority() {
+        use tempfile::TempDir;
+
+        // Create two temp directories to simulate XDG and fallback
+        let xdg_dir = TempDir::new().unwrap();
+        let fallback_dir = TempDir::new().unwrap();
+
+        // Create config in fallback dir (lower priority)
+        let fallback_router_hosts = fallback_dir.path().join("router-hosts");
+        std::fs::create_dir_all(&fallback_router_hosts).unwrap();
+        std::fs::write(fallback_router_hosts.join("client.toml"), "[server]").unwrap();
+
+        // Create config in XDG dir (higher priority)
+        let xdg_router_hosts = xdg_dir.path().join("router-hosts");
+        std::fs::create_dir_all(&xdg_router_hosts).unwrap();
+        std::fs::write(xdg_router_hosts.join("client.toml"), "[server]").unwrap();
+
+        // Set XDG_CONFIG_HOME to xdg_dir, HOME to fallback_dir
+        let _xdg_guard = EnvGuard::set("XDG_CONFIG_HOME", xdg_dir.path().to_str().unwrap());
+        let _home_guard = EnvGuard::set("HOME", fallback_dir.path().to_str().unwrap());
+
+        let found = ClientConfig::find_config_file();
+        assert!(found.is_some());
+
+        let found_path = found.unwrap();
+        assert!(
+            found_path.starts_with(xdg_dir.path()),
+            "Should find config from XDG_CONFIG_HOME ({:?}) before ~/.config ({:?}), found: {:?}",
+            xdg_dir.path(),
+            fallback_dir.path(),
+            found_path
         );
     }
 }
