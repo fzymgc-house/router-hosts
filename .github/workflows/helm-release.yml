@@ -95,6 +95,10 @@ jobs:
         run: |
           helm push "router-hosts-operator-${VERSION}.tgz" "oci://${REGISTRY}/${REPO_OWNER}/charts"
 
+      - name: Logout from registry
+        if: always()
+        run: helm registry logout "$REGISTRY"
+
       - name: Summary
         env:
           VERSION: ${{ steps.version.outputs.version }}

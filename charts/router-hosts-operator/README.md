@@ -18,11 +18,11 @@ The chart is published to GitHub Container Registry:
 # Create namespace and mTLS secret first (see below)
 kubectl create namespace router-hosts-system
 
-# Install from OCI registry
+# Install from OCI registry (replace VERSION with desired release)
 helm install router-hosts-operator \
   oci://ghcr.io/fzymgc-house/charts/router-hosts-operator \
   --namespace router-hosts-system \
-  --version 0.7.0
+  --version VERSION
 ```
 
 ### From Source
