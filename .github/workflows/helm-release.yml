@@ -55,7 +55,7 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
-          version: v3.14.0
+          version: v4.0.4
 
       - name: Extract version from tag
         id: version
@@ -66,16 +66,32 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Extracted version: $VERSION"
 
-      - name: Update Chart.yaml versions
+      - name: Validate Chart.yaml versions
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          # Update chart version and appVersion to match release
-          sed -i "s/^version:.*/version: $VERSION/" "$CHART_PATH/Chart.yaml"
-          sed -i "s/^appVersion:.*/appVersion: $VERSION/" "$CHART_PATH/Chart.yaml"
+          # Validate that Chart.yaml versions match the git tag
+          # This ensures reproducibility - the tagged commit must have correct versions
+          CHART_VERSION=$(grep '^version:' "$CHART_PATH/Chart.yaml" | awk '{print $2}')
+          APP_VERSION=$(grep '^appVersion:' "$CHART_PATH/Chart.yaml" | awk '{print $2}')
 
-          echo "Updated Chart.yaml:"
-          cat "$CHART_PATH/Chart.yaml"
+          echo "Tag version: $VERSION"
+          echo "Chart version: $CHART_VERSION"
+          echo "App version: $APP_VERSION"
+
+          if [ "$CHART_VERSION" != "$VERSION" ]; then
+            echo "::error::Chart version ($CHART_VERSION) does not match tag version ($VERSION)"
+            echo "Update Chart.yaml before tagging the release."
+            exit 1
+          fi
+
+          if [ "$APP_VERSION" != "$VERSION" ]; then
+            echo "::error::App version ($APP_VERSION) does not match tag version ($VERSION)"
+            echo "Update Chart.yaml before tagging the release."
+            exit 1
+          fi
+
+          echo "✓ Chart.yaml versions match tag"
 
       - name: Lint chart
         run: helm lint "$CHART_PATH"
