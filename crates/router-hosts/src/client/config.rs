@@ -100,26 +100,45 @@ impl ClientConfig {
     }
 
     fn load_from_file(path: Option<&PathBuf>) -> Result<Option<ConfigFile>> {
-        let config_path = match path {
-            Some(p) => {
-                // Explicitly specified path must exist
-                if !p.exists() {
-                    return Err(anyhow!("Config file not found: {}", p.display()));
-                }
-                p.clone()
-            }
-            None => {
-                // Try candidate paths in priority order
-                match Self::find_config_file() {
-                    Some(found) => found,
-                    None => return Ok(None),
-                }
-            }
+        // Determine config path: explicit path or auto-discovered
+        let (config_path, is_explicit) = match path {
+            Some(p) => (p.as_path(), true),
+            None => match Self::find_config_file() {
+                Some(found) => return Self::parse_config_file(&found),
+                None => return Ok(None),
+            },
         };
 
-        let content = std::fs::read_to_string(&config_path)?;
+        // Read file directly - avoid TOCTOU by not pre-checking exists()
+        let content = match std::fs::read_to_string(config_path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound && is_explicit => {
+                return Err(anyhow!("Config file not found: {}", config_path.display()));
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // Auto-discovered file was removed between find and read (rare race)
+                return Ok(None);
+            }
+            Err(e) => return Err(e.into()),
+        };
+
         let config: ConfigFile = toml::from_str(&content)?;
         Ok(Some(config))
+    }
+
+    /// Parse a config file that's known to exist (from find_config_file).
+    fn parse_config_file(path: &std::path::Path) -> Result<Option<ConfigFile>> {
+        match std::fs::read_to_string(path) {
+            Ok(content) => {
+                let config: ConfigFile = toml::from_str(&content)?;
+                Ok(Some(config))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // File was removed between find and read (rare race)
+                Ok(None)
+            }
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Find the first existing config file from candidate paths.
@@ -130,6 +149,19 @@ impl ClientConfig {
     /// 3. Platform-native config dir (macOS: ~/Library/Application Support/...)
     ///
     /// Within each directory, `client.toml` is preferred over `config.toml`.
+    ///
+    /// # Symlink Behavior
+    ///
+    /// Symlinks are followed transparently - both the config directory and config
+    /// file may be symlinks. Deduplication uses canonicalized paths, so if two
+    /// search directories resolve to the same location (e.g., `~/.config` symlinked
+    /// to another path), only the first is searched.
+    ///
+    /// # Platform Notes
+    ///
+    /// - **Linux/BSD**: `~/.config` is typically used (XDG default)
+    /// - **macOS**: `~/Library/Application Support` is native, but `~/.config` is also searched
+    /// - **Windows**: `%APPDATA%` is native; `~/.config` is also searched for WSL compatibility
     fn find_config_file() -> Option<PathBuf> {
         let filenames = ["client.toml", "config.toml"];
 
@@ -593,6 +625,60 @@ ca_cert_path = "/etc/certs/ca.crt"
             xdg_dir.path(),
             fallback_dir.path(),
             found_path
+        );
+    }
+
+    #[test]
+    fn test_load_from_file_propagates_io_errors() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        // Create a directory where a file is expected - will cause "is a directory" error
+        let dir_as_file = temp.path().join("not-a-file.toml");
+        std::fs::create_dir(&dir_as_file).unwrap();
+
+        // Explicitly specifying a directory should fail with an I/O error, not NotFound
+        let result = ClientConfig::load(Some(&dir_as_file), None, None, None, None);
+
+        assert!(result.is_err(), "Should fail when path is a directory");
+        let err = result.unwrap_err().to_string();
+        // Error message should NOT be "Config file not found" since the path exists
+        assert!(
+            !err.contains("not found"),
+            "Should propagate I/O error, not report as missing. Got: {}",
+            err
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_from_file_propagates_permission_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::NamedTempFile;
+
+        // Skip this test if running as root (root can read any file)
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
+
+        let mut file = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut file, b"[server]\naddress = \"test:1234\"").unwrap();
+
+        // Make file unreadable
+        let path = file.path().to_path_buf();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = ClientConfig::load(Some(&path), None, None, None, None);
+
+        // Restore permissions before assertions (cleanup)
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(result.is_err(), "Should fail with permission denied");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            !err.contains("not found"),
+            "Should propagate permission error, not report as missing. Got: {}",
+            err
         );
     }
 }
