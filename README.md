@@ -224,7 +224,7 @@ docker run -v /path/to/config:/config ghcr.io/fzymgc-house/router-hosts:latest s
 **v0.7.0 In Progress:**
 - ✅ Leader election for operator HA
 - ✅ Health RPC for operator readiness
-- 🔲 Documentation updates
+- ✅ Documentation updates
 
 See [Releases](https://github.com/fzymgc-house/router-hosts/releases) for version history.
 
