@@ -10,12 +10,14 @@ Rust CLI tool for managing DNS host entries on routers via gRPC.
 
 **router-hosts** provides a client-server architecture for remotely managing `/etc/hosts` files on routers (OpenWrt or similar embedded Linux):
 
-- **Server** runs on the router, exposes gRPC API, manages DuckDB storage
+- **Server** runs on the router, exposes gRPC API, manages host entries with event-sourced storage
 - **Client** runs on your workstation, provides CLI for all operations
-- Supports versioning, bulk operations, edit sessions, and validation
+- **Kubernetes Operator** automates DNS registration for Traefik IngressRoutes and custom HostMappings
+- Supports versioning, bulk operations, snapshots with rollback, and validation
 - TLS with mutual authentication for security
+- Prometheus metrics for observability
 
-See [Design Document](docs/plans/2025-11-28-router-hosts-design.md) for detailed architecture.
+See [Architecture](docs/architecture.md) for detailed design.
 
 ## Project Structure
 
@@ -23,7 +25,13 @@ See [Design Document](docs/plans/2025-11-28-router-hosts-design.md) for detailed
 router-hosts/
 ├── crates/
 │   ├── router-hosts-common/   # Shared validation, types, protobuf
-│   └── router-hosts/          # Unified binary (client + server modes)
+│   ├── router-hosts-storage/  # Storage backends (SQLite, PostgreSQL, DuckDB)
+│   ├── router-hosts/          # Main binary (client + server modes)
+│   ├── router-hosts-duckdb/   # DuckDB variant binary
+│   ├── router-hosts-operator/ # Kubernetes operator
+│   └── router-hosts-e2e/      # End-to-end tests
+├── charts/
+│   └── router-hosts-operator/ # Helm chart for operator
 └── proto/
     └── router_hosts/
         └── v1/
@@ -199,19 +207,26 @@ docker run -v /path/to/config:/config ghcr.io/fzymgc-house/router-hosts:latest s
 
 ## Status
 
-✅ **v0.5.0 Core Complete** - All features implemented, 8/8 E2E tests passing
+✅ **v0.6.0 Released** - Core features complete with Kubernetes operator
 
-**Ready for testing:**
+**Features:**
 - ✅ Client CLI with all commands (host, snapshot, config)
-- ✅ Server with event sourcing (DuckDB/CQRS)
+- ✅ Server with event sourcing and multiple storage backends
+- ✅ SQLite (default), PostgreSQL, and DuckDB storage options
 - ✅ Import/Export (hosts, JSON, CSV formats)
 - ✅ Snapshots with rollback and retention
-- ✅ mTLS authentication
-- ✅ Full E2E test coverage
+- ✅ mTLS authentication with SIGHUP certificate reload
+- ✅ ACME certificate automation (HTTP-01 and DNS-01)
+- ✅ Kubernetes operator for Traefik integration
+- ✅ Prometheus metrics instrumentation
+- ✅ Full E2E test coverage (10 scenarios)
 
-See [v0.5.0 Task List](docs/plans/2025-12-01-v1-tasks.md) for implementation details.
+**v0.7.0 In Progress:**
+- ✅ Leader election for operator HA
+- ✅ Health RPC for operator readiness
+- ✅ Documentation updates
 
-> **Note:** v0.5.0 not yet tagged for release. See GitHub Issues for remaining polish items.
+See [Releases](https://github.com/fzymgc-house/router-hosts/releases) for version history.
 
 ## License
 

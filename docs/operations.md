@@ -158,14 +158,54 @@ RUST_LOG=info,tonic=trace router-hosts server
 
 ### Health Checks
 
-The server exposes gRPC health checking (future enhancement):
+The server exposes health check RPCs within `HostsService` for monitoring and orchestration systems.
+
+**Available Health RPCs:**
+
+| RPC | Purpose | Checks |
+|-----|---------|--------|
+| `Liveness` | Process alive check | Returns immediately (no I/O) |
+| `Readiness` | Ready to serve | Verifies database connectivity |
+| `Health` | Detailed status | Server, database, ACME, hooks |
+
+**Using grpcurl for health checks:**
 
 ```bash
-grpc_health_probe -addr=localhost:50051 -tls \
-  -tls-ca-cert=/path/to/ca.crt \
-  -tls-client-cert=/path/to/client.crt \
-  -tls-client-key=/path/to/client.key
+# Check readiness (verifies database)
+grpcurl -cacert /path/to/ca.crt \
+  -cert /path/to/client.crt \
+  -key /path/to/client.key \
+  localhost:50051 router_hosts.v1.HostsService/Readiness
+
+# Get detailed health status
+grpcurl -cacert /path/to/ca.crt \
+  -cert /path/to/client.crt \
+  -key /path/to/client.key \
+  localhost:50051 router_hosts.v1.HostsService/Health
 ```
+
+**Health Response Fields:**
+
+| Field | Description |
+|-------|-------------|
+| `healthy` | Overall health status |
+| `server_status` | gRPC server status |
+| `database_status` | Storage backend connectivity |
+| `acme_status` | ACME certificate manager status (if configured) |
+| `hooks` | Individual hook health status |
+
+The `Readiness` RPC is suitable for Kubernetes readiness probes as it verifies the server can process requests (database is accessible).
+
+### Operator Health Endpoints
+
+The Kubernetes operator exposes HTTP health endpoints (separate from the server's gRPC Health service):
+
+| Endpoint | Purpose | Behavior |
+|----------|---------|----------|
+| `/healthz` | Liveness | Returns 200 if process is alive |
+| `/readyz` | Readiness | Returns 200 if startup complete AND router-hosts server reachable |
+
+See [Operator Documentation](operator.md#observability) for details on probe configuration.
 
 ## Prometheus Metrics
 
