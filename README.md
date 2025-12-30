@@ -207,7 +207,7 @@ docker run -v /path/to/config:/config ghcr.io/fzymgc-house/router-hosts:latest s
 
 ## Status
 
-✅ **v0.6.0 Released** - Core features complete with Kubernetes operator
+✅ **v0.7.0 Released** - Production-ready with operator high availability
 
 **Features:**
 - ✅ Client CLI with all commands (host, snapshot, config)
@@ -218,13 +218,10 @@ docker run -v /path/to/config:/config ghcr.io/fzymgc-house/router-hosts:latest s
 - ✅ mTLS authentication with SIGHUP certificate reload
 - ✅ ACME certificate automation (HTTP-01 and DNS-01)
 - ✅ Kubernetes operator for Traefik integration
+- ✅ Leader election for operator HA
+- ✅ Health RPCs for monitoring and probes
 - ✅ Prometheus metrics instrumentation
 - ✅ Full E2E test coverage (10 scenarios)
-
-**v0.7.0 In Progress:**
-- ✅ Leader election for operator HA
-- ✅ Health RPC for operator readiness
-- ✅ Documentation updates
 
 See [Releases](https://github.com/fzymgc-house/router-hosts/releases) for version history.
 
