@@ -47,9 +47,9 @@ See [Operator Documentation](docs/operator.md) for details.
 
 #### Health Endpoints (#158, #164)
 
-- **Server**: gRPC `Health` service with `Check` RPC for readiness probes
+- **Server**: gRPC health RPCs (`Liveness`, `Readiness`, `Health`) for monitoring and probes
 - **Operator**: HTTP `/healthz` (liveness) and `/readyz` (readiness) endpoints
-- Readiness probe verifies router-hosts server connectivity
+- Readiness probes verify database/server connectivity
 
 #### Prometheus Metrics (#170)
 
