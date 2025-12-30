@@ -734,11 +734,9 @@ mod reconcile_tests {
             "uid-123",
         ));
 
-        // The reconcile will fail on status update since we have a mock kube client,
-        // but the router-hosts calls should succeed
         let result = reconcile(hostmapping, ctx).await;
-        // Status update will fail, but that's expected with mock client
-        assert!(result.is_err() || result.is_ok());
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
     }
 
     #[tokio::test]
@@ -792,8 +790,8 @@ mod reconcile_tests {
         ));
 
         let result = reconcile(hostmapping, ctx).await;
-        // Status update may fail with mock client
-        assert!(result.is_err() || result.is_ok());
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
     }
 
     #[tokio::test]
@@ -836,8 +834,8 @@ mod reconcile_tests {
         ));
 
         let result = reconcile(hostmapping, ctx).await;
-        // With no update needed, reconcile proceeds without status update
-        assert!(result.is_ok() || result.is_err());
+        // No update needed, reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
     }
 
     #[tokio::test]
@@ -876,7 +874,8 @@ mod reconcile_tests {
         let hostmapping = Arc::new(test_hostmapping("app.example.com", None, "uid-123"));
 
         let result = reconcile(hostmapping, ctx).await;
-        assert!(result.is_ok() || result.is_err());
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
     }
 
     #[tokio::test]
@@ -986,7 +985,8 @@ mod reconcile_tests {
         });
 
         let result = reconcile(hostmapping, ctx).await;
-        assert!(result.is_ok() || result.is_err());
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
     }
 
     #[tokio::test]
@@ -1026,8 +1026,8 @@ mod reconcile_tests {
         ));
 
         let result = reconcile(hostmapping, ctx).await;
-        // Will try to update status with conflict, may fail with mock client
-        assert!(result.is_ok() || result.is_err());
+        // Conflict detection succeeds; status update succeeds with mock
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
     }
 
     #[tokio::test]
@@ -1079,6 +1079,7 @@ mod reconcile_tests {
         ));
 
         let result = reconcile(hostmapping, ctx).await;
-        assert!(result.is_ok() || result.is_err());
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
     }
 }

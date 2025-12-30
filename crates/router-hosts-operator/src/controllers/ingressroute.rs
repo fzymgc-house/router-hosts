@@ -690,6 +690,8 @@ mod tests {
             });
 
             // update_host should NOT be called
+            client.expect_update_host().times(0);
+
             let ctx = make_context(client, resolver);
             let result = reconcile(ir, ctx).await;
             assert!(result.is_ok());
@@ -705,13 +707,18 @@ mod tests {
                 "Host(`test.example.com`)",
             ));
 
-            let client = MockRouterHostsClientTrait::new();
+            let mut client = MockRouterHostsClientTrait::new();
             let mut resolver = MockIpResolverTrait::new();
 
             resolver
                 .expect_resolve()
                 .times(1)
                 .returning(|_| Err(crate::resolver::ResolverError::NoIpResolved));
+
+            // Should NOT attempt to create/update when resolution fails
+            client.expect_find_by_hostname().times(0);
+            client.expect_add_host().times(0);
+            client.expect_update_host().times(0);
 
             let ctx = make_context(client, resolver);
             let result = reconcile(ir, ctx).await;
@@ -735,8 +742,15 @@ mod tests {
                 "PathPrefix(`/api`)", // No Host() matcher
             ));
 
-            let client = MockRouterHostsClientTrait::new();
-            let resolver = MockIpResolverTrait::new();
+            let mut client = MockRouterHostsClientTrait::new();
+            let mut resolver = MockIpResolverTrait::new();
+
+            // No hosts to process, so no router-hosts calls should happen
+            resolver.expect_resolve().times(0);
+            client.expect_find_by_hostname().times(0);
+            client.expect_add_host().times(0);
+            client.expect_update_host().times(0);
+
             let ctx = make_context(client, resolver);
 
             let result = reconcile(ir, ctx).await;
