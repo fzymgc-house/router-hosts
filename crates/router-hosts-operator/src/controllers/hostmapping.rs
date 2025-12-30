@@ -585,3 +585,512 @@ mod tests {
         assert!(tags.contains(&"team:platform".to_string()));
     }
 }
+
+/// Reconcile tests verify the HostMapping controller's behavior when syncing
+/// Kubernetes HostMapping resources with the router-hosts backend.
+///
+/// These tests cover:
+/// - Creating new host entries when none exist
+/// - Updating existing entries when IP, tags, or aliases change
+/// - No-op behavior when entries are already in sync
+/// - IP resolution via configured resolvers
+/// - Error handling for resolution failures and invalid IPs
+/// - Conflict detection when entries are owned by different resources
+/// - Adoption of pre-existing unmanaged entries
+#[cfg(test)]
+mod reconcile_tests {
+    use super::*;
+    use crate::client::{HostEntry, MockRouterHostsClientTrait};
+    use crate::config::{DeletionConfig, RouterHostsConfigSpec, SecretReference, ServerConfig};
+    use crate::controllers::retry::RetryTracker;
+    use crate::deletion::DeletionScheduler;
+    use crate::hostmapping::HostMappingSpec;
+    use crate::resolver::MockIpResolverTrait;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::time::Duration;
+
+    fn test_config() -> RouterHostsConfigSpec {
+        RouterHostsConfigSpec {
+            server: ServerConfig {
+                endpoint: "localhost:50051".to_string(),
+                tls_secret_ref: SecretReference {
+                    name: "tls-secret".to_string(),
+                    namespace: "default".to_string(),
+                },
+            },
+            ip_resolution: vec![],
+            deletion: DeletionConfig {
+                grace_period_seconds: 300,
+            },
+            default_tags: vec!["test".to_string()],
+        }
+    }
+
+    /// Mock service for creating a kube Client in tests.
+    /// Unlike IngressRoute/IngressRouteTCP, HostMapping updates status on errors,
+    /// so we need to return valid responses instead of panicking.
+    #[derive(Clone)]
+    struct MockKubeService;
+
+    impl tower::Service<http::Request<kube::client::Body>> for MockKubeService {
+        type Response = http::Response<kube::client::Body>;
+        type Error = std::convert::Infallible;
+        type Future = std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>,
+        >;
+
+        fn poll_ready(
+            &mut self,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Result<(), Self::Error>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn call(&mut self, _req: http::Request<kube::client::Body>) -> Self::Future {
+            Box::pin(async {
+                // Return a minimal valid HostMapping response for status updates
+                let body = serde_json::json!({
+                    "apiVersion": "router-hosts.fzymgc.house/v1alpha1",
+                    "kind": "HostMapping",
+                    "metadata": {
+                        "name": "test-hostmapping",
+                        "namespace": "default"
+                    },
+                    "spec": {
+                        "hostname": "test.example.com"
+                    },
+                    "status": {}
+                });
+                let body_bytes = serde_json::to_vec(&body).unwrap();
+                let response = http::Response::builder()
+                    .status(200)
+                    .header("content-type", "application/json")
+                    .body(kube::client::Body::from(body_bytes))
+                    .unwrap();
+                Ok(response)
+            })
+        }
+    }
+
+    fn mock_kube_client() -> KubeClient {
+        KubeClient::new(MockKubeService, "default")
+    }
+
+    fn make_context(
+        client: MockRouterHostsClientTrait,
+        resolver: MockIpResolverTrait,
+    ) -> Arc<ControllerContext> {
+        Arc::new(ControllerContext {
+            client: Arc::new(client),
+            resolver: Arc::new(resolver),
+            deletion: Arc::new(DeletionScheduler::new(Duration::from_secs(300))),
+            config: Arc::new(test_config()),
+            kube_client: mock_kube_client(),
+            retry_tracker: Arc::new(RetryTracker::new()),
+        })
+    }
+
+    fn test_hostmapping(hostname: &str, ip: Option<&str>, uid: &str) -> HostMapping {
+        HostMapping {
+            metadata: ObjectMeta {
+                name: Some("test-hostmapping".to_string()),
+                namespace: Some("default".to_string()),
+                uid: Some(uid.to_string()),
+                ..Default::default()
+            },
+            spec: HostMappingSpec {
+                hostname: hostname.to_string(),
+                ip_address: ip.map(|s| s.to_string()),
+                aliases: vec![],
+                tags: vec![],
+            },
+            status: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_creates_new_entry() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mut mock_resolver = MockIpResolverTrait::new();
+
+        // No existing entry
+        mock_client
+            .expect_find_by_hostname()
+            .with(mockall::predicate::eq("app.example.com"))
+            .times(1)
+            .returning(|_| Ok(None));
+
+        // Should create new entry
+        mock_client
+            .expect_add_host()
+            .times(1)
+            .returning(|hostname, ip, _aliases, _tags| {
+                Ok(HostEntry {
+                    id: "new-entry-id".to_string(),
+                    hostname: hostname.to_string(),
+                    ip_address: ip.to_string(),
+                    aliases: vec![],
+                    tags: vec![],
+                    version: "1".to_string(),
+                })
+            });
+
+        // Resolver not called when explicit IP is provided
+        mock_resolver.expect_resolve().times(0);
+
+        let ctx = make_context(mock_client, mock_resolver);
+        let hostmapping = Arc::new(test_hostmapping(
+            "app.example.com",
+            Some("10.0.0.1"),
+            "uid-123",
+        ));
+
+        let result = reconcile(hostmapping, ctx).await;
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_updates_existing_entry() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mut mock_resolver = MockIpResolverTrait::new();
+
+        // Existing entry with our source tag
+        mock_client
+            .expect_find_by_hostname()
+            .with(mockall::predicate::eq("app.example.com"))
+            .times(1)
+            .returning(|_| {
+                Ok(Some(HostEntry {
+                    id: "existing-id".to_string(),
+                    hostname: "app.example.com".to_string(),
+                    ip_address: "10.0.0.99".to_string(), // Different IP - needs update
+                    aliases: vec![],
+                    tags: vec![
+                        "k8s-operator".to_string(),
+                        "source:uid-123".to_string(),
+                        "namespace:default".to_string(),
+                        "kind:HostMapping".to_string(),
+                    ],
+                    version: "1".to_string(),
+                }))
+            });
+
+        // Should update existing entry
+        mock_client
+            .expect_update_host()
+            .times(1)
+            .returning(|id, ip, aliases, tags, _version| {
+                Ok(HostEntry {
+                    id: id.to_string(),
+                    hostname: "app.example.com".to_string(),
+                    ip_address: ip.unwrap_or_else(|| "10.0.0.1".to_string()),
+                    aliases: aliases.unwrap_or_default(),
+                    tags: tags.unwrap_or_default(),
+                    version: "2".to_string(),
+                })
+            });
+
+        mock_resolver.expect_resolve().times(0);
+
+        let ctx = make_context(mock_client, mock_resolver);
+        let hostmapping = Arc::new(test_hostmapping(
+            "app.example.com",
+            Some("10.0.0.1"),
+            "uid-123",
+        ));
+
+        let result = reconcile(hostmapping, ctx).await;
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_no_update_when_unchanged() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mut mock_resolver = MockIpResolverTrait::new();
+
+        // Existing entry that matches - no update needed
+        mock_client
+            .expect_find_by_hostname()
+            .with(mockall::predicate::eq("app.example.com"))
+            .times(1)
+            .returning(|_| {
+                Ok(Some(HostEntry {
+                    id: "existing-id".to_string(),
+                    hostname: "app.example.com".to_string(),
+                    ip_address: "10.0.0.1".to_string(), // Same IP
+                    aliases: vec![],
+                    tags: vec![
+                        "k8s-operator".to_string(),
+                        "source:uid-123".to_string(),
+                        "namespace:default".to_string(),
+                        "kind:HostMapping".to_string(),
+                        "test".to_string(), // default tag from config
+                    ],
+                    version: "1".to_string(),
+                }))
+            });
+
+        // Should NOT call update
+        mock_client.expect_update_host().times(0);
+
+        mock_resolver.expect_resolve().times(0);
+
+        let ctx = make_context(mock_client, mock_resolver);
+        let hostmapping = Arc::new(test_hostmapping(
+            "app.example.com",
+            Some("10.0.0.1"),
+            "uid-123",
+        ));
+
+        let result = reconcile(hostmapping, ctx).await;
+        // No update needed, reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_with_resolver() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mut mock_resolver = MockIpResolverTrait::new();
+
+        // No explicit IP, resolver should be called
+        mock_resolver
+            .expect_resolve()
+            .times(1)
+            .returning(|_| Ok("192.168.1.100".to_string()));
+
+        mock_client
+            .expect_find_by_hostname()
+            .times(1)
+            .returning(|_| Ok(None));
+
+        mock_client
+            .expect_add_host()
+            .withf(|_hostname, ip, _aliases, _tags| ip == "192.168.1.100")
+            .times(1)
+            .returning(|hostname, ip, _aliases, _tags| {
+                Ok(HostEntry {
+                    id: "new-id".to_string(),
+                    hostname: hostname.to_string(),
+                    ip_address: ip.to_string(),
+                    aliases: vec![],
+                    tags: vec![],
+                    version: "1".to_string(),
+                })
+            });
+
+        let ctx = make_context(mock_client, mock_resolver);
+        // No explicit IP - resolver will be used
+        let hostmapping = Arc::new(test_hostmapping("app.example.com", None, "uid-123"));
+
+        let result = reconcile(hostmapping, ctx).await;
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_ip_resolution_error() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mut mock_resolver = MockIpResolverTrait::new();
+
+        // Resolver fails
+        mock_resolver
+            .expect_resolve()
+            .times(1)
+            .returning(|_| Err(crate::resolver::ResolverError::NoIpResolved));
+
+        // Should NOT attempt to create/update
+        mock_client.expect_find_by_hostname().times(0);
+        mock_client.expect_add_host().times(0);
+
+        let ctx = make_context(mock_client, mock_resolver);
+        // No explicit IP - resolver will be used and fail
+        let hostmapping = Arc::new(test_hostmapping("app.example.com", None, "uid-123"));
+
+        let result = reconcile(hostmapping, ctx).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            HostMappingError::IpResolution(_) => {}
+            e => panic!("Expected IpResolution error, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_invalid_ip_in_spec() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mock_resolver = MockIpResolverTrait::new();
+
+        // Should NOT attempt to create/update when IP is invalid
+        mock_client.expect_find_by_hostname().times(0);
+        mock_client.expect_add_host().times(0);
+
+        let ctx = make_context(mock_client, mock_resolver);
+        // Invalid IP address in spec
+        let hostmapping = Arc::new(test_hostmapping(
+            "app.example.com",
+            Some("not-an-ip"),
+            "uid-123",
+        ));
+
+        let result = reconcile(hostmapping, ctx).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            HostMappingError::InvalidIp(ip) => assert_eq!(ip, "not-an-ip"),
+            e => panic!("Expected InvalidIp error, got: {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_with_aliases_and_custom_tags() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mock_resolver = MockIpResolverTrait::new();
+
+        mock_client
+            .expect_find_by_hostname()
+            .times(1)
+            .returning(|_| Ok(None));
+
+        mock_client
+            .expect_add_host()
+            .times(1)
+            .withf(|_hostname, _ip, aliases, tags| {
+                aliases
+                    == &vec![
+                        "alias1.example.com".to_string(),
+                        "alias2.example.com".to_string(),
+                    ]
+                    && tags.contains(&"env:prod".to_string())
+                    && tags.contains(&"team:platform".to_string())
+            })
+            .returning(|hostname, ip, aliases, tags| {
+                Ok(HostEntry {
+                    id: "new-id".to_string(),
+                    hostname: hostname.to_string(),
+                    ip_address: ip.to_string(),
+                    aliases,
+                    tags,
+                    version: "1".to_string(),
+                })
+            });
+
+        let ctx = make_context(mock_client, mock_resolver);
+
+        let hostmapping = Arc::new(HostMapping {
+            metadata: ObjectMeta {
+                name: Some("test-hostmapping".to_string()),
+                namespace: Some("default".to_string()),
+                uid: Some("uid-123".to_string()),
+                ..Default::default()
+            },
+            spec: HostMappingSpec {
+                hostname: "app.example.com".to_string(),
+                ip_address: Some("10.0.0.1".to_string()),
+                aliases: vec![
+                    "alias1.example.com".to_string(),
+                    "alias2.example.com".to_string(),
+                ],
+                tags: vec!["env:prod".to_string(), "team:platform".to_string()],
+            },
+            status: None,
+        });
+
+        let result = reconcile(hostmapping, ctx).await;
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_conflict_with_different_owner() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mock_resolver = MockIpResolverTrait::new();
+
+        // Existing entry owned by different resource
+        mock_client
+            .expect_find_by_hostname()
+            .times(1)
+            .returning(|_| {
+                Ok(Some(HostEntry {
+                    id: "existing-id".to_string(),
+                    hostname: "app.example.com".to_string(),
+                    ip_address: "10.0.0.99".to_string(),
+                    aliases: vec![],
+                    tags: vec![
+                        "k8s-operator".to_string(),
+                        "source:different-uid".to_string(), // Different owner
+                        "namespace:default".to_string(),
+                        "kind:HostMapping".to_string(),
+                    ],
+                    version: "1".to_string(),
+                }))
+            });
+
+        // Should NOT update - entry is owned by different resource
+        mock_client.expect_update_host().times(0);
+        mock_client.expect_add_host().times(0);
+
+        let ctx = make_context(mock_client, mock_resolver);
+        let hostmapping = Arc::new(test_hostmapping(
+            "app.example.com",
+            Some("10.0.0.1"),
+            "uid-123",
+        ));
+
+        let result = reconcile(hostmapping, ctx).await;
+        // Conflict detection succeeds; status update succeeds with mock
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_adopts_pre_existing_entry() {
+        let mut mock_client = MockRouterHostsClientTrait::new();
+        let mock_resolver = MockIpResolverTrait::new();
+
+        // Existing entry WITHOUT k8s-operator tag (pre-existing, not managed)
+        mock_client
+            .expect_find_by_hostname()
+            .times(1)
+            .returning(|_| {
+                Ok(Some(HostEntry {
+                    id: "pre-existing-id".to_string(),
+                    hostname: "app.example.com".to_string(),
+                    ip_address: "10.0.0.99".to_string(),
+                    aliases: vec![],
+                    tags: vec![], // No operator tag - pre-existing entry
+                    version: "1".to_string(),
+                }))
+            });
+
+        // Should adopt by updating with ownership tags
+        mock_client
+            .expect_update_host()
+            .times(1)
+            .withf(|_id, _ip, _aliases, tags, _version| {
+                let tags = tags.as_ref().unwrap();
+                tags.contains(&"k8s-operator".to_string())
+                    && tags.contains(&"pre-existing:true".to_string())
+                    && tags.contains(&"source:uid-123".to_string())
+            })
+            .returning(|id, ip, aliases, tags, _version| {
+                Ok(HostEntry {
+                    id: id.to_string(),
+                    hostname: "app.example.com".to_string(),
+                    ip_address: ip.unwrap_or_else(|| "10.0.0.1".to_string()),
+                    aliases: aliases.unwrap_or_default(),
+                    tags: tags.unwrap_or_default(),
+                    version: "2".to_string(),
+                })
+            });
+
+        let ctx = make_context(mock_client, mock_resolver);
+        let hostmapping = Arc::new(test_hostmapping(
+            "app.example.com",
+            Some("10.0.0.1"),
+            "uid-123",
+        ));
+
+        let result = reconcile(hostmapping, ctx).await;
+        // MockKubeService returns valid responses, so reconcile should succeed
+        assert!(result.is_ok(), "reconcile should succeed: {:?}", result);
+    }
+}
