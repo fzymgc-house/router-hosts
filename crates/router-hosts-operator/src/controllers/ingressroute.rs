@@ -422,6 +422,18 @@ mod tests {
         assert!(tags.contains(&"pre-existing:true".to_string()));
     }
 
+    /// Reconcile tests verify the IngressRoute controller's behavior when syncing
+    /// Kubernetes IngressRoute resources with the router-hosts backend.
+    ///
+    /// These tests cover:
+    /// - Creating new host entries when none exist
+    /// - Updating existing entries when IP or tags change
+    /// - No-op behavior when entries are already in sync
+    /// - IP resolution via configured resolvers
+    /// - Error handling for resolution failures and invalid IPs
+    /// - Conflict detection when entries are owned by different resources
+    /// - Adoption of pre-existing unmanaged entries
+    /// - Handling of disabled IngressRoutes (enabled: false annotation)
     mod reconcile_tests {
         use super::*;
         use crate::client::{HostEntry, MockRouterHostsClientTrait};

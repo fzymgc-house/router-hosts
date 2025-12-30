@@ -586,6 +586,17 @@ mod tests {
     }
 }
 
+/// Reconcile tests verify the HostMapping controller's behavior when syncing
+/// Kubernetes HostMapping resources with the router-hosts backend.
+///
+/// These tests cover:
+/// - Creating new host entries when none exist
+/// - Updating existing entries when IP, tags, or aliases change
+/// - No-op behavior when entries are already in sync
+/// - IP resolution via configured resolvers
+/// - Error handling for resolution failures and invalid IPs
+/// - Conflict detection when entries are owned by different resources
+/// - Adoption of pre-existing unmanaged entries
 #[cfg(test)]
 mod reconcile_tests {
     use super::*;
@@ -856,9 +867,9 @@ mod reconcile_tests {
 
         mock_client
             .expect_add_host()
+            .withf(|_hostname, ip, _aliases, _tags| ip == "192.168.1.100")
             .times(1)
             .returning(|hostname, ip, _aliases, _tags| {
-                assert_eq!(ip, "192.168.1.100");
                 Ok(HostEntry {
                     id: "new-id".to_string(),
                     hostname: hostname.to_string(),
