@@ -108,16 +108,16 @@ See `docs/architecture/event-sourcing.md` for detailed event sourcing documentat
 
 The server exposes Prometheus metrics on a configurable HTTP endpoint:
 
-- **Request metrics**: `grpc_requests_total`, `grpc_request_duration_seconds`
-- **Storage metrics**: `storage_operations_total`, `storage_operation_duration_seconds`
-- **Host metrics**: `hosts_total`, `host_operations_total`
-- **Hook metrics**: `hook_executions_total`, `hook_execution_duration_seconds`
+- **Request metrics**: `router_hosts_requests_total`, `router_hosts_request_duration_seconds`
+- **Storage metrics**: `router_hosts_storage_operations_total`, `router_hosts_storage_duration_seconds`
+- **Host metrics**: `router_hosts_hosts_entries`
+- **Hook metrics**: `router_hosts_hook_executions_total`, `router_hosts_hook_duration_seconds`
 
 See [Operations Guide](operations.md#prometheus-metrics) for configuration.
 
 ### Health Endpoints
 
-- **Server**: `Health` gRPC service with `Check` RPC for readiness probes
+- **Server**: `Liveness`, `Readiness`, and `Health` RPCs within `HostsService` for monitoring probes
 - **Operator**: HTTP endpoints at `/healthz` (liveness) and `/readyz` (readiness)
 
 ## Configuration
