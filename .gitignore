@@ -19,7 +19,7 @@ target/
 
 # Build artifacts
 *.pdb
-.worktrees/
+coverage/
 
 # Temporary binary for CI Docker build
 /router-hosts
