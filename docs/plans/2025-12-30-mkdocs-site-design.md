@@ -2,7 +2,7 @@
 
 **Issue:** #180
 **Date:** 2025-12-30
-**Status:** Draft
+**Status:** Implemented
 
 ## Summary
 
@@ -10,10 +10,21 @@ Create a professional documentation site using MkDocs Material, published to Clo
 
 ## Goals
 
-1. Publish versioned documentation matching each release
+1. Publish documentation updated with each release
 2. Auto-generate CLI and API reference from source
 3. Consolidate and audit existing documentation
 4. Establish sustainable documentation practices
+
+## Design Decision: No Versioning
+
+**Decision:** Deploy single-version docs (latest release only) to Cloudflare Pages.
+
+**Rationale:**
+- Simplifies deployment pipeline (no mike, no gh-pages branch)
+- Reduces maintenance burden
+- Users typically want latest docs anyway
+- Version selector UI adds complexity without proportional benefit
+- If needed later, can use Cloudflare's branch-based deploys
 
 ## Architecture
 
@@ -49,8 +60,8 @@ docs/
 |-----------|--------|-----------|
 | Static site generator | MkDocs Material | Rich features, Python ecosystem, excellent search |
 | Hosting | Cloudflare Pages | Fast CDN, simple deployment, free tier sufficient |
-| Versioning | mike | Standard MkDocs versioning tool |
 | CI/CD | GitHub Actions | Existing infrastructure, full build control |
+| Task runner | Task (go-task) | Consistent local/CI builds via `task docs:ci` |
 | Diagrams | Mermaid | Version-controlled, renders natively in Material |
 
 ### Deployment Pipeline
@@ -58,16 +69,13 @@ docs/
 ```mermaid
 flowchart LR
     A[Release Published] --> B[Download Release Binary]
-    B --> C[Generate CLI Docs]
-    C --> D[Generate API Docs]
-    D --> E[Build MkDocs Site]
-    E --> F[Deploy via mike]
-    F --> G[Sync to Cloudflare Pages]
+    B --> C[task docs:ci]
+    C --> D[Deploy to Cloudflare]
 ```
 
-**Trigger:** Release published (not push to main)
+**Trigger:** Release published (or manual workflow_dispatch)
 
-Each release creates a versioned docs deployment. The `latest` alias points to the most recent stable release. Users select versions via the site's version selector.
+Each release updates the documentation site with the latest content. The `docs:ci` task generates CLI/API reference and builds the site with strict mode.
 
 ## Configuration
 
@@ -124,58 +132,40 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (defaults to latest release)'
+        required: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v6
 
       - name: Download release binary
         run: |
-          VERSION=${{ github.event.release.tag_name }}
           gh release download "$VERSION" \
-            --pattern 'router-hosts-*-linux-x86_64.tar.gz' \
+            --pattern 'router-hosts-x86_64-unknown-linux-gnu.tar.xz' \
             --dir /tmp
-          tar -xzf /tmp/router-hosts-*-linux-x86_64.tar.gz -C /tmp
+          tar -xJf /tmp/router-hosts-*.tar.xz -C /tmp
           chmod +x /tmp/router-hosts
-        env:
-          GH_TOKEN: ${{ github.token }}
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
-      - name: Install dependencies
-        run: |
-          pip install mkdocs-material \
-            mkdocs-git-revision-date-localized-plugin \
-            mike
+      - uses: arduino/setup-task@v2
+      - uses: actions/setup-go@v6
+      - uses: arduino/setup-protoc@v3
+      - uses: astral-sh/setup-uv@v4
 
       - name: Install protoc-gen-doc
-        run: |
-          go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@latest
+        run: go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@v1.5.1
 
-      - name: Generate CLI docs
-        run: ./scripts/generate-cli-docs.sh /tmp/router-hosts
-
-      - name: Generate API docs
-        run: ./scripts/generate-proto-docs.sh
-
-      - name: Deploy versioned docs
-        run: |
-          VERSION=${{ github.event.release.tag_name }}
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          mike deploy --push --update-aliases "$VERSION" latest
+      - name: Build docs
+        run: task docs:ci BINARY=/tmp/router-hosts
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          apiToken: ${{ secrets.CLOUDFLARE_PAGES_ACCOUNT_API }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: pages deploy site --project-name=router-hosts-docs
 ```
@@ -321,7 +311,6 @@ CLAUDE.md files point to documentation; they do not duplicate it.
 - Remove duplication with published docs
 
 ### Phase 5: Polish
-- Test version selector
 - Verify mobile responsiveness
 - Check search functionality
 - Final review
@@ -331,22 +320,21 @@ CLAUDE.md files point to documentation; they do not duplicate it.
 ### Cloudflare Configuration
 
 1. Create Pages project: `router-hosts-docs`
-2. Connect to GitHub repository (for direct deploy, not build)
+2. Use "Direct Upload" deployment (not Git connection)
 3. Use default `*.pages.dev` domain
 
 ### GitHub Secrets
 
 | Secret | Purpose |
 |--------|---------|
-| `CLOUDFLARE_API_TOKEN` | Wrangler deployment authentication |
+| `CLOUDFLARE_PAGES_ACCOUNT_API` | Wrangler deployment authentication |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account identifier |
 
 ## Success Criteria
 
-- Documentation site builds without errors
+- Documentation site builds without errors (strict mode)
 - All existing markdown docs incorporated
 - Automatic deployment on release
 - Mobile-responsive design
 - Sub-2-second page loads
-- Working version selector
 - Accurate CLI and API reference

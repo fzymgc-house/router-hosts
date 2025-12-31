@@ -50,6 +50,11 @@ jobs:
           chmod +x /tmp/router-hosts
           /tmp/router-hosts --version
 
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
@@ -66,27 +71,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
-      - name: Generate CLI docs
-        run: ./scripts/generate-cli-docs.sh /tmp/router-hosts
-
-      - name: Generate API docs
-        run: ./scripts/generate-proto-docs.sh
-
-      - name: Validate generated docs
-        run: |
-          for file in docs/reference/cli.md docs/reference/api.md; do
-            if [[ ! -f "$file" ]]; then
-              echo "::error::Generated documentation missing: $file"
-              exit 1
-            fi
-            lines=$(wc -l < "$file")
-            echo "$file: $lines lines"
-          done
-
-      - name: Build site
-        run: |
-          uvx --with mkdocs-material --with mkdocs-git-revision-date-localized-plugin --with mkdocs-exclude mkdocs build --strict
-          echo "Site built: $(find site -type f | wc -l) files"
+      - name: Build docs
+        run: task docs:ci BINARY=/tmp/router-hosts
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
