@@ -1,29 +1,51 @@
 # Release Process
 
-This document describes the automated release process for router-hosts using [release-plz](https://release-plz.dev).
+This document describes the automated release process for router-hosts using [release-please](https://github.com/googleapis/release-please).
 
 ## Overview
 
 Releases are fully automated:
 
 1. **Push commits to `main`** using [Conventional Commits](https://www.conventionalcommits.org/) format
-2. **release-plz creates a Release PR** with version bumps and changelog updates
+2. **release-please creates a Release PR** with version bumps and changelog updates
 3. **Merge the Release PR** to trigger the release
 4. **Workflows build and publish** binaries, Helm chart, and documentation
 
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
-│ Push commit │────▶│ Release PR   │────▶│ Merge PR    │────▶│ v-release.yml│
-│ to main     │     │ auto-created │     │ pushes tag  │     │ builds binaries│
-└─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
-                                                                    │
-                                         ┌──────────────────────────┴───────┐
-                                         │                                  │
-                                    ┌────▼─────┐                    ┌───────▼──────┐
-                                    │helm-release│                   │docs.yml      │
-                                    │publishes   │                   │deploys docs  │
-                                    │chart       │                   │              │
-                                    └────────────┘                   └──────────────┘
+```mermaid
+flowchart TD
+    subgraph "Development"
+        A[Push commits to main] --> B{Conventional<br/>Commits?}
+        B -->|Yes| C[release-please.yml runs]
+        B -->|No| D[Commit rejected<br/>by pre-commit]
+    end
+
+    subgraph "Release PR"
+        C --> E[Creates/updates<br/>Release PR]
+        E --> F[Version bumps:<br/>Cargo.toml, Chart.yaml]
+        F --> G[CHANGELOG.md updated]
+        G --> H[Review & Merge PR]
+    end
+
+    subgraph "Build & Publish"
+        H --> I[Tag pushed<br/>e.g. v0.9.0]
+        I --> J[v-release.yml]
+        I --> K[helm-release.yml]
+        I --> L[docs.yml]
+
+        J --> M[Build binaries<br/>all platforms]
+        M --> N[Create GitHub Release<br/>with CHANGELOG.md]
+        N --> O[Publish Homebrew<br/>formula]
+
+        K --> P[Publish Helm chart<br/>to ghcr.io]
+
+        L --> Q[Deploy docs to<br/>Cloudflare Pages]
+    end
+
+    style A fill:#e1f5fe
+    style H fill:#fff3e0
+    style N fill:#e8f5e9
+    style P fill:#e8f5e9
+    style Q fill:#e8f5e9
 ```
 
 ## Conventional Commits
@@ -89,8 +111,8 @@ cargo install cocogitto
    ```
 
 2. **Wait for Release PR**
-   - `release-plz.yml` workflow runs automatically
-   - Creates/updates PR titled "chore: release vX.Y.Z"
+   - `release-please.yml` workflow runs automatically
+   - Creates/updates PR titled "chore(main): release router-hosts X.Y.Z"
    - PR contains version bumps and changelog updates
 
 3. **Review the Release PR**
@@ -99,17 +121,17 @@ cargo install cocogitto
    - Check that Helm chart version is synced
 
 4. **Merge the Release PR**
-   - Merging triggers the `release-plz release` command
-   - This pushes the version tag (e.g., `v0.9.0`)
+   - Merging pushes the version tag (e.g., `v0.9.0`)
+   - Tag push triggers downstream workflows
 
 5. **Automated workflows trigger on tag**
-   - `v-release.yml`: Builds binaries, creates GitHub Release
+   - `v-release.yml`: Builds binaries, creates GitHub Release (uses CHANGELOG.md)
    - `helm-release.yml`: Publishes Helm chart to ghcr.io
    - `docs.yml`: Deploys documentation to Cloudflare Pages
 
 ### Version Files
 
-release-plz automatically updates these files:
+release-please automatically updates these files:
 
 | File | Fields Updated |
 |------|----------------|
@@ -146,6 +168,13 @@ file target/dist/router-hosts  # Should show "stripped"
 The following secrets must be configured in the repository:
 
 ### Release Secrets
+
+- **`RELEASE_PLEASE_APP_ID`**: GitHub App ID for release-please authentication
+  - The GitHub App must have `contents: write` and `pull-requests: write` permissions
+  - Using a GitHub App allows the release PR merge to trigger downstream workflows
+
+- **`RELEASE_PLEASE_PRIVATE_KEY`**: GitHub App private key (PEM format)
+  - Generate in the GitHub App settings
 
 - **`HOMEBREW_TAP_TOKEN`**: Personal access token with `contents: write` permission for `fzymgc-house/homebrew-tap`
   - Create at: https://github.com/settings/tokens/new
@@ -210,20 +239,28 @@ helm pull oci://ghcr.io/fzymgc-house/charts/router-hosts-operator --version 0.9.
 
 ## Release Tag Format
 
-release-plz uses semantic versioning with `v` prefix:
+release-please uses semantic versioning with `v` prefix:
 
 - `v0.9.0` - Standard release
 - `v0.9.1-rc.1` - Pre-release (marked as prerelease in GitHub)
 
 ## Workflow Configuration
 
-### release-plz.yml
+### release-please.yml
 
-Creates/updates release PRs and pushes tags when merged. Configuration in `release-plz.toml`.
+Creates/updates release PRs and pushes tags when merged. Configuration in `release-please-config.json`.
+
+Key settings:
+- `skip-github-release: true` - cargo-dist handles GitHub Release creation
+- `extra-files` - Syncs Chart.yaml version and appVersion
 
 ### v-release.yml
 
 Builds binaries using cargo-dist. Named `v-release.yml` because cargo-dist uses this convention when `tag-namespace = "v"` is configured.
+
+Key settings in `dist-workspace.toml`:
+- `changelog = false` - Don't generate changelog (release-please manages it)
+- `github-release = "CHANGELOG.md"` - Use release-please's changelog for release notes
 
 **Warning:** Do not rename `v-release.yml` manually. Running `dist generate-ci` will recreate it with the original name.
 
@@ -271,8 +308,9 @@ If a release has issues:
 ### Release PR not created
 
 1. Check that commits use Conventional Commits format
-2. Verify `release-plz.yml` workflow ran successfully
+2. Verify `release-please.yml` workflow ran successfully
 3. Look for existing release PR that needs updating
+4. Check GitHub App permissions (needs `contents: write` and `pull-requests: write`)
 
 ### Version not bumping
 
@@ -281,14 +319,15 @@ If a release has issues:
 
 ### Helm chart version mismatch
 
-release-plz automatically syncs Chart.yaml via `version_files` in `release-plz.toml`. If mismatch occurs:
+release-please automatically syncs Chart.yaml via `extra-files` in `release-please-config.json`. If mismatch occurs:
 
-1. Check `release-plz.toml` version_files configuration
+1. Check `release-please-config.json` extra-files configuration
 2. Manually update Chart.yaml and re-push
 
-### cargo-semver-checks failure
+### GitHub App token issues
 
-If release-plz detects a breaking change but commit wasn't marked as breaking:
+If the release PR doesn't trigger downstream workflows:
 
-1. Amend commit to use `feat!:` or add `BREAKING CHANGE:` footer
-2. Or acknowledge the breaking change in the release PR
+1. Verify GitHub App has correct permissions
+2. Check that secrets `RELEASE_PLEASE_APP_ID` and `RELEASE_PLEASE_PRIVATE_KEY` are set
+3. Ensure the App is installed on the repository

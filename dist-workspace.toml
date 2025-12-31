@@ -28,3 +28,7 @@ github-attestations = true
 pr-run-mode = "skip"
 # Require tags to start with "v" prefix (e.g., v0.5.0, not 0.5.0)
 tag-namespace = "v"
+# Don't generate changelog - release-please manages CHANGELOG.md
+changelog = false
+# Use release-please's CHANGELOG.md for GitHub Release notes
+github-release = "CHANGELOG.md"
