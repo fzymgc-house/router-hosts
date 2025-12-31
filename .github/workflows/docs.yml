@@ -34,7 +34,11 @@ jobs:
           elif [[ -n "$INPUT_VERSION" ]]; then
             VERSION="$INPUT_VERSION"
           else
-            VERSION=$(gh release view --json tagName -q .tagName)
+            if ! VERSION=$(gh release view --json tagName -q .tagName 2>&1); then
+              echo "::error::Failed to determine version. No releases found or gh CLI error: $VERSION"
+              echo "Hint: Use workflow_dispatch with explicit version input, or create a release first."
+              exit 1
+            fi
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Deploying docs for version: $VERSION"
@@ -62,16 +66,20 @@ jobs:
           version: '25.x'
 
       - name: Install protoc-gen-doc
-        run: go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@latest
+        run: go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@v1.5.1
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
       - name: Install Python dependencies
         run: |
-          pip install mkdocs-material \
+          uv pip install --system \
+            mkdocs-material \
             mkdocs-git-revision-date-localized-plugin \
             mike
 
@@ -90,8 +98,31 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          mike deploy --push --update-aliases "$VERSION" latest
-          mike set-default --push latest
+          echo "Deploying version $VERSION with 'latest' alias..."
+          if ! mike deploy --push --update-aliases "$VERSION" latest; then
+            echo "::error::mike deploy failed for version $VERSION"
+            echo "Check that the gh-pages branch exists and mkdocs.yml is valid."
+            exit 1
+          fi
+          if ! mike set-default --push latest; then
+            echo "::error::mike set-default failed"
+            exit 1
+          fi
+          echo "Successfully deployed version $VERSION"
+
+      - name: Validate site directory
+        run: |
+          if [[ ! -d "site" ]]; then
+            echo "::error::site/ directory does not exist after mike deploy"
+            echo "mike should have created the site directory. Check mike logs above."
+            exit 1
+          fi
+          file_count=$(find site -type f | wc -l)
+          if [[ "$file_count" -lt 10 ]]; then
+            echo "::error::site/ directory has only $file_count files, expected more"
+            exit 1
+          fi
+          echo "Site directory validated: $file_count files"
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
