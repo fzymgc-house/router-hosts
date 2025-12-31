@@ -43,26 +43,30 @@ The following secrets must be configured in the repository for releases to work:
    version = "0.6.0"  # Update this
    ```
 
-2. **Update CHANGELOG.md** with release notes
+2. **Update Helm chart version** in `charts/router-hosts-operator/Chart.yaml`:
+   ```yaml
+   version: 0.6.0      # Must match the tag (without 'v' prefix)
+   appVersion: 0.6.0   # Should match the application version
+   ```
 
-3. **Commit version bump**:
+3. **Update CHANGELOG.md** with release notes
+
+4. **Commit version bump**:
    ```bash
    git commit -am "chore: bump version to v0.6.0"
    git push origin main
    ```
 
-4. **Create and push tag** (triggers release workflow):
+5. **Create and push tag** (triggers release workflows):
    ```bash
    git tag v0.6.0
    git push origin v0.6.0
    ```
 
-5. **Monitor release workflow**:
-   - GitHub Actions will build binaries for all platforms
-   - Generate shell installer and Homebrew formula
-   - Create GitHub Release with all artifacts
-   - Generate GitHub attestations for supply chain security
-   - Push Homebrew formula to `fzymgc-house/homebrew-tap`
+6. **Monitor release workflows**:
+   - `v-release.yml`: Builds binaries, generates installers, creates GitHub Release
+   - `helm-release.yml`: Publishes Helm chart to ghcr.io OCI registry
+   - Both workflows trigger on version tags matching `v*.*.*`
 
 ## Post-Release Verification
 
@@ -114,6 +118,68 @@ cargo-dist uses this naming convention when `tag-namespace = "v"` is configured.
 recreate it with the original name, and any custom changes will be lost. Always use
 `dist generate-ci` to regenerate the workflow file after modifying `dist-workspace.toml`.
 
+## Helm Chart Release
+
+The Helm chart is published to GitHub Container Registry (ghcr.io) as an OCI artifact.
+
+### Chart Release Process
+
+The Helm chart version **must match the release tag**. The workflow validates this and will fail if there's a mismatch.
+
+1. **Update Chart.yaml versions** before tagging:
+   ```bash
+   # Edit charts/router-hosts-operator/Chart.yaml
+   version: 0.8.0      # Must match the tag (without 'v' prefix)
+   appVersion: 0.8.0   # Should match the application version
+   ```
+
+2. **Commit the Chart.yaml update** along with other release changes
+
+3. **Create and push tag** - the `helm-release.yml` workflow triggers automatically
+
+4. **Verify chart publication**:
+   ```bash
+   # Pull the chart to verify it's published
+   helm pull oci://ghcr.io/fzymgc-house/charts/router-hosts-operator --version 0.8.0
+
+   # Or install directly
+   helm install router-hosts-operator \
+     oci://ghcr.io/fzymgc-house/charts/router-hosts-operator \
+     --version 0.8.0
+   ```
+
+### Manual Chart Publishing
+
+To publish a chart for an existing tag (e.g., if the workflow failed or was added after the tag):
+
+```bash
+gh workflow run helm-release.yml -f tag=v0.7.0
+```
+
+### Chart Version Validation
+
+The workflow validates that:
+- `version` in Chart.yaml matches the git tag
+- `appVersion` in Chart.yaml matches the git tag
+
+If either doesn't match, the workflow fails with a clear error message indicating which version needs to be updated.
+
+### Helm Version Requirements
+
+The release workflow uses **Helm 4.x** (specifically v4.0.4 or later). Helm 4 provides:
+
+- Improved OCI registry support with better error handling
+- Native OCI artifact publishing without experimental flags
+- Better compatibility with ghcr.io container registry
+
+For details on Helm 4 changes, see: https://helm.sh/blog/helm-4-0-0-released/
+
+If you need to run helm commands locally for chart development, ensure you have Helm 4.x installed:
+
+```bash
+helm version  # Should show v4.x.x
+```
+
 ## Release Artifacts
 
 Each release includes:
@@ -126,6 +192,7 @@ Each release includes:
 | `router-hosts-aarch64-apple-darwin.tar.gz` | macOS Apple Silicon binary |
 | `router-hosts-installer.sh` | Universal shell installer |
 | `router-hosts.rb` | Homebrew formula |
+| `router-hosts-operator` Helm chart | Published to `oci://ghcr.io/fzymgc-house/charts` |
 
 ## Rollback
 

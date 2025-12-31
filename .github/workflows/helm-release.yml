@@ -1,0 +1,138 @@
+---
+name: Helm Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to publish (e.g., v0.7.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  CHART_PATH: charts/router-hosts-operator
+
+jobs:
+  release-chart:
+    runs-on: ubuntu-latest
+    env:
+      REPO_OWNER: ${{ github.repository_owner }}
+      ACTOR: ${{ github.actor }}
+    steps:
+      - name: Determine tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            echo "ref=$INPUT_TAG" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
+
+      - name: Validate tag exists
+        env:
+          TAG_REF: ${{ steps.tag.outputs.ref }}
+        run: |
+          if ! git describe --tags --exact-match HEAD 2>/dev/null; then
+            echo "Error: ref '$TAG_REF' is not a valid tag"
+            exit 1
+          fi
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          # Helm 4.x is required for improved OCI registry support
+          # See: https://helm.sh/blog/helm-4-0-0-released/
+          version: v4.0.4
+
+      - name: Install yq
+        uses: mikefarah/yq@v4
+
+      - name: Extract version from tag
+        id: version
+        env:
+          TAG_REF: ${{ steps.tag.outputs.ref }}
+        run: |
+          VERSION="${TAG_REF#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Extracted version: $VERSION"
+
+      - name: Validate Chart.yaml versions
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          # Validate that Chart.yaml versions match the git tag
+          # This ensures reproducibility - the tagged commit must have correct versions
+          # Using yq for robust YAML parsing (handles comments, quoting, whitespace)
+          CHART_VERSION=$(yq '.version' "$CHART_PATH/Chart.yaml")
+          APP_VERSION=$(yq '.appVersion' "$CHART_PATH/Chart.yaml")
+
+          echo "Tag version: $VERSION"
+          echo "Chart version: $CHART_VERSION"
+          echo "App version: $APP_VERSION"
+
+          if [ "$CHART_VERSION" != "$VERSION" ]; then
+            echo "::error::Chart version ($CHART_VERSION) does not match tag version ($VERSION)"
+            echo "Update Chart.yaml before tagging the release."
+            exit 1
+          fi
+
+          if [ "$APP_VERSION" != "$VERSION" ]; then
+            echo "::error::App version ($APP_VERSION) does not match tag version ($VERSION)"
+            echo "Update Chart.yaml before tagging the release."
+            exit 1
+          fi
+
+          echo "✓ Chart.yaml versions match tag"
+
+      - name: Lint chart
+        run: helm lint "$CHART_PATH"
+
+      - name: Package chart
+        run: helm package "$CHART_PATH"
+
+      - name: Login to GitHub Container Registry
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GITHUB_TOKEN" | helm registry login "$REGISTRY" -u "$ACTOR" --password-stdin
+
+      - name: Push chart to OCI registry
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          helm push "router-hosts-operator-${VERSION}.tgz" "oci://${REGISTRY}/${REPO_OWNER}/charts"
+
+      - name: Logout from registry
+        if: always()
+        run: helm registry logout "$REGISTRY"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" << EOF
+          ## Helm Chart Published
+
+          Chart: \`router-hosts-operator\`
+          Version: \`${VERSION}\`
+
+          ### Install
+          \`\`\`bash
+          helm install router-hosts-operator oci://${REGISTRY}/${REPO_OWNER}/charts/router-hosts-operator --version ${VERSION}
+          \`\`\`
+          EOF
