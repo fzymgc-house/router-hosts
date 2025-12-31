@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "rust",
+  "include-component-in-tag": false,
+  "include-v-in-tag": true,
+  "bump-minor-pre-major": true,
+  "bump-patch-for-minor-pre-major": true,
+  "skip-github-release": true,
+  "changelog-sections": [
+    {"type": "feat", "section": "Features"},
+    {"type": "fix", "section": "Bug Fixes"},
+    {"type": "perf", "section": "Performance Improvements"},
+    {"type": "refactor", "section": "Code Refactoring"},
+    {"type": "docs", "section": "Documentation"},
+    {"type": "test", "section": "Tests"},
+    {"type": "build", "section": "Build System"},
+    {"type": "ci", "section": "CI/CD"},
+    {"type": "chore", "section": "Miscellaneous", "hidden": true}
+  ],
+  "extra-files": [
+    {
+      "type": "yaml",
+      "path": "charts/router-hosts-operator/Chart.yaml",
+      "jsonpath": "$.version"
+    },
+    {
+      "type": "yaml",
+      "path": "charts/router-hosts-operator/Chart.yaml",
+      "jsonpath": "$.appVersion"
+    }
+  ],
+  "packages": {
+    ".": {
+      "component": "router-hosts"
+    }
+  }
+}
