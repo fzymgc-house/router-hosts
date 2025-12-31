@@ -156,3 +156,35 @@ jobs:
 
       - name: Run E2E tests
         run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
+
+  # ─────────────────────────────────────────────────────────────
+  # Job 6: CI Complete - Aggregation gate for branch protection
+  # ─────────────────────────────────────────────────────────────
+  ci-complete:
+    if: always()
+    needs: [lint, helm-lint, build, test-coverage, e2e]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check all jobs passed
+        env:
+          LINT_RESULT: ${{ needs.lint.result }}
+          HELM_LINT_RESULT: ${{ needs.helm-lint.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          TEST_COVERAGE_RESULT: ${{ needs.test-coverage.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          if [[ "$LINT_RESULT" != "success" ]] || \
+             [[ "$HELM_LINT_RESULT" != "success" ]] || \
+             [[ "$BUILD_RESULT" != "success" ]] || \
+             [[ "$TEST_COVERAGE_RESULT" != "success" ]] || \
+             [[ "$E2E_RESULT" != "success" ]]; then
+            echo "One or more jobs failed:"
+            echo "  lint: $LINT_RESULT"
+            echo "  helm-lint: $HELM_LINT_RESULT"
+            echo "  build: $BUILD_RESULT"
+            echo "  test-coverage: $TEST_COVERAGE_RESULT"
+            echo "  e2e: $E2E_RESULT"
+            exit 1
+          fi
+          echo "All CI jobs passed successfully"
