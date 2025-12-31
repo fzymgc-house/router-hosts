@@ -1,97 +1,259 @@
+# CI Workflow - Parallelized build, test, and E2E pipeline
+#
+# Job Dependencies:
+#   fmt ────────┬──> clippy ──> test-coverage
+#   buf-check ──┤        │
+#   helm-lint   │        └──> ci-complete (requires all)
+#               │
+#               └──> build ──> e2e
+#
+# Fast checks (fmt, buf-check) gate expensive jobs (clippy, build)
+# Critical path: fmt/buf-check (~30s) -> clippy/build -> test-coverage/e2e
+# Cache strategy: Save cache from same-repo PRs (not forks, for security)
+#
+# Trigger Strategy (PR-only):
+#   - All merges to main require a PR, so PR validation is sufficient
+#   - Main branch builds: docker.yml handles image builds on push to main
+#   - Release builds: docker.yml triggers on tag push (v*)
+#   - cargo-dist releases: Handled by separate release workflow on tags
+
 name: CI
 
 on:
-    push:
-        branches: [main]
-    pull_request:
-        branches: [main]
+  pull_request:
+    branches: [main]
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
 
 jobs:
-    build:
-        runs-on:
-            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+  # ─────────────────────────────────────────────────────────────
+  # Fast checks - Run in parallel for quick feedback (~30 sec each)
+  # ─────────────────────────────────────────────────────────────
+  fmt:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
-        steps:
-            - uses: runs-on/action@v2
-              with:
-                  metrics: cpu,network,memory,disk,io
+    steps:
+      - uses: actions/checkout@v6
 
-            - uses: actions/checkout@v6
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
 
-            - name: Install Rust
-              uses: dtolnay/rust-toolchain@stable
+      - name: Check formatting
+        run: cargo fmt --check
 
-            - name: Install protoc
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y protobuf-compiler
-                  echo "PROTOC=$(which protoc)" >> "$GITHUB_ENV"
-                  protoc --version
-              env:
-                  DEBIAN_FRONTEND: noninteractive
+  buf-check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
-            - name: Install buf
-              uses: bufbuild/buf-setup-action@v1
-              with:
-                  github_token: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
 
-            - name: Install Task
-              uses: arduino/setup-task@v2
+      - name: Install buf
+        uses: bufbuild/buf-setup-action@v1
 
-            # Use Swatinem/rust-cache for Rust caching
-            # Only cache ~/.cargo registry, not target/ (too large with DuckDB ~16GB)
-            - name: Cache Rust dependencies
-              uses: Swatinem/rust-cache@v2
-              with:
-                  # Don't cache target/ - DuckDB artifacts are huge
-                  cache-targets: "false"
-                  # Only save cache on main branch to avoid PR cache pollution
-                  save-if: ${{ github.ref == 'refs/heads/main' }}
-                  key: ${{ runner.os }}-cargo
+      - name: Lint protobuf
+        run: buf lint
 
-            - name: Install cargo-nextest
-              uses: taiki-e/install-action@v2
-              with:
-                  tool: cargo-nextest
+      - name: Check protobuf formatting
+        run: buf format --diff --exit-code
 
-            - name: Install cargo-llvm-cov
-              uses: taiki-e/install-action@v2
-              with:
-                  tool: cargo-llvm-cov
+  helm-lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
-            - name: Build
-              run: task build
+    steps:
+      - uses: actions/checkout@v6
 
-            - name: Run PostgreSQL backend tests
-              run: task test:postgres
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.0.4
 
-            - name: Build release binary
-              run: task build:release
+      - name: Lint Helm chart
+        run: helm lint charts/router-hosts-operator
 
-            - name: Build CI Docker image
-              run: task docker:build-ci IMAGE_NAME=router-hosts IMAGE_TAG=ci
+  # ─────────────────────────────────────────────────────────────
+  # Clippy - Requires compilation, runs in parallel with build
+  # ─────────────────────────────────────────────────────────────
+  clippy:
+    needs: [fmt, buf-check] # Fast-fail on format errors before expensive compilation
+    runs-on:
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price
+    timeout-minutes: 15
 
-            - name: Verify Docker image runs
-              run: |
-                  echo "Testing binary inside container..."
-                  docker run --rm router-hosts:ci --help
-                  docker run --rm router-hosts:ci server --help
-                  echo "Binary runs successfully"
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
 
-            - name: Run E2E tests
-              run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
+      - uses: actions/checkout@v6
 
-            - name: Check test coverage (≥80% required)
-              # Coverage runs all tests with llvm-cov instrumentation
-              run: task test:coverage:ci
+      - name: Setup Rust environment
+        uses: ./.github/actions/rust-setup
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-            - name: Upload coverage report
-              uses: actions/upload-artifact@v6
-              if: always()
-              with:
-                  name: coverage-report
-                  path: coverage/
-                  retention-days: 14
+      - name: Run clippy
+        run: cargo clippy --workspace -- -D warnings
+
+  # ─────────────────────────────────────────────────────────────
+  # Build - Create release binary for E2E tests
+  # ─────────────────────────────────────────────────────────────
+  build:
+    needs: [fmt, buf-check] # Fast-fail on format errors before expensive compilation
+    runs-on:
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+    timeout-minutes: 30
+
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
+
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust environment
+        uses: ./.github/actions/rust-setup
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+
+      - name: Build release binary
+        run: task build:release
+
+      - name: Upload release binary
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-binary
+          path: target/release/router-hosts
+          retention-days: 1
+
+  # ─────────────────────────────────────────────────────────────
+  # Test with Coverage - Run all tests with coverage
+  # Note: Runs all tests including PostgreSQL via --workspace flag
+  # ─────────────────────────────────────────────────────────────
+  test-coverage:
+    needs: [clippy] # Fast-fail on clippy errors before expensive tests
+    runs-on:
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+    timeout-minutes: 20
+
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
+
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust environment
+        uses: ./.github/actions/rust-setup
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup CI tools
+        uses: ./.github/actions/ci-tools
+
+      - name: Check test coverage (≥80% required)
+        run: task test:coverage:ci
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  # ─────────────────────────────────────────────────────────────
+  # E2E Tests - Requires release binary
+  # ─────────────────────────────────────────────────────────────
+  e2e:
+    needs: [build]
+    runs-on:
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+    timeout-minutes: 20
+
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
+
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust environment
+        uses: ./.github/actions/rust-setup
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+
+      - name: Download release binary
+        uses: actions/download-artifact@v6
+        with:
+          name: release-binary
+          path: target/release/
+
+      - name: Make binary executable
+        run: chmod +x target/release/router-hosts
+
+      - name: Build CI Docker image
+        run: task docker:build-ci IMAGE_NAME=router-hosts IMAGE_TAG=ci
+
+      - name: Verify Docker image runs
+        run: |
+          set -euo pipefail
+          echo "Testing binary inside container..."
+          docker run --rm router-hosts:ci --help
+          docker run --rm router-hosts:ci server --help
+          echo "Binary runs successfully"
+
+      - name: Run E2E tests
+        run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
+
+  # ─────────────────────────────────────────────────────────────
+  # CI Complete - Aggregation gate for branch protection
+  # ─────────────────────────────────────────────────────────────
+  ci-complete:
+    if: always()
+    needs: [fmt, buf-check, clippy, helm-lint, build, test-coverage, e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    steps:
+      - name: Check all jobs passed
+        env:
+          FMT_RESULT: ${{ needs.fmt.result }}
+          BUF_CHECK_RESULT: ${{ needs.buf-check.result }}
+          CLIPPY_RESULT: ${{ needs.clippy.result }}
+          HELM_LINT_RESULT: ${{ needs.helm-lint.result }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          TEST_COVERAGE_RESULT: ${{ needs.test-coverage.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: |
+          if [[ "$FMT_RESULT" != "success" ]] || \
+             [[ "$BUF_CHECK_RESULT" != "success" ]] || \
+             [[ "$CLIPPY_RESULT" != "success" ]] || \
+             [[ "$HELM_LINT_RESULT" != "success" ]] || \
+             [[ "$BUILD_RESULT" != "success" ]] || \
+             [[ "$TEST_COVERAGE_RESULT" != "success" ]] || \
+             [[ "$E2E_RESULT" != "success" ]]; then
+            echo "One or more jobs failed:"
+            echo "  fmt: $FMT_RESULT"
+            echo "  buf-check: $BUF_CHECK_RESULT"
+            echo "  clippy: $CLIPPY_RESULT"
+            echo "  helm-lint: $HELM_LINT_RESULT"
+            echo "  build: $BUILD_RESULT"
+            echo "  test-coverage: $TEST_COVERAGE_RESULT"
+            echo "  e2e: $E2E_RESULT"
+            exit 1
+          fi
+          echo "All CI jobs passed successfully"

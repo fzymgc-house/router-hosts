@@ -1,0 +1,17 @@
+# Minimal release Dockerfile for router-hosts
+# Uses pre-built binary from CI - no cargo build inside Docker
+# Base image matches CI runner (Ubuntu 24.04, glibc 2.39)
+FROM ubuntu:24.04
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Binary path passed via --build-arg or copied to context
+ARG BINARY_PATH=router-hosts
+COPY ${BINARY_PATH} /usr/local/bin/router-hosts
+RUN chmod +x /usr/local/bin/router-hosts
+
+EXPOSE 50051
+ENTRYPOINT ["router-hosts"]
+CMD ["server", "--config", "/config/server.toml"]

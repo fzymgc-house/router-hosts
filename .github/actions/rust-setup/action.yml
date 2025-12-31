@@ -1,0 +1,49 @@
+name: 'Rust Development Setup'
+description: 'Install Rust toolchain, protoc, buf, and configure caching'
+
+inputs:
+  cache-targets:
+    description: 'Whether to cache target directory'
+    required: false
+    default: 'false'
+  save-cache:
+    description: 'Whether to save cache (only on main branch)'
+    required: false
+    default: 'false'
+  github-token:
+    description: 'GitHub token for API access (defaults to github.token)'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install protoc
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y protobuf-compiler
+        echo "PROTOC=$(which protoc)" >> "$GITHUB_ENV"
+      shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Install buf
+      uses: bufbuild/buf-setup-action@v1
+      with:
+        github_token: ${{ inputs.github-token }}
+
+    # Cache Strategy:
+    #   - Only 'build' job saves cache (release profile artifacts)
+    #   - Other jobs (clippy, test-coverage) read cache but don't save
+    #   - This prevents cache pollution from debug/instrumented builds
+    #   - rust-cache handles dependency artifacts (profile-agnostic) automatically
+    #   - Single cache save avoids race conditions in parallel jobs
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-targets: ${{ inputs.cache-targets }}
+        save-if: ${{ inputs.save-cache }}
+        key: ${{ runner.os }}-cargo
