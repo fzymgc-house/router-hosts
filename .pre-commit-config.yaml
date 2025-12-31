@@ -1,5 +1,5 @@
 # Pre-commit hooks for router-hosts
-# Install: pre-commit install && pre-commit install --hook-type pre-push
+# Install: pre-commit install && pre-commit install --hook-type pre-push && pre-commit install --hook-type commit-msg
 # Run manually: pre-commit run --all-files
 # Run all stages: pre-commit run --all-files --hook-stage pre-push
 #
@@ -52,6 +52,15 @@ repos:
         types: [shell]
         # Run on all shell scripts in examples/
         files: 'examples/.*\.sh$'
+
+      # Conventional commit message validation (commit-msg stage)
+      # Requires: cargo install cocogitto
+      - id: conventional-commit
+        name: conventional commit
+        entry: cog verify --file
+        language: system
+        stages: [commit-msg]
+        always_run: true
 
       # Expensive checks (run only on pre-push)
       # Note: Runs on entire workspace regardless of changed files
