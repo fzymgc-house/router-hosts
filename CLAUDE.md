@@ -49,7 +49,9 @@ You MUST follow Conventional Commits format:
 
 **Types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`
 
-**Scopes:** `proto`, `server`, `client`, `storage`, `validation`, `config`
+**Scopes:** `proto`, `server`, `client`, `storage`, `validation`, `config`, `ci`, `deps`, `helm`, `docs`, `operator`
+
+Scopes are recommended for clarity but not enforced. See `cog.toml` for scope descriptions.
 
 **Rules:**
 - Subject line MUST be ≤50 characters, imperative mood, no period
@@ -111,6 +113,7 @@ You MUST maintain ≥80% test coverage. PRs that decrease coverage below 80% MUS
 
 - **Rust toolchain** (stable): `rustup install stable`
 - **buf CLI** (protobuf): `brew install bufbuild/buf/buf`
+- **cocogitto** (commit validation): `brew install cocogitto`
 - **pre-commit**: `pip install pre-commit && pre-commit install`
 
 ### Issue Tracking

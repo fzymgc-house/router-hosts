@@ -1,0 +1,52 @@
+name: Release-plz
+
+# Automated release workflow using release-plz
+# - Creates/updates release PR when commits are pushed to main
+# - Pushes version tag when release PR is merged
+# - Existing workflows (v-release.yml, helm-release.yml, docs.yml) trigger on tags
+
+permissions:
+  contents: write      # Push version tags and update CHANGELOG.md
+  pull-requests: write # Create and update release PRs
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  release-plz-pr:
+    name: Create/Update Release PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  release-plz-release:
+    name: Push Version Tag
+    # Only run when the commit message indicates a release PR merge
+    # This prevents unnecessary job runs and avoids race conditions
+    if: "${{ startsWith(github.event.head_commit.message, 'chore: release v') }}"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run release-plz release
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
