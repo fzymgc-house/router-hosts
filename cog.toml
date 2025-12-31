@@ -6,7 +6,7 @@ pre-commit = []
 pre-push = []
 # commit-msg hook is configured via pre-commit framework
 
-# NOTE: Changelog is managed by release-plz, not cocogitto
+# NOTE: Changelog is managed by release-please, not cocogitto
 
 # Commit types (conventional commits specification)
 [commit_types]
