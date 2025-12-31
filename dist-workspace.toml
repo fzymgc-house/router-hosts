@@ -30,5 +30,5 @@ pr-run-mode = "skip"
 tag-namespace = "v"
 # Don't generate changelog - release-please manages CHANGELOG.md
 changelog = false
-# Use release-please's CHANGELOG.md for GitHub Release notes
-github-release = "CHANGELOG.md"
+# Let release-please create the GitHub Release; cargo-dist just adds binaries
+github-release = "host"

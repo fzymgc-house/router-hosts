@@ -153,7 +153,7 @@ Add to the `[dist]` section:
 
 ```toml
 changelog = false
-github-release = "CHANGELOG.md"
+github-release = "host"
 ```
 
 ### docs/contributing/releasing.md
