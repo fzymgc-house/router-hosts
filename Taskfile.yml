@@ -195,6 +195,39 @@ tasks:
       - dist plan
 
   # ─────────────────────────────────────────────────────────────
+  # Documentation
+  # ─────────────────────────────────────────────────────────────
+  docs:build:
+    desc: Build documentation site locally
+    deps: [docs:generate]
+    cmds:
+      - mkdocs build
+
+  docs:serve:
+    desc: Serve documentation locally with live reload
+    deps: [docs:generate]
+    cmds:
+      - mkdocs serve
+
+  docs:generate:
+    desc: Generate CLI and API reference docs from source
+    deps: [build:release]
+    cmds:
+      - ./scripts/generate-cli-docs.sh ./target/release/router-hosts
+      - ./scripts/generate-proto-docs.sh
+
+  docs:generate:cli:
+    desc: Generate CLI reference docs only
+    deps: [build:release]
+    cmds:
+      - ./scripts/generate-cli-docs.sh ./target/release/router-hosts
+
+  docs:generate:api:
+    desc: Generate API reference docs from protobuf
+    cmds:
+      - ./scripts/generate-proto-docs.sh
+
+  # ─────────────────────────────────────────────────────────────
   # CI Shortcuts
   # ─────────────────────────────────────────────────────────────
   ci:
