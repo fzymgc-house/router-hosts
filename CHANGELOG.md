@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2025-12-30
+
+### Added
+
+- **XDG config auto-discovery**: Client now automatically searches for config files in XDG-compliant locations (`~/.config/router-hosts/`, `/etc/router-hosts/`) when no explicit config is provided
+
+### Changed
+
+- **CI/CD improvements**: Optimized build parallelization and added Helm chart OCI registry publishing workflow
+
 ## [0.7.0] - 2025-12-30
 
 ### Breaking Changes
