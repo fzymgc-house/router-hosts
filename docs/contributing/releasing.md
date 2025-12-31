@@ -66,6 +66,18 @@ pre-commit install --hook-type pre-push
 
 If your commit message doesn't follow the format, the commit will be rejected with guidance.
 
+### Prerequisites
+
+The commit message validation requires cocogitto:
+
+```bash
+# Install cocogitto (macOS)
+brew install cocogitto
+
+# Or via cargo (cross-platform)
+cargo install cocogitto
+```
+
 ## Creating a Release
 
 ### Standard Release Flow

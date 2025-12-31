@@ -6,12 +6,7 @@ pre-commit = []
 pre-push = []
 # commit-msg hook is configured via pre-commit framework
 
-# Changelog is managed by release-plz, not cocogitto
-[changelog]
-template = "remote"
-remote = "github.com"
-repository = "router-hosts"
-owner = "fzymgc-house"
+# NOTE: Changelog is managed by release-plz, not cocogitto
 
 # Commit types (conventional commits specification)
 [commit_types]

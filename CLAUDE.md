@@ -49,7 +49,9 @@ You MUST follow Conventional Commits format:
 
 **Types:** `feat`, `fix`, `refactor`, `perf`, `test`, `docs`, `build`, `ci`, `chore`
 
-**Scopes:** `proto`, `server`, `client`, `storage`, `validation`, `config`
+**Scopes:** `proto`, `server`, `client`, `storage`, `validation`, `config`, `ci`, `deps`, `helm`, `docs`, `operator`
+
+Scopes are recommended for clarity but not enforced. See `cog.toml` for scope descriptions.
 
 **Rules:**
 - Subject line MUST be ≤50 characters, imperative mood, no period
