@@ -43,10 +43,10 @@ flowchart TD
         J --> M[Build binaries<br/>all platforms]
         M --> N[Create GitHub Release<br/>with CHANGELOG.md]
         N --> O[Publish Homebrew<br/>formula]
-        N --> L[docs.yml<br/>on release:published]
 
         K --> P[Publish Helm chart<br/>to ghcr.io]
 
+        O --> L[docs.yml<br/>on v-release complete]
         L --> Q[Deploy docs to<br/>Cloudflare Pages]
     end
 
