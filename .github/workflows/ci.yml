@@ -1,3 +1,17 @@
+# CI Workflow - Parallelized build, test, and E2E pipeline
+#
+# Job Dependencies:
+#   lint ──────┬──> test-coverage
+#              │
+#   helm-lint  │   (parallel)
+#              │
+#   build ─────┴──> e2e
+#              │
+#              └──> ci-complete (requires all)
+#
+# Critical path: lint -> build -> e2e (~8.5 min)
+# Cache strategy: Only 'build' job saves cache on main branch
+
 name: CI
 
 on:
@@ -9,6 +23,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
 jobs:
   # ─────────────────────────────────────────────────────────────
   # Job 1: Lint - Fast feedback on code quality
@@ -16,6 +33,7 @@ jobs:
   lint:
     runs-on:
       - runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price
+    timeout-minutes: 10
 
     steps:
       - uses: runs-on/action@v2
@@ -37,7 +55,8 @@ jobs:
   # Job 2: Helm Lint - Validate Helm chart (fast, parallel with lint)
   # ─────────────────────────────────────────────────────────────
   helm-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
     steps:
       - uses: actions/checkout@v6
@@ -56,6 +75,7 @@ jobs:
   build:
     runs-on:
       - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+    timeout-minutes: 30
 
     steps:
       - uses: runs-on/action@v2
@@ -84,11 +104,13 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────
   # Job 4: Test with Coverage - Run all tests with coverage
+  # Note: Runs all tests including PostgreSQL via --workspace flag
   # ─────────────────────────────────────────────────────────────
   test-coverage:
     needs: [lint] # Fast-fail on lint errors
     runs-on:
       - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+    timeout-minutes: 20
 
     steps:
       - uses: runs-on/action@v2
@@ -121,6 +143,7 @@ jobs:
     needs: [build]
     runs-on:
       - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+    timeout-minutes: 20
 
     steps:
       - uses: runs-on/action@v2
@@ -149,6 +172,7 @@ jobs:
 
       - name: Verify Docker image runs
         run: |
+          set -euo pipefail
           echo "Testing binary inside container..."
           docker run --rm router-hosts:ci --help
           docker run --rm router-hosts:ci server --help
@@ -163,7 +187,8 @@ jobs:
   ci-complete:
     if: always()
     needs: [lint, helm-lint, build, test-coverage, e2e]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
 
     steps:
       - name: Check all jobs passed
