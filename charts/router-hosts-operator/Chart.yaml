@@ -2,8 +2,8 @@ apiVersion: v2
 name: router-hosts-operator
 description: Kubernetes operator for syncing Ingress hostnames to router-hosts
 type: application
-version: 0.8.1
-appVersion: 0.8.1
+version: 0.8.2
+appVersion: 0.8.2
 home: https://github.com/fzymgc-house/router-hosts
 sources:
   - https://github.com/fzymgc-house/router-hosts
