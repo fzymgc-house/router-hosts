@@ -14,7 +14,7 @@ repos:
       # Fast file checks (run on every commit)
       - id: check-merge-conflict
       - id: check-yaml
-        exclude: '^charts/.*/templates/.*\.yaml$'  # Exclude Helm templates (contain Go template syntax)
+        exclude: '^(charts/.*/templates/.*\.yaml|mkdocs\.yml)$'  # Exclude Helm templates and MkDocs (Python tags)
       - id: check-toml
       - id: trailing-whitespace
       - id: end-of-file-fixer
