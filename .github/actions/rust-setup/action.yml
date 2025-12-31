@@ -1,0 +1,39 @@
+name: 'Rust Development Setup'
+description: 'Install Rust toolchain, protoc, buf, and configure caching'
+
+inputs:
+  cache-targets:
+    description: 'Whether to cache target directory'
+    required: false
+    default: 'false'
+  save-cache:
+    description: 'Whether to save cache (only on main branch)'
+    required: false
+    default: 'false'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install protoc
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y protobuf-compiler
+        echo "PROTOC=$(which protoc)" >> "$GITHUB_ENV"
+      shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+
+    - name: Install buf
+      uses: bufbuild/buf-setup-action@v1
+      with:
+        github_token: ${{ github.token }}
+
+    - name: Cache Rust dependencies
+      uses: Swatinem/rust-cache@v2
+      with:
+        cache-targets: ${{ inputs.cache-targets }}
+        save-if: ${{ inputs.save-cache }}
+        key: ${{ runner.os }}-cargo

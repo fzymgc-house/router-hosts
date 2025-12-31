@@ -124,23 +124,24 @@ On a PR:
 ### Phase 2: Parallelize Jobs (HIGH IMPACT)
 
 **Current**: Single monolithic `build` job
-**Proposed**: Three parallel jobs
+**Proposed**: Five parallel jobs (including `helm-lint` migrated from pr-checks.yml)
 
 ```
-                    ┌─────────┐
-                    │  lint   │ (~1.5 min) - fast feedback
-                    └────┬────┘
-                         │
-          ┌──────────────┴──────────────┐
-          ▼                             ▼
-    ┌───────────────┐           ┌─────────────┐
-    │ test-coverage │           │    build    │ (~4 min)
-    │   (~4 min)    │           └──────┬──────┘
-    └───────────────┘                  │
-                                       ▼
-                               ┌───────────────┐
-                               │     e2e       │ (~3 min)
-                               └───────────────┘
+          ┌─────────┐    ┌───────────┐
+          │  lint   │    │ helm-lint │ (~30s) - parallel fast feedback
+          │(~1.5min)│    └───────────┘
+          └────┬────┘
+               │
+    ┌──────────┴──────────┐
+    ▼                     ▼
+┌───────────────┐   ┌─────────────┐
+│ test-coverage │   │    build    │ (~4 min)
+│   (~4 min)    │   └──────┬──────┘
+└───────────────┘          │
+                           ▼
+                   ┌───────────────┐
+                   │     e2e       │ (~3 min)
+                   └───────────────┘
 ```
 
 **Critical path**: lint → build → e2e = ~8.5 min (was ~15 min)
@@ -396,11 +397,12 @@ jobs:
 ```
 
 **Key changes:**
-1. Split into 4 parallel jobs: `lint`, `build`, `test-coverage`, `e2e`
+1. Split into 5 parallel jobs: `lint`, `helm-lint`, `build`, `test-coverage`, `e2e`
 2. Removed redundant `task test:postgres` (coverage runs all tests)
 3. Use composite actions for setup
 4. Use 2-CPU runner for lint (faster startup, cheaper)
 5. Artifact upload/download for release binary between jobs
+6. Migrated `helm-lint` job from pr-checks.yml (runs on ubuntu-latest for speed)
 
 ---
 
@@ -434,46 +436,19 @@ e2e:quick:
 
 ---
 
-## Task 5: Update PR Checks Workflow to Use Composite Action
+## Task 5: Remove PR Checks Workflow (Consolidated)
 
 **Files:**
-- Modify: `.github/workflows/pr-checks.yml`
+- Delete: `.github/workflows/pr-checks.yml`
+- Modify: `.github/workflows/ci.yml` (add `helm-lint` job)
 
-**Step 1: Refactor to use composite action**
+**Status: COMPLETED**
 
-```yaml
-name: PR Checks
+The parallelized ci.yml now has a dedicated `lint` job that provides fast feedback (~1.5 min). The `helm-lint` job from pr-checks.yml was migrated to ci.yml to preserve Helm chart validation. pre-commit hooks are better run locally, not in CI.
 
-on:
-  pull_request:
-    branches: [main]
-
-env:
-  CARGO_TERM_COLOR: always
-
-jobs:
-  lint:
-    runs-on:
-      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price/volume=150gb:600mbs:4000iops
-    steps:
-      - uses: runs-on/action@v2
-        with:
-          metrics: cpu,network,memory,disk,io
-      - uses: actions/checkout@v6
-
-      - name: Setup Rust environment
-        uses: ./.github/actions/rust-setup
-
-      - name: Install pre-commit
-        run: pip install pre-commit
-
-      - name: Run pre-commit (all hooks)
-        run: |
-          # Run commit-stage hooks first
-          pre-commit run --all-files
-          # Run push-stage hooks (clippy, tests) separately to avoid cache skipping
-          pre-commit run --all-files --hook-stage pre-push
-```
+**Changes made:**
+1. Deleted `.github/workflows/pr-checks.yml`
+2. Added `helm-lint` job to ci.yml (runs on ubuntu-latest, parallel with other jobs)
 
 ---
 
@@ -557,21 +532,16 @@ Part of #183
 **Files:**
 - Modify: `.github/workflows/docker.yml`
 
+**Status: COMPLETED**
+
 **Rationale**: On PRs, docker.yml builds 4 Docker images using cargo-chef (slow, ~10-15 min each) just to validate Dockerfile syntax. ci.yml already builds and validates `Dockerfile.ci` with a pre-built binary, providing sufficient PR validation.
 
-**Step 1: Remove pull_request trigger from docker.yml**
+**Changes made:**
+1. Removed `pull_request` trigger
+2. Preserved `workflow_dispatch` trigger (added in PR #182 for manual tag builds)
+3. Added comment explaining why PR builds were removed
 
-Change:
-```yaml
-on:
-  push:
-    branches: [main]
-    tags: ['v*']
-  pull_request:
-    branches: [main]
-```
-
-To:
+Final trigger configuration:
 ```yaml
 on:
   push:
@@ -579,6 +549,12 @@ on:
     tags: ['v*']
   # Note: PR builds removed - ci.yml validates Docker builds via Dockerfile.ci
   # Multi-arch builds only needed on merge to main or release tags
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing git tag to build (e.g., v0.7.0)'
+        required: true
+        type: string
 ```
 
 **Expected savings**: ~40-60 min aggregate runner time per PR (4 cargo-chef builds eliminated).
@@ -587,54 +563,13 @@ on:
 
 ## Task 7: Consolidate PR Checks into CI Workflow
 
-**Files:**
-- Modify: `.github/workflows/pr-checks.yml`
+**Status: COMPLETED (merged into Task 5)**
 
-**Option A: Remove pr-checks.yml entirely** (Recommended)
+This task was consolidated with Task 5. The `pr-checks.yml` workflow was deleted and its `helm-lint` job was migrated to `ci.yml`. See Task 5 for details.
 
-The parallelized ci.yml now has a dedicated `lint` job that provides fast feedback (~1.5 min). pre-commit hooks are better run locally, not in CI.
+~~**Option A: Remove pr-checks.yml entirely** (Recommended)~~
 
-**Step 1: Delete pr-checks.yml**
-
-```bash
-git rm .github/workflows/pr-checks.yml
-```
-
-**Option B: Convert to fast-feedback-only workflow**
-
-If pre-commit enforcement is required, keep only the fastest checks:
-
-```yaml
-name: PR Quick Checks
-
-on:
-  pull_request:
-    branches: [main]
-
-jobs:
-  format-check:
-    runs-on:
-      - runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price
-    steps:
-      - uses: runs-on/action@v2
-      - uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Check Rust formatting
-        run: cargo fmt --check
-
-      - name: Install buf
-        uses: bufbuild/buf-setup-action@v1
-        with:
-          github_token: ${{ github.token }}
-
-      - name: Check protobuf formatting
-        run: buf format --diff --exit-code
-```
-
-This provides ~30-second feedback on formatting issues only. Clippy and tests run in ci.yml.
+~~**Option B: Convert to fast-feedback-only workflow**~~ (Not implemented - Option A chosen)
 
 ---
 
@@ -668,12 +603,13 @@ Total runner time: ~60-80 min across all workflows
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│ ci.yml (parallelized)                                               │
+│ ci.yml (parallelized - 5 jobs)                                      │
 │                                                                     │
-│   ┌─────────┐                                                       │
-│   │  lint   │ (~1.5 min) ← Fast feedback                           │
+│   ┌─────────┐    ┌───────────┐                                     │
+│   │  lint   │    │ helm-lint │ (parallel, ~30s)                    │
+│   │(~1.5min)│    └───────────┘                                     │
 │   └────┬────┘                                                       │
-│        │                                                            │
+│        │ ← Fast feedback                                            │
 │   ┌────┴────────────────┐                                          │
 │   ▼                     ▼                                          │
 │ ┌───────────────┐  ┌─────────┐                                     │
@@ -689,7 +625,7 @@ Total runner time: ~60-80 min across all workflows
 └─────────────────────────────────────────────────────────────────────┘
 
 docker.yml: SKIPPED on PRs (only runs on push to main/tags)
-pr-checks.yml: REMOVED (consolidated into ci.yml lint job)
+pr-checks.yml: REMOVED (helm-lint migrated to ci.yml)
 
 Total runner time: ~12-15 min (single workflow, parallel jobs)
 Improvement: 75-80% reduction in aggregate runner time

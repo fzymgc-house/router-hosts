@@ -151,7 +151,7 @@ tasks:
       ROUTER_HOSTS_IMAGE: '{{.LOCAL_IMAGE}}'
       ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
     cmds:
-      - cargo test -p router-hosts-e2e --release -- --test-threads=2
+      - cargo test -p router-hosts-e2e --release -- --test-threads=4
 
   e2e:quick:
     desc: Run E2E tests (skip rebuild, assumes image exists)
@@ -160,7 +160,7 @@ tasks:
       ROUTER_HOSTS_IMAGE: '{{.LOCAL_IMAGE}}'
       ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
     cmds:
-      - cargo test -p router-hosts-e2e --release -- --test-threads=2
+      - cargo test -p router-hosts-e2e --release -- --test-threads=4
 
   e2e:scenario:
     desc: Run specific E2E scenario (e.g., task e2e:scenario -- daily_operations)

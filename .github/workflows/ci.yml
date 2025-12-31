@@ -1,97 +1,158 @@
 name: CI
 
 on:
-    push:
-        branches: [main]
-    pull_request:
-        branches: [main]
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 env:
-    CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: always
 
 jobs:
-    build:
-        runs-on:
-            - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+  # ─────────────────────────────────────────────────────────────
+  # Job 1: Lint - Fast feedback on code quality
+  # ─────────────────────────────────────────────────────────────
+  lint:
+    runs-on:
+      - runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price
 
-        steps:
-            - uses: runs-on/action@v2
-              with:
-                  metrics: cpu,network,memory,disk,io
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
 
-            - uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-            - name: Install Rust
-              uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust environment
+        uses: ./.github/actions/rust-setup
 
-            - name: Install protoc
-              run: |
-                  sudo apt-get update
-                  sudo apt-get install -y protobuf-compiler
-                  echo "PROTOC=$(which protoc)" >> "$GITHUB_ENV"
-                  protoc --version
-              env:
-                  DEBIAN_FRONTEND: noninteractive
+      - name: Install Task
+        uses: arduino/setup-task@v2
 
-            - name: Install buf
-              uses: bufbuild/buf-setup-action@v1
-              with:
-                  github_token: ${{ github.token }}
+      - name: Run linters
+        run: task lint
 
-            - name: Install Task
-              uses: arduino/setup-task@v2
+  # ─────────────────────────────────────────────────────────────
+  # Job 2: Helm Lint - Validate Helm chart (fast, parallel with lint)
+  # ─────────────────────────────────────────────────────────────
+  helm-lint:
+    runs-on: ubuntu-latest
 
-            # Use Swatinem/rust-cache for Rust caching
-            # Only cache ~/.cargo registry, not target/ (too large with DuckDB ~16GB)
-            - name: Cache Rust dependencies
-              uses: Swatinem/rust-cache@v2
-              with:
-                  # Don't cache target/ - DuckDB artifacts are huge
-                  cache-targets: "false"
-                  # Only save cache on main branch to avoid PR cache pollution
-                  save-if: ${{ github.ref == 'refs/heads/main' }}
-                  key: ${{ runner.os }}-cargo
+    steps:
+      - uses: actions/checkout@v6
 
-            - name: Install cargo-nextest
-              uses: taiki-e/install-action@v2
-              with:
-                  tool: cargo-nextest
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v4.0.4
 
-            - name: Install cargo-llvm-cov
-              uses: taiki-e/install-action@v2
-              with:
-                  tool: cargo-llvm-cov
+      - name: Lint Helm chart
+        run: helm lint charts/router-hosts-operator
 
-            - name: Build
-              run: task build
+  # ─────────────────────────────────────────────────────────────
+  # Job 3: Build - Create release binary for E2E tests
+  # ─────────────────────────────────────────────────────────────
+  build:
+    runs-on:
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
 
-            - name: Run PostgreSQL backend tests
-              run: task test:postgres
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
 
-            - name: Build release binary
-              run: task build:release
+      - uses: actions/checkout@v6
 
-            - name: Build CI Docker image
-              run: task docker:build-ci IMAGE_NAME=router-hosts IMAGE_TAG=ci
+      - name: Setup Rust environment
+        uses: ./.github/actions/rust-setup
+        with:
+          save-cache: ${{ github.ref == 'refs/heads/main' }}
 
-            - name: Verify Docker image runs
-              run: |
-                  echo "Testing binary inside container..."
-                  docker run --rm router-hosts:ci --help
-                  docker run --rm router-hosts:ci server --help
-                  echo "Binary runs successfully"
+      - name: Install Task
+        uses: arduino/setup-task@v2
 
-            - name: Run E2E tests
-              run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
+      - name: Build release binary
+        run: task build:release
 
-            - name: Check test coverage (≥80% required)
-              # Coverage runs all tests with llvm-cov instrumentation
-              run: task test:coverage:ci
+      - name: Upload release binary
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-binary
+          path: target/release/router-hosts
+          retention-days: 1
 
-            - name: Upload coverage report
-              uses: actions/upload-artifact@v6
-              if: always()
-              with:
-                  name: coverage-report
-                  path: coverage/
-                  retention-days: 14
+  # ─────────────────────────────────────────────────────────────
+  # Job 4: Test with Coverage - Run all tests with coverage
+  # ─────────────────────────────────────────────────────────────
+  test-coverage:
+    needs: [lint] # Fast-fail on lint errors
+    runs-on:
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
+
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust environment
+        uses: ./.github/actions/rust-setup
+
+      - name: Setup CI tools
+        uses: ./.github/actions/ci-tools
+
+      - name: Check test coverage (≥80% required)
+        run: task test:coverage:ci
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
+
+  # ─────────────────────────────────────────────────────────────
+  # Job 5: E2E Tests - Requires release binary
+  # ─────────────────────────────────────────────────────────────
+  e2e:
+    needs: [build]
+    runs-on:
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache+docker/spot=lowest-price/volume=150gb:600mbs:4000iops
+
+    steps:
+      - uses: runs-on/action@v2
+        with:
+          metrics: cpu,network,memory,disk,io
+
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust environment
+        uses: ./.github/actions/rust-setup
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+
+      - name: Download release binary
+        uses: actions/download-artifact@v6
+        with:
+          name: release-binary
+          path: target/release/
+
+      - name: Make binary executable
+        run: chmod +x target/release/router-hosts
+
+      - name: Build CI Docker image
+        run: task docker:build-ci IMAGE_NAME=router-hosts IMAGE_TAG=ci
+
+      - name: Verify Docker image runs
+        run: |
+          echo "Testing binary inside container..."
+          docker run --rm router-hosts:ci --help
+          docker run --rm router-hosts:ci server --help
+          echo "Binary runs successfully"
+
+      - name: Run E2E tests
+        run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
