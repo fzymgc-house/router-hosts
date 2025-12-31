@@ -35,6 +35,26 @@ The following secrets must be configured in the repository for releases to work:
   - Required scopes: `public_repo` (or `repo` if tap is private)
   - Add at: https://github.com/fzymgc-house/router-hosts/settings/secrets/actions
 
+### Documentation Deployment Secrets
+
+For automated documentation deployment to Cloudflare Pages:
+
+- **`CLOUDFLARE_ACCOUNT_ID`**: Cloudflare account identifier
+  - Find at: Cloudflare Dashboard → Account Home → right sidebar
+- **`CLOUDFLARE_PAGES_ACCOUNT_API`**: API token with Pages deployment permission
+  - Create at: Cloudflare Dashboard → My Profile → API Tokens → Create Token
+  - Use template: "Edit Cloudflare Pages"
+  - Or custom token with: `Zone:Read`, `Account:Cloudflare Pages:Edit`
+
+## Documentation Setup
+
+Create a Cloudflare Pages project before the first release:
+
+1. Go to Cloudflare Dashboard → Workers & Pages → Create
+2. Select "Pages" → "Direct Upload" (not Git connection)
+3. Name the project: `router-hosts-docs`
+4. The docs workflow will deploy using Wrangler
+
 ## Creating a Release
 
 1. **Update version in `Cargo.toml`** (workspace root):

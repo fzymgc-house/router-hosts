@@ -71,16 +71,16 @@ This document covers common issues and their solutions.
 
 **Solutions:**
 1. Rollback to previous snapshot: `router-hosts snapshot rollback <id>`
-2. Export and reimport:
+2. List snapshots and reimport:
    ```bash
-   router-hosts snapshot show <id> > backup.txt
-   # Fix manually if needed
-   router-hosts host import --file backup.txt --conflict-mode replace
+   router-hosts snapshot list
+   # Choose a snapshot ID from the list, then rollback:
+   router-hosts snapshot rollback <id>
    ```
 
 ## ACME Issues
 
-See [ACME documentation](acme.md#troubleshooting) for certificate-specific issues.
+See [ACME documentation](guides/acme.md#troubleshooting) for certificate-specific issues.
 
 ### Quick ACME Checklist
 
@@ -180,10 +180,10 @@ systemctl stop router-hosts
 mv /var/lib/router-hosts/hosts.db /var/lib/router-hosts/hosts.db.corrupt
 
 # Reimport from most recent export
-router-hosts host import --file /backup/hosts-export.json
+router-hosts host import /backup/hosts-export.json --input-format json
 
 # Or reimport from /etc/hosts directly
-router-hosts host import --file /etc/hosts
+router-hosts host import /etc/hosts
 ```
 
 ### Certificate emergency replacement

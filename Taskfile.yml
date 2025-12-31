@@ -5,6 +5,10 @@ vars:
   IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
   # Local-only image name (no registry prefix) to prevent testcontainers pull attempts
   LOCAL_IMAGE: 'router-hosts:e2e-local'
+  # Binary path for docs generation (override in CI with downloaded release binary)
+  BINARY: '{{.BINARY | default "./target/release/router-hosts"}}'
+  # MkDocs command with all required plugins
+  MKDOCS: 'uvx --with mkdocs-material --with mkdocs-git-revision-date-localized-plugin --with mkdocs-exclude mkdocs'
 
 tasks:
   # ─────────────────────────────────────────────────────────────
@@ -193,6 +197,46 @@ tasks:
     desc: Preview what cargo-dist would build (dry-run)
     cmds:
       - dist plan
+
+  # ─────────────────────────────────────────────────────────────
+  # Documentation
+  # ─────────────────────────────────────────────────────────────
+  docs:build:
+    desc: Build documentation site locally (with strict mode)
+    deps: [docs:generate]
+    cmds:
+      - '{{.MKDOCS}} build --strict'
+
+  docs:serve:
+    desc: Serve documentation locally with live reload
+    deps: [docs:generate]
+    cmds:
+      - '{{.MKDOCS}} serve'
+
+  docs:generate:
+    desc: Generate CLI and API reference docs from source
+    deps: [build:release]
+    cmds:
+      - ./scripts/generate-cli-docs.sh {{.BINARY}}
+      - ./scripts/generate-proto-docs.sh
+
+  docs:generate:cli:
+    desc: Generate CLI reference docs only
+    deps: [build:release]
+    cmds:
+      - ./scripts/generate-cli-docs.sh {{.BINARY}}
+
+  docs:generate:api:
+    desc: Generate API reference docs from protobuf
+    cmds:
+      - ./scripts/generate-proto-docs.sh
+
+  docs:ci:
+    desc: Build docs for CI (uses BINARY var, no cargo build)
+    cmds:
+      - ./scripts/generate-cli-docs.sh {{.BINARY}}
+      - ./scripts/generate-proto-docs.sh
+      - '{{.MKDOCS}} build --strict'
 
   # ─────────────────────────────────────────────────────────────
   # CI Shortcuts

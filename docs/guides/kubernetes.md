@@ -14,7 +14,7 @@ The router-hosts Kubernetes operator automates DNS registration for Kubernetes w
 
 ## Installation
 
-The operator is deployed via Helm chart. See [charts/router-hosts-operator/README.md](../charts/router-hosts-operator/README.md) for complete installation instructions.
+The operator is deployed via Helm chart. See the [Helm Chart README](https://github.com/fzymgc-house/router-hosts/blob/main/charts/router-hosts-operator/README.md) for complete installation instructions.
 
 **Quick start:**
 
@@ -378,6 +378,6 @@ kubectl describe hostmapping <name> -n <namespace>
 
 ## See Also
 
-- [Helm Chart README](../charts/router-hosts-operator/README.md) - Installation and configuration
-- [Architecture](architecture.md) - Overall system design
+- [Helm Chart README](https://github.com/fzymgc-house/router-hosts/blob/main/charts/router-hosts-operator/README.md) - Installation and configuration
+- [Architecture](../contributing/architecture.md) - Overall system design
 - [Operations](operations.md) - Server operations and monitoring

@@ -9,6 +9,34 @@ router-hosts uses a client-server architecture:
 - **Server** runs on the target machine (router, server, container), manages a configurable hosts file via event-sourced storage
 - **Client** runs on workstation, connects via gRPC over TLS with mutual authentication
 
+```mermaid
+flowchart TB
+    subgraph Client
+        CLI[router-hosts CLI]
+    end
+
+    subgraph Server
+        GRPC[gRPC Server]
+        ES[Event Store]
+        SNAP[Snapshot Store]
+        PROJ[Host Projection]
+    end
+
+    subgraph Storage
+        SQLite[(SQLite)]
+        PG[(PostgreSQL)]
+        Duck[(DuckDB)]
+    end
+
+    CLI -->|mTLS| GRPC
+    GRPC --> ES
+    GRPC --> SNAP
+    GRPC --> PROJ
+    ES --> SQLite
+    ES --> PG
+    ES --> Duck
+```
+
 See `docs/plans/2025-12-01-router-hosts-v1-design.md` for complete design specification.
 
 ## Workspace Structure
@@ -53,7 +81,7 @@ Kubernetes operator for automated DNS registration:
 - Automatically registers/updates host entries with router-hosts server
 - Leader election for high availability
 - Health endpoints for Kubernetes probes
-- See [Operator Documentation](operator.md) for details
+- See [Operator Documentation](../guides/kubernetes.md) for details
 
 ### router-hosts-e2e
 
@@ -65,12 +93,35 @@ End-to-end acceptance tests:
 
 ### Event Sourcing
 
+The server uses **CQRS (Command Query Responsibility Segregation)** with **Event Sourcing**:
+
 - All changes stored as immutable events in the storage backend
-- Current state reconstructed from event log (CQRS pattern)
+- Current state reconstructed from event log
 - Complete audit trail and time-travel query capability
 - Optimistic concurrency via event versions
 
-See `docs/architecture/event-sourcing.md` for detailed event sourcing documentation.
+**Why event sourcing?** Traditional soft-delete CRUD patterns complicated queries and limited audit capabilities. Event sourcing provides:
+
+- Immutable event log as single source of truth
+- Complete history - every change recorded as an event
+- Time travel - reconstruct state at any point in time
+- No soft deletes - deletion is just another event (`HostDeleted`)
+
+**Domain events:**
+
+| Event | Description |
+|-------|-------------|
+| `HostCreated` | New host entry created |
+| `IpAddressChanged` | IP address modified |
+| `HostnameChanged` | Hostname modified |
+| `CommentUpdated` | Comment added/changed |
+| `TagsModified` | Tags updated |
+| `AliasesModified` | Aliases updated |
+| `HostDeleted` | Tombstone event |
+
+**Optimistic concurrency:** Each event has a version number. Updates must specify the expected version; if another write occurred, the operation fails with `ABORTED` (version mismatch), and the client must retry.
+
+**Projections:** Materialized views built from events for efficient queries. The `host_entries_current` view shows active hosts by replaying events and filtering out deleted entries.
 
 ### Streaming APIs
 
@@ -113,7 +164,7 @@ The server exposes Prometheus metrics on a configurable HTTP endpoint:
 - **Host metrics**: `router_hosts_hosts_entries`
 - **Hook metrics**: `router_hosts_hook_executions_total`, `router_hosts_hook_duration_seconds`
 
-See [Operations Guide](operations.md#prometheus-metrics) for configuration.
+See [Operations Guide](../guides/operations.md#prometheus-metrics) for configuration.
 
 ### Health Endpoints
 
@@ -210,7 +261,7 @@ router-hosts host update <id> --alias primary --alias backup
 router-hosts host update <id> --clear-aliases
 
 # Import with alias conflict override
-router-hosts host import --file hosts.txt --conflict-mode strict --force
+router-hosts host import hosts.txt --conflict-mode strict --force
 ```
 
 ### Key Behaviors

@@ -135,7 +135,7 @@ All tasks are tracked in GitHub Issues. You MUST:
 
 **Storage defaults:** SQLite is the default backend. When no database URL is configured, an XDG-compliant path is used (`~/.local/share/router-hosts/hosts.db` on Linux).
 
-For detailed architecture, see `docs/architecture.md`.
+For detailed architecture, see `docs/contributing/architecture.md`.
 
 ## Documentation
 
@@ -143,10 +143,10 @@ For detailed information, see:
 
 | Topic | Location |
 |-------|----------|
-| Architecture & design decisions | `docs/architecture.md` |
-| ACME certificate management | `docs/acme.md` |
-| Operations (SIGHUP, hooks) | `docs/operations.md` |
-| Release process | `docs/releasing.md` |
-| E2E testing details | `docs/e2e-testing.md` |
+| Architecture & design decisions | `docs/contributing/architecture.md` |
+| ACME certificate management | `docs/guides/acme.md` |
+| Operations (SIGHUP, hooks) | `docs/guides/operations.md` |
+| Release process | `docs/contributing/releasing.md` |
+| E2E testing details | `docs/contributing/testing.md` |
 | Troubleshooting | `docs/troubleshooting.md` |
 | Design specification | `docs/plans/2025-12-01-router-hosts-v1-design.md` |

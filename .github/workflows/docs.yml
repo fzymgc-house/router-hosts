@@ -1,0 +1,82 @@
+name: Deploy Docs
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to deploy (e.g., v0.8.0). Defaults to latest release.'
+        required: false
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Determine version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "$EVENT_NAME" == "release" ]]; then
+            VERSION="$RELEASE_TAG"
+          elif [[ -n "$INPUT_VERSION" ]]; then
+            VERSION="$INPUT_VERSION"
+          else
+            if ! VERSION=$(gh release view --json tagName -q .tagName 2>&1); then
+              echo "::error::Failed to determine version. No releases found or gh CLI error: $VERSION"
+              echo "Hint: Use workflow_dispatch with explicit version input, or create a release first."
+              exit 1
+            fi
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Deploying docs for version: $VERSION"
+
+      - name: Download release binary
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release download "$VERSION" \
+            --pattern 'router-hosts-x86_64-unknown-linux-gnu.tar.xz' \
+            --dir /tmp
+          tar -xJf /tmp/router-hosts-x86_64-unknown-linux-gnu.tar.xz -C /tmp
+          chmod +x /tmp/router-hosts
+          /tmp/router-hosts --version
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.22'
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.x'
+
+      - name: Install protoc-gen-doc
+        run: go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@v1.5.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Build docs
+        run: task docs:ci BINARY=/tmp/router-hosts
+
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_PAGES_ACCOUNT_API }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy site --project-name=router-hosts-docs

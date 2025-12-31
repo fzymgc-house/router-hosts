@@ -31,3 +31,4 @@ coverage/
 
 # Vault AppRole credentials (sensitive - never commit)
 /examples/vault-approle/
+site/
