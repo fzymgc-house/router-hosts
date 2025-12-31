@@ -164,6 +164,22 @@ The workflow validates that:
 
 If either doesn't match, the workflow fails with a clear error message indicating which version needs to be updated.
 
+### Helm Version Requirements
+
+The release workflow uses **Helm 4.x** (specifically v4.0.4 or later). Helm 4 provides:
+
+- Improved OCI registry support with better error handling
+- Native OCI artifact publishing without experimental flags
+- Better compatibility with ghcr.io container registry
+
+For details on Helm 4 changes, see: https://helm.sh/blog/helm-4-0-0-released/
+
+If you need to run helm commands locally for chart development, ensure you have Helm 4.x installed:
+
+```bash
+helm version  # Should show v4.x.x
+```
+
 ## Release Artifacts
 
 Each release includes:

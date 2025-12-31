@@ -55,7 +55,12 @@ jobs:
       - name: Set up Helm
         uses: azure/setup-helm@v4
         with:
+          # Helm 4.x is required for improved OCI registry support
+          # See: https://helm.sh/blog/helm-4-0-0-released/
           version: v4.0.4
+
+      - name: Install yq
+        uses: mikefarah/yq@v4
 
       - name: Extract version from tag
         id: version
@@ -72,8 +77,9 @@ jobs:
         run: |
           # Validate that Chart.yaml versions match the git tag
           # This ensures reproducibility - the tagged commit must have correct versions
-          CHART_VERSION=$(grep '^version:' "$CHART_PATH/Chart.yaml" | awk '{print $2}')
-          APP_VERSION=$(grep '^appVersion:' "$CHART_PATH/Chart.yaml" | awk '{print $2}')
+          # Using yq for robust YAML parsing (handles comments, quoting, whitespace)
+          CHART_VERSION=$(yq '.version' "$CHART_PATH/Chart.yaml")
+          APP_VERSION=$(yq '.appVersion' "$CHART_PATH/Chart.yaml")
 
           echo "Tag version: $VERSION"
           echo "Chart version: $CHART_VERSION"
