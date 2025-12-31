@@ -260,7 +260,7 @@ Builds binaries using cargo-dist. Named `v-release.yml` because cargo-dist uses 
 
 Key settings in `dist-workspace.toml`:
 - `changelog = false` - Don't generate changelog (release-please manages it)
-- `github-release = "CHANGELOG.md"` - Use release-please's changelog for release notes
+- `github-release = "host"` - Add binaries to existing release (release-please creates it)
 
 **Warning:** Do not rename `v-release.yml` manually. Running `dist generate-ci` will recreate it with the original name.
 
