@@ -28,21 +28,30 @@ Complete reference for all configuration options.
 
 ### `[hooks]`
 
+Hooks are arrays of hook definitions. Each hook has a `name` (kebab-case identifier) and `command` (shell command).
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `on_success` | array | `[]` | Commands to run after successful host updates |
-| `on_failure` | array | `[]` | Commands to run after failed host updates |
+| `on_success` | array of hooks | `[]` | Hooks to run after successful host updates |
+| `on_failure` | array of hooks | `[]` | Hooks to run after failed host updates |
+
+Each hook definition:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | string | Unique kebab-case identifier (used in logs/metrics) |
+| `command` | string | Shell command to execute |
 
 Example hooks:
 
 ```toml
-[hooks]
-on_success = [
-  "systemctl reload dnsmasq"
-]
-on_failure = [
-  "notify-send 'router-hosts update failed'"
-]
+[[hooks.on_success]]
+name = "reload-dnsmasq"
+command = "systemctl reload dnsmasq"
+
+[[hooks.on_failure]]
+name = "notify-failure"
+command = "notify-send 'router-hosts update failed'"
 ```
 
 ## Client Configuration
