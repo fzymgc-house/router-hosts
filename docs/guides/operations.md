@@ -205,7 +205,7 @@ The Kubernetes operator exposes HTTP health endpoints (separate from the server'
 | `/healthz` | Liveness | Returns 200 if process is alive |
 | `/readyz` | Readiness | Returns 200 if startup complete AND router-hosts server reachable |
 
-See [Operator Documentation](operator.md#observability) for details on probe configuration.
+See [Operator Documentation](kubernetes.md#observability) for details on probe configuration.
 
 ## Prometheus Metrics
 

@@ -80,7 +80,7 @@ This document covers common issues and their solutions.
 
 ## ACME Issues
 
-See [ACME documentation](acme.md#troubleshooting) for certificate-specific issues.
+See [ACME documentation](guides/acme.md#troubleshooting) for certificate-specific issues.
 
 ### Quick ACME Checklist
 
