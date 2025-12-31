@@ -402,9 +402,9 @@ mod tests {
             .expect_update_host()
             .withf(|id, _ip, _aliases, tags, version| {
                 id == "entry-1"
-                    && tags.as_ref().map_or(false, |t| {
-                        t.len() == 1 && t.contains(&"custom-tag".to_string())
-                    })
+                    && tags
+                        .as_ref()
+                        .is_some_and(|t| t.len() == 1 && t.contains(&"custom-tag".to_string()))
                     && version == &Some("v1".to_string())
             })
             .times(1)

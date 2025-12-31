@@ -143,6 +143,18 @@ tasks:
       - docker build -f Dockerfile.ci -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} -t {{.LOCAL_IMAGE}} .
       - rm router-hosts
 
+  docker:build-operator-e2e:
+    desc: Build operator Docker image from existing binary (for CI smoke test)
+    preconditions:
+      - test -f target/release/router-hosts-operator
+    cmds:
+      # Copy binary to root to avoid .dockerignore excluding target/
+      - cp target/release/router-hosts-operator router-hosts-operator
+      - docker build -f Dockerfile.ci.operator -t {{.OPERATOR_IMAGE_NAME}}:{{.IMAGE_TAG}} .
+      - rm router-hosts-operator
+    vars:
+      OPERATOR_IMAGE_NAME: '{{.OPERATOR_IMAGE_NAME | default "router-hosts-operator"}}'
+
   docker:run:
     desc: Run server container (requires certs in ./dev/certs/)
     cmds:

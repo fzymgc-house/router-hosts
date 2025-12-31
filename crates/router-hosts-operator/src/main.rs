@@ -26,8 +26,25 @@ use router_hosts_operator::resolver::IpResolver;
 const GC_INTERVAL_SECS: u64 = 60;
 const SHUTDOWN_GRACE_SECS: u64 = 30;
 
+/// Initialize the rustls crypto provider.
+///
+/// Must be called before any TLS operations (kube-client, tonic, etc.).
+/// Required since rustls 0.23 removed the default crypto provider.
+///
+/// Without this call, the first TLS operation (e.g., kube-client connecting
+/// to the API server) will panic with "no process-default CryptoProvider".
+fn init_crypto_provider() {
+    // The only possible error is "provider already installed" which is benign
+    // (e.g., in test scenarios where multiple tests run in the same process)
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install rustls crypto provider before any TLS operations.
+    // This must happen before kube-client creates its TLS config.
+    init_crypto_provider();
+
     // Initialize tracing with JSON formatting for production
     tracing_subscriber::registry()
         .with(
@@ -39,6 +56,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    debug!("Crypto provider initialized (aws-lc-rs)");
     info!("router-hosts-operator starting");
 
     // Create Kubernetes client
@@ -549,4 +567,43 @@ async fn build_uid_cache(client: &Client) -> Result<UidCache> {
         ingressroutetcps,
         hostmappings,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::init_crypto_provider;
+
+    /// Verify that init_crypto_provider enables TLS operations.
+    ///
+    /// This test catches the rustls 0.23+ breaking change where the default
+    /// crypto provider was removed. Without calling init_crypto_provider(),
+    /// creating a rustls ClientConfig would panic.
+    ///
+    /// The test calls our actual initialization function and then verifies
+    /// TLS config creation works - the same sequence that happens in main().
+    ///
+    /// Regression test for: https://github.com/fzymgc-house/router-hosts/issues/192
+    #[test]
+    fn init_crypto_provider_enables_tls() {
+        // Call our actual initialization function (same as main does)
+        init_crypto_provider();
+
+        // This would panic without the crypto provider installed.
+        // kube-client does exactly this internally when creating TLS connections.
+        let _config = rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth();
+
+        // If we get here without panicking, the initialization worked
+    }
+
+    /// Verify the aws-lc-rs crypto provider is available at compile time.
+    ///
+    /// This compile-time check ensures the rustls `aws_lc_rs` feature is enabled.
+    /// If someone removes the dependency or feature, this test won't compile.
+    #[test]
+    fn aws_lc_rs_provider_available() {
+        // This line won't compile if rustls aws_lc_rs feature is disabled
+        let _provider = rustls::crypto::aws_lc_rs::default_provider();
+    }
 }

@@ -1,0 +1,8 @@
+# Minimal Dockerfile for CI smoke tests
+# Uses Ubuntu to match CI runner's glibc version
+# Expects pre-built binary copied to ./router-hosts-operator (outside target/ to avoid .dockerignore)
+FROM ubuntu:24.04
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY router-hosts-operator /usr/local/bin/
+EXPOSE 8081
+ENTRYPOINT ["router-hosts-operator"]
