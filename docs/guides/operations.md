@@ -258,13 +258,10 @@ The server creates snapshots before destructive operations:
 
 ```bash
 # Export current state
-router-hosts host export --format json > backup.json
+router-hosts host export --export-format json > backup.json
 
 # List available snapshots
 router-hosts snapshot list
-
-# View specific snapshot
-router-hosts snapshot show <id>
 ```
 
 ### Recovery
@@ -274,7 +271,7 @@ router-hosts snapshot show <id>
 router-hosts snapshot rollback <id>
 
 # Import from backup
-router-hosts host import --file backup.json --conflict-mode replace
+router-hosts host import backup.json --conflict-mode replace
 ```
 
 ### Retention Policy
@@ -283,7 +280,7 @@ Configure snapshot retention in server config:
 
 ```toml
 [retention]
-max_count = 50          # Keep at most 50 snapshots
+max_snapshots = 50      # Keep at most 50 snapshots
 max_age_days = 30       # Delete snapshots older than 30 days
 ```
 

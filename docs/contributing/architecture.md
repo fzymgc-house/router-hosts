@@ -238,7 +238,7 @@ router-hosts host update <id> --alias primary --alias backup
 router-hosts host update <id> --clear-aliases
 
 # Import with alias conflict override
-router-hosts host import --file hosts.txt --conflict-mode strict --force
+router-hosts host import hosts.txt --conflict-mode strict --force
 ```
 
 ### Key Behaviors
