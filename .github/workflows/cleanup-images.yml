@@ -93,5 +93,5 @@ jobs:
           # See: https://github.com/snok/container-retention-policy#image-tags
           image-tags: "!latest !v*.*.* *"
 
-          # Enable dry-run for safe testing (change to false for production)
-          dry-run: true
+          # Dry-run disabled after successful validation (see #88)
+          dry-run: false
