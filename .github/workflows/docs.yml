@@ -4,7 +4,7 @@ on:
   # Trigger after v-release.yml completes (builds binaries)
   # v-release.yml runs on tag pushes, so we don't filter by branch
   workflow_run:
-    workflows: ["Release"]
+    workflows: ["Build Release"]
     types: [completed]
   workflow_dispatch:
     inputs:
