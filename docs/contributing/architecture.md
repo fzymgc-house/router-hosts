@@ -93,12 +93,35 @@ End-to-end acceptance tests:
 
 ### Event Sourcing
 
+The server uses **CQRS (Command Query Responsibility Segregation)** with **Event Sourcing**:
+
 - All changes stored as immutable events in the storage backend
-- Current state reconstructed from event log (CQRS pattern)
+- Current state reconstructed from event log
 - Complete audit trail and time-travel query capability
 - Optimistic concurrency via event versions
 
-See `docs/architecture/event-sourcing.md` for detailed event sourcing documentation.
+**Why event sourcing?** Traditional soft-delete CRUD patterns complicated queries and limited audit capabilities. Event sourcing provides:
+
+- Immutable event log as single source of truth
+- Complete history - every change recorded as an event
+- Time travel - reconstruct state at any point in time
+- No soft deletes - deletion is just another event (`HostDeleted`)
+
+**Domain events:**
+
+| Event | Description |
+|-------|-------------|
+| `HostCreated` | New host entry created |
+| `IpAddressChanged` | IP address modified |
+| `HostnameChanged` | Hostname modified |
+| `CommentUpdated` | Comment added/changed |
+| `TagsModified` | Tags updated |
+| `AliasesModified` | Aliases updated |
+| `HostDeleted` | Tombstone event |
+
+**Optimistic concurrency:** Each event has a version number. Updates must specify the expected version; if another write occurred, the operation fails with `ABORTED` (version mismatch), and the client must retry.
+
+**Projections:** Materialized views built from events for efficient queries. The `host_entries_current` view shows active hosts by replaying events and filtering out deleted entries.
 
 ### Streaming APIs
 

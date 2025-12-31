@@ -37,9 +37,6 @@ plugins:
   - exclude:
       glob:
         - plans/*
-        - architecture/*
-        - workarounds/*
-        - test-coverage-audit.md
   - git-revision-date-localized:
       type: date
       fallback_to_build_date: true
