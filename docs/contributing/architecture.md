@@ -53,7 +53,7 @@ Kubernetes operator for automated DNS registration:
 - Automatically registers/updates host entries with router-hosts server
 - Leader election for high availability
 - Health endpoints for Kubernetes probes
-- See [Operator Documentation](operator.md) for details
+- See [Operator Documentation](../guides/kubernetes.md) for details
 
 ### router-hosts-e2e
 

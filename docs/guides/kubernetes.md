@@ -379,5 +379,5 @@ kubectl describe hostmapping <name> -n <namespace>
 ## See Also
 
 - [Helm Chart README](../charts/router-hosts-operator/README.md) - Installation and configuration
-- [Architecture](architecture.md) - Overall system design
+- [Architecture](../contributing/architecture.md) - Overall system design
 - [Operations](operations.md) - Server operations and monitoring
