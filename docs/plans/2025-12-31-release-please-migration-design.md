@@ -64,7 +64,7 @@ flowchart TD
 ```json
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
-  "release-type": "rust",
+  "release-type": "simple",
   "include-component-in-tag": false,
   "include-v-in-tag": true,
   "bump-minor-pre-major": true,
@@ -83,6 +83,11 @@ flowchart TD
   ],
   "extra-files": [
     {
+      "type": "toml",
+      "path": "Cargo.toml",
+      "jsonpath": "$.workspace.package.version"
+    },
+    {
       "type": "yaml",
       "path": "charts/router-hosts-operator/Chart.yaml",
       "jsonpath": "$.version"
@@ -100,6 +105,8 @@ flowchart TD
   }
 }
 ```
+
+**Note:** Using `simple` release-type instead of `rust` because the Cargo workspace uses `version.workspace = true` inheritance. The `rust` type doesn't handle workspace inheritance properly.
 
 ### .release-please-manifest.json
 
