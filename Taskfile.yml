@@ -201,13 +201,13 @@ tasks:
     desc: Build documentation site locally
     deps: [docs:generate]
     cmds:
-      - mkdocs build
+      - uvx --with mkdocs-material --with mkdocs-git-revision-date-localized-plugin mkdocs build
 
   docs:serve:
     desc: Serve documentation locally with live reload
     deps: [docs:generate]
     cmds:
-      - mkdocs serve
+      - uvx --with mkdocs-material --with mkdocs-git-revision-date-localized-plugin mkdocs serve
 
   docs:generate:
     desc: Generate CLI and API reference docs from source
