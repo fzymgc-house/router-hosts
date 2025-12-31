@@ -12,8 +12,41 @@ permissions:
 jobs:
   release-please:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+
     steps:
-      - uses: actions/create-github-app-token@v1
+      - name: Validate required secrets
+        env:
+          APP_ID: ${{ secrets.RELEASE_PLEASE_APP_ID }}
+          PRIVATE_KEY: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
+        run: |
+          if [ -z "$APP_ID" ]; then
+            echo "::error::Missing required secret: RELEASE_PLEASE_APP_ID"
+            echo "Configure the GitHub App ID in repository secrets."
+            exit 1
+          fi
+          if [ -z "$PRIVATE_KEY" ]; then
+            echo "::error::Missing required secret: RELEASE_PLEASE_PRIVATE_KEY"
+            echo "Configure the GitHub App private key in repository secrets."
+            exit 1
+          fi
+          echo "Required secrets are configured"
+
+      - uses: actions/checkout@v4
+
+      - name: Validate release-please config
+        run: |
+          if ! jq empty release-please-config.json 2>/dev/null; then
+            echo "::error::release-please-config.json is not valid JSON"
+            exit 1
+          fi
+          if ! jq empty .release-please-manifest.json 2>/dev/null; then
+            echo "::error::.release-please-manifest.json is not valid JSON"
+            exit 1
+          fi
+          echo "Configuration files are valid JSON"
+
+      - uses: actions/create-github-app-token@v2
         id: app-token
         with:
           app-id: ${{ secrets.RELEASE_PLEASE_APP_ID }}
@@ -23,3 +56,32 @@ jobs:
         id: release
         with:
           token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      - name: Report release status
+        if: always() && steps.release.outcome == 'success'
+        env:
+          RELEASES_CREATED: ${{ steps.release.outputs.releases_created }}
+          PRS_CREATED: ${{ steps.release.outputs.prs_created }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag_name }}
+        run: |
+          echo "## Release Please Results" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$RELEASES_CREATED" = "true" ]; then
+            echo "**Release created:** $RELEASE_TAG" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$PRS_CREATED" = "true" ]; then
+            echo "**Release PR created or updated**" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "No release activity (no releasable commits since last release)" >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Report failure details
+        if: failure()
+        run: |
+          echo "::error::Release Please workflow failed"
+          echo "## Troubleshooting" >> "$GITHUB_STEP_SUMMARY"
+          echo "Check the following:" >> "$GITHUB_STEP_SUMMARY"
+          echo "1. Secrets RELEASE_PLEASE_APP_ID and RELEASE_PLEASE_PRIVATE_KEY are configured" >> "$GITHUB_STEP_SUMMARY"
+          echo "2. GitHub App is installed on this repository" >> "$GITHUB_STEP_SUMMARY"
+          echo "3. GitHub App has 'contents: write' and 'pull-requests: write' permissions" >> "$GITHUB_STEP_SUMMARY"
+          echo "4. release-please-config.json and .release-please-manifest.json are valid" >> "$GITHUB_STEP_SUMMARY"

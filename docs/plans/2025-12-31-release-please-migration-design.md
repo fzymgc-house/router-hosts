@@ -39,11 +39,11 @@ flowchart TD
         H --> I[Tag pushed<br/>e.g. v0.9.0]
         I --> J[v-release.yml]
         I --> K[helm-release.yml]
-        I --> L[docs.yml]
 
         J --> M[Build binaries<br/>all platforms]
         M --> N[Create GitHub Release<br/>with CHANGELOG.md]
         N --> O[Publish Homebrew<br/>formula]
+        N --> L[docs.yml<br/>on release:published]
 
         K --> P[Publish Helm chart<br/>to ghcr.io]
 
@@ -140,9 +140,9 @@ jobs:
 
 ## Files to Modify
 
-### Cargo.toml
+### dist-workspace.toml
 
-Add to `[workspace.metadata.dist]`:
+Add to the `[dist]` section:
 
 ```toml
 changelog = false
@@ -170,7 +170,7 @@ Complete rewrite replacing release-plz references with release-please.
 1. Create `release-please-config.json`
 2. Create `.release-please-manifest.json`
 3. Create `.github/workflows/release-please.yml`
-4. Update `Cargo.toml` with dist changelog settings
+4. Update `dist-workspace.toml` with changelog settings
 5. Update `docs/contributing/releasing.md`
 6. Commit and push
 7. Verify workflow runs on push to main

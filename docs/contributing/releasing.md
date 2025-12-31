@@ -30,11 +30,11 @@ flowchart TD
         H --> I[Tag pushed<br/>e.g. v0.9.0]
         I --> J[v-release.yml]
         I --> K[helm-release.yml]
-        I --> L[docs.yml]
 
         J --> M[Build binaries<br/>all platforms]
         M --> N[Create GitHub Release<br/>with CHANGELOG.md]
         N --> O[Publish Homebrew<br/>formula]
+        N --> L[docs.yml<br/>on release:published]
 
         K --> P[Publish Helm chart<br/>to ghcr.io]
 
@@ -230,8 +230,8 @@ brew install fzymgc-house/tap/router-hosts
 curl -LO https://github.com/fzymgc-house/router-hosts/releases/download/v0.9.0/router-hosts.rb
 brew install --formula ./router-hosts.rb
 
-# 5. Test binary with audit data
-cargo auditable audit router-hosts
+# 5. Check embedded audit data (requires cargo-auditable)
+cargo auditable info router-hosts
 
 # 6. Verify Helm chart
 helm pull oci://ghcr.io/fzymgc-house/charts/router-hosts-operator --version 0.9.0
@@ -269,7 +269,7 @@ Key settings in `dist-workspace.toml`:
 Publishes Helm chart to GitHub Container Registry (ghcr.io) as an OCI artifact.
 
 **Requirements:**
-- Helm 4.x (specifically v4.0.4 or later)
+- Helm 4.x (CI uses v4.0.4)
 - Chart version must match the release tag
 
 For manual chart publishing (if workflow failed):
