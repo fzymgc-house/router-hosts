@@ -3,6 +3,7 @@ site_url: https://router-hosts-docs.pages.dev
 repo_url: https://github.com/fzymgc-house/router-hosts
 repo_name: fzymgc-house/router-hosts
 edit_uri: edit/main/docs/
+strict: true
 
 theme:
   name: material
@@ -36,6 +37,9 @@ plugins:
   - exclude:
       glob:
         - plans/*
+        - architecture/*
+        - workarounds/*
+        - test-coverage-audit.md
   - git-revision-date-localized:
       type: date
       fallback_to_build_date: true
