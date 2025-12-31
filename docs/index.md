@@ -21,7 +21,7 @@ brew install fzymgc-house/tap/router-hosts
 router-hosts server --config server.toml
 
 # Add a host
-router-hosts add 192.168.1.100 myserver.local --tags homelab
+router-hosts host add --ip 192.168.1.100 --hostname myserver.local --tag homelab
 ```
 
 [Get Started](getting-started/index.md){ .md-button .md-button--primary }

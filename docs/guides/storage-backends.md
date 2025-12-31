@@ -16,19 +16,19 @@ router-hosts supports three storage backends. SQLite is the default and recommen
 Best for single-server deployments. Zero configuration required.
 
 ```toml
-[storage]
-database_url = "sqlite:///var/lib/router-hosts/hosts.db"
+[database]
+path = "/var/lib/router-hosts/hosts.db"
 ```
 
-Default location (if no URL specified): `~/.local/share/router-hosts/hosts.db`
+Default location (if no path specified): `~/.local/share/router-hosts/hosts.db`
 
 ## PostgreSQL
 
 Best for high-availability deployments with multiple server instances.
 
 ```toml
-[storage]
-database_url = "postgres://user:password@localhost:5432/router_hosts"
+[database]
+url = "postgres://user:password@localhost:5432/router_hosts"
 ```
 
 Requires PostgreSQL 14+.
@@ -38,8 +38,8 @@ Requires PostgreSQL 14+.
 Experimental backend. Requires the `router-hosts-duckdb` binary variant.
 
 ```toml
-[storage]
-database_url = "duckdb:///var/lib/router-hosts/hosts.duckdb"
+[database]
+path = "/var/lib/router-hosts/hosts.duckdb"
 ```
 
 !!! warning

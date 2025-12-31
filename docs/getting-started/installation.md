@@ -14,22 +14,29 @@ Download from [GitHub Releases](https://github.com/fzymgc-house/router-hosts/rel
 
 === "Linux (x86_64)"
     ```bash
-    curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-linux-x86_64.tar.gz
-    tar -xzf router-hosts-linux-x86_64.tar.gz
+    curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-x86_64-unknown-linux-gnu.tar.xz
+    tar -xJf router-hosts-x86_64-unknown-linux-gnu.tar.xz
+    sudo mv router-hosts /usr/local/bin/
+    ```
+
+=== "Linux (ARM64)"
+    ```bash
+    curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-aarch64-unknown-linux-gnu.tar.xz
+    tar -xJf router-hosts-aarch64-unknown-linux-gnu.tar.xz
     sudo mv router-hosts /usr/local/bin/
     ```
 
 === "macOS (Apple Silicon)"
     ```bash
-    curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-darwin-aarch64.tar.gz
-    tar -xzf router-hosts-darwin-aarch64.tar.gz
+    curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-aarch64-apple-darwin.tar.xz
+    tar -xJf router-hosts-aarch64-apple-darwin.tar.xz
     sudo mv router-hosts /usr/local/bin/
     ```
 
 === "macOS (Intel)"
     ```bash
-    curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-darwin-x86_64.tar.gz
-    tar -xzf router-hosts-darwin-x86_64.tar.gz
+    curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-x86_64-apple-darwin.tar.xz
+    tar -xJf router-hosts-x86_64-apple-darwin.tar.xz
     sudo mv router-hosts /usr/local/bin/
     ```
 

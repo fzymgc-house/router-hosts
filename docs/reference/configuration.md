@@ -8,49 +8,55 @@ Complete reference for all configuration options.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `listen_addr` | string | `"0.0.0.0:50051"` | gRPC server listen address |
-| `health_addr` | string | `"0.0.0.0:8080"` | Health check HTTP server address |
+| `bind_address` | string | `"0.0.0.0:50051"` | gRPC server listen address |
+| `hosts_file_path` | path | `/etc/hosts.d/router-hosts` | Output hosts file path |
+
+### `[database]`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `path` | path | XDG data dir | SQLite database file path |
+| `url` | string | - | PostgreSQL connection URL (use instead of `path`) |
 
 ### `[tls]`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `cert_file` | path | required | Server certificate file |
-| `key_file` | path | required | Server private key file |
-| `ca_file` | path | required | CA certificate for client verification |
-
-### `[storage]`
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `database_url` | string | SQLite in XDG data dir | Database connection URL |
+| `cert_path` | path | required | Server certificate file |
+| `key_path` | path | required | Server private key file |
+| `ca_cert_path` | path | required | CA certificate for client verification |
 
 ### `[hooks]`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `post_update` | array | `[]` | Commands to run after host updates |
+| `on_success` | array | `[]` | Commands to run after successful host updates |
+| `on_failure` | array | `[]` | Commands to run after failed host updates |
 
-Example hook:
+Example hooks:
 
 ```toml
-[[hooks.post_update]]
-name = "restart-dnsmasq"
-command = "systemctl restart dnsmasq"
+[hooks]
+on_success = [
+  "systemctl reload dnsmasq"
+]
+on_failure = [
+  "notify-send 'router-hosts update failed'"
+]
 ```
 
 ## Client Configuration
 
-### `[client]`
+### `[server]`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `server_addr` | string | required | Server gRPC address |
+| `address` | string | required | Server gRPC address |
 
 ### `[tls]`
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `cert_file` | path | required | Client certificate file |
-| `key_file` | path | required | Client private key file |
-| `ca_file` | path | required | CA certificate for server verification |
+| `cert_path` | path | required | Client certificate file |
+| `key_path` | path | required | Client private key file |
+| `ca_cert_path` | path | required | CA certificate for server verification |

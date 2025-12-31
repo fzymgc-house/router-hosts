@@ -49,14 +49,14 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           gh release download "$VERSION" \
-            --pattern 'router-hosts-*-x86_64-unknown-linux-gnu.tar.gz' \
+            --pattern 'router-hosts-x86_64-unknown-linux-gnu.tar.xz' \
             --dir /tmp
-          tar -xzf /tmp/router-hosts-*-x86_64-unknown-linux-gnu.tar.gz -C /tmp
+          tar -xJf /tmp/router-hosts-x86_64-unknown-linux-gnu.tar.xz -C /tmp
           chmod +x /tmp/router-hosts
           /tmp/router-hosts --version
 
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: '1.22'
 
@@ -99,19 +99,16 @@ jobs:
           fi
           echo "Successfully deployed version $VERSION"
 
-      - name: Validate site directory
+      - name: Build site for Cloudflare Pages
         run: |
+          # mike deploys to gh-pages but doesn't create local site/
+          # Build locally for Cloudflare Pages deployment
+          uvx --with mkdocs-material --with mkdocs-git-revision-date-localized-plugin mkdocs build
           if [[ ! -d "site" ]]; then
-            echo "::error::site/ directory does not exist after mike deploy"
-            echo "mike should have created the site directory. Check mike logs above."
+            echo "::error::site/ directory does not exist after mkdocs build"
             exit 1
           fi
-          file_count=$(find site -type f | wc -l)
-          if [[ "$file_count" -lt 10 ]]; then
-            echo "::error::site/ directory has only $file_count files, expected more"
-            exit 1
-          fi
-          echo "Site directory validated: $file_count files"
+          echo "Site built: $(find site -type f | wc -l) files"
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3

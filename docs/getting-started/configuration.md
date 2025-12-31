@@ -8,19 +8,20 @@ Create `server.toml`:
 
 ```toml
 [server]
-listen_addr = "0.0.0.0:50051"
+bind_address = "0.0.0.0:50051"
+hosts_file_path = "/etc/hosts.d/router-hosts"
+
+[database]
+# SQLite (default) - just specify path
+path = "/var/lib/router-hosts/hosts.db"
+
+# PostgreSQL alternative - use url instead
+# url = "postgres://user:pass@localhost/router_hosts"
 
 [tls]
-cert_file = "/path/to/server.crt"
-key_file = "/path/to/server.key"
-ca_file = "/path/to/ca.crt"
-
-[storage]
-# SQLite (default)
-database_url = "sqlite:///var/lib/router-hosts/hosts.db"
-
-# PostgreSQL alternative
-# database_url = "postgres://user:pass@localhost/router_hosts"
+cert_path = "/path/to/server.pem"
+key_path = "/path/to/server-key.pem"
+ca_cert_path = "/path/to/ca.pem"
 ```
 
 Start the server:
@@ -40,13 +41,13 @@ The client looks for configuration in these locations (in order):
 Create `client.toml`:
 
 ```toml
-[client]
-server_addr = "https://router-hosts.example.com:50051"
+[server]
+address = "router-hosts.example.com:50051"
 
 [tls]
-cert_file = "/path/to/client.crt"
-key_file = "/path/to/client.key"
-ca_file = "/path/to/ca.crt"
+cert_path = "/path/to/client.pem"
+key_path = "/path/to/client-key.pem"
+ca_cert_path = "/path/to/ca.pem"
 ```
 
 See [Configuration Reference](../reference/configuration.md) for all options.
