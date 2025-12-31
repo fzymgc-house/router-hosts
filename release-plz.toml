@@ -8,8 +8,9 @@
 # Generate changelog entries from conventional commits
 changelog_update = true
 
-# Use cargo-semver-checks to detect breaking changes
-semver_check = true
+# Disable cargo-semver-checks - it compares against crates.io which we don't use
+# Enable this if/when we start publishing to crates.io
+semver_check = false
 
 # Don't publish to crates.io - binaries only
 publish = false
@@ -75,6 +76,7 @@ commit_parsers = [
 name = "router-hosts"
 
 # Sync version to Helm chart (Chart.yaml version and appVersion)
+# Pattern matches the YAML format: "version: X.Y.Z" with single space after colon
 version_files = [
     { path = "charts/router-hosts-operator/Chart.yaml", pattern = 'version: {{ version }}' },
     { path = "charts/router-hosts-operator/Chart.yaml", pattern = 'appVersion: {{ version }}' },

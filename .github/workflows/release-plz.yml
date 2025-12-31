@@ -33,29 +33,18 @@ jobs:
 
   release-plz-release:
     name: Push Version Tag
+    # Only run when the commit message indicates a release PR merge
+    # This prevents unnecessary job runs and avoids race conditions
+    if: "${{ startsWith(github.event.head_commit.message, 'chore: release') }}"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - name: Check if release commit
-        id: check
-        env:
-          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-        run: |
-          # Only proceed if this is a release PR merge commit
-          if [[ "$COMMIT_MESSAGE" == "chore: release" ]] || [[ "$COMMIT_MESSAGE" == chore:\ release\ v* ]]; then
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          fi
-
       - uses: dtolnay/rust-toolchain@stable
-        if: steps.check.outputs.is_release == 'true'
 
       - name: Run release-plz release
-        if: steps.check.outputs.is_release == 'true'
         uses: release-plz/action@v0.5
         with:
           command: release

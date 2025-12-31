@@ -1,0 +1,44 @@
+# Cocogitto configuration for conventional commit validation
+# Documentation: https://docs.cocogitto.io/config/
+
+[git_hooks]
+pre-commit = []
+pre-push = []
+# commit-msg hook is configured via pre-commit framework
+
+# Changelog is managed by release-plz, not cocogitto
+[changelog]
+template = "remote"
+remote = "github.com"
+repository = "router-hosts"
+owner = "fzymgc-house"
+
+# Commit types (conventional commits specification)
+[commit_types]
+feat = { changelog_title = "Features" }
+fix = { changelog_title = "Bug Fixes" }
+perf = { changelog_title = "Performance" }
+refactor = { changelog_title = "Refactoring" }
+docs = { changelog_title = "Documentation", omit_from_changelog = true }
+test = { changelog_title = "Tests", omit_from_changelog = true }
+build = { changelog_title = "Build", omit_from_changelog = true }
+ci = { changelog_title = "CI/CD", omit_from_changelog = true }
+chore = { changelog_title = "Chores", omit_from_changelog = true }
+
+# Valid scopes for this project
+# These align with the crate structure and functional areas
+[scopes]
+# Crate-level scopes
+proto = "Protobuf definitions and generated code"
+server = "Server-side functionality"
+client = "Client-side functionality"
+storage = "Storage backends (SQLite, PostgreSQL, DuckDB)"
+validation = "Input validation logic"
+config = "Configuration handling"
+
+# Additional scopes for broader changes
+ci = "CI/CD workflows and configuration"
+deps = "Dependency updates"
+helm = "Helm chart changes"
+docs = "Documentation changes"
+operator = "Kubernetes operator functionality"
