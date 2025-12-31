@@ -251,8 +251,8 @@ release-please uses semantic versioning with `v` prefix:
 Creates/updates release PRs and pushes tags when merged. Configuration in `release-please-config.json`.
 
 Key settings:
-- `skip-github-release: true` - cargo-dist handles GitHub Release creation
-- `extra-files` - Syncs Chart.yaml version and appVersion
+- `skip-github-release: false` - release-please creates GitHub Release and pushes tag, cargo-dist then adds binaries
+- `extra-files` - Syncs Cargo.toml workspace version and Chart.yaml version/appVersion
 
 ### v-release.yml
 

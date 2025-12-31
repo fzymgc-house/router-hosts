@@ -15,7 +15,7 @@ Migrate from release-plz to Google's release-please for release automation. rele
 | Tag format | `v0.8.1` | Simple, no component prefix |
 | Chart.yaml sync | extra-files | Automatic via jsonpath |
 | Changelog | release-please owns | Single source of truth |
-| GitHub Release | cargo-dist creates | Uses CHANGELOG.md content |
+| GitHub Release | release-please creates, cargo-dist updates | release-please adds notes, cargo-dist adds binaries |
 | Authentication | GitHub App | Can trigger downstream workflows |
 
 ## Architecture
@@ -69,7 +69,7 @@ flowchart TD
   "include-v-in-tag": true,
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
-  "skip-github-release": true,
+  "skip-github-release": false,
   "changelog-sections": [
     {"type": "feat", "section": "Features"},
     {"type": "fix", "section": "Bug Fixes"},
