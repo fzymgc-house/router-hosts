@@ -30,7 +30,7 @@ jobs:
   # ─────────────────────────────────────────────────────────────
   lint:
     runs-on:
-      - runs-on=${{ github.run_id }}/runner=2cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price
+      - runs-on=${{ github.run_id }}/runner=4cpu-linux-x64/image=ubuntu24-full-x64/extras=s3-cache/spot=lowest-price
     timeout-minutes: 15
 
     steps:
