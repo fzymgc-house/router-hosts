@@ -9,6 +9,34 @@ router-hosts uses a client-server architecture:
 - **Server** runs on the target machine (router, server, container), manages a configurable hosts file via event-sourced storage
 - **Client** runs on workstation, connects via gRPC over TLS with mutual authentication
 
+```mermaid
+flowchart TB
+    subgraph Client
+        CLI[router-hosts CLI]
+    end
+
+    subgraph Server
+        GRPC[gRPC Server]
+        ES[Event Store]
+        SNAP[Snapshot Store]
+        PROJ[Host Projection]
+    end
+
+    subgraph Storage
+        SQLite[(SQLite)]
+        PG[(PostgreSQL)]
+        Duck[(DuckDB)]
+    end
+
+    CLI -->|mTLS| GRPC
+    GRPC --> ES
+    GRPC --> SNAP
+    GRPC --> PROJ
+    ES --> SQLite
+    ES --> PG
+    ES --> Duck
+```
+
 See `docs/plans/2025-12-01-router-hosts-v1-design.md` for complete design specification.
 
 ## Workspace Structure
@@ -113,7 +141,7 @@ The server exposes Prometheus metrics on a configurable HTTP endpoint:
 - **Host metrics**: `router_hosts_hosts_entries`
 - **Hook metrics**: `router_hosts_hook_executions_total`, `router_hosts_hook_duration_seconds`
 
-See [Operations Guide](operations.md#prometheus-metrics) for configuration.
+See [Operations Guide](../guides/operations.md#prometheus-metrics) for configuration.
 
 ### Health Endpoints
 
