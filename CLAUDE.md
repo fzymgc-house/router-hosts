@@ -113,6 +113,7 @@ You MUST maintain ≥80% test coverage. PRs that decrease coverage below 80% MUS
 
 - **Rust toolchain** (stable): `rustup install stable`
 - **buf CLI** (protobuf): `brew install bufbuild/buf/buf`
+- **cocogitto** (commit validation): `brew install cocogitto`
 - **pre-commit**: `pip install pre-commit && pre-commit install`
 
 ### Issue Tracking

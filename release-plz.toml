@@ -22,6 +22,8 @@ git_tag_name = "v{{ version }}"
 git_release_enable = false
 
 # PR configuration
+# IMPORTANT: The workflow (.github/workflows/release-plz.yml) uses startsWith()
+# to match this commit message format. If you change pr_name, update the workflow too.
 pr_name = "chore: release v{{ version }}"
 pr_body = """
 ## Release v{{ version }}

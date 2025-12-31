@@ -6,8 +6,8 @@ name: Release-plz
 # - Existing workflows (v-release.yml, helm-release.yml, docs.yml) trigger on tags
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: write      # Push version tags and update CHANGELOG.md
+  pull-requests: write # Create and update release PRs
 
 on:
   push:
