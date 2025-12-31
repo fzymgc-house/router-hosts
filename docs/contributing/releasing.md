@@ -48,23 +48,6 @@ For automated documentation deployment to Cloudflare Pages:
 
 ## Documentation Setup
 
-### Initializing gh-pages Branch
-
-The documentation workflow uses [mike](https://github.com/jimporter/mike) for versioned docs, which requires a `gh-pages` branch. Initialize it before the first release:
-
-```bash
-# Create empty gh-pages branch
-git checkout --orphan gh-pages
-git rm -rf .
-git commit --allow-empty -m "Initialize gh-pages branch"
-git push origin gh-pages
-git checkout main
-```
-
-Mike will manage the `gh-pages` branch content after initialization. The branch stores versioned documentation that the version selector uses.
-
-### Cloudflare Pages Project
-
 Create a Cloudflare Pages project before the first release:
 
 1. Go to Cloudflare Dashboard → Workers & Pages → Create
