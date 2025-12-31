@@ -129,11 +129,13 @@ jobs:
       - name: Build release binary
         run: task build:release
 
-      - name: Upload release binary
+      - name: Upload release binaries
         uses: actions/upload-artifact@v6
         with:
           name: release-binary
-          path: target/release/router-hosts
+          path: |
+            target/release/router-hosts
+            target/release/router-hosts-operator
           retention-days: 1
 
   # ─────────────────────────────────────────────────────────────
@@ -198,8 +200,10 @@ jobs:
           name: release-binary
           path: target/release/
 
-      - name: Make binary executable
-        run: chmod +x target/release/router-hosts
+      - name: Make binaries executable
+        run: |
+          chmod +x target/release/router-hosts
+          chmod +x target/release/router-hosts-operator
 
       - name: Build CI Docker image
         run: task docker:build-e2e IMAGE_NAME=router-hosts IMAGE_TAG=ci
@@ -211,6 +215,21 @@ jobs:
           docker run --rm router-hosts:ci --help
           docker run --rm router-hosts:ci server --help
           echo "Binary runs successfully"
+
+      - name: Build operator CI Docker image
+        run: task docker:build-operator-e2e OPERATOR_IMAGE_NAME=router-hosts-operator IMAGE_TAG=ci
+
+      - name: Verify operator image starts
+        run: |
+          set -euo pipefail
+          echo "Testing operator startup (will fail on k8s connect, but should not panic)..."
+          # The operator will exit with error (no k8s config) but should NOT panic.
+          # A panic from missing crypto provider would show "panicked" in output.
+          if docker run --rm router-hosts-operator:ci 2>&1 | grep -q "panicked"; then
+            echo "FAILURE: Operator panicked on startup!"
+            exit 1
+          fi
+          echo "Operator starts without panic (exits due to missing k8s config as expected)"
 
       - name: Run E2E tests
         run: task e2e:quick IMAGE_NAME=router-hosts IMAGE_TAG=ci
