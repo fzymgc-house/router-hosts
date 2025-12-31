@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.1](https://github.com/fzymgc-house/router-hosts/compare/v0.8.0...v0.8.1) (2025-12-31)
+
+
+### Features
+
+* **ci:** add release-plz automation for versioning and releases ([#194](https://github.com/fzymgc-house/router-hosts/issues/194)) ([fa098c1](https://github.com/fzymgc-house/router-hosts/commit/fa098c17fe7be2df2182ee7ba69858cd26eff79b))
+
+
+### Bug Fixes
+
+* **ci:** use simple release-type for Cargo workspace ([#196](https://github.com/fzymgc-house/router-hosts/issues/196)) ([bde89a0](https://github.com/fzymgc-house/router-hosts/commit/bde89a050173ed1d36c497f7aed7155836e8635a))
+* **operator:** install rustls crypto provider on startup ([#193](https://github.com/fzymgc-house/router-hosts/issues/193)) ([d256a5e](https://github.com/fzymgc-house/router-hosts/commit/d256a5e1d67a4a1517755a4acd5ac27203916b15))
+
+
+### Documentation
+
+* create MkDocs Material documentation site ([#191](https://github.com/fzymgc-house/router-hosts/issues/191)) ([e7231f2](https://github.com/fzymgc-house/router-hosts/commit/e7231f2e810fb8431ff441e29f4c4bd4aaa383f8))
+
+
+### Build System
+
+* **ci:** migrate from release-plz to release-please ([#195](https://github.com/fzymgc-house/router-hosts/issues/195)) ([2623ca1](https://github.com/fzymgc-house/router-hosts/commit/2623ca1a8154050461efb210147336cb2b499e34))
+
+
+### CI/CD
+
+* **ghcr:** disable dry-run mode for image cleanup ([#189](https://github.com/fzymgc-house/router-hosts/issues/189)) ([7c6f9e1](https://github.com/fzymgc-house/router-hosts/commit/7c6f9e1e6edf5678e7be650acde9408867888149))
+
 ## [Unreleased]
 
 ## [0.8.0] - 2025-12-30
