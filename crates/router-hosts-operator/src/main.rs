@@ -31,13 +31,12 @@ const SHUTDOWN_GRACE_SECS: u64 = 30;
 /// Must be called before any TLS operations (kube-client, tonic, etc.).
 /// Required since rustls 0.23 removed the default crypto provider.
 ///
-/// # Panics
-/// Panics if the crypto provider cannot be installed (should never happen
-/// if the `ring` feature is enabled).
+/// Without this call, the first TLS operation (e.g., kube-client connecting
+/// to the API server) will panic with "no process-default CryptoProvider".
 fn init_crypto_provider() {
-    rustls::crypto::ring::default_provider()
-        .install_default()
-        .expect("Failed to install rustls crypto provider");
+    // The only possible error is "provider already installed" which is benign
+    // (e.g., in test scenarios where multiple tests run in the same process)
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
 #[tokio::main]
@@ -57,6 +56,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    debug!("Crypto provider initialized (aws-lc-rs)");
     info!("router-hosts-operator starting");
 
     // Create Kubernetes client
@@ -597,13 +597,13 @@ mod tests {
         // If we get here without panicking, the initialization worked
     }
 
-    /// Verify the ring crypto provider is available at compile time.
+    /// Verify the aws-lc-rs crypto provider is available at compile time.
     ///
-    /// This compile-time check ensures the rustls `ring` feature is enabled.
+    /// This compile-time check ensures the rustls `aws_lc_rs` feature is enabled.
     /// If someone removes the dependency or feature, this test won't compile.
     #[test]
-    fn ring_provider_available() {
-        // This line won't compile if rustls ring feature is disabled
-        let _provider = rustls::crypto::ring::default_provider();
+    fn aws_lc_rs_provider_available() {
+        // This line won't compile if rustls aws_lc_rs feature is disabled
+        let _provider = rustls::crypto::aws_lc_rs::default_provider();
     }
 }

@@ -47,7 +47,8 @@ chrono.workspace = true
 axum = "0.8"
 
 # TLS crypto provider - must be initialized before kube-client uses rustls
-rustls = { version = "0.23", default-features = false, features = ["ring"] }
+# Uses aws-lc-rs for consistency with the main router-hosts crate
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
