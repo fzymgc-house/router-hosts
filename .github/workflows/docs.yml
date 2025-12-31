@@ -68,20 +68,8 @@ jobs:
       - name: Install protoc-gen-doc
         run: go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@v1.5.1
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-
       - name: Install uv
         uses: astral-sh/setup-uv@v4
-
-      - name: Install Python dependencies
-        run: |
-          uv pip install --system \
-            mkdocs-material \
-            mkdocs-git-revision-date-localized-plugin \
-            mike
 
       - name: Generate CLI docs
         run: ./scripts/generate-cli-docs.sh /tmp/router-hosts
@@ -99,12 +87,13 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           echo "Deploying version $VERSION with 'latest' alias..."
-          if ! mike deploy --push --update-aliases "$VERSION" latest; then
+          MIKE="uvx --with mkdocs-material --with mkdocs-git-revision-date-localized-plugin mike"
+          if ! $MIKE deploy --push --update-aliases "$VERSION" latest; then
             echo "::error::mike deploy failed for version $VERSION"
             echo "Check that the gh-pages branch exists and mkdocs.yml is valid."
             exit 1
           fi
-          if ! mike set-default --push latest; then
+          if ! $MIKE set-default --push latest; then
             echo "::error::mike set-default failed"
             exit 1
           fi
