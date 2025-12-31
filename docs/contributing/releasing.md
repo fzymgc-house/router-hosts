@@ -35,6 +35,43 @@ The following secrets must be configured in the repository for releases to work:
   - Required scopes: `public_repo` (or `repo` if tap is private)
   - Add at: https://github.com/fzymgc-house/router-hosts/settings/secrets/actions
 
+### Documentation Deployment Secrets
+
+For automated documentation deployment to Cloudflare Pages:
+
+- **`CLOUDFLARE_ACCOUNT_ID`**: Cloudflare account identifier
+  - Find at: Cloudflare Dashboard → Account Home → right sidebar
+- **`CLOUDFLARE_PAGES_ACCOUNT_API`**: API token with Pages deployment permission
+  - Create at: Cloudflare Dashboard → My Profile → API Tokens → Create Token
+  - Use template: "Edit Cloudflare Pages"
+  - Or custom token with: `Zone:Read`, `Account:Cloudflare Pages:Edit`
+
+## Documentation Setup
+
+### Initializing gh-pages Branch
+
+The documentation workflow uses [mike](https://github.com/jimporter/mike) for versioned docs, which requires a `gh-pages` branch. Initialize it before the first release:
+
+```bash
+# Create empty gh-pages branch
+git checkout --orphan gh-pages
+git rm -rf .
+git commit --allow-empty -m "Initialize gh-pages branch"
+git push origin gh-pages
+git checkout main
+```
+
+Mike will manage the `gh-pages` branch content after initialization. The branch stores versioned documentation that the version selector uses.
+
+### Cloudflare Pages Project
+
+Create a Cloudflare Pages project before the first release:
+
+1. Go to Cloudflare Dashboard → Workers & Pages → Create
+2. Select "Pages" → "Direct Upload" (not Git connection)
+3. Name the project: `router-hosts-docs`
+4. The docs workflow will deploy using Wrangler
+
 ## Creating a Release
 
 1. **Update version in `Cargo.toml`** (workspace root):
