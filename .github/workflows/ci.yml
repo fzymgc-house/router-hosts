@@ -10,13 +10,11 @@
 #              └──> ci-complete (requires all)
 #
 # Critical path: lint -> build -> e2e (~8.5 min)
-# Cache strategy: Only 'build' job saves cache on main branch
+# Cache strategy: Save cache from same-repo PRs (not forks, for security)
 
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -87,7 +85,7 @@ jobs:
       - name: Setup Rust environment
         uses: ./.github/actions/rust-setup
         with:
-          save-cache: ${{ github.ref == 'refs/heads/main' }}
+          save-cache: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
 
       - name: Install Task
         uses: arduino/setup-task@v2
