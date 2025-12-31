@@ -188,11 +188,7 @@ jobs:
 
       - uses: actions/checkout@v6
 
-      - name: Setup Rust environment
-        uses: ./.github/actions/rust-setup
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
+      # Note: No rust-setup needed - binary is pre-built from 'build' job
       - name: Install Task
         uses: arduino/setup-task@v2
 
@@ -206,7 +202,7 @@ jobs:
         run: chmod +x target/release/router-hosts
 
       - name: Build CI Docker image
-        run: task docker:build-ci IMAGE_NAME=router-hosts IMAGE_TAG=ci
+        run: task docker:build-e2e IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
       - name: Verify Docker image runs
         run: |

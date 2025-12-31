@@ -129,6 +129,16 @@ tasks:
       - docker build -f Dockerfile.ci -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} -t {{.LOCAL_IMAGE}} .
       - rm router-hosts
 
+  docker:build-e2e:
+    desc: Build Docker image from existing binary (no build step, for CI artifact reuse)
+    preconditions:
+      - test -f target/release/router-hosts
+    cmds:
+      # Copy binary to root to avoid .dockerignore excluding target/
+      - cp target/release/router-hosts router-hosts
+      - docker build -f Dockerfile.ci -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} -t {{.LOCAL_IMAGE}} .
+      - rm router-hosts
+
   docker:run:
     desc: Run server container (requires certs in ./dev/certs/)
     cmds:
