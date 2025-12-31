@@ -201,12 +201,8 @@ jobs:
       - name: Make binary executable
         run: chmod +x target/release/router-hosts
 
-      # Build Docker directly (skip task dep on build:release - binary already exists)
       - name: Build CI Docker image
-        run: |
-          cp target/release/router-hosts router-hosts
-          docker build -f Dockerfile.ci -t router-hosts:ci .
-          rm router-hosts
+        run: task docker:build-e2e IMAGE_NAME=router-hosts IMAGE_TAG=ci
 
       - name: Verify Docker image runs
         run: |
