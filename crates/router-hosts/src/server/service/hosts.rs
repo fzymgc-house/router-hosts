@@ -18,8 +18,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<AddHostRequest>,
     ) -> Result<Response<AddHostResponse>, Status> {
-        let timer = TimedOperation::new("AddHost");
+        let mut timer = TimedOperation::new("AddHost");
         let req = request.into_inner();
+
+        // Capture host context for access log
+        timer.set_host_context(Some(&req.hostname), Some(&req.ip_address));
 
         let result = self
             .write_queue
@@ -34,6 +37,7 @@ impl HostsServiceImpl {
 
         match result {
             Ok(entry) => {
+                timer.set_id(entry.id.to_string());
                 timer.finish("ok");
                 Ok(Response::new(AddHostResponse {
                     id: entry.id.to_string(),
@@ -52,8 +56,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<GetHostRequest>,
     ) -> Result<Response<GetHostResponse>, Status> {
-        let timer = TimedOperation::new("GetHost");
+        let mut timer = TimedOperation::new("GetHost");
         let req = request.into_inner();
+
+        // Capture raw ID for access log before validation
+        timer.set_id(&req.id);
 
         let id = match Ulid::from_string(&req.id) {
             Ok(id) => id,
@@ -68,6 +75,7 @@ impl HostsServiceImpl {
 
         match self.commands.get_host(id).await {
             Ok(entry) => {
+                timer.set_host_context(Some(&entry.hostname), Some(&entry.ip_address));
                 timer.finish("ok");
                 Ok(Response::new(GetHostResponse {
                     entry: Some(host_entry_to_proto(entry)),
@@ -85,8 +93,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<UpdateHostRequest>,
     ) -> Result<Response<UpdateHostResponse>, Status> {
-        let timer = TimedOperation::new("UpdateHost");
+        let mut timer = TimedOperation::new("UpdateHost");
         let req = request.into_inner();
+
+        // Capture raw ID for access log before validation
+        timer.set_id(&req.id);
 
         let id = match Ulid::from_string(&req.id) {
             Ok(id) => id,
@@ -125,6 +136,8 @@ impl HostsServiceImpl {
             .await
         {
             Ok(entry) => {
+                // Capture resulting hostname/ip for access log
+                timer.set_host_context(Some(&entry.hostname), Some(&entry.ip_address));
                 timer.finish("ok");
                 Ok(Response::new(UpdateHostResponse {
                     entry: Some(host_entry_to_proto(entry)),
@@ -142,8 +155,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<DeleteHostRequest>,
     ) -> Result<Response<DeleteHostResponse>, Status> {
-        let timer = TimedOperation::new("DeleteHost");
+        let mut timer = TimedOperation::new("DeleteHost");
         let req = request.into_inner();
+
+        // Capture raw ID for access log before validation
+        timer.set_id(&req.id);
 
         let id = match Ulid::from_string(&req.id) {
             Ok(id) => id,
@@ -173,6 +189,7 @@ impl HostsServiceImpl {
         &self,
         _request: Request<ListHostsRequest>,
     ) -> Result<Response<Vec<ListHostsResponse>>, Status> {
+        // ListHosts doesn't set context fields; use immutable binding
         let timer = TimedOperation::new("ListHosts");
 
         match self.commands.list_hosts().await {
@@ -198,8 +215,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<SearchHostsRequest>,
     ) -> Result<Response<Vec<SearchHostsResponse>>, Status> {
-        let timer = TimedOperation::new("SearchHosts");
+        let mut timer = TimedOperation::new("SearchHosts");
         let req = request.into_inner();
+
+        // Capture search query for access log
+        timer.set_query(&req.query);
 
         match self.commands.search_hosts(&req.query).await {
             Ok(entries) => {
