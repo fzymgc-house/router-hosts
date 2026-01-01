@@ -85,4 +85,4 @@ jobs:
         with:
           apiToken: ${{ secrets.CLOUDFLARE_PAGES_ACCOUNT_API }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy site --project-name=router-hosts-docs
+          command: pages deploy site --project-name=router-hosts-docs --branch=main
