@@ -48,12 +48,16 @@ const MAX_LOG_FIELD_LEN: usize = 256;
 /// - Truncating excessive length
 /// - Escaping special characters that could break log parsers
 fn sanitize_for_log(input: &str) -> String {
+    // Count chars, not bytes - important for multi-byte UTF-8 (e.g., emojis, CJK)
+    let char_count = input.chars().count();
+    let truncated = char_count > MAX_LOG_FIELD_LEN;
+
     let sanitized: String = input
         .chars()
         .take(MAX_LOG_FIELD_LEN)
         .map(|c| {
-            if c.is_control() || c == '\n' || c == '\r' || c == '\t' {
-                // Replace control chars with unicode replacement char
+            // is_control() covers ASCII control chars including \n, \r, \t
+            if c.is_control() {
                 '\u{FFFD}'
             } else {
                 c
@@ -61,7 +65,7 @@ fn sanitize_for_log(input: &str) -> String {
         })
         .collect();
 
-    if input.len() > MAX_LOG_FIELD_LEN {
+    if truncated {
         format!("{}...", sanitized)
     } else {
         sanitized
@@ -241,8 +245,35 @@ mod tests {
     fn test_sanitize_for_log_truncation() {
         let long_input = "a".repeat(500);
         let result = sanitize_for_log(&long_input);
-        assert!(result.len() <= MAX_LOG_FIELD_LEN + 3); // +3 for "..."
+        // Result should be 256 chars + "..."
+        assert_eq!(result.chars().count(), MAX_LOG_FIELD_LEN + 3);
         assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_sanitize_for_log_multibyte_utf8() {
+        // Emoji is 4 bytes but 1 char - verify we count chars not bytes
+        let emoji_input = "🎉".repeat(300); // 300 emojis = 300 chars but 1200 bytes
+        let result = sanitize_for_log(&emoji_input);
+
+        // Should truncate to 256 chars (emojis) + "..."
+        assert_eq!(result.chars().count(), MAX_LOG_FIELD_LEN + 3);
+        assert!(result.ends_with("..."));
+
+        // Verify the truncated portion contains only emojis (no partial UTF-8)
+        let without_ellipsis = &result[..result.len() - 3];
+        assert!(without_ellipsis.chars().all(|c| c == '🎉'));
+    }
+
+    #[test]
+    fn test_sanitize_for_log_mixed_multibyte() {
+        // Mix of ASCII and multi-byte chars at boundary
+        let input = format!("{}{}", "a".repeat(250), "日本語テスト"); // 250 ASCII + 6 CJK = 256 chars
+        let result = sanitize_for_log(&input);
+
+        // Exactly at limit, no truncation
+        assert!(!result.ends_with("..."));
+        assert_eq!(result.chars().count(), 256);
     }
 
     #[test]
