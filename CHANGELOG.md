@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.9](https://github.com/fzymgc-house/router-hosts/compare/v0.8.8...v0.8.9) (2026-01-01)
+
+
+### Features
+
+* **server:** add access logging for gRPC operations ([#217](https://github.com/fzymgc-house/router-hosts/issues/217)) ([d6c8dc7](https://github.com/fzymgc-house/router-hosts/commit/d6c8dc734bccaf28ce04a01e0ab0ddd37bf1a4c8))
+
+
+### Documentation
+
+* archive completed mkdocs site plans ([#221](https://github.com/fzymgc-house/router-hosts/issues/221)) ([c977954](https://github.com/fzymgc-house/router-hosts/commit/c977954f822d98e9351d56d04ff0b59e0c32667a))
+
 ## [0.8.8](https://github.com/fzymgc-house/router-hosts/compare/v0.8.7...v0.8.8) (2026-01-01)
 
 
