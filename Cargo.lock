@@ -3757,7 +3757,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts"
-version = "0.8.0"
+version = "0.8.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3813,7 +3813,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts-common"
-version = "0.8.0"
+version = "0.8.6"
 dependencies = [
  "chrono",
  "dlprotoc",
@@ -3831,7 +3831,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts-duckdb"
-version = "0.8.0"
+version = "0.8.6"
 dependencies = [
  "anyhow",
  "router-hosts",
@@ -3841,7 +3841,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts-e2e"
-version = "0.8.0"
+version = "0.8.6"
 dependencies = [
  "assert_cmd",
  "predicates",
@@ -3859,7 +3859,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts-operator"
-version = "0.8.0"
+version = "0.8.6"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -3892,7 +3892,7 @@ dependencies = [
 
 [[package]]
 name = "router-hosts-storage"
-version = "0.8.0"
+version = "0.8.6"
 dependencies = [
  "async-trait",
  "chrono",
