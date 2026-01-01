@@ -73,6 +73,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use std::time::Duration;
+use tracing::instrument;
 use ulid::Ulid;
 
 use crate::error::StorageError;
@@ -171,6 +172,7 @@ impl PostgresStorage {
 
 #[async_trait]
 impl EventStore for PostgresStorage {
+    #[instrument(skip(self, event), level = "debug")]
     async fn append_event(
         &self,
         aggregate_id: Ulid,
@@ -181,6 +183,7 @@ impl EventStore for PostgresStorage {
             .await
     }
 
+    #[instrument(skip(self, events), level = "debug")]
     async fn append_events(
         &self,
         aggregate_id: Ulid,
@@ -191,10 +194,12 @@ impl EventStore for PostgresStorage {
             .await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn load_events(&self, aggregate_id: Ulid) -> Result<Vec<EventEnvelope>, StorageError> {
         self.load_events_impl(aggregate_id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn get_current_version(
         &self,
         aggregate_id: Ulid,
@@ -202,6 +207,7 @@ impl EventStore for PostgresStorage {
         self.get_current_version_impl(aggregate_id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn count_events(&self, aggregate_id: Ulid) -> Result<i64, StorageError> {
         self.count_events_impl(aggregate_id).await
     }
@@ -209,14 +215,17 @@ impl EventStore for PostgresStorage {
 
 #[async_trait]
 impl SnapshotStore for PostgresStorage {
+    #[instrument(skip(self, snapshot), level = "debug")]
     async fn save_snapshot(&self, snapshot: Snapshot) -> Result<(), StorageError> {
         self.save_snapshot_impl(snapshot).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn get_snapshot(&self, snapshot_id: &SnapshotId) -> Result<Snapshot, StorageError> {
         self.get_snapshot_impl(snapshot_id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn list_snapshots(
         &self,
         limit: Option<u32>,
@@ -225,10 +234,12 @@ impl SnapshotStore for PostgresStorage {
         self.list_snapshots_impl(limit, offset).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn delete_snapshot(&self, snapshot_id: &SnapshotId) -> Result<(), StorageError> {
         self.delete_snapshot_impl(snapshot_id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn apply_retention_policy(
         &self,
         max_count: Option<usize>,
@@ -241,14 +252,17 @@ impl SnapshotStore for PostgresStorage {
 
 #[async_trait]
 impl HostProjection for PostgresStorage {
+    #[instrument(skip(self), level = "debug")]
     async fn list_all(&self) -> Result<Vec<HostEntry>, StorageError> {
         self.list_all_impl().await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn get_by_id(&self, id: Ulid) -> Result<HostEntry, StorageError> {
         self.get_by_id_impl(id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn find_by_ip_and_hostname(
         &self,
         ip_address: &str,
@@ -258,10 +272,12 @@ impl HostProjection for PostgresStorage {
             .await
     }
 
+    #[instrument(skip(self, filter), level = "debug")]
     async fn search(&self, filter: HostFilter) -> Result<Vec<HostEntry>, StorageError> {
         self.search_impl(filter).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn get_at_time(&self, at_time: DateTime<Utc>) -> Result<Vec<HostEntry>, StorageError> {
         self.get_at_time_impl(at_time).await
     }
@@ -273,6 +289,7 @@ impl Storage for PostgresStorage {
         "postgresql"
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn initialize(&self) -> Result<(), StorageError> {
         MIGRATIONS
             .run(self.pool())
@@ -280,6 +297,7 @@ impl Storage for PostgresStorage {
             .map_err(|e| StorageError::migration("failed to run PostgreSQL migrations", e))
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn health_check(&self) -> Result<(), StorageError> {
         // First check basic connectivity
         sqlx::query("SELECT 1")
@@ -313,6 +331,7 @@ impl Storage for PostgresStorage {
         Ok(())
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn close(&self) -> Result<(), StorageError> {
         self.pool.close().await;
         Ok(())
