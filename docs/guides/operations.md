@@ -337,6 +337,55 @@ scrape_configs:
       - targets: ['router-hosts:9090']
 ```
 
+## OpenTelemetry Integration
+
+### Configuration
+
+Enable OTEL export alongside Prometheus:
+
+```toml
+[metrics]
+prometheus_bind = "0.0.0.0:9090"
+
+[metrics.otel]
+endpoint = "http://otel-collector:4317"
+service_name = "router-hosts"     # Optional, defaults to "router-hosts"
+export_metrics = true             # Optional, defaults to true
+export_traces = true              # Optional, defaults to true
+# headers = { "Authorization" = "Bearer token" }  # Optional
+```
+
+### Trace Context Propagation
+
+Incoming gRPC requests with W3C Trace Context headers (`traceparent`, `tracestate`) are automatically linked to distributed traces.
+
+### Graceful Degradation
+
+- No `[metrics.otel]` config → no OTEL layers, zero overhead
+- `export_traces = false` or `export_metrics = false` → respective exporter disabled
+- Collector unavailable at runtime → OpenTelemetry SDK handles retry/backoff internally
+
+**Note:** Invalid configuration (malformed endpoint, invalid headers) will cause server startup to fail. Verify your OTEL collector is reachable before deploying.
+
+### Kubernetes Collector Sidecar
+
+Example collector sidecar configuration:
+
+```yaml
+containers:
+  - name: otel-collector
+    image: otel/opentelemetry-collector:latest
+    ports:
+      - containerPort: 4317
+    volumeMounts:
+      - name: otel-config
+        mountPath: /etc/otelcol
+volumes:
+  - name: otel-config
+    configMap:
+      name: otel-collector-config
+```
+
 ## Backup and Recovery
 
 ### Automatic Snapshots
