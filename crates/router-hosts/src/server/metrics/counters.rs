@@ -72,84 +72,31 @@ impl TimedOperation {
     pub fn finish(self, status: &str) {
         let duration = self.start.elapsed();
 
-        // Build log with available context
+        // Local macro to emit structured log with variable optional fields
+        macro_rules! log_request {
+            ($($field:ident = $val:expr),* $(,)?) => {
+                info!(
+                    method = %self.method,
+                    $($field = %$val,)*
+                    status = %status,
+                    duration_ms = %duration.as_millis(),
+                    "request"
+                )
+            };
+        }
+
+        // Log with whichever context fields are available
         match (&self.id, &self.hostname, &self.ip) {
             (Some(id), Some(hostname), Some(ip)) => {
-                info!(
-                    method = %self.method,
-                    id = %id,
-                    hostname = %hostname,
-                    ip = %ip,
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                );
+                log_request!(id = id, hostname = hostname, ip = ip)
             }
-            (Some(id), Some(hostname), None) => {
-                info!(
-                    method = %self.method,
-                    id = %id,
-                    hostname = %hostname,
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                );
-            }
-            (Some(id), None, Some(ip)) => {
-                info!(
-                    method = %self.method,
-                    id = %id,
-                    ip = %ip,
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                );
-            }
-            (Some(id), None, None) => {
-                info!(
-                    method = %self.method,
-                    id = %id,
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                );
-            }
-            (None, Some(hostname), Some(ip)) => {
-                info!(
-                    method = %self.method,
-                    hostname = %hostname,
-                    ip = %ip,
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                );
-            }
-            (None, Some(hostname), None) => {
-                info!(
-                    method = %self.method,
-                    hostname = %hostname,
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                );
-            }
-            (None, None, Some(ip)) => {
-                info!(
-                    method = %self.method,
-                    ip = %ip,
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                );
-            }
-            (None, None, None) => {
-                info!(
-                    method = %self.method,
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                );
-            }
+            (Some(id), Some(hostname), None) => log_request!(id = id, hostname = hostname),
+            (Some(id), None, Some(ip)) => log_request!(id = id, ip = ip),
+            (Some(id), None, None) => log_request!(id = id),
+            (None, Some(hostname), Some(ip)) => log_request!(hostname = hostname, ip = ip),
+            (None, Some(hostname), None) => log_request!(hostname = hostname),
+            (None, None, Some(ip)) => log_request!(ip = ip),
+            (None, None, None) => log_request!(),
         }
 
         record_request(&self.method, status, duration);
@@ -183,14 +130,17 @@ mod tests {
     }
 
     #[test]
-    fn test_timed_operation_with_partial_host_context() {
+    fn test_timed_operation_with_hostname_only() {
         let mut op = TimedOperation::new("AddHost");
         op.set_host_context(Some("example.com"), None);
         op.finish("ok");
+    }
 
-        let mut op2 = TimedOperation::new("AddHost");
-        op2.set_host_context(None, Some("192.168.1.1"));
-        op2.finish("ok");
+    #[test]
+    fn test_timed_operation_with_ip_only() {
+        let mut op = TimedOperation::new("SomeMethod");
+        op.set_host_context(None, Some("192.168.1.1"));
+        op.finish("ok");
     }
 
     #[test]

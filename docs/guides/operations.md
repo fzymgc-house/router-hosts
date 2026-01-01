@@ -154,6 +154,58 @@ RUST_LOG=info,router_hosts_storage=debug router-hosts server
 RUST_LOG=info,tonic=trace router-hosts server
 ```
 
+### Access Logs
+
+The server emits structured access logs at INFO level for every gRPC request. These logs provide observability into server operations.
+
+**Log Format:**
+
+Each request produces a single log line with structured fields:
+
+| Field | Description | Always Present |
+|-------|-------------|----------------|
+| `method` | gRPC method name (e.g., AddHost, GetHost) | Yes |
+| `status` | Result status (`ok` or `error`) | Yes |
+| `duration_ms` | Request duration in milliseconds | Yes |
+| `id` | Host entry ULID (for CRUD operations) | When available |
+| `hostname` | Host's hostname | When available |
+| `ip` | Host's IP address | When available |
+
+**Example Output:**
+
+```
+INFO request method=AddHost id=01JG... hostname=myserver.local ip=192.168.1.10 status=ok duration_ms=5
+INFO request method=GetHost id=01JG... hostname=myserver.local ip=192.168.1.10 status=ok duration_ms=2
+INFO request method=UpdateHost id=01JG... hostname=newname.local ip=10.0.0.5 status=ok duration_ms=3
+INFO request method=DeleteHost id=01JG... status=ok duration_ms=1
+INFO request method=ListHosts status=ok duration_ms=12
+INFO request method=SearchHosts status=ok duration_ms=8
+```
+
+**Privacy Considerations:**
+
+Access logs contain IP addresses and hostnames which may be considered sensitive:
+
+- **IP addresses**: May be PII under GDPR and similar regulations
+- **Hostnames**: Could reveal internal infrastructure naming
+
+Consider your log retention policies and access controls accordingly. For environments with strict privacy requirements, configure log aggregation to filter or redact these fields.
+
+**Querying Logs:**
+
+Example queries for common log aggregation tools:
+
+```bash
+# Find all failed requests
+grep 'status=error' /var/log/router-hosts.log
+
+# Find operations on a specific host
+grep 'hostname=myserver.local' /var/log/router-hosts.log
+
+# Find slow requests (>100ms)
+awk '/duration_ms=[0-9]{3,}/' /var/log/router-hosts.log
+```
+
 ## Monitoring
 
 ### Health Checks
