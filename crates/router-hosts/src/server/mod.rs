@@ -14,6 +14,7 @@ pub mod hooks;
 pub mod hosts_file;
 pub mod import;
 pub mod metrics;
+pub mod propagation;
 pub mod service;
 pub mod tracing_setup;
 pub mod write_queue;

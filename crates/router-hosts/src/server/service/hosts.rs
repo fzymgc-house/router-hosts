@@ -2,6 +2,7 @@
 
 use crate::server::commands::CommandError;
 use crate::server::metrics::counters::TimedOperation;
+use crate::server::propagation;
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
     self, AddHostRequest, AddHostResponse, DeleteHostRequest, DeleteHostResponse, GetHostRequest,
@@ -10,6 +11,7 @@ use router_hosts_common::proto::{
 };
 use router_hosts_storage::HostEntry;
 use tonic::{Request, Response, Status};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use ulid::Ulid;
 
 impl HostsServiceImpl {
@@ -18,6 +20,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<AddHostRequest>,
     ) -> Result<Response<AddHostResponse>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        // Ignoring result: if parent context can't be set, we continue without it
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let mut timer = TimedOperation::new("AddHost");
         let req = request.into_inner();
 
@@ -56,6 +63,10 @@ impl HostsServiceImpl {
         &self,
         request: Request<GetHostRequest>,
     ) -> Result<Response<GetHostResponse>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let mut timer = TimedOperation::new("GetHost");
         let req = request.into_inner();
 
@@ -93,6 +104,10 @@ impl HostsServiceImpl {
         &self,
         request: Request<UpdateHostRequest>,
     ) -> Result<Response<UpdateHostResponse>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let mut timer = TimedOperation::new("UpdateHost");
         let req = request.into_inner();
 
@@ -155,6 +170,10 @@ impl HostsServiceImpl {
         &self,
         request: Request<DeleteHostRequest>,
     ) -> Result<Response<DeleteHostResponse>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let mut timer = TimedOperation::new("DeleteHost");
         let req = request.into_inner();
 
@@ -187,8 +206,12 @@ impl HostsServiceImpl {
     /// List all host entries (server streaming)
     pub async fn handle_list_hosts(
         &self,
-        _request: Request<ListHostsRequest>,
+        request: Request<ListHostsRequest>,
     ) -> Result<Response<Vec<ListHostsResponse>>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         // ListHosts doesn't set context fields; use immutable binding
         let timer = TimedOperation::new("ListHosts");
 
@@ -215,6 +238,10 @@ impl HostsServiceImpl {
         &self,
         request: Request<SearchHostsRequest>,
     ) -> Result<Response<Vec<SearchHostsResponse>>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let mut timer = TimedOperation::new("SearchHosts");
         let req = request.into_inner();
 
