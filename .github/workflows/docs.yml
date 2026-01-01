@@ -51,7 +51,8 @@ jobs:
           gh release download "$VERSION" \
             --pattern 'router-hosts-x86_64-unknown-linux-gnu.tar.xz' \
             --dir /tmp
-          tar -xJf /tmp/router-hosts-x86_64-unknown-linux-gnu.tar.xz -C /tmp
+          # Extract with --strip-components=1 to remove the top-level directory
+          tar -xJf /tmp/router-hosts-x86_64-unknown-linux-gnu.tar.xz -C /tmp --strip-components=1
           chmod +x /tmp/router-hosts
           /tmp/router-hosts --version
 
