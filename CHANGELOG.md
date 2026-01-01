@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.7](https://github.com/fzymgc-house/router-hosts/compare/v0.8.6...v0.8.7) (2026-01-01)
+
+
+### Bug Fixes
+
+* **ci:** extract tarball with --strip-components to fix docs deployment ([#209](https://github.com/fzymgc-house/router-hosts/issues/209)) ([6cf4ac7](https://github.com/fzymgc-house/router-hosts/commit/6cf4ac7a96179a73dab648af2bf78d8a21d3be91))
+* **operator:** bind health server to 0.0.0.0 for Kubernetes probes ([#212](https://github.com/fzymgc-house/router-hosts/issues/212)) ([a3e1c5f](https://github.com/fzymgc-house/router-hosts/commit/a3e1c5f0e128aaaf705d5dc5a95360eac21dc250))
+
 ## [0.8.6](https://github.com/fzymgc-house/router-hosts/compare/v0.8.5...v0.8.6) (2026-01-01)
 
 
