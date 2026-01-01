@@ -59,6 +59,9 @@ impl HostsServiceImpl {
         let mut timer = TimedOperation::new("GetHost");
         let req = request.into_inner();
 
+        // Capture raw ID for access log before validation
+        timer.set_id(&req.id);
+
         let id = match Ulid::from_string(&req.id) {
             Ok(id) => id,
             Err(e) => {
@@ -69,8 +72,6 @@ impl HostsServiceImpl {
                 )));
             }
         };
-
-        timer.set_id(id.to_string());
 
         match self.commands.get_host(id).await {
             Ok(entry) => {
@@ -95,6 +96,9 @@ impl HostsServiceImpl {
         let mut timer = TimedOperation::new("UpdateHost");
         let req = request.into_inner();
 
+        // Capture raw ID for access log before validation
+        timer.set_id(&req.id);
+
         let id = match Ulid::from_string(&req.id) {
             Ok(id) => id,
             Err(e) => {
@@ -105,8 +109,6 @@ impl HostsServiceImpl {
                 )));
             }
         };
-
-        timer.set_id(id.to_string());
 
         // Convert optional fields properly from proto optional fields
         // For comment: None = no change, Some(None) = clear, Some(Some(val)) = set value
@@ -156,6 +158,9 @@ impl HostsServiceImpl {
         let mut timer = TimedOperation::new("DeleteHost");
         let req = request.into_inner();
 
+        // Capture raw ID for access log before validation
+        timer.set_id(&req.id);
+
         let id = match Ulid::from_string(&req.id) {
             Ok(id) => id,
             Err(e) => {
@@ -166,8 +171,6 @@ impl HostsServiceImpl {
                 )));
             }
         };
-
-        timer.set_id(id.to_string());
 
         match self.write_queue.delete_host(id, None).await {
             Ok(()) => {
@@ -186,6 +189,7 @@ impl HostsServiceImpl {
         &self,
         _request: Request<ListHostsRequest>,
     ) -> Result<Response<Vec<ListHostsResponse>>, Status> {
+        // ListHosts doesn't set context fields; use immutable binding
         let timer = TimedOperation::new("ListHosts");
 
         match self.commands.list_hosts().await {
@@ -211,8 +215,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<SearchHostsRequest>,
     ) -> Result<Response<Vec<SearchHostsResponse>>, Status> {
-        let timer = TimedOperation::new("SearchHosts");
+        let mut timer = TimedOperation::new("SearchHosts");
         let req = request.into_inner();
+
+        // Capture search query for access log
+        timer.set_query(&req.query);
 
         match self.commands.search_hosts(&req.query).await {
             Ok(entries) => {

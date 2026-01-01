@@ -38,6 +38,36 @@ pub fn set_hosts_entries_count(count: u64) {
     gauge!("router_hosts_hosts_entries").set(count as f64);
 }
 
+/// Maximum length for logged fields to prevent log flooding
+const MAX_LOG_FIELD_LEN: usize = 256;
+
+/// Sanitize user input for safe logging
+///
+/// Prevents log injection attacks by:
+/// - Removing/replacing control characters (including newlines)
+/// - Truncating excessive length
+/// - Escaping special characters that could break log parsers
+fn sanitize_for_log(input: &str) -> String {
+    let sanitized: String = input
+        .chars()
+        .take(MAX_LOG_FIELD_LEN)
+        .map(|c| {
+            if c.is_control() || c == '\n' || c == '\r' || c == '\t' {
+                // Replace control chars with unicode replacement char
+                '\u{FFFD}'
+            } else {
+                c
+            }
+        })
+        .collect();
+
+    if input.len() > MAX_LOG_FIELD_LEN {
+        format!("{}...", sanitized)
+    } else {
+        sanitized
+    }
+}
+
 /// RAII guard for timing operations with optional context for access logging
 pub struct TimedOperation {
     start: Instant,
@@ -45,6 +75,7 @@ pub struct TimedOperation {
     id: Option<String>,
     hostname: Option<String>,
     ip: Option<String>,
+    query: Option<String>,
 }
 
 impl TimedOperation {
@@ -55,33 +86,51 @@ impl TimedOperation {
             id: None,
             hostname: None,
             ip: None,
+            query: None,
         }
     }
 
-    /// Set the entity ID for access logging
+    /// Set the entity ID for access logging (sanitized to prevent log injection)
     pub fn set_id(&mut self, id: impl Into<String>) {
-        self.id = Some(id.into());
+        self.id = Some(sanitize_for_log(&id.into()));
     }
 
-    /// Set host context for access logging (hostname and/or IP)
+    /// Set host context for access logging (sanitized to prevent log injection)
     pub fn set_host_context(&mut self, hostname: Option<&str>, ip: Option<&str>) {
-        self.hostname = hostname.map(String::from);
-        self.ip = ip.map(String::from);
+        self.hostname = hostname.map(sanitize_for_log);
+        self.ip = ip.map(sanitize_for_log);
+    }
+
+    /// Set search query for access logging (sanitized to prevent log injection)
+    pub fn set_query(&mut self, query: impl Into<String>) {
+        self.query = Some(sanitize_for_log(&query.into()));
     }
 
     pub fn finish(self, status: &str) {
         let duration = self.start.elapsed();
 
         // Local macro to emit structured log with variable optional fields
+        // Handles query separately to avoid exponential match arm growth
         macro_rules! log_request {
             ($($field:ident = $val:expr),* $(,)?) => {
-                info!(
-                    method = %self.method,
-                    $($field = %$val,)*
-                    status = %status,
-                    duration_ms = %duration.as_millis(),
-                    "request"
-                )
+                if let Some(query) = &self.query {
+                    info!(
+                        method = %self.method,
+                        $($field = %$val,)*
+                        query = %query,
+                        status = %status,
+                        duration_ms = %duration.as_millis(),
+                        "request"
+                    )
+                } else {
+                    info!(
+                        method = %self.method,
+                        $($field = %$val,)*
+                        status = %status,
+                        duration_ms = %duration.as_millis(),
+                        "request"
+                    )
+                }
             };
         }
 
@@ -156,5 +205,52 @@ mod tests {
         let mut op = TimedOperation::new("DeleteHost");
         op.set_id("01ARZ3NDEKTSV4RRFFQ69G5FAV");
         op.finish("error");
+    }
+
+    #[test]
+    fn test_timed_operation_with_query() {
+        let mut op = TimedOperation::new("SearchHosts");
+        op.set_query("*.example.com");
+        op.finish("ok");
+    }
+
+    #[test]
+    fn test_sanitize_for_log_normal_input() {
+        assert_eq!(sanitize_for_log("normal-input"), "normal-input");
+    }
+
+    #[test]
+    fn test_sanitize_for_log_newlines() {
+        let input = "line1\nline2\rline3";
+        let result = sanitize_for_log(input);
+        assert!(!result.contains('\n'));
+        assert!(!result.contains('\r'));
+        assert!(result.contains('\u{FFFD}')); // replacement char
+    }
+
+    #[test]
+    fn test_sanitize_for_log_control_chars() {
+        let input = "prefix\x00\x1f\x7fsuffix";
+        let result = sanitize_for_log(input);
+        assert!(!result.contains('\x00'));
+        assert!(!result.contains('\x1f'));
+        assert!(!result.contains('\x7f'));
+    }
+
+    #[test]
+    fn test_sanitize_for_log_truncation() {
+        let long_input = "a".repeat(500);
+        let result = sanitize_for_log(&long_input);
+        assert!(result.len() <= MAX_LOG_FIELD_LEN + 3); // +3 for "..."
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_timed_operation_with_malicious_id() {
+        let mut op = TimedOperation::new("GetHost");
+        // Attempt log injection with newline
+        op.set_id("valid-id\n{\"malicious\": \"json\"}");
+        op.finish("ok");
+        // Test passes if no panic - sanitization happens internally
     }
 }
