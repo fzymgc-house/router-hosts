@@ -3,13 +3,8 @@ name: Deploy Docs
 on:
   # Trigger after v-release.yml completes (builds binaries)
   # v-release.yml runs on tag pushes, so we don't filter by branch
-  #
-  # WARNING: The workflow name "Build Release" must match v-release.yml exactly.
-  # cargo-dist may regenerate v-release.yml with a different name (e.g., "Release").
-  # If the names don't match, this workflow will silently fail to trigger.
-  # After running `dist generate-ci`, verify the name in v-release.yml still matches.
   workflow_run:
-    workflows: ["Build Release"]
+    workflows: ["Release"]
     types: [completed]
   workflow_dispatch:
     inputs:
