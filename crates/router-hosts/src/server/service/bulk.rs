@@ -53,6 +53,7 @@ impl HostsServiceImpl {
 
         // Extract W3C trace context from gRPC metadata for distributed tracing
         let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
         let _ = tracing::Span::current().set_parent(parent_cx);
 
         let timer = TimedOperation::new("ImportHosts");
@@ -176,6 +177,7 @@ impl HostsServiceImpl {
     ) -> Result<Response<Vec<ExportHostsResponse>>, Status> {
         // Extract W3C trace context from gRPC metadata for distributed tracing
         let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
         let _ = tracing::Span::current().set_parent(parent_cx);
 
         let timer = TimedOperation::new("ExportHosts");

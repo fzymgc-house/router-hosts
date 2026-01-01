@@ -22,12 +22,23 @@ pub struct TracingHandle {
 
 impl TracingHandle {
     /// Gracefully shutdown tracing subsystem
-    pub fn shutdown(self) {
-        if let Some(provider) = self.tracer_provider {
+    pub fn shutdown(mut self) {
+        if let Some(provider) = self.tracer_provider.take() {
             if let Err(e) = provider.shutdown() {
                 tracing::warn!("Error shutting down tracer provider: {:?}", e);
             }
             info!("OTEL tracer provider shut down");
+        }
+    }
+}
+
+impl Drop for TracingHandle {
+    fn drop(&mut self) {
+        if self.tracer_provider.is_some() {
+            tracing::warn!(
+                "TracingHandle dropped without calling shutdown() - \
+                 OTEL traces may not be flushed"
+            );
         }
     }
 }

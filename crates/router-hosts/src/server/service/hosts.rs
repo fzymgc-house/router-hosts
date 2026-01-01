@@ -22,7 +22,7 @@ impl HostsServiceImpl {
     ) -> Result<Response<AddHostResponse>, Status> {
         // Extract W3C trace context from gRPC metadata for distributed tracing
         let parent_cx = propagation::extract_context(request.metadata());
-        // Ignoring result: if parent context can't be set, we continue without it
+        // Distributed tracing is best-effort: continue if parent context cannot be set
         let _ = tracing::Span::current().set_parent(parent_cx);
 
         let mut timer = TimedOperation::new("AddHost");
@@ -65,6 +65,7 @@ impl HostsServiceImpl {
     ) -> Result<Response<GetHostResponse>, Status> {
         // Extract W3C trace context from gRPC metadata for distributed tracing
         let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
         let _ = tracing::Span::current().set_parent(parent_cx);
 
         let mut timer = TimedOperation::new("GetHost");
@@ -106,6 +107,7 @@ impl HostsServiceImpl {
     ) -> Result<Response<UpdateHostResponse>, Status> {
         // Extract W3C trace context from gRPC metadata for distributed tracing
         let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
         let _ = tracing::Span::current().set_parent(parent_cx);
 
         let mut timer = TimedOperation::new("UpdateHost");
@@ -172,6 +174,7 @@ impl HostsServiceImpl {
     ) -> Result<Response<DeleteHostResponse>, Status> {
         // Extract W3C trace context from gRPC metadata for distributed tracing
         let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
         let _ = tracing::Span::current().set_parent(parent_cx);
 
         let mut timer = TimedOperation::new("DeleteHost");
@@ -210,6 +213,7 @@ impl HostsServiceImpl {
     ) -> Result<Response<Vec<ListHostsResponse>>, Status> {
         // Extract W3C trace context from gRPC metadata for distributed tracing
         let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
         let _ = tracing::Span::current().set_parent(parent_cx);
 
         // ListHosts doesn't set context fields; use immutable binding
@@ -240,6 +244,7 @@ impl HostsServiceImpl {
     ) -> Result<Response<Vec<SearchHostsResponse>>, Status> {
         // Extract W3C trace context from gRPC metadata for distributed tracing
         let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
         let _ = tracing::Span::current().set_parent(parent_cx);
 
         let mut timer = TimedOperation::new("SearchHosts");
