@@ -94,6 +94,8 @@ pub fn init_metrics(config: &OtelConfig) -> Result<Option<SdkMeterProvider>, Met
 
     let resource = build_resource(config.service_name());
 
+    // 60-second export interval balances collector overhead vs metric freshness.
+    // This is the OTEL recommended default for production workloads.
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
         .with_interval(Duration::from_secs(60))
         .build();

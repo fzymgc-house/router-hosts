@@ -367,6 +367,16 @@ Incoming gRPC requests with W3C Trace Context headers (`traceparent`, `tracestat
 
 **Note:** Invalid configuration (malformed endpoint, invalid headers) will cause server startup to fail. Verify your OTEL collector is reachable before deploying.
 
+### Collector Retry Behavior
+
+When the OTEL collector becomes unavailable at runtime:
+
+- **Traces:** The batch exporter retries with exponential backoff (5s initial, 30s max). Failed spans are dropped after retry exhaustion to prevent memory growth.
+- **Metrics:** The periodic reader (60s interval) retries on each export cycle. Metrics are aggregated in-memory and the latest values are sent when connectivity resumes.
+- **Logging:** Failed exports log at `warn` level. Enable `RUST_LOG=opentelemetry=debug` for detailed retry diagnostics.
+
+This design ensures the server never blocks on telemetry failures—observability is best-effort.
+
 ### Kubernetes Collector Sidecar
 
 Example collector sidecar configuration:
@@ -384,6 +394,33 @@ volumes:
   - name: otel-config
     configMap:
       name: otel-collector-config
+```
+
+### Troubleshooting OTEL
+
+**No traces/metrics appearing in collector:**
+
+1. Verify connectivity: `grpcurl -plaintext otel-collector:4317 list`
+2. Check server logs for `OTEL.*initialized` messages
+3. Confirm `export_traces` and `export_metrics` are `true` (or omitted for defaults)
+4. Ensure collector is configured to receive OTLP/gRPC on port 4317
+
+**Server fails to start with OTEL errors:**
+
+1. Validate endpoint URL format: `http://host:port` (no trailing slash)
+2. Check header syntax in config: `headers = { "Key" = "Value" }`
+3. Ensure collector is reachable from server network
+
+**High memory usage with OTEL enabled:**
+
+1. Verify collector is healthy—backpressure from failing exports can buffer spans
+2. Consider reducing trace sampling in high-throughput scenarios
+3. Check for circular trace propagation in service mesh configurations
+
+**Debug logging:**
+
+```bash
+RUST_LOG=opentelemetry=debug,router_hosts=debug ./router-hosts server
 ```
 
 ## Backup and Recovery
