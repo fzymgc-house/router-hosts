@@ -17,6 +17,7 @@
 //! ```
 
 pub mod counters;
+pub mod otel;
 mod prometheus;
 
 use crate::server::config::MetricsConfig;
