@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.5](https://github.com/fzymgc-house/router-hosts/compare/v0.8.4...v0.8.5) (2026-01-01)
+
+
+### Bug Fixes
+
+* bump version ([#205](https://github.com/fzymgc-house/router-hosts/issues/205)) ([c4ebd86](https://github.com/fzymgc-house/router-hosts/commit/c4ebd8678412ea06843421f59f4111a3102bf992))
+* **ci:** regenerate v-release.yml for cargo-dist compatibility ([#204](https://github.com/fzymgc-house/router-hosts/issues/204)) ([7e3cac7](https://github.com/fzymgc-house/router-hosts/commit/7e3cac793947f620b7877598a04011066230e306))
+
 ## [0.8.4](https://github.com/fzymgc-house/router-hosts/compare/v0.8.3...v0.8.4) (2026-01-01)
 
 
