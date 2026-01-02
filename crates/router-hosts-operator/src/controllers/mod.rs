@@ -5,6 +5,7 @@ pub mod ingress;
 pub mod ingressroute;
 pub mod ingressroutetcp;
 pub mod retry;
+pub mod service;
 
 use std::sync::Arc;
 
