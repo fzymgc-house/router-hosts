@@ -303,6 +303,12 @@ async fn run_controllers(client: Client, ctx: Arc<ControllerContext>) -> Result<
         ctx.clone(),
     ));
 
+    info!("Starting Service controller");
+    let service = tokio::spawn(router_hosts_operator::controllers::service::run(
+        client.clone(),
+        ctx.clone(),
+    ));
+
     info!("All controllers spawned");
 
     // Wait for any controller to exit (they shouldn't under normal operation)
@@ -318,6 +324,9 @@ async fn run_controllers(client: Client, ctx: Arc<ControllerContext>) -> Result<
         }
         result = hostmapping => {
             handle_controller_exit("HostMapping", result)
+        }
+        result = service => {
+            handle_controller_exit("Service", result)
         }
     }
 }
