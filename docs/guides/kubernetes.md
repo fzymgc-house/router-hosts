@@ -1,10 +1,11 @@
 # Kubernetes Operator
 
-The router-hosts Kubernetes operator automates DNS registration for Kubernetes workloads. It watches Traefik IngressRoutes and custom HostMapping resources, automatically creating and maintaining corresponding host entries in the router-hosts server.
+The router-hosts Kubernetes operator automates DNS registration for Kubernetes workloads. It watches Kubernetes Services, Traefik IngressRoutes, and custom HostMapping resources, automatically creating and maintaining corresponding host entries in the router-hosts server.
 
 ## Overview
 
 **Key features:**
+- Watches Kubernetes `Service` resources (LoadBalancer, NodePort)
 - Watches Traefik `IngressRoute` and `IngressRouteTCP` resources
 - Supports explicit `HostMapping` CRD for non-Ingress workloads
 - Automatic IP resolution from ingress controllers or static addresses
@@ -154,6 +155,78 @@ spec:
         - name: postgres
           port: 5432
 ```
+
+### Kubernetes Services
+
+The operator watches Kubernetes Service resources when annotated with `router-hosts.fzymgc.house/enabled: "true"`. This enables DNS registration for Services without requiring an IngressRoute.
+
+**Supported Service Types:**
+
+| Type | IP Discovery | Requirements |
+|------|--------------|--------------|
+| `LoadBalancer` | Automatic from `.status.loadBalancer.ingress[0].ip` | None - IP auto-discovered when assigned |
+| `NodePort` | Manual via annotation | Requires `ip-address` annotation |
+
+**Unsupported Types:**
+
+| Type | Reason |
+|------|--------|
+| `ClusterIP` | No external IP available; cluster-internal only |
+| `ExternalName` | Maps to external hostname, not an IP address |
+
+**LoadBalancer Example:**
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-app
+  annotations:
+    router-hosts.fzymgc.house/enabled: "true"
+    router-hosts.fzymgc.house/hostname: "app.example.com"
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 443
+      targetPort: 8443
+  selector:
+    app: my-app
+```
+
+For LoadBalancer Services, the operator waits for the cloud provider to assign an external IP and then creates the DNS entry automatically.
+
+**NodePort Example:**
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: my-nodeport
+  annotations:
+    router-hosts.fzymgc.house/enabled: "true"
+    router-hosts.fzymgc.house/hostname: "nodeport.example.com"
+    router-hosts.fzymgc.house/ip-address: "192.168.1.100"
+spec:
+  type: NodePort
+  ports:
+    - port: 80
+      nodePort: 30080
+  selector:
+    app: my-app
+```
+
+NodePort Services expose a port on every cluster node, but the operator cannot automatically determine which node IP to use. You must specify the IP address explicitly via the `ip-address` annotation. This is typically the IP of a load balancer in front of your nodes, or a specific node's IP.
+
+**Service-Specific Annotations:**
+
+| Annotation | Required | Description |
+|------------|----------|-------------|
+| `router-hosts.fzymgc.house/enabled` | Yes | Must be `"true"` to enable DNS sync |
+| `router-hosts.fzymgc.house/hostname` | Yes | The hostname to register |
+| `router-hosts.fzymgc.house/ip-address` | NodePort only | IP address for NodePort Services |
+| `router-hosts.fzymgc.house/aliases` | No | Additional hostnames (comma-separated) |
+| `router-hosts.fzymgc.house/tags` | No | Custom tags (comma-separated) |
+| `router-hosts.fzymgc.house/grace-period` | No | Deletion grace period in seconds |
 
 ## Annotations
 
@@ -331,6 +404,13 @@ kubectl describe hostmapping <name> -n <namespace>
 - Check Service has LoadBalancer IP or ClusterIP
 - Try adding static fallback strategy
 
+**Service not syncing:**
+- Verify `router-hosts.fzymgc.house/enabled: "true"` annotation is present
+- Verify `router-hosts.fzymgc.house/hostname` annotation is set
+- For LoadBalancer: Check `.status.loadBalancer.ingress[0].ip` is assigned
+- For NodePort: Ensure `router-hosts.fzymgc.house/ip-address` annotation is set
+- ClusterIP and ExternalName Services are not supported
+
 **Connectivity issues:**
 - Check `/readyz` endpoint returns 200
 - Verify router-hosts server is reachable from cluster
@@ -339,41 +419,42 @@ kubectl describe hostmapping <name> -n <namespace>
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Kubernetes Cluster                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────┐  │
-│  │ IngressRoute│  │IngressRoute │  │    HostMapping      │  │
-│  │   (Traefik) │  │    TCP      │  │       (CRD)         │  │
-│  └──────┬──────┘  └──────┬──────┘  └──────────┬──────────┘  │
-│         │                │                     │             │
-│         └────────────────┼─────────────────────┘             │
-│                          │                                   │
-│                          ▼                                   │
-│              ┌───────────────────────┐                       │
-│              │  router-hosts-operator │                      │
-│              │  ┌─────────────────┐  │                       │
-│              │  │ Leader Election │  │ (if HA enabled)      │
-│              │  └────────┬────────┘  │                       │
-│              │           ▼           │                       │
-│              │  ┌─────────────────┐  │                       │
-│              │  │   Controllers   │  │                       │
-│              │  │ • IngressRoute  │  │                       │
-│              │  │ • IngressTCP    │  │                       │
-│              │  │ • HostMapping   │  │                       │
-│              │  └────────┬────────┘  │                       │
-│              │           │           │                       │
-│              │  ┌────────▼────────┐  │                       │
-│              │  │  IP Resolution  │  │                       │
-│              │  └────────┬────────┘  │                       │
-│              └───────────┼───────────┘                       │
-│                          │                                   │
-└──────────────────────────┼───────────────────────────────────┘
-                           │ gRPC/mTLS
-                           ▼
-                ┌─────────────────────┐
-                │  router-hosts server │
-                │    (/etc/hosts)      │
-                └─────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│                         Kubernetes Cluster                            │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐  │
+│  │   Service   │ │ IngressRoute│ │IngressRoute │ │   HostMapping   │  │
+│  │ (LB/NodePt) │ │   (Traefik) │ │    TCP      │ │      (CRD)      │  │
+│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └────────┬────────┘  │
+│         │               │               │                  │          │
+│         └───────────────┴───────────────┴──────────────────┘          │
+│                                   │                                   │
+│                                   ▼                                   │
+│                   ┌───────────────────────────┐                       │
+│                   │   router-hosts-operator   │                       │
+│                   │  ┌─────────────────────┐  │                       │
+│                   │  │   Leader Election   │  │ (if HA enabled)      │
+│                   │  └──────────┬──────────┘  │                       │
+│                   │             ▼             │                       │
+│                   │  ┌─────────────────────┐  │                       │
+│                   │  │     Controllers     │  │                       │
+│                   │  │ • Service           │  │                       │
+│                   │  │ • IngressRoute      │  │                       │
+│                   │  │ • IngressTCP        │  │                       │
+│                   │  │ • HostMapping       │  │                       │
+│                   │  └──────────┬──────────┘  │                       │
+│                   │             │             │                       │
+│                   │  ┌──────────▼──────────┐  │                       │
+│                   │  │    IP Resolution    │  │                       │
+│                   │  └──────────┬──────────┘  │                       │
+│                   └─────────────┼─────────────┘                       │
+│                                 │                                     │
+└─────────────────────────────────┼─────────────────────────────────────┘
+                                  │ gRPC/mTLS
+                                  ▼
+                      ┌─────────────────────┐
+                      │  router-hosts server │
+                      │    (/etc/hosts)      │
+                      └─────────────────────┘
 ```
 
 ## See Also
