@@ -165,6 +165,180 @@ fn parse_custom_tags(annotations: &BTreeMap<String, String>) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Reconcile a single Service resource
+#[instrument(skip(ctx, service), fields(
+    namespace = %service.metadata.namespace.as_deref().unwrap_or("default"),
+    name = %service.metadata.name.as_deref().unwrap_or("unknown"),
+))]
+pub(crate) async fn reconcile(
+    service: Arc<Service>,
+    ctx: Arc<ControllerContext>,
+) -> Result<Action, ServiceError> {
+    let annotations = service.metadata.annotations.as_ref();
+
+    // Skip if not enabled
+    if let Some(annots) = annotations {
+        if !is_enabled(annots) {
+            debug!("Service not enabled, skipping");
+            return Ok(Action::await_change());
+        }
+    } else {
+        debug!("No annotations, skipping");
+        return Ok(Action::await_change());
+    }
+
+    let annotations =
+        annotations.ok_or(ServiceError::MissingAnnotation("annotations".to_string()))?;
+
+    // Validate service type
+    let service_type = validate_service_type(&service)?;
+    debug!(service_type = %service_type, "Validated service type");
+
+    // Extract hostname from annotation
+    let hostname = extract_hostname(annotations)?;
+    debug!(hostname = %hostname, "Extracted hostname");
+
+    // Resolve IP address
+    let ip = resolve_ip(&service, service_type, annotations)?;
+    debug!(ip = %ip, "Resolved IP address");
+
+    // Parse additional configuration
+    let aliases = parse_aliases(annotations);
+    let custom_tags = parse_custom_tags(annotations);
+
+    // Check if entry already exists
+    match ctx.client.find_by_hostname(&hostname).await? {
+        Some(existing) => {
+            // Check if this entry is owned by us
+            let source_tag = format!(
+                "{}{}",
+                tags::SOURCE_PREFIX,
+                service.metadata.uid.as_deref().unwrap_or("")
+            );
+            let owned_by_us = existing.tags.contains(&source_tag);
+            let pre_existing = !owned_by_us && !existing.tags.contains(&tags::OPERATOR.to_string());
+
+            // Cancel any pending deletion
+            if ctx.deletion.is_pending(&existing.id).await {
+                ctx.deletion.cancel(&existing.id).await;
+                info!(
+                    entry_id = %existing.id,
+                    hostname = %hostname,
+                    "Cancelled pending deletion"
+                );
+            }
+
+            // Build tags
+            let new_tags = build_tags(
+                &service,
+                &custom_tags,
+                &ctx.config.default_tags,
+                pre_existing,
+            );
+
+            // Update entry if needed
+            if existing.ip_address != ip
+                || existing.aliases != aliases
+                || !tags_equal(&existing.tags, &new_tags)
+            {
+                ctx.client
+                    .update_host(
+                        &existing.id,
+                        Some(ip.clone()),
+                        Some(aliases.clone()),
+                        Some(new_tags),
+                        Some(existing.version.clone()),
+                    )
+                    .await?;
+
+                info!(
+                    entry_id = %existing.id,
+                    hostname = %hostname,
+                    ip = %ip,
+                    pre_existing = pre_existing,
+                    "Updated host entry"
+                );
+            } else {
+                debug!(hostname = %hostname, "Entry unchanged");
+            }
+        }
+        None => {
+            // Create new entry
+            let new_tags = build_tags(&service, &custom_tags, &ctx.config.default_tags, false);
+            let entry = ctx
+                .client
+                .add_host(&hostname, &ip, aliases.clone(), new_tags)
+                .await?;
+
+            info!(
+                entry_id = %entry.id,
+                hostname = %hostname,
+                ip = %ip,
+                "Created host entry"
+            );
+        }
+    }
+
+    // Reset retry counter on success
+    if let Some(uid) = service.metadata.uid.as_deref() {
+        ctx.retry_tracker.reset(uid);
+    }
+
+    // Requeue for periodic resync
+    Ok(Action::requeue(Duration::from_secs(300)))
+}
+
+/// Classify error type for retry behavior
+fn classify_error(error: &ServiceError) -> ErrorKind {
+    match error {
+        // Network errors are transient
+        ServiceError::Client(_) => ErrorKind::Transient,
+        // Pending LB IP will resolve eventually
+        ServiceError::PendingLoadBalancerIp => ErrorKind::Transient,
+        // Missing annotations and invalid types are permanent
+        ServiceError::MissingAnnotation(_) => ErrorKind::Permanent,
+        ServiceError::InvalidServiceType(_) => ErrorKind::Permanent,
+    }
+}
+
+/// Error policy for the controller with exponential backoff
+fn error_policy(
+    service: Arc<Service>,
+    error: &ServiceError,
+    ctx: Arc<ControllerContext>,
+) -> Action {
+    let uid = service.metadata.uid.as_deref().unwrap_or("unknown");
+    let kind = classify_error(error);
+
+    let attempt = ctx.retry_tracker.increment(uid);
+
+    warn!(
+        error = %error,
+        attempt = attempt,
+        error_kind = ?kind,
+        "Reconciliation error"
+    );
+
+    compute_backoff(attempt, kind)
+}
+
+/// Run the Service controller
+pub async fn run(client: Client, ctx: Arc<ControllerContext>) {
+    let services: Api<Service> = Api::all(client.clone());
+
+    info!("Starting Service controller");
+
+    Controller::new(services, WatcherConfig::default())
+        .shutdown_on_signal()
+        .run(reconcile, error_policy, ctx)
+        .for_each(|result| async move {
+            if let Err(e) = result {
+                error!(error = ?e, "Service controller stream error");
+            }
+        })
+        .await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
