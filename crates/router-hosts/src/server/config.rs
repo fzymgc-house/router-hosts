@@ -1,6 +1,7 @@
 use crate::server::acme::{AcmeConfig, AcmeConfigError};
 use router_hosts_storage::StorageError;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -357,14 +358,34 @@ pub struct OtelConfig {
     pub endpoint: String,
 
     /// Service name for traces/metrics (defaults to "router-hosts")
+    #[serde(default = "default_service_name")]
+    pub service_name: String,
+
+    /// Export metrics via OTLP (default: true)
+    #[serde(default = "default_true")]
+    pub export_metrics: bool,
+
+    /// Export traces via OTLP (default: true)
+    #[serde(default = "default_true")]
+    pub export_traces: bool,
+
+    /// Optional headers for authentication (e.g., Authorization)
     #[serde(default)]
-    pub service_name: Option<String>,
+    pub headers: HashMap<String, String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_service_name() -> String {
+    "router-hosts".to_string()
 }
 
 impl OtelConfig {
-    /// Get the service name, defaulting to "router-hosts"
+    /// Get the service name
     pub fn service_name(&self) -> &str {
-        self.service_name.as_deref().unwrap_or("router-hosts")
+        &self.service_name
     }
 }
 
@@ -1338,6 +1359,68 @@ command = ""
         let metrics = config.metrics.unwrap();
         let otel = metrics.otel.unwrap();
         assert_eq!(otel.endpoint, "http://otel-collector:4317");
-        assert_eq!(otel.service_name, Some("my-router-hosts".to_string()));
+        assert_eq!(otel.service_name, "my-router-hosts");
+    }
+
+    #[test]
+    fn test_otel_config_full() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "sqlite://:memory:"
+
+            [tls]
+            cert_path = "/cert.pem"
+            key_path = "/key.pem"
+            ca_cert_path = "/ca.pem"
+
+            [metrics.otel]
+            endpoint = "http://otel-collector:4317"
+            service_name = "my-service"
+            export_metrics = true
+            export_traces = false
+            headers = { "Authorization" = "Bearer token123" }
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let otel = config.metrics.unwrap().otel.unwrap();
+        assert_eq!(otel.endpoint, "http://otel-collector:4317");
+        assert_eq!(otel.service_name(), "my-service");
+        assert!(otel.export_metrics);
+        assert!(!otel.export_traces);
+        assert_eq!(
+            otel.headers.get("Authorization").unwrap(),
+            "Bearer token123"
+        );
+    }
+
+    #[test]
+    fn test_otel_config_defaults() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "sqlite://:memory:"
+
+            [tls]
+            cert_path = "/cert.pem"
+            key_path = "/key.pem"
+            ca_cert_path = "/ca.pem"
+
+            [metrics.otel]
+            endpoint = "http://localhost:4317"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let otel = config.metrics.unwrap().otel.unwrap();
+        assert_eq!(otel.service_name(), "router-hosts");
+        assert!(otel.export_metrics); // default true
+        assert!(otel.export_traces); // default true
+        assert!(otel.headers.is_empty());
     }
 }

@@ -5,6 +5,7 @@ use crate::server::export::{
     format_json_entry, ExportFormat,
 };
 use crate::server::metrics::counters::TimedOperation;
+use crate::server::propagation;
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
     ExportHostsRequest, ExportHostsResponse, ImportHostsRequest, ImportHostsResponse,
@@ -12,6 +13,7 @@ use router_hosts_common::proto::{
 use router_hosts_storage::Storage;
 use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 /// Maximum size of import data in bytes (10 MiB)
 ///
@@ -48,6 +50,11 @@ impl HostsServiceImpl {
         use crate::server::import::{parse_import, ImportFormat};
         use crate::server::write_queue::ConflictMode;
         use tokio_stream::StreamExt;
+
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
+        let _ = tracing::Span::current().set_parent(parent_cx);
 
         let timer = TimedOperation::new("ImportHosts");
         let mut stream = request.into_inner();
@@ -168,6 +175,11 @@ impl HostsServiceImpl {
         request: Request<ExportHostsRequest>,
         storage: Arc<dyn Storage>,
     ) -> Result<Response<Vec<ExportHostsResponse>>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let timer = TimedOperation::new("ExportHosts");
         let req = request.into_inner();
 

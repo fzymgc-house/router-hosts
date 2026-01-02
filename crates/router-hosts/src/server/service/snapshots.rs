@@ -1,6 +1,7 @@
 //! Snapshot management handlers
 
 use crate::server::metrics::counters::TimedOperation;
+use crate::server::propagation;
 use crate::server::service::HostsServiceImpl;
 use router_hosts_common::proto::{
     CreateSnapshotRequest, CreateSnapshotResponse, DeleteSnapshotRequest, DeleteSnapshotResponse,
@@ -8,6 +9,7 @@ use router_hosts_common::proto::{
     RollbackToSnapshotResponse, Snapshot,
 };
 use tonic::{Request, Response, Status};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 impl HostsServiceImpl {
     /// Create a new snapshot
@@ -15,6 +17,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<CreateSnapshotRequest>,
     ) -> Result<Response<CreateSnapshotResponse>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let timer = TimedOperation::new("CreateSnapshot");
         let req = request.into_inner();
 
@@ -61,6 +68,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<ListSnapshotsRequest>,
     ) -> Result<Response<Vec<ListSnapshotsResponse>>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let timer = TimedOperation::new("ListSnapshots");
         let req = request.into_inner();
 
@@ -114,6 +126,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<RollbackToSnapshotRequest>,
     ) -> Result<Response<RollbackToSnapshotResponse>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let timer = TimedOperation::new("RollbackToSnapshot");
         let req = request.into_inner();
 
@@ -151,6 +168,11 @@ impl HostsServiceImpl {
         &self,
         request: Request<DeleteSnapshotRequest>,
     ) -> Result<Response<DeleteSnapshotResponse>, Status> {
+        // Extract W3C trace context from gRPC metadata for distributed tracing
+        let parent_cx = propagation::extract_context(request.metadata());
+        // Distributed tracing is best-effort: continue if parent context cannot be set
+        let _ = tracing::Span::current().set_parent(parent_cx);
+
         let timer = TimedOperation::new("DeleteSnapshot");
         let req = request.into_inner();
 

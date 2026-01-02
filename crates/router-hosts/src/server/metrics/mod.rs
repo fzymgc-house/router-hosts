@@ -17,9 +17,11 @@
 //! ```
 
 pub mod counters;
+pub mod otel;
 mod prometheus;
 
 use crate::server::config::MetricsConfig;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -38,6 +40,8 @@ pub enum MetricsError {
 pub struct MetricsHandle {
     /// Shutdown signal for Prometheus server
     prometheus_shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    /// OTEL meter provider for metrics export
+    otel_meter_provider: Option<SdkMeterProvider>,
 }
 
 impl MetricsHandle {
@@ -45,6 +49,7 @@ impl MetricsHandle {
     pub fn disabled() -> Self {
         Self {
             prometheus_shutdown: None,
+            otel_meter_provider: None,
         }
     }
 
@@ -55,7 +60,11 @@ impl MetricsHandle {
                 tracing::warn!("Prometheus server already shut down (receiver dropped)");
             }
         }
-        // TODO: Flush OTEL exporter
+        if let Some(provider) = self.otel_meter_provider.take() {
+            if let Err(e) = provider.shutdown() {
+                tracing::warn!(error = %e, "Failed to shutdown OTEL meter provider");
+            }
+        }
     }
 }
 
@@ -65,6 +74,12 @@ impl Drop for MetricsHandle {
             tracing::warn!(
                 "MetricsHandle dropped without calling shutdown() - \
                  Prometheus server will continue running until process exit"
+            );
+        }
+        if self.otel_meter_provider.is_some() {
+            tracing::warn!(
+                "MetricsHandle dropped without calling shutdown() - \
+                 OTEL metrics may not be flushed"
             );
         }
     }
@@ -84,6 +99,7 @@ pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, Metri
 
     let mut handle = MetricsHandle {
         prometheus_shutdown: None,
+        otel_meter_provider: None,
     };
 
     // Start Prometheus HTTP server if configured
@@ -99,10 +115,20 @@ pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, Metri
         );
     }
 
-    // Initialize OTEL if configured
-    if let Some(_otel_config) = &config.otel {
-        // TODO: Initialize OTEL exporter in Task 5
-        tracing::info!("OpenTelemetry export configured (not yet implemented)");
+    // Initialize OTEL metrics if configured
+    if let Some(otel_config) = &config.otel {
+        match otel::init_metrics(otel_config)? {
+            Some(provider) => {
+                handle.otel_meter_provider = Some(provider);
+                tracing::info!(
+                    endpoint = %otel_config.endpoint,
+                    "OTEL metrics export initialized"
+                );
+            }
+            None => {
+                tracing::debug!("OTEL metrics export disabled");
+            }
+        }
     }
 
     Ok(handle)
@@ -118,6 +144,7 @@ mod tests {
     async fn test_init_with_none_returns_disabled() {
         let handle = init(None).await.unwrap();
         assert!(handle.prometheus_shutdown.is_none());
+        assert!(handle.otel_meter_provider.is_none());
     }
 
     #[tokio::test]
@@ -140,6 +167,8 @@ mod tests {
 
         // Verify prometheus shutdown channel exists (server is running)
         assert!(handle.prometheus_shutdown.is_some());
+        // No OTEL configured
+        assert!(handle.otel_meter_provider.is_none());
 
         // Record some metrics to verify the recorder is installed
         counters::record_request("GetHost", "ok", Duration::from_millis(5));
@@ -148,6 +177,31 @@ mod tests {
         counters::record_hook_execution("test_hook", "pre", "success", Duration::from_millis(10));
 
         // Shutdown cleanly
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_otel_disabled_by_export_flag() {
+        use crate::server::config::{MetricsConfig, OtelConfig};
+        use std::collections::HashMap;
+
+        let config = MetricsConfig {
+            prometheus_bind: None,
+            otel: Some(OtelConfig {
+                endpoint: "http://localhost:4317".to_string(),
+                service_name: "router-hosts".to_string(),
+                export_metrics: false,
+                export_traces: false,
+                headers: HashMap::new(),
+            }),
+        };
+
+        let handle = init(Some(&config)).await.unwrap();
+
+        // OTEL configured but export_metrics is false
+        assert!(handle.otel_meter_provider.is_none());
+
         handle.shutdown().await;
     }
 }

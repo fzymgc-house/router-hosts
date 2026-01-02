@@ -14,7 +14,9 @@ pub mod hooks;
 pub mod hosts_file;
 pub mod import;
 pub mod metrics;
+pub mod propagation;
 pub mod service;
+pub mod tracing_setup;
 pub mod write_queue;
 
 use crate::server::acme::renewal::{AcmeRenewalLoop, RenewalHandle, TlsPaths};
@@ -160,30 +162,36 @@ struct ServerCli {
 }
 
 pub async fn run() -> Result<()> {
-    tracing_subscriber::fmt::init();
-
     // Parse server-specific arguments (skip program name and "server" argument)
     let args: Vec<String> = std::env::args().skip(2).collect();
     let cli = ServerCli::parse_from(std::iter::once("server".to_string()).chain(args));
 
-    info!("router-hosts server starting");
-
-    // Load configuration
+    // Load configuration first (tracing needs OTEL config)
     let config_path = cli
         .config
         .as_deref()
         .unwrap_or("/etc/router-hosts/server.toml");
-    info!("Loading configuration from: {}", config_path);
 
     let config = Config::from_file(config_path)
         .map_err(|e| anyhow::anyhow!("Failed to load config: {}", e))?;
 
-    // Run the server
-    run_server(config)
-        .await
-        .map_err(|e| anyhow::anyhow!("Server error: {}", e))?;
+    // Initialize tracing with OTEL if configured
+    let otel_config = config.metrics.as_ref().and_then(|m| m.otel.as_ref());
+    let tracing_handle = tracing_setup::init(otel_config)
+        .map_err(|e| anyhow::anyhow!("Failed to initialize tracing: {}", e))?;
 
-    Ok(())
+    info!("router-hosts server starting");
+    info!("Loaded configuration from: {}", config_path);
+
+    // Run the server
+    let result = run_server(config)
+        .await
+        .map_err(|e| anyhow::anyhow!("Server error: {}", e));
+
+    // Shutdown tracing (flushes pending spans)
+    tracing_handle.shutdown();
+
+    result
 }
 
 /// Load TLS configuration from files

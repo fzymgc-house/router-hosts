@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use tracing::instrument;
 use ulid::Ulid;
 
 use crate::error::StorageError;
@@ -119,6 +120,7 @@ impl DuckDbStorage {
 
 #[async_trait]
 impl EventStore for DuckDbStorage {
+    #[instrument(skip(self, event), level = "debug")]
     async fn append_event(
         &self,
         aggregate_id: Ulid,
@@ -129,6 +131,7 @@ impl EventStore for DuckDbStorage {
             .await
     }
 
+    #[instrument(skip(self, events), level = "debug")]
     async fn append_events(
         &self,
         aggregate_id: Ulid,
@@ -139,10 +142,12 @@ impl EventStore for DuckDbStorage {
             .await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn load_events(&self, aggregate_id: Ulid) -> Result<Vec<EventEnvelope>, StorageError> {
         self.load_events_impl(aggregate_id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn get_current_version(
         &self,
         aggregate_id: Ulid,
@@ -150,6 +155,7 @@ impl EventStore for DuckDbStorage {
         self.get_current_version_impl(aggregate_id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn count_events(&self, aggregate_id: Ulid) -> Result<i64, StorageError> {
         self.count_events_impl(aggregate_id).await
     }
@@ -157,14 +163,17 @@ impl EventStore for DuckDbStorage {
 
 #[async_trait]
 impl SnapshotStore for DuckDbStorage {
+    #[instrument(skip(self, snapshot), level = "debug")]
     async fn save_snapshot(&self, snapshot: Snapshot) -> Result<(), StorageError> {
         self.save_snapshot_impl(snapshot).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn get_snapshot(&self, snapshot_id: &SnapshotId) -> Result<Snapshot, StorageError> {
         self.get_snapshot_impl(snapshot_id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn list_snapshots(
         &self,
         limit: Option<u32>,
@@ -173,10 +182,12 @@ impl SnapshotStore for DuckDbStorage {
         self.list_snapshots_impl(limit, offset).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn delete_snapshot(&self, snapshot_id: &SnapshotId) -> Result<(), StorageError> {
         self.delete_snapshot_impl(snapshot_id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn apply_retention_policy(
         &self,
         max_count: Option<usize>,
@@ -189,14 +200,17 @@ impl SnapshotStore for DuckDbStorage {
 
 #[async_trait]
 impl HostProjection for DuckDbStorage {
+    #[instrument(skip(self), level = "debug")]
     async fn list_all(&self) -> Result<Vec<HostEntry>, StorageError> {
         self.list_all_impl().await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn get_by_id(&self, id: Ulid) -> Result<HostEntry, StorageError> {
         self.get_by_id_impl(id).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn find_by_ip_and_hostname(
         &self,
         ip_address: &str,
@@ -206,10 +220,12 @@ impl HostProjection for DuckDbStorage {
             .await
     }
 
+    #[instrument(skip(self, filter), level = "debug")]
     async fn search(&self, filter: HostFilter) -> Result<Vec<HostEntry>, StorageError> {
         self.search_impl(filter).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn get_at_time(&self, at_time: DateTime<Utc>) -> Result<Vec<HostEntry>, StorageError> {
         self.get_at_time_impl(at_time).await
     }
@@ -221,10 +237,12 @@ impl Storage for DuckDbStorage {
         "duckdb"
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn initialize(&self) -> Result<(), StorageError> {
         schema::initialize_schema(self).await
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn health_check(&self) -> Result<(), StorageError> {
         let conn = self.conn();
 
@@ -241,6 +259,7 @@ impl Storage for DuckDbStorage {
         .map_err(|e| StorageError::connection("spawn_blocking panicked during health check", e))?
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn close(&self) -> Result<(), StorageError> {
         // DuckDB connections don't need explicit close in Rust
         // The Drop impl handles cleanup
