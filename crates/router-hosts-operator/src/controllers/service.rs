@@ -164,3 +164,208 @@ fn parse_custom_tags(annotations: &BTreeMap<String, String>) -> Vec<String> {
         })
         .unwrap_or_default()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use k8s_openapi::api::core::v1::{ServiceSpec, ServiceStatus};
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+
+    fn test_service(
+        service_type: &str,
+        annotations: BTreeMap<String, String>,
+        uid: &str,
+    ) -> Service {
+        Service {
+            metadata: ObjectMeta {
+                name: Some("test-service".to_string()),
+                namespace: Some("default".to_string()),
+                uid: Some(uid.to_string()),
+                annotations: Some(annotations),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: Some(service_type.to_string()),
+                ..Default::default()
+            }),
+            status: None,
+        }
+    }
+
+    fn test_service_with_lb_ip(ip: &str, annotations: BTreeMap<String, String>) -> Service {
+        use k8s_openapi::api::core::v1::{LoadBalancerIngress, LoadBalancerStatus};
+
+        Service {
+            metadata: ObjectMeta {
+                name: Some("test-service".to_string()),
+                namespace: Some("default".to_string()),
+                uid: Some("test-uid".to_string()),
+                annotations: Some(annotations),
+                ..Default::default()
+            },
+            spec: Some(ServiceSpec {
+                type_: Some("LoadBalancer".to_string()),
+                ..Default::default()
+            }),
+            status: Some(ServiceStatus {
+                load_balancer: Some(LoadBalancerStatus {
+                    ingress: Some(vec![LoadBalancerIngress {
+                        ip: Some(ip.to_string()),
+                        hostname: None,
+                        ip_mode: None,
+                        ports: None,
+                    }]),
+                }),
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[test]
+    fn test_is_enabled() {
+        let mut annotations = BTreeMap::new();
+        assert!(!is_enabled(&annotations));
+
+        annotations.insert(annotations::ENABLED.to_string(), "false".to_string());
+        assert!(!is_enabled(&annotations));
+
+        annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+        assert!(is_enabled(&annotations));
+    }
+
+    #[test]
+    fn test_validate_service_type_loadbalancer() {
+        let service = test_service("LoadBalancer", BTreeMap::new(), "uid");
+        assert_eq!(validate_service_type(&service).unwrap(), "LoadBalancer");
+    }
+
+    #[test]
+    fn test_validate_service_type_nodeport() {
+        let service = test_service("NodePort", BTreeMap::new(), "uid");
+        assert_eq!(validate_service_type(&service).unwrap(), "NodePort");
+    }
+
+    #[test]
+    fn test_validate_service_type_clusterip_rejected() {
+        let service = test_service("ClusterIP", BTreeMap::new(), "uid");
+        let result = validate_service_type(&service);
+        assert!(matches!(result, Err(ServiceError::InvalidServiceType(t)) if t == "ClusterIP"));
+    }
+
+    #[test]
+    fn test_validate_service_type_externalname_rejected() {
+        let service = test_service("ExternalName", BTreeMap::new(), "uid");
+        let result = validate_service_type(&service);
+        assert!(matches!(result, Err(ServiceError::InvalidServiceType(t)) if t == "ExternalName"));
+    }
+
+    #[test]
+    fn test_validate_service_type_defaults_to_clusterip() {
+        // Service with no type specified defaults to ClusterIP
+        let service = Service {
+            metadata: ObjectMeta::default(),
+            spec: Some(ServiceSpec {
+                type_: None,
+                ..Default::default()
+            }),
+            status: None,
+        };
+        let result = validate_service_type(&service);
+        assert!(matches!(result, Err(ServiceError::InvalidServiceType(t)) if t == "ClusterIP"));
+    }
+
+    #[test]
+    fn test_extract_hostname_present() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(annotations::HOSTNAME.to_string(), "my.host.com".to_string());
+        assert_eq!(extract_hostname(&annotations).unwrap(), "my.host.com");
+    }
+
+    #[test]
+    fn test_extract_hostname_missing() {
+        let annotations = BTreeMap::new();
+        let result = extract_hostname(&annotations);
+        assert!(matches!(result, Err(ServiceError::MissingAnnotation(_))));
+    }
+
+    #[test]
+    fn test_extract_hostname_empty() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(annotations::HOSTNAME.to_string(), "".to_string());
+        let result = extract_hostname(&annotations);
+        assert!(matches!(result, Err(ServiceError::MissingAnnotation(_))));
+    }
+
+    #[test]
+    fn test_resolve_ip_loadbalancer_from_status() {
+        let annotations = BTreeMap::new();
+        let service = test_service_with_lb_ip("10.0.0.1", annotations.clone());
+        let result = resolve_ip(&service, "LoadBalancer", &annotations);
+        assert_eq!(result.unwrap(), "10.0.0.1");
+    }
+
+    #[test]
+    fn test_resolve_ip_loadbalancer_pending() {
+        let annotations = BTreeMap::new();
+        let service = test_service("LoadBalancer", annotations.clone(), "uid");
+        let result = resolve_ip(&service, "LoadBalancer", &annotations);
+        assert!(matches!(result, Err(ServiceError::PendingLoadBalancerIp)));
+    }
+
+    #[test]
+    fn test_resolve_ip_loadbalancer_with_override() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            annotations::IP_ADDRESS.to_string(),
+            "192.168.1.1".to_string(),
+        );
+        let service = test_service_with_lb_ip("10.0.0.1", annotations.clone());
+        let result = resolve_ip(&service, "LoadBalancer", &annotations);
+        // Override takes precedence
+        assert_eq!(result.unwrap(), "192.168.1.1");
+    }
+
+    #[test]
+    fn test_resolve_ip_nodeport_requires_annotation() {
+        let annotations = BTreeMap::new();
+        let service = test_service("NodePort", annotations.clone(), "uid");
+        let result = resolve_ip(&service, "NodePort", &annotations);
+        assert!(matches!(result, Err(ServiceError::MissingAnnotation(_))));
+    }
+
+    #[test]
+    fn test_resolve_ip_nodeport_with_annotation() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            annotations::IP_ADDRESS.to_string(),
+            "192.168.1.100".to_string(),
+        );
+        let service = test_service("NodePort", annotations.clone(), "uid");
+        let result = resolve_ip(&service, "NodePort", &annotations);
+        assert_eq!(result.unwrap(), "192.168.1.100");
+    }
+
+    #[test]
+    fn test_build_tags() {
+        let service = test_service("LoadBalancer", BTreeMap::new(), "abc-123");
+        let custom_tags = vec!["custom".to_string()];
+        let default_tags = vec!["default".to_string()];
+
+        let tags = build_tags(&service, &custom_tags, &default_tags, false);
+
+        assert!(tags.contains(&"k8s-operator".to_string()));
+        assert!(tags.contains(&"source:abc-123".to_string()));
+        assert!(tags.contains(&"namespace:default".to_string()));
+        assert!(tags.contains(&"kind:Service".to_string()));
+        assert!(tags.contains(&"custom".to_string()));
+        assert!(tags.contains(&"default".to_string()));
+        assert!(!tags.contains(&"pre-existing:true".to_string()));
+    }
+
+    #[test]
+    fn test_build_tags_pre_existing() {
+        let service = test_service("LoadBalancer", BTreeMap::new(), "abc-123");
+        let tags = build_tags(&service, &[], &[], true);
+        assert!(tags.contains(&"pre-existing:true".to_string()));
+    }
+}
