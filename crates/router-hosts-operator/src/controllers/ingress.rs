@@ -21,7 +21,7 @@ use crate::config::{annotations, tags};
 use crate::resolver::ResolverError;
 
 use super::retry::{compute_backoff, ErrorKind};
-use super::ControllerContext;
+use super::{parse_aliases, parse_custom_tags, tags_equal, ControllerContext};
 
 #[derive(Debug, Error)]
 pub enum IngressError {
@@ -60,18 +60,6 @@ fn extract_hosts(ingress: &Ingress) -> Vec<String> {
     hosts
 }
 
-/// Compare two tag lists regardless of order
-fn tags_equal(a: &[String], b: &[String]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut a_sorted: Vec<_> = a.iter().collect();
-    let mut b_sorted: Vec<_> = b.iter().collect();
-    a_sorted.sort();
-    b_sorted.sort();
-    a_sorted == b_sorted
-}
-
 /// Build ownership tags for the Ingress
 fn build_tags(
     ingress: &Ingress,
@@ -102,32 +90,6 @@ fn build_tags(
     tags.extend_from_slice(default_tags);
 
     tags
-}
-
-/// Parse aliases from annotation
-fn parse_aliases(annotations: &BTreeMap<String, String>) -> Vec<String> {
-    annotations
-        .get(annotations::ALIASES)
-        .map(|s| {
-            s.split(',')
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Parse custom tags from annotation
-fn parse_custom_tags(annotations: &BTreeMap<String, String>) -> Vec<String> {
-    annotations
-        .get(annotations::TAGS)
-        .map(|s| {
-            s.split(',')
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Reconcile a single Ingress resource

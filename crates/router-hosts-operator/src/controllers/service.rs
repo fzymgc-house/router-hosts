@@ -3,6 +3,18 @@
 //! Watches v1/Service resources and creates/updates/deletes
 //! corresponding router-hosts entries for LoadBalancer and NodePort types.
 //!
+//! ## Hostname Annotation Requirement
+//!
+//! Unlike IngressRoute/Ingress/IngressRouteTCP resources which have hostnames
+//! defined in their spec, Kubernetes Service resources have no concept of a
+//! hostname—they only expose ports and select pods. The hostname annotation
+//! (`router-hosts.io/hostname`) is therefore mandatory for Services.
+//!
+//! This explicit annotation requirement ensures:
+//! - Intentional DNS registration (not accidentally exposing internal services)
+//! - Clear ownership of the hostname by the Service author
+//! - Flexibility to use any valid hostname regardless of Service name
+//!
 //! ## Deletion Behavior
 //!
 //! This controller does not implement a custom finalizer or immediate deletion
@@ -19,7 +31,7 @@
 //! source UID no longer exists in the cluster. Services are included in the
 //! UID cache built by `build_uid_cache()` in main.rs.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,7 +51,7 @@ use crate::client::{ClientError, RouterHostsClientTrait};
 use crate::config::{annotations, tags};
 
 use super::retry::{compute_backoff, ErrorKind};
-use super::ControllerContext;
+use super::{parse_aliases, parse_custom_tags, tags_equal, ControllerContext};
 
 #[derive(Debug, Error)]
 pub enum ServiceError {
@@ -55,6 +67,12 @@ pub enum ServiceError {
     InvalidIpAddress(String),
     #[error("Pending LoadBalancer IP")]
     PendingLoadBalancerIp,
+    #[error(
+        "NodePort services require explicit IP annotation ({}) since they don't have \
+         an assigned external IP. Use your node's external IP or a load balancer IP.",
+        annotations::IP_ADDRESS
+    )]
+    NodePortMissingIp,
 }
 
 /// Check if Service has opt-in annotation
@@ -79,7 +97,11 @@ fn validate_service_type(service: &Service) -> Result<&str, ServiceError> {
     }
 }
 
-/// Extract and validate hostname from annotation (required for Services)
+/// Extract and validate hostname from annotation.
+///
+/// This is required for Services because they have no hostname in their spec
+/// (unlike Ingress/IngressRoute which define hosts in rules). The annotation
+/// makes DNS registration explicit and intentional.
 fn extract_hostname(annotations: &BTreeMap<String, String>) -> Result<String, ServiceError> {
     let hostname = annotations
         .get(annotations::HOSTNAME)
@@ -127,24 +149,9 @@ fn resolve_ip(
                 .ok_or(ServiceError::PendingLoadBalancerIp)?;
             validate_ip(&ip)
         }
-        "NodePort" => {
-            // NodePort requires explicit IP annotation
-            Err(ServiceError::MissingAnnotation(
-                annotations::IP_ADDRESS.to_string(),
-            ))
-        }
+        "NodePort" => Err(ServiceError::NodePortMissingIp),
         _ => Err(ServiceError::InvalidServiceType(service_type.to_string())),
     }
-}
-
-/// Compare two tag lists regardless of order using HashSet for O(n) comparison
-fn tags_equal(a: &[String], b: &[String]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let a_set: HashSet<_> = a.iter().collect();
-    let b_set: HashSet<_> = b.iter().collect();
-    a_set == b_set
 }
 
 /// Build ownership tags for the Service
@@ -172,32 +179,6 @@ fn build_tags(
     result.extend_from_slice(default_tags);
 
     result
-}
-
-/// Parse aliases from annotation
-fn parse_aliases(annotations: &BTreeMap<String, String>) -> Vec<String> {
-    annotations
-        .get(annotations::ALIASES)
-        .map(|s| {
-            s.split(',')
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-/// Parse custom tags from annotation
-fn parse_custom_tags(annotations: &BTreeMap<String, String>) -> Vec<String> {
-    annotations
-        .get(annotations::TAGS)
-        .map(|s| {
-            s.split(',')
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// Reconcile a single Service resource
@@ -334,6 +315,7 @@ fn classify_error(error: &ServiceError) -> ErrorKind {
         ServiceError::InvalidServiceType(_) => ErrorKind::Permanent,
         ServiceError::InvalidHostname(_) => ErrorKind::Permanent,
         ServiceError::InvalidIpAddress(_) => ErrorKind::Permanent,
+        ServiceError::NodePortMissingIp => ErrorKind::Permanent,
     }
 }
 
@@ -559,6 +541,14 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_ip_loadbalancer_ipv6_from_status() {
+        let annotations = BTreeMap::new();
+        let service = test_service_with_lb_ip("2001:db8::1", annotations.clone());
+        let result = resolve_ip(&service, "LoadBalancer", &annotations);
+        assert_eq!(result.unwrap(), "2001:db8::1");
+    }
+
+    #[test]
     fn test_resolve_ip_loadbalancer_pending() {
         let annotations = BTreeMap::new();
         let service = test_service("LoadBalancer", annotations.clone(), "uid");
@@ -584,7 +574,7 @@ mod tests {
         let annotations = BTreeMap::new();
         let service = test_service("NodePort", annotations.clone(), "uid");
         let result = resolve_ip(&service, "NodePort", &annotations);
-        assert!(matches!(result, Err(ServiceError::MissingAnnotation(_))));
+        assert!(matches!(result, Err(ServiceError::NodePortMissingIp)));
     }
 
     #[test]
@@ -597,6 +587,18 @@ mod tests {
         let service = test_service("NodePort", annotations.clone(), "uid");
         let result = resolve_ip(&service, "NodePort", &annotations);
         assert_eq!(result.unwrap(), "192.168.1.100");
+    }
+
+    #[test]
+    fn test_resolve_ip_nodeport_with_ipv6_annotation() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            annotations::IP_ADDRESS.to_string(),
+            "2001:db8::1".to_string(),
+        );
+        let service = test_service("NodePort", annotations.clone(), "uid");
+        let result = resolve_ip(&service, "NodePort", &annotations);
+        assert_eq!(result.unwrap(), "2001:db8::1");
     }
 
     #[test]
@@ -661,6 +663,12 @@ mod tests {
     #[test]
     fn test_classify_error_invalid_ip_is_permanent() {
         let error = ServiceError::InvalidIpAddress("not-an-ip".to_string());
+        assert!(matches!(classify_error(&error), ErrorKind::Permanent));
+    }
+
+    #[test]
+    fn test_classify_error_nodeport_missing_ip_is_permanent() {
+        let error = ServiceError::NodePortMissingIp;
         assert!(matches!(classify_error(&error), ErrorKind::Permanent));
     }
 
@@ -898,7 +906,7 @@ mod tests {
             let ctx = make_context(client);
 
             let result = reconcile(service, ctx).await;
-            assert!(matches!(result, Err(ServiceError::MissingAnnotation(_))));
+            assert!(matches!(result, Err(ServiceError::NodePortMissingIp)));
         }
 
         #[tokio::test]
