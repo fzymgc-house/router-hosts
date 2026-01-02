@@ -127,6 +127,134 @@ See [ACME documentation](guides/acme.md#troubleshooting) for certificate-specifi
 2. Working directory - hooks run from server's working directory
 3. Error not logged - add explicit logging to hook script
 
+## Kubernetes Operator Issues
+
+The router-hosts operator watches Kubernetes resources and creates DNS entries automatically.
+
+### Service not being processed
+
+**Symptoms:** Service exists but no DNS entry created
+
+**Causes and solutions:**
+1. Missing `router-hosts.fzymgc.house/enabled: "true"` annotation
+2. Missing `router-hosts.fzymgc.house/hostname` annotation - required for Services
+3. Invalid service type - only `LoadBalancer` and `NodePort` are supported
+
+```bash
+# Check annotations on Service
+kubectl get svc <name> -o jsonpath='{.metadata.annotations}'
+
+# Verify operator is running
+kubectl get pods -n router-hosts -l app=router-hosts-operator
+```
+
+### "InvalidServiceType" warning event
+
+**Symptoms:** Kubernetes event shows invalid service type
+
+**Cause:** `ClusterIP` and `ExternalName` Services are not supported
+
+**Solution:** Use `LoadBalancer` or `NodePort` service type, or remove the `enabled` annotation if DNS registration isn't needed.
+
+### "MissingHostname" warning event
+
+**Symptoms:** Service annotated but no hostname configured
+
+**Cause:** `router-hosts.fzymgc.house/hostname` annotation is required for Services (unlike Ingress which has `spec.rules[].host`)
+
+**Solution:** Add the hostname annotation:
+```yaml
+annotations:
+  router-hosts.fzymgc.house/enabled: "true"
+  router-hosts.fzymgc.house/hostname: "myservice.example.com"
+```
+
+### "InvalidHostname" warning event
+
+**Symptoms:** Hostname annotation present but rejected
+
+**Cause:** Hostname doesn't conform to RFC 1123 format
+
+**Common issues:**
+- Contains underscores (use hyphens instead)
+- Starts or ends with hyphen
+- Contains consecutive dots
+- Label exceeds 63 characters
+
+**Solution:** Fix the hostname format:
+```yaml
+# Wrong
+router-hosts.fzymgc.house/hostname: "my_service.example.com"
+router-hosts.fzymgc.house/hostname: "-service.example.com"
+
+# Correct
+router-hosts.fzymgc.house/hostname: "my-service.example.com"
+```
+
+### "MissingIPAddress" warning event (NodePort)
+
+**Symptoms:** NodePort Service not creating DNS entry
+
+**Cause:** NodePort Services require explicit IP address annotation because they expose on all nodes
+
+**Solution:** Add the IP annotation:
+```yaml
+annotations:
+  router-hosts.fzymgc.house/enabled: "true"
+  router-hosts.fzymgc.house/hostname: "myservice.example.com"
+  router-hosts.fzymgc.house/ip-address: "192.168.1.100"  # Required for NodePort
+```
+
+### "PendingLoadBalancer" normal event
+
+**Symptoms:** LoadBalancer Service waiting for IP
+
+**Cause:** Cloud provider hasn't assigned an external IP yet
+
+**Solutions:**
+1. Wait for cloud provider to provision load balancer
+2. Check cloud provider quotas and limits
+3. For bare-metal clusters, ensure MetalLB or similar is configured
+
+```bash
+# Check LoadBalancer status
+kubectl get svc <name> -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+```
+
+### DNS entry not updated after Service change
+
+**Symptoms:** Changed Service but DNS doesn't reflect updates
+
+**Causes and solutions:**
+1. Check operator logs for errors
+2. Verify router-hosts server is reachable
+3. Check retry backoff - transient errors use exponential backoff
+
+```bash
+# Check operator logs
+kubectl logs -n router-hosts -l app=router-hosts-operator --tail=100
+
+# Force reconciliation by touching annotation
+kubectl annotate svc <name> router-hosts.fzymgc.house/timestamp="$(date +%s)" --overwrite
+```
+
+### Operator not connecting to router-hosts server
+
+**Symptoms:** All reconciliations fail with client errors
+
+**Causes and solutions:**
+1. Verify server address in RouterHostsConfig
+2. Check mTLS certificates are valid and mounted
+3. Verify network connectivity between operator and server
+
+```bash
+# Check operator configuration
+kubectl get routerhostsconfig -A -o yaml
+
+# Check certificate secrets exist
+kubectl get secrets -n router-hosts | grep tls
+```
+
 ## Logging and Debugging
 
 ### Enable debug logging

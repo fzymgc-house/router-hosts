@@ -37,7 +37,7 @@ use crate::hostmapping::{Condition, HostMapping, HostMappingStatus};
 use crate::resolver::ResolverError;
 
 use super::retry::{compute_backoff, ErrorKind};
-use super::ControllerContext;
+use super::{tags_equal, ControllerContext};
 
 #[derive(Debug, Error)]
 pub enum HostMappingError {
@@ -88,18 +88,6 @@ fn build_tags(
     result.extend_from_slice(default_tags);
 
     result
-}
-
-/// Compare two tag lists regardless of order
-fn tags_equal(a: &[String], b: &[String]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut a_sorted: Vec<_> = a.iter().collect();
-    let mut b_sorted: Vec<_> = b.iter().collect();
-    a_sorted.sort();
-    b_sorted.sort();
-    a_sorted == b_sorted
 }
 
 /// Update the status subresource of a HostMapping

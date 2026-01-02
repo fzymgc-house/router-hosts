@@ -303,6 +303,12 @@ async fn run_controllers(client: Client, ctx: Arc<ControllerContext>) -> Result<
         ctx.clone(),
     ));
 
+    info!("Starting Service controller");
+    let service = tokio::spawn(router_hosts_operator::controllers::service::run(
+        client.clone(),
+        ctx.clone(),
+    ));
+
     info!("All controllers spawned");
 
     // Wait for any controller to exit (they shouldn't under normal operation)
@@ -318,6 +324,9 @@ async fn run_controllers(client: Client, ctx: Arc<ControllerContext>) -> Result<
         }
         result = hostmapping => {
             handle_controller_exit("HostMapping", result)
+        }
+        result = service => {
+            handle_controller_exit("Service", result)
         }
     }
 }
@@ -483,6 +492,7 @@ struct UidCache {
     ingressroutes: HashSet<String>,
     ingressroutetcps: HashSet<String>,
     hostmappings: HashSet<String>,
+    services: HashSet<String>,
 }
 
 impl UidCache {
@@ -493,6 +503,7 @@ impl UidCache {
             Some("IngressRoute") => self.ingressroutes.contains(uid),
             Some("IngressRouteTCP") => self.ingressroutetcps.contains(uid),
             Some("HostMapping") => self.hostmappings.contains(uid),
+            Some("Service") => self.services.contains(uid),
             Some(k) => {
                 warn!(kind = k, "Unknown resource kind, assuming exists");
                 true
@@ -507,6 +518,7 @@ impl UidCache {
 /// Lists each resource type once and extracts UIDs into HashSets
 /// for O(1) lookup during orphan checking.
 async fn build_uid_cache(client: &Client) -> Result<UidCache> {
+    use k8s_openapi::api::core::v1::Service;
     use k8s_openapi::api::networking::v1::Ingress;
     use router_hosts_operator::controllers::ingressroute::IngressRoute;
     use router_hosts_operator::controllers::ingressroutetcp::IngressRouteTCP;
@@ -517,15 +529,17 @@ async fn build_uid_cache(client: &Client) -> Result<UidCache> {
     let ingressroute_api: Api<IngressRoute> = Api::all(client.clone());
     let ingressroutetcp_api: Api<IngressRouteTCP> = Api::all(client.clone());
     let hostmapping_api: Api<HostMapping> = Api::all(client.clone());
+    let service_api: Api<Service> = Api::all(client.clone());
 
     let params = ListParams::default();
 
     // List all resources in parallel for efficiency
-    let (ingresses, ingressroutes, ingressroutetcps, hostmappings) = tokio::try_join!(
+    let (ingresses, ingressroutes, ingressroutetcps, hostmappings, services) = tokio::try_join!(
         ingress_api.list(&params),
         ingressroute_api.list(&params),
         ingressroutetcp_api.list(&params),
         hostmapping_api.list(&params),
+        service_api.list(&params),
     )?;
 
     // Extract UIDs into HashSets for O(1) lookup
@@ -553,11 +567,18 @@ async fn build_uid_cache(client: &Client) -> Result<UidCache> {
         .filter_map(|m| m.metadata.uid)
         .collect();
 
+    let services: HashSet<String> = services
+        .items
+        .into_iter()
+        .filter_map(|s| s.metadata.uid)
+        .collect();
+
     debug!(
         ingresses = ingresses.len(),
         ingressroutes = ingressroutes.len(),
         ingressroutetcps = ingressroutetcps.len(),
         hostmappings = hostmappings.len(),
+        services = services.len(),
         "Built UID cache for GC"
     );
 
@@ -566,6 +587,7 @@ async fn build_uid_cache(client: &Client) -> Result<UidCache> {
         ingressroutes,
         ingressroutetcps,
         hostmappings,
+        services,
     })
 }
 

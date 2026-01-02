@@ -101,6 +101,8 @@ pub mod annotations {
     pub const ALIASES: &str = "router-hosts.fzymgc.house/aliases";
     /// Override grace period (seconds)
     pub const GRACE_PERIOD: &str = "router-hosts.fzymgc.house/grace-period";
+    /// Hostname for Service resources
+    pub const HOSTNAME: &str = "router-hosts.fzymgc.house/hostname";
 }
 
 /// Tags used for ownership tracking
