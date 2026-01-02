@@ -542,4 +542,228 @@ mod tests {
         let tags = build_tags(&service, &[], &[], true);
         assert!(tags.contains(&"pre-existing:true".to_string()));
     }
+
+    mod reconcile_tests {
+        use super::*;
+        use crate::client::{HostEntry, MockRouterHostsClientTrait};
+        use crate::config::{DeletionConfig, RouterHostsConfigSpec, SecretReference, ServerConfig};
+        use crate::controllers::retry::RetryTracker;
+        use crate::deletion::DeletionScheduler;
+        use std::time::Duration;
+
+        fn test_config() -> RouterHostsConfigSpec {
+            RouterHostsConfigSpec {
+                server: ServerConfig {
+                    endpoint: "localhost:50051".to_string(),
+                    tls_secret_ref: SecretReference {
+                        name: "tls-secret".to_string(),
+                        namespace: "default".to_string(),
+                    },
+                },
+                ip_resolution: vec![],
+                deletion: DeletionConfig {
+                    grace_period_seconds: 300,
+                },
+                default_tags: vec!["env:test".to_string()],
+            }
+        }
+
+        #[derive(Clone)]
+        struct MockKubeService;
+
+        impl tower::Service<http::Request<kube::client::Body>> for MockKubeService {
+            type Response = http::Response<kube::client::Body>;
+            type Error = std::convert::Infallible;
+            type Future = std::future::Ready<Result<Self::Response, Self::Error>>;
+
+            fn poll_ready(
+                &mut self,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Result<(), Self::Error>> {
+                std::task::Poll::Ready(Ok(()))
+            }
+
+            fn call(&mut self, _req: http::Request<kube::client::Body>) -> Self::Future {
+                panic!("MockKubeService should not be called in reconcile tests")
+            }
+        }
+
+        fn mock_kube_client() -> Client {
+            Client::new(MockKubeService, "default")
+        }
+
+        fn make_context(client: MockRouterHostsClientTrait) -> Arc<ControllerContext> {
+            use crate::resolver::MockIpResolverTrait;
+
+            Arc::new(ControllerContext {
+                client: Arc::new(client),
+                resolver: Arc::new(MockIpResolverTrait::new()),
+                deletion: Arc::new(DeletionScheduler::new(Duration::from_secs(300))),
+                config: Arc::new(test_config()),
+                kube_client: mock_kube_client(),
+                retry_tracker: Arc::new(RetryTracker::new()),
+            })
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_not_enabled() {
+            let service = Arc::new(test_service("LoadBalancer", BTreeMap::new(), "uid"));
+            let client = MockRouterHostsClientTrait::new();
+            let ctx = make_context(client);
+
+            let result = reconcile(service, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_invalid_service_type() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            let service = Arc::new(test_service("ClusterIP", annotations, "uid"));
+
+            let client = MockRouterHostsClientTrait::new();
+            let ctx = make_context(client);
+
+            let result = reconcile(service, ctx).await;
+            assert!(matches!(result, Err(ServiceError::InvalidServiceType(_))));
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_missing_hostname() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            let service = Arc::new(test_service("LoadBalancer", annotations, "uid"));
+
+            let client = MockRouterHostsClientTrait::new();
+            let ctx = make_context(client);
+
+            let result = reconcile(service, ctx).await;
+            assert!(matches!(result, Err(ServiceError::MissingAnnotation(_))));
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_loadbalancer_creates_entry() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            annotations.insert(
+                annotations::HOSTNAME.to_string(),
+                "lb.example.com".to_string(),
+            );
+
+            let service = Arc::new(test_service_with_lb_ip("10.0.0.1", annotations));
+
+            let mut client = MockRouterHostsClientTrait::new();
+
+            client
+                .expect_find_by_hostname()
+                .with(mockall::predicate::eq("lb.example.com"))
+                .times(1)
+                .returning(|_| Ok(None));
+
+            client
+                .expect_add_host()
+                .withf(|hostname, ip, _aliases, tags| {
+                    hostname == "lb.example.com"
+                        && ip == "10.0.0.1"
+                        && tags.contains(&"kind:Service".to_string())
+                })
+                .times(1)
+                .returning(|hostname, ip, aliases, tags| {
+                    Ok(HostEntry {
+                        id: "new-id".to_string(),
+                        hostname: hostname.to_string(),
+                        ip_address: ip.to_string(),
+                        aliases,
+                        tags,
+                        version: "v1".to_string(),
+                    })
+                });
+
+            let ctx = make_context(client);
+            let result = reconcile(service, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_nodeport_creates_entry() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            annotations.insert(
+                annotations::HOSTNAME.to_string(),
+                "np.example.com".to_string(),
+            );
+            annotations.insert(
+                annotations::IP_ADDRESS.to_string(),
+                "192.168.1.100".to_string(),
+            );
+
+            let service = Arc::new(test_service("NodePort", annotations, "uid-123"));
+
+            let mut client = MockRouterHostsClientTrait::new();
+
+            client
+                .expect_find_by_hostname()
+                .times(1)
+                .returning(|_| Ok(None));
+
+            client
+                .expect_add_host()
+                .withf(|hostname, ip, _aliases, _tags| {
+                    hostname == "np.example.com" && ip == "192.168.1.100"
+                })
+                .times(1)
+                .returning(|hostname, ip, aliases, tags| {
+                    Ok(HostEntry {
+                        id: "new-id".to_string(),
+                        hostname: hostname.to_string(),
+                        ip_address: ip.to_string(),
+                        aliases,
+                        tags,
+                        version: "v1".to_string(),
+                    })
+                });
+
+            let ctx = make_context(client);
+            let result = reconcile(service, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_nodeport_without_ip_fails() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            annotations.insert(
+                annotations::HOSTNAME.to_string(),
+                "np.example.com".to_string(),
+            );
+            // No IP_ADDRESS annotation
+
+            let service = Arc::new(test_service("NodePort", annotations, "uid"));
+
+            let client = MockRouterHostsClientTrait::new();
+            let ctx = make_context(client);
+
+            let result = reconcile(service, ctx).await;
+            assert!(matches!(result, Err(ServiceError::MissingAnnotation(_))));
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_pending_loadbalancer_returns_error() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            annotations.insert(
+                annotations::HOSTNAME.to_string(),
+                "lb.example.com".to_string(),
+            );
+
+            // LoadBalancer without status (pending)
+            let service = Arc::new(test_service("LoadBalancer", annotations, "uid"));
+
+            let client = MockRouterHostsClientTrait::new();
+            let ctx = make_context(client);
+
+            let result = reconcile(service, ctx).await;
+            assert!(matches!(result, Err(ServiceError::PendingLoadBalancerIp)));
+        }
+    }
 }
