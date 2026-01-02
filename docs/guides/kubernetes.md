@@ -195,6 +195,8 @@ spec:
 
 For LoadBalancer Services, the operator waits for the cloud provider to assign an external IP and then creates the DNS entry automatically.
 
+> **Note:** Some cloud providers (e.g., AWS ELB) expose a hostname instead of an IP address in `.status.loadBalancer.ingress[].hostname`. The operator only accepts IP addresses, not hostnames. If your LoadBalancer receives a hostname instead of an IP, you can manually override it using the `ip-address` annotation.
+
 **NodePort Example:**
 
 ```yaml

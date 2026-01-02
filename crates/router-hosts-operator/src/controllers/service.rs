@@ -2,8 +2,25 @@
 //!
 //! Watches v1/Service resources and creates/updates/deletes
 //! corresponding router-hosts entries for LoadBalancer and NodePort types.
+//!
+//! ## Deletion Behavior
+//!
+//! This controller does not implement a custom finalizer or immediate deletion
+//! handler. Instead, orphaned DNS entries are cleaned up by the operator's
+//! garbage collector (GC), which runs periodically (default: 60s interval).
+//!
+//! The GC approach was chosen over finalizers because:
+//! - Simpler implementation with less state to manage
+//! - Avoids blocking Service deletion if router-hosts is unavailable
+//! - Consistent with the deletion grace period feature
+//! - Small delay (up to 60s) is acceptable for DNS cleanup
+//!
+//! The GC queries all entries with `k8s-operator` tag and removes any whose
+//! source UID no longer exists in the cluster. Services are included in the
+//! UID cache built by `build_uid_cache()` in main.rs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
+use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -34,6 +51,8 @@ pub enum ServiceError {
     InvalidServiceType(String),
     #[error("Invalid hostname: {0}")]
     InvalidHostname(#[from] ValidationError),
+    #[error("Invalid IP address: {0}")]
+    InvalidIpAddress(String),
     #[error("Pending LoadBalancer IP")]
     PendingLoadBalancerIp,
 }
@@ -73,6 +92,13 @@ fn extract_hostname(annotations: &BTreeMap<String, String>) -> Result<String, Se
     Ok(hostname.clone())
 }
 
+/// Validate IP address format
+fn validate_ip(ip: &str) -> Result<String, ServiceError> {
+    ip.parse::<IpAddr>()
+        .map(|_| ip.to_string())
+        .map_err(|_| ServiceError::InvalidIpAddress(ip.to_string()))
+}
+
 /// Resolve IP address based on Service type
 fn resolve_ip(
     service: &Service,
@@ -82,7 +108,7 @@ fn resolve_ip(
     // Check for explicit IP override first
     if let Some(ip) = annotations.get(annotations::IP_ADDRESS) {
         if !ip.is_empty() {
-            return Ok(ip.clone());
+            return validate_ip(ip);
         }
     }
 
@@ -91,14 +117,15 @@ fn resolve_ip(
             // Get IP from status (only accept IP, not hostname)
             // Some cloud providers (e.g., AWS ELB) return hostname instead of IP,
             // but router-hosts requires an IP address for DNS registration.
-            service
+            let ip = service
                 .status
                 .as_ref()
                 .and_then(|s| s.load_balancer.as_ref())
                 .and_then(|lb| lb.ingress.as_ref())
                 .and_then(|ingress| ingress.first())
                 .and_then(|ing| ing.ip.clone())
-                .ok_or(ServiceError::PendingLoadBalancerIp)
+                .ok_or(ServiceError::PendingLoadBalancerIp)?;
+            validate_ip(&ip)
         }
         "NodePort" => {
             // NodePort requires explicit IP annotation
@@ -110,16 +137,14 @@ fn resolve_ip(
     }
 }
 
-/// Compare two tag lists regardless of order
+/// Compare two tag lists regardless of order using HashSet for O(n) comparison
 fn tags_equal(a: &[String], b: &[String]) -> bool {
     if a.len() != b.len() {
         return false;
     }
-    let mut a_sorted: Vec<_> = a.iter().collect();
-    let mut b_sorted: Vec<_> = b.iter().collect();
-    a_sorted.sort();
-    b_sorted.sort();
-    a_sorted == b_sorted
+    let a_set: HashSet<_> = a.iter().collect();
+    let b_set: HashSet<_> = b.iter().collect();
+    a_set == b_set
 }
 
 /// Build ownership tags for the Service
@@ -304,10 +329,11 @@ fn classify_error(error: &ServiceError) -> ErrorKind {
         ServiceError::Client(_) => ErrorKind::Transient,
         // Pending LB IP will resolve eventually
         ServiceError::PendingLoadBalancerIp => ErrorKind::Transient,
-        // Missing annotations, invalid types, and invalid hostnames are permanent
+        // Missing annotations, invalid types, hostnames, and IPs are permanent
         ServiceError::MissingAnnotation(_) => ErrorKind::Permanent,
         ServiceError::InvalidServiceType(_) => ErrorKind::Permanent,
         ServiceError::InvalidHostname(_) => ErrorKind::Permanent,
+        ServiceError::InvalidIpAddress(_) => ErrorKind::Permanent,
     }
 }
 
@@ -630,6 +656,45 @@ mod tests {
         let error =
             ServiceError::InvalidHostname(ValidationError::InvalidHostname("bad".to_string()));
         assert!(matches!(classify_error(&error), ErrorKind::Permanent));
+    }
+
+    #[test]
+    fn test_classify_error_invalid_ip_is_permanent() {
+        let error = ServiceError::InvalidIpAddress("not-an-ip".to_string());
+        assert!(matches!(classify_error(&error), ErrorKind::Permanent));
+    }
+
+    // IP validation tests
+    #[test]
+    fn test_validate_ip_valid_ipv4() {
+        let result = validate_ip("192.168.1.100");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "192.168.1.100");
+    }
+
+    #[test]
+    fn test_validate_ip_valid_ipv6() {
+        let result = validate_ip("2001:db8::1");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "2001:db8::1");
+    }
+
+    #[test]
+    fn test_validate_ip_invalid_hostname() {
+        let result = validate_ip("example.com");
+        assert!(matches!(result, Err(ServiceError::InvalidIpAddress(_))));
+    }
+
+    #[test]
+    fn test_validate_ip_invalid_format() {
+        let result = validate_ip("not-an-ip");
+        assert!(matches!(result, Err(ServiceError::InvalidIpAddress(_))));
+    }
+
+    #[test]
+    fn test_validate_ip_invalid_ipv4_out_of_range() {
+        let result = validate_ip("256.256.256.256");
+        assert!(matches!(result, Err(ServiceError::InvalidIpAddress(_))));
     }
 
     mod reconcile_tests {
