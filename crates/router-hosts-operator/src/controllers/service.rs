@@ -16,6 +16,8 @@ use kube::{Api, Client};
 use thiserror::Error;
 use tracing::{debug, error, info, instrument, warn};
 
+use router_hosts_common::validation::{validate_hostname, ValidationError};
+
 use crate::client::{ClientError, RouterHostsClientTrait};
 use crate::config::{annotations, tags};
 
@@ -30,6 +32,8 @@ pub enum ServiceError {
     MissingAnnotation(String),
     #[error("Invalid service type: {0}")]
     InvalidServiceType(String),
+    #[error("Invalid hostname: {0}")]
+    InvalidHostname(#[from] ValidationError),
     #[error("Pending LoadBalancer IP")]
     PendingLoadBalancerIp,
 }
@@ -56,13 +60,17 @@ fn validate_service_type(service: &Service) -> Result<&str, ServiceError> {
     }
 }
 
-/// Extract hostname from annotation (required for Services)
+/// Extract and validate hostname from annotation (required for Services)
 fn extract_hostname(annotations: &BTreeMap<String, String>) -> Result<String, ServiceError> {
-    annotations
+    let hostname = annotations
         .get(annotations::HOSTNAME)
         .filter(|h| !h.is_empty())
-        .cloned()
-        .ok_or_else(|| ServiceError::MissingAnnotation(annotations::HOSTNAME.to_string()))
+        .ok_or_else(|| ServiceError::MissingAnnotation(annotations::HOSTNAME.to_string()))?;
+
+    // Validate hostname format (RFC 1123)
+    validate_hostname(hostname)?;
+
+    Ok(hostname.clone())
 }
 
 /// Resolve IP address based on Service type
@@ -80,14 +88,16 @@ fn resolve_ip(
 
     match service_type {
         "LoadBalancer" => {
-            // Get IP from status
+            // Get IP from status (only accept IP, not hostname)
+            // Some cloud providers (e.g., AWS ELB) return hostname instead of IP,
+            // but router-hosts requires an IP address for DNS registration.
             service
                 .status
                 .as_ref()
                 .and_then(|s| s.load_balancer.as_ref())
                 .and_then(|lb| lb.ingress.as_ref())
                 .and_then(|ingress| ingress.first())
-                .and_then(|ing| ing.ip.clone().or_else(|| ing.hostname.clone()))
+                .and_then(|ing| ing.ip.clone())
                 .ok_or(ServiceError::PendingLoadBalancerIp)
         }
         "NodePort" => {
@@ -176,19 +186,18 @@ pub(crate) async fn reconcile(
 ) -> Result<Action, ServiceError> {
     let annotations = service.metadata.annotations.as_ref();
 
-    // Skip if not enabled
-    if let Some(annots) = annotations {
-        if !is_enabled(annots) {
+    // Skip if not enabled (annotations required for Services)
+    let annotations = match annotations {
+        Some(annots) if is_enabled(annots) => annots,
+        Some(_) => {
             debug!("Service not enabled, skipping");
             return Ok(Action::await_change());
         }
-    } else {
-        debug!("No annotations, skipping");
-        return Ok(Action::await_change());
-    }
-
-    let annotations =
-        annotations.ok_or(ServiceError::MissingAnnotation("annotations".to_string()))?;
+        None => {
+            debug!("No annotations, skipping");
+            return Ok(Action::await_change());
+        }
+    };
 
     // Validate service type
     let service_type = validate_service_type(&service)?;
@@ -295,9 +304,10 @@ fn classify_error(error: &ServiceError) -> ErrorKind {
         ServiceError::Client(_) => ErrorKind::Transient,
         // Pending LB IP will resolve eventually
         ServiceError::PendingLoadBalancerIp => ErrorKind::Transient,
-        // Missing annotations and invalid types are permanent
+        // Missing annotations, invalid types, and invalid hostnames are permanent
         ServiceError::MissingAnnotation(_) => ErrorKind::Permanent,
         ServiceError::InvalidServiceType(_) => ErrorKind::Permanent,
+        ServiceError::InvalidHostname(_) => ErrorKind::Permanent,
     }
 }
 
@@ -471,6 +481,50 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_hostname_invalid_underscore() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            annotations::HOSTNAME.to_string(),
+            "my_invalid_host.com".to_string(),
+        );
+        let result = extract_hostname(&annotations);
+        assert!(matches!(result, Err(ServiceError::InvalidHostname(_))));
+    }
+
+    #[test]
+    fn test_extract_hostname_invalid_leading_hyphen() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            annotations::HOSTNAME.to_string(),
+            "-invalid.com".to_string(),
+        );
+        let result = extract_hostname(&annotations);
+        assert!(matches!(result, Err(ServiceError::InvalidHostname(_))));
+    }
+
+    #[test]
+    fn test_extract_hostname_invalid_trailing_hyphen() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            annotations::HOSTNAME.to_string(),
+            "invalid-.com".to_string(),
+        );
+        let result = extract_hostname(&annotations);
+        assert!(matches!(result, Err(ServiceError::InvalidHostname(_))));
+    }
+
+    #[test]
+    fn test_extract_hostname_invalid_consecutive_dots() {
+        let mut annotations = BTreeMap::new();
+        annotations.insert(
+            annotations::HOSTNAME.to_string(),
+            "invalid..com".to_string(),
+        );
+        let result = extract_hostname(&annotations);
+        assert!(matches!(result, Err(ServiceError::InvalidHostname(_))));
+    }
+
+    #[test]
     fn test_resolve_ip_loadbalancer_from_status() {
         let annotations = BTreeMap::new();
         let service = test_service_with_lb_ip("10.0.0.1", annotations.clone());
@@ -541,6 +595,41 @@ mod tests {
         let service = test_service("LoadBalancer", BTreeMap::new(), "abc-123");
         let tags = build_tags(&service, &[], &[], true);
         assert!(tags.contains(&"pre-existing:true".to_string()));
+    }
+
+    #[test]
+    fn test_classify_error_client_is_transient() {
+        use crate::client::ClientError;
+
+        let error = ServiceError::Client(ClientError::TlsError("test".to_string()));
+        assert!(matches!(classify_error(&error), ErrorKind::Transient));
+    }
+
+    #[test]
+    fn test_classify_error_pending_lb_is_transient() {
+        let error = ServiceError::PendingLoadBalancerIp;
+        assert!(matches!(classify_error(&error), ErrorKind::Transient));
+    }
+
+    #[test]
+    fn test_classify_error_missing_annotation_is_permanent() {
+        let error = ServiceError::MissingAnnotation("hostname".to_string());
+        assert!(matches!(classify_error(&error), ErrorKind::Permanent));
+    }
+
+    #[test]
+    fn test_classify_error_invalid_service_type_is_permanent() {
+        let error = ServiceError::InvalidServiceType("ClusterIP".to_string());
+        assert!(matches!(classify_error(&error), ErrorKind::Permanent));
+    }
+
+    #[test]
+    fn test_classify_error_invalid_hostname_is_permanent() {
+        use router_hosts_common::validation::ValidationError;
+
+        let error =
+            ServiceError::InvalidHostname(ValidationError::InvalidHostname("bad".to_string()));
+        assert!(matches!(classify_error(&error), ErrorKind::Permanent));
     }
 
     mod reconcile_tests {
@@ -764,6 +853,103 @@ mod tests {
 
             let result = reconcile(service, ctx).await;
             assert!(matches!(result, Err(ServiceError::PendingLoadBalancerIp)));
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_loadbalancer_updates_existing_entry() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            annotations.insert(
+                annotations::HOSTNAME.to_string(),
+                "lb.example.com".to_string(),
+            );
+
+            let service = Arc::new(test_service_with_lb_ip("10.0.0.2", annotations));
+
+            let mut client = MockRouterHostsClientTrait::new();
+
+            // Return existing entry with different IP
+            client
+                .expect_find_by_hostname()
+                .with(mockall::predicate::eq("lb.example.com"))
+                .times(1)
+                .returning(|_| {
+                    Ok(Some(HostEntry {
+                        id: "existing-id".to_string(),
+                        hostname: "lb.example.com".to_string(),
+                        ip_address: "10.0.0.1".to_string(), // Different IP
+                        aliases: vec![],
+                        tags: vec!["k8s-operator".to_string(), "source:test-uid".to_string()],
+                        version: "v1".to_string(),
+                    }))
+                });
+
+            // Expect update to be called with new IP
+            client
+                .expect_update_host()
+                .withf(|id, ip, _aliases, _tags, version| {
+                    id == "existing-id"
+                        && ip == &Some("10.0.0.2".to_string())
+                        && version == &Some("v1".to_string())
+                })
+                .times(1)
+                .returning(|_id, _ip, _aliases, _tags, _version| {
+                    Ok(HostEntry {
+                        id: "existing-id".to_string(),
+                        hostname: "lb.example.com".to_string(),
+                        ip_address: "10.0.0.2".to_string(),
+                        aliases: vec![],
+                        tags: vec![],
+                        version: "v2".to_string(),
+                    })
+                });
+
+            let ctx = make_context(client);
+            let result = reconcile(service, ctx).await;
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn test_reconcile_loadbalancer_skips_update_when_unchanged() {
+            let mut annotations = BTreeMap::new();
+            annotations.insert(annotations::ENABLED.to_string(), "true".to_string());
+            annotations.insert(
+                annotations::HOSTNAME.to_string(),
+                "lb.example.com".to_string(),
+            );
+
+            let service = Arc::new(test_service_with_lb_ip("10.0.0.1", annotations));
+
+            let mut client = MockRouterHostsClientTrait::new();
+
+            // Return existing entry with same IP and matching tags
+            client
+                .expect_find_by_hostname()
+                .with(mockall::predicate::eq("lb.example.com"))
+                .times(1)
+                .returning(|_| {
+                    Ok(Some(HostEntry {
+                        id: "existing-id".to_string(),
+                        hostname: "lb.example.com".to_string(),
+                        ip_address: "10.0.0.1".to_string(),
+                        aliases: vec![],
+                        tags: vec![
+                            "k8s-operator".to_string(),
+                            "source:test-uid".to_string(),
+                            "namespace:default".to_string(),
+                            "kind:Service".to_string(),
+                            "env:test".to_string(),
+                        ],
+                        version: "v1".to_string(),
+                    }))
+                });
+
+            // update_host should NOT be called since nothing changed
+            // (no expect_update_host means it will panic if called)
+
+            let ctx = make_context(client);
+            let result = reconcile(service, ctx).await;
+            assert!(result.is_ok());
         }
     }
 }
