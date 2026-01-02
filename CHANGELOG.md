@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.10](https://github.com/fzymgc-house/router-hosts/compare/v0.8.9...v0.8.10) (2026-01-02)
+
+
+### Features
+
+* add OpenTelemetry integration for distributed tracing ([#222](https://github.com/fzymgc-house/router-hosts/issues/222)) ([214c1ed](https://github.com/fzymgc-house/router-hosts/commit/214c1ed985d94548e180a8d94850baacbba4d251))
+
 ## [0.8.9](https://github.com/fzymgc-house/router-hosts/compare/v0.8.8...v0.8.9) (2026-01-01)
 
 
