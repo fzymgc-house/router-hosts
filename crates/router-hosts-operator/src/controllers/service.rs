@@ -8,7 +8,7 @@
 //! Unlike IngressRoute/Ingress/IngressRouteTCP resources which have hostnames
 //! defined in their spec, Kubernetes Service resources have no concept of a
 //! hostname—they only expose ports and select pods. The hostname annotation
-//! (`router-hosts.io/hostname`) is therefore mandatory for Services.
+//! (`router-hosts.fzymgc.house/hostname`) is therefore mandatory for Services.
 //!
 //! This explicit annotation requirement ensures:
 //! - Intentional DNS registration (not accidentally exposing internal services)
