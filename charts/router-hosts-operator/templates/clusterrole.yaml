@@ -32,8 +32,8 @@ rules:
   # Note: Secret access is handled by a namespaced Role in the tlsSecretRef.namespace
   # to ensure proper namespace isolation (see role-secret.yaml)
 
-  # Services (for IP resolution)
+  # Services (for IP resolution and Service controller)
   - apiGroups: [""]
     resources: ["services"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "watch"]
 {{- end }}
