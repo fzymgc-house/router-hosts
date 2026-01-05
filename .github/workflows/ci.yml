@@ -195,7 +195,7 @@ jobs:
         uses: arduino/setup-task@v2
 
       - name: Download release binary
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@v7
         with:
           name: release-binary
           path: target/release/
