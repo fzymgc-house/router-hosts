@@ -90,6 +90,7 @@ async-trait = "0.1"  # For dyn-compatible async traits in DNS providers
 # Metrics and observability
 metrics = "0.24"
 metrics-exporter-prometheus = { version = "0.18", features = ["http-listener"] }
+metrics-exporter-opentelemetry = "0.2"
 opentelemetry = { version = "0.31", features = ["trace", "metrics"] }
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }

@@ -91,6 +91,16 @@ impl Drop for MetricsHandle {
 /// Dropping the handle will shut down metrics collection.
 ///
 /// If `config` is `None`, returns a disabled handle with zero overhead.
+///
+/// # Recorder Priority
+///
+/// Only one global `metrics` recorder can be installed. The priority is:
+/// 1. OTEL metrics (if `export_metrics = true`) - installs OTEL recorder
+/// 2. Prometheus (if `prometheus_bind` is set and OTEL not enabled) - installs Prometheus recorder
+///
+/// When OTEL metrics is enabled, Prometheus endpoint is not available since
+/// they cannot both install a global recorder. Use the OTEL collector's
+/// Prometheus exporter if you need both.
 pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, MetricsError> {
     let Some(config) = config else {
         tracing::debug!("Metrics disabled (no [metrics] config section)");
@@ -102,32 +112,43 @@ pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, Metri
         otel_meter_provider: None,
     };
 
-    // Start Prometheus HTTP server if configured
-    if let Some(addr) = config.prometheus_bind {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        handle.prometheus_shutdown = Some(tx);
+    // Determine if OTEL metrics will be enabled (installs its own recorder)
+    let otel_metrics_enabled = config.otel.as_ref().is_some_and(|c| c.export_metrics);
 
-        let actual_addr = prometheus::start_server(addr, rx).await?;
-        tracing::info!(
-            requested = %addr,
-            actual = %actual_addr,
-            "Prometheus metrics endpoint started on /metrics"
-        );
-    }
-
-    // Initialize OTEL metrics if configured
+    // Initialize OTEL metrics FIRST if configured (installs global recorder)
     if let Some(otel_config) = &config.otel {
         match otel::init_metrics(otel_config)? {
             Some(provider) => {
                 handle.otel_meter_provider = Some(provider);
                 tracing::info!(
                     endpoint = %otel_config.endpoint,
-                    "OTEL metrics export initialized"
+                    "OTEL metrics export initialized (all metrics routed via OTEL)"
                 );
             }
             None => {
                 tracing::debug!("OTEL metrics export disabled");
             }
+        }
+    }
+
+    // Start Prometheus HTTP server if configured AND OTEL metrics not enabled
+    // (only one recorder can be installed globally)
+    if let Some(addr) = config.prometheus_bind {
+        if otel_metrics_enabled {
+            tracing::info!(
+                "Prometheus endpoint skipped: OTEL metrics is enabled. \
+                 Use OTEL collector's Prometheus exporter for /metrics endpoint."
+            );
+        } else {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            handle.prometheus_shutdown = Some(tx);
+
+            let actual_addr = prometheus::start_server(addr, rx).await?;
+            tracing::info!(
+                requested = %addr,
+                actual = %actual_addr,
+                "Prometheus metrics endpoint started on /metrics"
+            );
         }
     }
 
