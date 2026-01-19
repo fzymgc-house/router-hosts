@@ -46,12 +46,16 @@ impl MetricsHandle {
     }
 
     /// Gracefully shut down metrics subsystem
-    pub async fn shutdown(mut self) {
+    ///
+    /// Returns an error if OTEL provider shutdown fails (metrics may not have been flushed).
+    /// Callers should log the error but may choose to continue server shutdown.
+    pub async fn shutdown(mut self) -> Result<(), MetricsError> {
         if let Some(provider) = self.otel_meter_provider.take() {
-            if let Err(e) = provider.shutdown() {
-                tracing::warn!(error = %e, "Failed to shutdown OTEL meter provider");
-            }
+            provider.shutdown().map_err(|e| {
+                MetricsError::OtelInit(format!("Failed to shutdown OTEL meter provider: {}", e))
+            })?;
         }
+        Ok(())
     }
 }
 
@@ -59,8 +63,11 @@ impl Drop for MetricsHandle {
     fn drop(&mut self) {
         if self.otel_meter_provider.is_some() {
             tracing::warn!(
-                "MetricsHandle dropped without calling shutdown() - \
-                 OTEL metrics may not be flushed"
+                target: "router_hosts::metrics",
+                "MetricsHandle dropped without calling shutdown(). \
+                 OTEL metrics may not be flushed. \
+                 Ensure MetricsHandle::shutdown() is awaited during graceful server shutdown \
+                 (see server/mod.rs shutdown sequence)."
             );
         }
     }
@@ -115,7 +122,7 @@ mod tests {
     #[tokio::test]
     async fn test_disabled_shutdown_is_noop() {
         let handle = MetricsHandle::disabled();
-        handle.shutdown().await; // Should not panic
+        handle.shutdown().await.unwrap(); // Should not panic or error
     }
 
     #[tokio::test]
@@ -130,6 +137,7 @@ mod tests {
                 service_name: "router-hosts".to_string(),
                 export_metrics: false,
                 export_traces: false,
+                export_interval_secs: 60,
                 headers: HashMap::new(),
             }),
         };
@@ -139,6 +147,6 @@ mod tests {
         // OTEL configured but export_metrics is false
         assert!(handle.otel_meter_provider.is_none());
 
-        handle.shutdown().await;
+        handle.shutdown().await.unwrap();
     }
 }

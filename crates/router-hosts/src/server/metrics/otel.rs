@@ -103,14 +103,19 @@ pub fn init_metrics(config: &OtelConfig) -> Result<Option<SdkMeterProvider>, Met
             MetricsError::OtelInit(format!("Failed to build OTLP metrics exporter: {}", e))
         })?;
 
-    // 60-second export interval balances collector overhead vs metric freshness.
+    // Export interval balances collector overhead vs metric freshness.
+    // Default is 60 seconds; configurable via export_interval_secs.
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
-        .with_interval(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(config.export_interval_secs))
         .build();
 
     // Use metrics-exporter-opentelemetry to bridge metrics crate -> OpenTelemetry.
     // This installs a global recorder for the `metrics` crate that forwards
     // all counter!(), histogram!(), gauge!() calls to OpenTelemetry.
+    //
+    // The `_recorder` is intentionally discarded: `install()` registers it as the
+    // global recorder (a side effect), so we only need to keep the `provider` alive
+    // for metric export to continue. The recorder remains active until process exit.
     let (provider, _recorder) = OtelRecorder::builder(service_name.clone())
         .with_meter_provider(|builder| builder.with_reader(reader).with_resource(resource))
         .install()
@@ -165,6 +170,7 @@ mod tests {
             service_name: "router-hosts".to_string(),
             export_metrics: true,
             export_traces: false,
+            export_interval_secs: 60,
             headers: HashMap::new(),
         };
         let result = init_tracer(&config).unwrap();
@@ -178,6 +184,7 @@ mod tests {
             service_name: "router-hosts".to_string(),
             export_metrics: false,
             export_traces: true,
+            export_interval_secs: 60,
             headers: HashMap::new(),
         };
         let result = init_metrics(&config).unwrap();

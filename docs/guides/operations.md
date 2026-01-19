@@ -312,8 +312,11 @@ endpoint = "http://otel-collector:4317"
 service_name = "router-hosts"     # Optional, defaults to "router-hosts"
 export_metrics = true             # Optional, defaults to true
 export_traces = true              # Optional, defaults to true
+export_interval_secs = 60         # Optional, defaults to 60 seconds
 # headers = { "Authorization" = "Bearer token" }  # Optional
 ```
+
+The `export_interval_secs` option controls how frequently metrics are pushed to the OTEL collector. Lower values increase metric freshness but add collector overhead. The default of 60 seconds balances freshness with efficiency for most deployments.
 
 ### Available Metrics
 

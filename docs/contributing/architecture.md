@@ -63,7 +63,7 @@ Storage abstraction layer:
 
 Main binary (client and server modes):
 - **Client mode (default):** CLI interface using clap, gRPC client wrapper, command handlers
-- **Server mode:** gRPC service implementation, storage integration, hosts file generation with atomic writes, post-edit hook execution, Prometheus metrics
+- **Server mode:** gRPC service implementation, storage integration, hosts file generation with atomic writes, post-edit hook execution, OpenTelemetry metrics
 - Mode selection: runs in server mode when first argument is "server", otherwise client mode
 - Includes SQLite and PostgreSQL backends
 

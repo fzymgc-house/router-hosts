@@ -368,6 +368,13 @@ pub struct OtelConfig {
     #[serde(default = "default_true")]
     pub export_traces: bool,
 
+    /// Metrics export interval in seconds (default: 60)
+    ///
+    /// Controls how frequently metrics are pushed to the OTEL collector.
+    /// Lower values increase metric freshness but add collector overhead.
+    #[serde(default = "default_export_interval_secs")]
+    pub export_interval_secs: u64,
+
     /// Optional headers for authentication (e.g., Authorization)
     #[serde(default)]
     pub headers: HashMap<String, String>,
@@ -379,6 +386,10 @@ fn default_true() -> bool {
 
 fn default_service_name() -> String {
     "router-hosts".to_string()
+}
+
+fn default_export_interval_secs() -> u64 {
+    60
 }
 
 impl OtelConfig {
