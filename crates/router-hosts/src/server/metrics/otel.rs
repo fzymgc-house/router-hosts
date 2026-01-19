@@ -1,9 +1,12 @@
 //! OpenTelemetry exporter setup
 //!
 //! Provides trace and metrics export via OTLP/gRPC to an OpenTelemetry collector.
+//! Uses `metrics-exporter-opentelemetry` to bridge the `metrics` crate to OpenTelemetry,
+//! ensuring all metrics recorded via `counter!()`, `histogram!()`, etc. are exported.
 
 use crate::server::config::OtelConfig;
 use crate::server::metrics::MetricsError;
+use metrics_exporter_opentelemetry::Recorder as OtelRecorder;
 use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
 use opentelemetry_sdk::{metrics::SdkMeterProvider, trace::SdkTracerProvider, Resource};
 use std::time::Duration;
@@ -71,9 +74,13 @@ pub fn init_tracer(config: &OtelConfig) -> Result<Option<SdkTracerProvider>, Met
     Ok(Some(provider))
 }
 
-/// Initialize OTEL metrics exporter
+/// Initialize OTEL metrics exporter with bridge to `metrics` crate
 ///
-/// Returns a meter provider that exports metrics to the configured endpoint.
+/// This function bridges the `metrics` crate (used throughout router-hosts via
+/// `counter!()`, `histogram!()`, etc.) to OpenTelemetry, ensuring all metrics
+/// are exported via OTLP to the configured collector.
+///
+/// Returns a meter provider that must be kept alive for metric export.
 /// Returns None if export_metrics is false.
 pub fn init_metrics(config: &OtelConfig) -> Result<Option<SdkMeterProvider>, MetricsError> {
     if !config.export_metrics {
@@ -82,33 +89,44 @@ pub fn init_metrics(config: &OtelConfig) -> Result<Option<SdkMeterProvider>, Met
     }
 
     let metadata = build_metadata(&config.headers)?;
+    let endpoint = config.endpoint.clone();
+    let service_name = config.service_name().to_string();
+    let resource = build_resource(&service_name);
 
+    // Build the OTLP exporter
     let exporter = opentelemetry_otlp::MetricExporter::builder()
         .with_tonic()
-        .with_endpoint(&config.endpoint)
+        .with_endpoint(&endpoint)
         .with_metadata(metadata)
         .build()
         .map_err(|e| {
             MetricsError::OtelInit(format!("Failed to build OTLP metrics exporter: {}", e))
         })?;
 
-    let resource = build_resource(config.service_name());
-
-    // 60-second export interval balances collector overhead vs metric freshness.
-    // This is the OTEL recommended default for production workloads.
+    // Export interval balances collector overhead vs metric freshness.
+    // Default is 60 seconds; configurable via export_interval_secs.
     let reader = opentelemetry_sdk::metrics::PeriodicReader::builder(exporter)
-        .with_interval(Duration::from_secs(60))
+        .with_interval(Duration::from_secs(config.export_interval_secs))
         .build();
 
-    let provider = SdkMeterProvider::builder()
-        .with_reader(reader)
-        .with_resource(resource)
-        .build();
+    // Use metrics-exporter-opentelemetry to bridge metrics crate -> OpenTelemetry.
+    // This installs a global recorder for the `metrics` crate that forwards
+    // all counter!(), histogram!(), gauge!() calls to OpenTelemetry.
+    //
+    // The `_recorder` is intentionally discarded: `install()` registers it as the
+    // global recorder (a side effect), so we only need to keep the `provider` alive
+    // for metric export to continue. The recorder remains active until process exit.
+    let (provider, _recorder) = OtelRecorder::builder(service_name.clone())
+        .with_meter_provider(|builder| builder.with_reader(reader).with_resource(resource))
+        .install()
+        .map_err(|e| {
+            MetricsError::OtelInit(format!("Failed to install OTEL metrics recorder: {}", e))
+        })?;
 
     info!(
         endpoint = %config.endpoint,
         service_name = %config.service_name(),
-        "OTEL metrics exporter initialized"
+        "OTEL metrics exporter initialized (metrics crate bridged)"
     );
 
     Ok(Some(provider))
@@ -152,6 +170,7 @@ mod tests {
             service_name: "router-hosts".to_string(),
             export_metrics: true,
             export_traces: false,
+            export_interval_secs: 60,
             headers: HashMap::new(),
         };
         let result = init_tracer(&config).unwrap();
@@ -165,6 +184,7 @@ mod tests {
             service_name: "router-hosts".to_string(),
             export_metrics: false,
             export_traces: true,
+            export_interval_secs: 60,
             headers: HashMap::new(),
         };
         let result = init_metrics(&config).unwrap();

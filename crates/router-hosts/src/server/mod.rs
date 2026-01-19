@@ -465,7 +465,9 @@ async fn run_server(config: Config) -> Result<(), ServerError> {
 
                 // Shutdown metrics
                 info!("Shutting down metrics");
-                metrics_handle.shutdown().await;
+                if let Err(e) = metrics_handle.shutdown().await {
+                    warn!(error = %e, "Metrics shutdown failed - some metrics may not have been flushed");
+                }
 
                 info!("Server shutdown complete");
                 break;

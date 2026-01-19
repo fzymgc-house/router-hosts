@@ -162,7 +162,7 @@ mod tests {
 
     #[test]
     fn test_timed_operation_records_duration() {
-        // Just verify it doesn't panic - actual recording needs prometheus installed
+        // Just verify it doesn't panic - actual recording needs metrics recorder installed
         let op = TimedOperation::new("test_method");
         std::thread::sleep(Duration::from_millis(1));
         op.finish("ok");

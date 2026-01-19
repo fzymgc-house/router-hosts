@@ -58,7 +58,7 @@ base64 = "0.22"
 
 # Metrics and observability
 metrics.workspace = true
-metrics-exporter-prometheus.workspace = true
+metrics-exporter-opentelemetry.workspace = true
 opentelemetry.workspace = true
 opentelemetry_sdk.workspace = true
 opentelemetry-otlp.workspace = true

@@ -298,24 +298,29 @@ The Kubernetes operator exposes HTTP health endpoints (separate from the server'
 
 See [Operator Documentation](kubernetes.md#observability) for details on probe configuration.
 
-## Prometheus Metrics
+## Metrics and Tracing (OpenTelemetry)
+
+All metrics and traces are exported via OpenTelemetry (OTLP/gRPC) to a collector of your choice.
 
 ### Configuration
 
-Metrics are opt-in. Add a `[metrics]` section to enable:
+Metrics and tracing are opt-in. Add a `[metrics.otel]` section to enable:
 
 ```toml
-[metrics]
-# Prometheus HTTP endpoint (plaintext)
-prometheus_bind = "0.0.0.0:9090"
-
-# Optional: OpenTelemetry export
 [metrics.otel]
 endpoint = "http://otel-collector:4317"
-service_name = "router-hosts"  # defaults to "router-hosts"
+service_name = "router-hosts"     # Optional, defaults to "router-hosts"
+export_metrics = true             # Optional, defaults to true
+export_traces = true              # Optional, defaults to true
+export_interval_secs = 60         # Optional, defaults to 60 seconds
+# headers = { "Authorization" = "Bearer token" }  # Optional
 ```
 
+The `export_interval_secs` option controls how frequently metrics are pushed to the OTEL collector. Lower values increase metric freshness but add collector overhead. The default of 60 seconds balances freshness with efficiency for most deployments.
+
 ### Available Metrics
+
+All metrics recorded via `counter!()`, `histogram!()`, and `gauge!()` macros are exported to the OTEL collector:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
@@ -327,32 +332,31 @@ service_name = "router-hosts"  # defaults to "router-hosts"
 | `router_hosts_hook_duration_seconds` | Histogram | `name`, `type` | Hook execution time |
 | `router_hosts_hosts_entries` | Gauge | - | Current host entry count |
 
-### Scraping
+### Prometheus Scraping via OTEL Collector
+
+If you need Prometheus-style `/metrics` scraping, configure your OTEL collector to expose a Prometheus endpoint:
+
+```yaml
+# otel-collector-config.yaml
+exporters:
+  prometheus:
+    endpoint: "0.0.0.0:9090"
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus]
+```
+
+Then configure your Prometheus to scrape the collector:
 
 ```yaml
 # prometheus.yml
 scrape_configs:
   - job_name: 'router-hosts'
     static_configs:
-      - targets: ['router-hosts:9090']
-```
-
-## OpenTelemetry Integration
-
-### Configuration
-
-Enable OTEL export alongside Prometheus:
-
-```toml
-[metrics]
-prometheus_bind = "0.0.0.0:9090"
-
-[metrics.otel]
-endpoint = "http://otel-collector:4317"
-service_name = "router-hosts"     # Optional, defaults to "router-hosts"
-export_metrics = true             # Optional, defaults to true
-export_traces = true              # Optional, defaults to true
-# headers = { "Authorization" = "Bearer token" }  # Optional
+      - targets: ['otel-collector:9090']
 ```
 
 ### Trace Context Propagation
@@ -362,7 +366,8 @@ Incoming gRPC requests with W3C Trace Context headers (`traceparent`, `tracestat
 ### Graceful Degradation
 
 - No `[metrics.otel]` config → no OTEL layers, zero overhead
-- `export_traces = false` or `export_metrics = false` → respective exporter disabled
+- `export_traces = false` → trace exporter disabled (still logs to console)
+- `export_metrics = false` → metrics export disabled
 - Collector unavailable at runtime → OpenTelemetry SDK handles retry/backoff internally
 
 **Note:** Invalid configuration (malformed endpoint, invalid headers) will cause server startup to fail. Verify your OTEL collector is reachable before deploying.

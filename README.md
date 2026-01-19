@@ -15,7 +15,7 @@ Rust CLI tool for managing DNS host entries on routers via gRPC.
 - **Kubernetes Operator** automates DNS registration for Traefik IngressRoutes and custom HostMappings
 - Supports versioning, bulk operations, snapshots with rollback, and validation
 - TLS with mutual authentication for security
-- Prometheus metrics for observability
+- OpenTelemetry metrics and tracing for observability
 
 See [Architecture](docs/architecture.md) for detailed design.
 
@@ -220,7 +220,7 @@ docker run -v /path/to/config:/config ghcr.io/fzymgc-house/router-hosts:latest s
 - ✅ Kubernetes operator for Traefik integration
 - ✅ Leader election for operator HA
 - ✅ Health RPCs for monitoring and probes
-- ✅ Prometheus metrics instrumentation
+- ✅ OpenTelemetry metrics and tracing
 - ✅ Full E2E test coverage (10 scenarios)
 
 See [Releases](https://github.com/fzymgc-house/router-hosts/releases) for version history.
