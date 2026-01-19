@@ -298,21 +298,26 @@ The Kubernetes operator exposes HTTP health endpoints (separate from the server'
 
 See [Operator Documentation](kubernetes.md#observability) for details on probe configuration.
 
-## Prometheus Metrics
+## Metrics and Tracing (OpenTelemetry)
+
+All metrics and traces are exported via OpenTelemetry (OTLP/gRPC) to a collector of your choice.
 
 ### Configuration
 
-Metrics are opt-in. Add a `[metrics]` section to enable Prometheus scraping:
+Metrics and tracing are opt-in. Add a `[metrics.otel]` section to enable:
 
 ```toml
-[metrics]
-# Prometheus HTTP endpoint (plaintext)
-prometheus_bind = "0.0.0.0:9090"
+[metrics.otel]
+endpoint = "http://otel-collector:4317"
+service_name = "router-hosts"     # Optional, defaults to "router-hosts"
+export_metrics = true             # Optional, defaults to true
+export_traces = true              # Optional, defaults to true
+# headers = { "Authorization" = "Bearer token" }  # Optional
 ```
 
-> **Note:** If you want metrics via OTEL instead, see [OpenTelemetry Integration](#opentelemetry-integration) below. You cannot use both Prometheus and OTEL metrics simultaneously.
-
 ### Available Metrics
+
+All metrics recorded via `counter!()`, `histogram!()`, and `gauge!()` macros are exported to the OTEL collector:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
@@ -324,42 +329,9 @@ prometheus_bind = "0.0.0.0:9090"
 | `router_hosts_hook_duration_seconds` | Histogram | `name`, `type` | Hook execution time |
 | `router_hosts_hosts_entries` | Gauge | - | Current host entry count |
 
-### Scraping
+### Prometheus Scraping via OTEL Collector
 
-```yaml
-# prometheus.yml
-scrape_configs:
-  - job_name: 'router-hosts'
-    static_configs:
-      - targets: ['router-hosts:9090']
-```
-
-## OpenTelemetry Integration
-
-### Configuration
-
-Enable OTEL export for traces and metrics:
-
-```toml
-[metrics.otel]
-endpoint = "http://otel-collector:4317"
-service_name = "router-hosts"     # Optional, defaults to "router-hosts"
-export_metrics = true             # Optional, defaults to true
-export_traces = true              # Optional, defaults to true
-# headers = { "Authorization" = "Bearer token" }  # Optional
-```
-
-### Metrics Export: OTEL vs Prometheus
-
-**Important:** You can use **either** OTEL **or** Prometheus for metrics export, but not both simultaneously. This is due to the `metrics` crate's single global recorder limitation.
-
-| Configuration | Metrics Destination |
-|---------------|---------------------|
-| `export_metrics = true` | OTEL collector (OTLP/gRPC) |
-| `prometheus_bind` only (no OTEL or `export_metrics = false`) | Local `/metrics` HTTP endpoint |
-| Both configured | OTEL wins; Prometheus endpoint skipped |
-
-**If you need both OTEL and Prometheus scraping**, configure your OTEL collector to expose a Prometheus endpoint:
+If you need Prometheus-style `/metrics` scraping, configure your OTEL collector to expose a Prometheus endpoint:
 
 ```yaml
 # otel-collector-config.yaml
@@ -374,6 +346,16 @@ service:
       exporters: [prometheus]
 ```
 
+Then configure your Prometheus to scrape the collector:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'router-hosts'
+    static_configs:
+      - targets: ['otel-collector:9090']
+```
+
 ### Trace Context Propagation
 
 Incoming gRPC requests with W3C Trace Context headers (`traceparent`, `tracestate`) are automatically linked to distributed traces.
@@ -382,7 +364,7 @@ Incoming gRPC requests with W3C Trace Context headers (`traceparent`, `tracestat
 
 - No `[metrics.otel]` config → no OTEL layers, zero overhead
 - `export_traces = false` → trace exporter disabled (still logs to console)
-- `export_metrics = false` → OTEL metrics disabled; Prometheus endpoint available if configured
+- `export_metrics = false` → metrics export disabled
 - Collector unavailable at runtime → OpenTelemetry SDK handles retry/backoff internally
 
 **Note:** Invalid configuration (malformed endpoint, invalid headers) will cause server startup to fail. Verify your OTEL collector is reachable before deploying.

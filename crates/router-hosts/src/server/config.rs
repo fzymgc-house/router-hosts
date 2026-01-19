@@ -2,7 +2,6 @@ use crate::server::acme::{AcmeConfig, AcmeConfigError};
 use router_hosts_storage::StorageError;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::path::PathBuf;
 use thiserror::Error;
 use tracing::warn;
@@ -391,15 +390,10 @@ impl OtelConfig {
 
 /// Metrics and observability configuration
 ///
-/// When this section is absent from config, no metrics are collected
-/// and no ports are opened. This is the default (opt-in) behavior.
+/// When this section is absent from config, no metrics are collected.
+/// All metrics are exported via OpenTelemetry (OTLP/gRPC).
 #[derive(Debug, Deserialize, Clone)]
 pub struct MetricsConfig {
-    /// Address to bind Prometheus HTTP endpoint (e.g., "0.0.0.0:9090")
-    /// If set, exposes /metrics endpoint on plaintext HTTP
-    #[serde(default)]
-    pub prometheus_bind: Option<SocketAddr>,
-
     /// OpenTelemetry configuration for metrics and traces export
     #[serde(default)]
     pub otel: Option<OtelConfig>,
@@ -1305,34 +1299,6 @@ command = ""
     }
 
     #[test]
-    fn test_metrics_config_prometheus_only() {
-        let toml_str = r#"
-            [server]
-            bind_address = "0.0.0.0:50051"
-            hosts_file_path = "/etc/hosts"
-
-            [database]
-            url = "sqlite://:memory:"
-
-            [tls]
-            cert_path = "/cert.pem"
-            key_path = "/key.pem"
-            ca_cert_path = "/ca.pem"
-
-            [metrics]
-            prometheus_bind = "0.0.0.0:9090"
-        "#;
-
-        let config: Config = toml::from_str(toml_str).unwrap();
-        let metrics = config.metrics.unwrap();
-        assert_eq!(
-            metrics.prometheus_bind,
-            Some("0.0.0.0:9090".parse().unwrap())
-        );
-        assert!(metrics.otel.is_none());
-    }
-
-    #[test]
     fn test_metrics_config_with_otel() {
         let toml_str = r#"
             [server]
@@ -1346,9 +1312,6 @@ command = ""
             cert_path = "/cert.pem"
             key_path = "/key.pem"
             ca_cert_path = "/ca.pem"
-
-            [metrics]
-            prometheus_bind = "0.0.0.0:9090"
 
             [metrics.otel]
             endpoint = "http://otel-collector:4317"

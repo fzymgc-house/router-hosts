@@ -155,16 +155,16 @@ The server uses **CQRS (Command Query Responsibility Segregation)** with **Event
 
 ## Observability
 
-### Prometheus Metrics
+### Metrics and Tracing (OpenTelemetry)
 
-The server exposes Prometheus metrics on a configurable HTTP endpoint:
+All metrics and traces are exported via OpenTelemetry (OTLP/gRPC) to a collector:
 
 - **Request metrics**: `router_hosts_requests_total`, `router_hosts_request_duration_seconds`
 - **Storage metrics**: `router_hosts_storage_operations_total`, `router_hosts_storage_duration_seconds`
 - **Host metrics**: `router_hosts_hosts_entries`
 - **Hook metrics**: `router_hosts_hook_executions_total`, `router_hosts_hook_duration_seconds`
 
-See [Operations Guide](../guides/operations.md#prometheus-metrics) for configuration.
+See [Operations Guide](../guides/operations.md#metrics-and-tracing-opentelemetry) for configuration.
 
 ### Health Endpoints
 

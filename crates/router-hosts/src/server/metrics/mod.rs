@@ -1,24 +1,23 @@
 //! Metrics and observability instrumentation
 //!
-//! This module provides Prometheus metrics export and OpenTelemetry
-//! integration for distributed tracing.
+//! This module provides OpenTelemetry integration for metrics and distributed tracing.
+//! All metrics recorded via `counter!()`, `histogram!()`, and `gauge!()` macros are
+//! exported to an OTEL collector via OTLP/gRPC.
 //!
 //! # Configuration
 //!
-//! Metrics are opt-in. When no `[metrics]` section is present in config,
-//! no collectors are installed and no ports are opened.
+//! Metrics are opt-in. Add a `[metrics.otel]` section to enable:
 //!
 //! ```toml
-//! [metrics]
-//! prometheus_bind = "0.0.0.0:9090"  # Enables /metrics endpoint
-//!
 //! [metrics.otel]
 //! endpoint = "http://otel-collector:4317"
+//! service_name = "router-hosts"  # Optional, defaults to "router-hosts"
+//! export_metrics = true          # Optional, defaults to true
+//! export_traces = true           # Optional, defaults to true
 //! ```
 
 pub mod counters;
 pub mod otel;
-mod prometheus;
 
 use crate::server::config::MetricsConfig;
 use opentelemetry_sdk::metrics::SdkMeterProvider;
@@ -26,20 +25,14 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum MetricsError {
-    #[error("Failed to bind Prometheus endpoint: {0}")]
-    PrometheusBind(String),
-
     #[error("Failed to initialize OTEL exporter: {0}")]
     OtelInit(String),
 }
 
 /// Handle for the metrics subsystem
 ///
-/// Dropping this handle will shut down the Prometheus HTTP server
-/// and flush any pending OTEL exports.
+/// Dropping this handle will flush any pending OTEL exports.
 pub struct MetricsHandle {
-    /// Shutdown signal for Prometheus server
-    prometheus_shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     /// OTEL meter provider for metrics export
     otel_meter_provider: Option<SdkMeterProvider>,
 }
@@ -48,18 +41,12 @@ impl MetricsHandle {
     /// Create a disabled metrics handle (no-op)
     pub fn disabled() -> Self {
         Self {
-            prometheus_shutdown: None,
             otel_meter_provider: None,
         }
     }
 
     /// Gracefully shut down metrics subsystem
     pub async fn shutdown(mut self) {
-        if let Some(tx) = self.prometheus_shutdown.take() {
-            if tx.send(()).is_err() {
-                tracing::warn!("Prometheus server already shut down (receiver dropped)");
-            }
-        }
         if let Some(provider) = self.otel_meter_provider.take() {
             if let Err(e) = provider.shutdown() {
                 tracing::warn!(error = %e, "Failed to shutdown OTEL meter provider");
@@ -70,12 +57,6 @@ impl MetricsHandle {
 
 impl Drop for MetricsHandle {
     fn drop(&mut self) {
-        if self.prometheus_shutdown.is_some() {
-            tracing::warn!(
-                "MetricsHandle dropped without calling shutdown() - \
-                 Prometheus server will continue running until process exit"
-            );
-        }
         if self.otel_meter_provider.is_some() {
             tracing::warn!(
                 "MetricsHandle dropped without calling shutdown() - \
@@ -91,16 +72,6 @@ impl Drop for MetricsHandle {
 /// Dropping the handle will shut down metrics collection.
 ///
 /// If `config` is `None`, returns a disabled handle with zero overhead.
-///
-/// # Recorder Priority
-///
-/// Only one global `metrics` recorder can be installed. The priority is:
-/// 1. OTEL metrics (if `export_metrics = true`) - installs OTEL recorder
-/// 2. Prometheus (if `prometheus_bind` is set and OTEL not enabled) - installs Prometheus recorder
-///
-/// When OTEL metrics is enabled, Prometheus endpoint is not available since
-/// they cannot both install a global recorder. Use the OTEL collector's
-/// Prometheus exporter if you need both.
 pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, MetricsError> {
     let Some(config) = config else {
         tracing::debug!("Metrics disabled (no [metrics] config section)");
@@ -108,14 +79,10 @@ pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, Metri
     };
 
     let mut handle = MetricsHandle {
-        prometheus_shutdown: None,
         otel_meter_provider: None,
     };
 
-    // Determine if OTEL metrics will be enabled (installs its own recorder)
-    let otel_metrics_enabled = config.otel.as_ref().is_some_and(|c| c.export_metrics);
-
-    // Initialize OTEL metrics FIRST if configured (installs global recorder)
+    // Initialize OTEL metrics if configured
     if let Some(otel_config) = &config.otel {
         match otel::init_metrics(otel_config)? {
             Some(provider) => {
@@ -131,27 +98,6 @@ pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, Metri
         }
     }
 
-    // Start Prometheus HTTP server if configured AND OTEL metrics not enabled
-    // (only one recorder can be installed globally)
-    if let Some(addr) = config.prometheus_bind {
-        if otel_metrics_enabled {
-            tracing::info!(
-                "Prometheus endpoint skipped: OTEL metrics is enabled. \
-                 Use OTEL collector's Prometheus exporter for /metrics endpoint."
-            );
-        } else {
-            let (tx, rx) = tokio::sync::oneshot::channel();
-            handle.prometheus_shutdown = Some(tx);
-
-            let actual_addr = prometheus::start_server(addr, rx).await?;
-            tracing::info!(
-                requested = %addr,
-                actual = %actual_addr,
-                "Prometheus metrics endpoint started on /metrics"
-            );
-        }
-    }
-
     Ok(handle)
 }
 
@@ -159,12 +105,10 @@ pub async fn init(config: Option<&MetricsConfig>) -> Result<MetricsHandle, Metri
 mod tests {
     use super::*;
     use serial_test::serial;
-    use std::time::Duration;
 
     #[tokio::test]
     async fn test_init_with_none_returns_disabled() {
         let handle = init(None).await.unwrap();
-        assert!(handle.prometheus_shutdown.is_none());
         assert!(handle.otel_meter_provider.is_none());
     }
 
@@ -176,39 +120,11 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_full_metrics_init_and_scrape() {
-        use crate::server::config::MetricsConfig;
-
-        let config = MetricsConfig {
-            prometheus_bind: Some("127.0.0.1:0".parse().unwrap()),
-            otel: None,
-        };
-
-        let handle = init(Some(&config)).await.unwrap();
-
-        // Verify prometheus shutdown channel exists (server is running)
-        assert!(handle.prometheus_shutdown.is_some());
-        // No OTEL configured
-        assert!(handle.otel_meter_provider.is_none());
-
-        // Record some metrics to verify the recorder is installed
-        counters::record_request("GetHost", "ok", Duration::from_millis(5));
-        counters::set_hosts_entries_count(42);
-        counters::record_storage_operation("get", "ok", Duration::from_millis(2));
-        counters::record_hook_execution("test_hook", "pre", "success", Duration::from_millis(10));
-
-        // Shutdown cleanly
-        handle.shutdown().await;
-    }
-
-    #[tokio::test]
-    #[serial]
     async fn test_otel_disabled_by_export_flag() {
         use crate::server::config::{MetricsConfig, OtelConfig};
         use std::collections::HashMap;
 
         let config = MetricsConfig {
-            prometheus_bind: None,
             otel: Some(OtelConfig {
                 endpoint: "http://localhost:4317".to_string(),
                 service_name: "router-hosts".to_string(),
