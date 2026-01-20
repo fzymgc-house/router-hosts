@@ -1395,6 +1395,56 @@ command = ""
         assert_eq!(otel.service_name(), "router-hosts");
         assert!(otel.export_metrics); // default true
         assert!(otel.export_traces); // default true
+        assert_eq!(otel.export_interval_secs, 60); // default 60
         assert!(otel.headers.is_empty());
+    }
+
+    #[test]
+    fn test_otel_config_export_interval_default() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "sqlite://:memory:"
+
+            [tls]
+            cert_path = "/cert.pem"
+            key_path = "/key.pem"
+            ca_cert_path = "/ca.pem"
+
+            [metrics.otel]
+            endpoint = "http://localhost:4317"
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let otel = config.metrics.unwrap().otel.unwrap();
+        assert_eq!(otel.export_interval_secs, 60); // Verify default
+    }
+
+    #[test]
+    fn test_otel_config_export_interval_custom() {
+        let toml_str = r#"
+            [server]
+            bind_address = "0.0.0.0:50051"
+            hosts_file_path = "/etc/hosts"
+
+            [database]
+            url = "sqlite://:memory:"
+
+            [tls]
+            cert_path = "/cert.pem"
+            key_path = "/key.pem"
+            ca_cert_path = "/ca.pem"
+
+            [metrics.otel]
+            endpoint = "http://localhost:4317"
+            export_interval_secs = 30
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        let otel = config.metrics.unwrap().otel.unwrap();
+        assert_eq!(otel.export_interval_secs, 30);
     }
 }

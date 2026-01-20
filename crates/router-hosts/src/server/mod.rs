@@ -189,7 +189,9 @@ pub async fn run() -> Result<()> {
         .map_err(|e| anyhow::anyhow!("Server error: {}", e));
 
     // Shutdown tracing (flushes pending spans)
-    tracing_handle.shutdown();
+    if let Err(e) = tracing_handle.shutdown() {
+        tracing::warn!(error = %e, "Tracing shutdown failed - some traces may not have been flushed");
+    }
 
     result
 }
