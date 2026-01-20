@@ -22,13 +22,17 @@ pub struct TracingHandle {
 
 impl TracingHandle {
     /// Gracefully shutdown tracing subsystem
-    pub fn shutdown(mut self) {
+    ///
+    /// Returns an error if OTEL provider shutdown fails (traces may not have been flushed).
+    /// Callers should log the error but may choose to continue server shutdown.
+    pub fn shutdown(mut self) -> Result<(), MetricsError> {
         if let Some(provider) = self.tracer_provider.take() {
-            if let Err(e) = provider.shutdown() {
-                tracing::warn!("Error shutting down tracer provider: {:?}", e);
-            }
+            provider.shutdown().map_err(|e| {
+                MetricsError::OtelInit(format!("Failed to shutdown OTEL tracer provider: {:?}", e))
+            })?;
             info!("OTEL tracer provider shut down");
         }
+        Ok(())
     }
 }
 

@@ -88,6 +88,25 @@ pub fn init_metrics(config: &OtelConfig) -> Result<Option<SdkMeterProvider>, Met
         return Ok(None);
     }
 
+    // Validate export_interval_secs
+    if config.export_interval_secs == 0 {
+        return Err(MetricsError::OtelInit(
+            "export_interval_secs must be greater than 0".to_string(),
+        ));
+    }
+    if config.export_interval_secs < 10 {
+        tracing::warn!(
+            export_interval_secs = config.export_interval_secs,
+            "export_interval_secs is very small (<10s); this may overload your OTEL collector"
+        );
+    }
+    if config.export_interval_secs > 3600 {
+        tracing::warn!(
+            export_interval_secs = config.export_interval_secs,
+            "export_interval_secs is very large (>1 hour); metrics may appear stale"
+        );
+    }
+
     let metadata = build_metadata(&config.headers)?;
     let endpoint = config.endpoint.clone();
     let service_name = config.service_name().to_string();
@@ -113,20 +132,30 @@ pub fn init_metrics(config: &OtelConfig) -> Result<Option<SdkMeterProvider>, Met
     // This installs a global recorder for the `metrics` crate that forwards
     // all counter!(), histogram!(), gauge!() calls to OpenTelemetry.
     //
-    // The `_recorder` is intentionally discarded: `install()` registers it as the
-    // global recorder (a side effect), so we only need to keep the `provider` alive
-    // for metric export to continue. The recorder remains active until process exit.
+    // The `_recorder` is intentionally discarded: `install()` registers it globally
+    // as a side effect. However, metric EXPORT depends on keeping the `provider` alive -
+    // if the provider is dropped, metrics will still be recorded but not exported.
+    // The recorder remains registered until process exit (cannot be unregistered).
     let (provider, _recorder) = OtelRecorder::builder(service_name.clone())
         .with_meter_provider(|builder| builder.with_reader(reader).with_resource(resource))
         .install()
         .map_err(|e| {
-            MetricsError::OtelInit(format!("Failed to install OTEL metrics recorder: {}", e))
+            MetricsError::OtelInit(format!(
+                "Failed to install OTEL metrics recorder: {}. \
+                 This usually means another metrics recorder (e.g., a test harness or \
+                 another library) was installed first. Only one global recorder can be active. \
+                 Check for conflicting metrics configuration.",
+                e
+            ))
         })?;
 
     info!(
         endpoint = %config.endpoint,
         service_name = %config.service_name(),
-        "OTEL metrics exporter initialized (metrics crate bridged)"
+        export_interval_secs = config.export_interval_secs,
+        "OTEL metrics exporter initialized. Note: Connection to collector is established \
+         on first export (~{}s after startup). Check logs for export errors if metrics are missing.",
+        config.export_interval_secs
     );
 
     Ok(Some(provider))
@@ -189,5 +218,23 @@ mod tests {
         };
         let result = init_metrics(&config).unwrap();
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_export_interval_zero_rejected() {
+        let config = OtelConfig {
+            endpoint: "http://localhost:4317".to_string(),
+            service_name: "router-hosts".to_string(),
+            export_metrics: true,
+            export_traces: false,
+            export_interval_secs: 0,
+            headers: HashMap::new(),
+        };
+        let result = init_metrics(&config);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("export_interval_secs must be greater than 0"));
     }
 }

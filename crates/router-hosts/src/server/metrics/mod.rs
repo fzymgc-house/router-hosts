@@ -11,9 +11,10 @@
 //! ```toml
 //! [metrics.otel]
 //! endpoint = "http://otel-collector:4317"
-//! service_name = "router-hosts"  # Optional, defaults to "router-hosts"
-//! export_metrics = true          # Optional, defaults to true
-//! export_traces = true           # Optional, defaults to true
+//! service_name = "router-hosts"       # Optional, defaults to "router-hosts"
+//! export_metrics = true               # Optional, defaults to true
+//! export_traces = true                # Optional, defaults to true
+//! export_interval_secs = 60           # Optional, defaults to 60
 //! ```
 
 pub mod counters;
@@ -31,7 +32,10 @@ pub enum MetricsError {
 
 /// Handle for the metrics subsystem
 ///
-/// Dropping this handle will flush any pending OTEL exports.
+/// Call `shutdown()` to gracefully flush pending OTEL exports before dropping.
+/// If dropped without calling `shutdown()`, the underlying OTEL provider will
+/// attempt to flush on drop, but this may not succeed in all cases (e.g., during
+/// panic unwinds or if the runtime has already shut down).
 pub struct MetricsHandle {
     /// OTEL meter provider for metrics export
     otel_meter_provider: Option<SdkMeterProvider>,
