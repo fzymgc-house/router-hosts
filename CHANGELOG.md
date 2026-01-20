@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.13](https://github.com/fzymgc-house/router-hosts/compare/v0.8.12...v0.8.13) (2026-01-20)
+
+
+### Bug Fixes
+
+* **ci:** allow release-please bot to trigger claude reviews ([#240](https://github.com/fzymgc-house/router-hosts/issues/240)) ([9ed8f10](https://github.com/fzymgc-house/router-hosts/commit/9ed8f10996113ff4ea78d5dc9f397fb98d5ca2fe))
+* **metrics:** address PR review findings for OTEL-only metrics ([#239](https://github.com/fzymgc-house/router-hosts/issues/239)) ([3f02a48](https://github.com/fzymgc-house/router-hosts/commit/3f02a48c099f4dcbc502f6bff073f4dabebeceff))
+
+
+### Code Refactoring
+
+* **metrics:** remove Prometheus in favor of OTEL-only export ([#238](https://github.com/fzymgc-house/router-hosts/issues/238)) ([d657728](https://github.com/fzymgc-house/router-hosts/commit/d657728fc0fd52988e158ce0ff3ce0696aa94a0a))
+
+
+### Build System
+
+* **deps:** update github action astral-sh/setup-uv to v7 ([#231](https://github.com/fzymgc-house/router-hosts/issues/231)) ([b153ba4](https://github.com/fzymgc-house/router-hosts/commit/b153ba46a6e927722265dd95ed19a761f07f07b4))
+* **deps:** update github artifact actions ([#233](https://github.com/fzymgc-house/router-hosts/issues/233)) ([23302e4](https://github.com/fzymgc-house/router-hosts/commit/23302e44f31ed8e35a83b648c5daa7e8bafb7898))
+
 ## [0.8.12](https://github.com/fzymgc-house/router-hosts/compare/v0.8.11...v0.8.12) (2026-01-03)
 
 
