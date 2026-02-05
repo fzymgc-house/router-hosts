@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.14](https://github.com/fzymgc-house/router-hosts/compare/v0.8.13...v0.8.14) (2026-02-05)
+
+
+### Build System
+
+* **deps:** update rust crate bytes to v1.11.1 [security] ([#243](https://github.com/fzymgc-house/router-hosts/issues/243)) ([4b59d75](https://github.com/fzymgc-house/router-hosts/commit/4b59d759c972c5998c686c2c3bd56fb1026d3ba9))
+* **deps:** update rust crate time to v0.3.47 [security] ([#247](https://github.com/fzymgc-house/router-hosts/issues/247)) ([9762046](https://github.com/fzymgc-house/router-hosts/commit/9762046b8ffc69813b43e9fd80c892425d9e9ffd))
+
 ## [0.8.13](https://github.com/fzymgc-house/router-hosts/compare/v0.8.12...v0.8.13) (2026-01-20)
 
 
