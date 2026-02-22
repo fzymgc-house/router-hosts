@@ -343,8 +343,7 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 
 	// Only hosts format is supported for now
 	if format != "hosts" {
-		errMsg := fmt.Sprintf("format %q not yet supported; only \"hosts\" is implemented", format)
-		return stream.Send(&hostsv1.ImportHostsResponse{Error: &errMsg})
+		return status.Errorf(codes.InvalidArgument, "import format %q not yet supported; only \"hosts\" is implemented", format)
 	}
 
 	if conflictMode != "skip" && conflictMode != "replace" && conflictMode != "strict" {
@@ -483,6 +482,7 @@ func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream g
 	case "csv":
 		var csvBuf bytes.Buffer
 		w := csv.NewWriter(&csvBuf)
+		// csv.Writer buffers errors; w.Error() below catches any failures.
 		_ = w.Write([]string{"id", "ip_address", "hostname", "comment", "tags", "aliases"})
 		for _, e := range entries {
 			comment := ""
@@ -606,6 +606,8 @@ func (s *HostsServiceImpl) ListSnapshots(req *hostsv1.ListSnapshotsRequest, stre
 }
 
 // RollbackToSnapshot restores the hosts database to a snapshot state.
+// NOTE: This operation is not atomic — a failure mid-rollback leaves partial
+// state. The pre-rollback backup snapshot allows manual recovery.
 func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.RollbackToSnapshotRequest) (*hostsv1.RollbackToSnapshotResponse, error) {
 	// Load the target snapshot
 	target, err := s.store.GetSnapshot(ctx, req.GetSnapshotId())
