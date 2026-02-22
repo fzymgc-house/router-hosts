@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.14](https://github.com/fzymgc-house/router-hosts/compare/v0.8.13...v0.8.14) (2026-02-22)
+
+
+### Build System
+
+* **deps:** update github action actions/attest-build-provenance to v3 ([#251](https://github.com/fzymgc-house/router-hosts/issues/251)) ([268969a](https://github.com/fzymgc-house/router-hosts/commit/268969a5f29f5b4cf0cc7b415099fa8404424a0b))
+* **deps:** update github action actions/checkout to v6 ([#252](https://github.com/fzymgc-house/router-hosts/issues/252)) ([7163ad4](https://github.com/fzymgc-house/router-hosts/commit/7163ad459a065187f6f9cdeba54d6119f60260ce))
+* **deps:** update github action ubuntu to v24 ([#253](https://github.com/fzymgc-house/router-hosts/issues/253)) ([27cb3de](https://github.com/fzymgc-house/router-hosts/commit/27cb3dece080aec1c0dff7af5e189bff9c191964))
+* **deps:** update rust crate bytes to v1.11.1 [security] ([#243](https://github.com/fzymgc-house/router-hosts/issues/243)) ([4b59d75](https://github.com/fzymgc-house/router-hosts/commit/4b59d759c972c5998c686c2c3bd56fb1026d3ba9))
+* **deps:** update rust crate time to v0.3.47 [security] ([#247](https://github.com/fzymgc-house/router-hosts/issues/247)) ([9762046](https://github.com/fzymgc-house/router-hosts/commit/9762046b8ffc69813b43e9fd80c892425d9e9ffd))
+
+
+### CI/CD
+
+* migrate from pre-commit to lefthook, add rumdl ([#255](https://github.com/fzymgc-house/router-hosts/issues/255)) ([06e0f44](https://github.com/fzymgc-house/router-hosts/commit/06e0f44c85506f05f3a93c7ea2ea7492fbd652d4))
+
 ## [0.8.13](https://github.com/fzymgc-house/router-hosts/compare/v0.8.12...v0.8.13) (2026-01-20)
 
 
