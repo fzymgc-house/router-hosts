@@ -1,23 +1,29 @@
-# Stage 1: Chef - prepare recipe
-FROM lukemathwalker/cargo-chef:latest-rust-1-bookworm AS chef
-WORKDIR /app
+# syntax=docker/dockerfile:1
 
-# Stage 2: Planner - compute dependency graph
-FROM chef AS planner
+# ---------- builder ----------
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
 COPY . .
-RUN cargo chef prepare --recipe-path recipe.json
 
-# Stage 3: Builder - cache dependencies, then build
-FROM chef AS builder
-COPY --from=planner /app/recipe.json recipe.json
-RUN cargo chef cook --release --recipe-path recipe.json
-COPY . .
-RUN cargo build --release --bin router-hosts
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags="-s -w" \
+    -o /out/router-hosts ./cmd/router-hosts
 
-# Stage 4: Runtime - minimal image
-FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y ca-certificates netcat-openbsd && rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/router-hosts /usr/local/bin/
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
+    -ldflags="-s -w" \
+    -o /out/operator ./cmd/operator
+
+# ---------- runtime ----------
+FROM gcr.io/distroless/static:nonroot
+
+COPY --from=builder /out/router-hosts /usr/local/bin/router-hosts
+COPY --from=builder /out/operator /usr/local/bin/operator
+
 EXPOSE 50051
+
 ENTRYPOINT ["router-hosts"]
-CMD ["server", "--config", "/config/server.toml"]
+CMD ["serve", "--config", "/etc/router-hosts/server.toml"]
