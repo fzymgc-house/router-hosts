@@ -10,13 +10,17 @@ import (
 
 // Event type discriminators matching Rust's serde tag values.
 const (
-	EventTypeHostCreated      = "HostCreated"
-	EventTypeIPAddressChanged = "IpAddressChanged"
-	EventTypeHostnameChanged  = "HostnameChanged"
-	EventTypeCommentUpdated   = "CommentUpdated"
-	EventTypeTagsModified     = "TagsModified"
-	EventTypeAliasesModified  = "AliasesModified"
-	EventTypeHostDeleted      = "HostDeleted"
+	EventTypeHostCreated        = "HostCreated"
+	EventTypeIPAddressChanged   = "IpAddressChanged"
+	EventTypeHostnameChanged    = "HostnameChanged"
+	EventTypeCommentUpdated     = "CommentUpdated"
+	EventTypeTagsModified       = "TagsModified"
+	EventTypeAliasesModified    = "AliasesModified"
+	EventTypeHostDeleted        = "HostDeleted"
+	EventTypeHostImported       = "HostImported"
+	EventTypeSnapshotCreated    = "SnapshotCreated"
+	EventTypeSnapshotRolledBack = "SnapshotRolledBack"
+	EventTypeSnapshotDeleted    = "SnapshotDeleted"
 )
 
 // HostEvent is a polymorphic domain event serialized with a "type" discriminator.
@@ -109,6 +113,30 @@ func (e *HostEvent) Decode() (any, error) {
 			return nil, err
 		}
 		return v, nil
+	case EventTypeHostImported:
+		var v HostImported
+		if err := json.Unmarshal(e.Payload, &v); err != nil {
+			return nil, err
+		}
+		return v, nil
+	case EventTypeSnapshotCreated:
+		var v SnapshotCreated
+		if err := json.Unmarshal(e.Payload, &v); err != nil {
+			return nil, err
+		}
+		return v, nil
+	case EventTypeSnapshotRolledBack:
+		var v SnapshotRolledBack
+		if err := json.Unmarshal(e.Payload, &v); err != nil {
+			return nil, err
+		}
+		return v, nil
+	case EventTypeSnapshotDeleted:
+		var v SnapshotDeleted
+		if err := json.Unmarshal(e.Payload, &v); err != nil {
+			return nil, err
+		}
+		return v, nil
 	default:
 		return nil, fmt.Errorf("unknown event type: %s", e.Type)
 	}
@@ -135,6 +163,14 @@ func (e *HostEvent) OccurredAt() (time.Time, error) {
 		return ev.ModifiedAt, nil
 	case HostDeleted:
 		return ev.DeletedAt, nil
+	case HostImported:
+		return ev.OccurredAt, nil
+	case SnapshotCreated:
+		return ev.OccurredAt, nil
+	case SnapshotRolledBack:
+		return ev.OccurredAt, nil
+	case SnapshotDeleted:
+		return ev.OccurredAt, nil
 	default:
 		return time.Time{}, fmt.Errorf("unknown event type: %T", v)
 	}
@@ -158,6 +194,14 @@ func NewHostEvent(v any) (HostEvent, error) {
 		eventType = EventTypeAliasesModified
 	case HostDeleted:
 		eventType = EventTypeHostDeleted
+	case HostImported:
+		eventType = EventTypeHostImported
+	case SnapshotCreated:
+		eventType = EventTypeSnapshotCreated
+	case SnapshotRolledBack:
+		eventType = EventTypeSnapshotRolledBack
+	case SnapshotDeleted:
+		eventType = EventTypeSnapshotDeleted
 	default:
 		return HostEvent{}, fmt.Errorf("unsupported event type: %T", v)
 	}
@@ -226,6 +270,38 @@ type HostDeleted struct {
 	Reason    *string   `json:"reason,omitempty"`
 }
 
+// HostImported is emitted when a host entry is imported from an external source.
+type HostImported struct {
+	IPAddress  string    `json:"ip_address"`
+	Hostname   string    `json:"hostname"`
+	Comment    *string   `json:"comment,omitempty"`
+	Tags       []string  `json:"tags"`
+	Aliases    []string  `json:"aliases"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// SnapshotCreated is emitted when a new snapshot is created.
+type SnapshotCreated struct {
+	SnapshotID string    `json:"snapshot_id"`
+	Name       string    `json:"name"`
+	Trigger    string    `json:"trigger"`
+	EntryCount int32     `json:"entry_count"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// SnapshotRolledBack is emitted when a snapshot is rolled back.
+type SnapshotRolledBack struct {
+	SnapshotID      string    `json:"snapshot_id"`
+	RestoredEntries int32     `json:"restored_entries"`
+	OccurredAt      time.Time `json:"occurred_at"`
+}
+
+// SnapshotDeleted is emitted when a snapshot is deleted.
+type SnapshotDeleted struct {
+	SnapshotID string    `json:"snapshot_id"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
 // EventEnvelope wraps a domain event with metadata for persistence.
 type EventEnvelope struct {
 	EventID     ulid.ULID `json:"event_id"`
@@ -234,4 +310,10 @@ type EventEnvelope struct {
 	Version     string    `json:"event_version"`
 	CreatedAt   time.Time `json:"created_at"`
 	CreatedBy   *string   `json:"created_by,omitempty"`
+}
+
+// OccurredAt returns the envelope's CreatedAt timestamp.
+// This aliases CreatedAt to satisfy the spec's OccurredAt naming convention.
+func (e *EventEnvelope) OccurredAt() time.Time {
+	return e.CreatedAt
 }

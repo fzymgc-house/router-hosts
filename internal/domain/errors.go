@@ -14,6 +14,7 @@ const (
 	CodeDuplicate       = "duplicate_entry"   // gRPC AlreadyExists
 	CodeValidation      = "validation_failed" // gRPC InvalidArgument
 	CodeInternal        = "internal"          // gRPC Internal
+	CodeStorage         = "storage_error"     // gRPC Internal
 )
 
 // GRPCCode returns the gRPC status code for a domain error code.
@@ -28,6 +29,8 @@ func GRPCCode(code string) codes.Code {
 	case CodeValidation:
 		return codes.InvalidArgument
 	case CodeInternal:
+		return codes.Internal
+	case CodeStorage:
 		return codes.Internal
 	default:
 		return codes.Unknown
@@ -80,5 +83,12 @@ func ErrValidationf(format string, args ...any) error {
 func ErrInternal(err error) error {
 	return oops.
 		Code(CodeInternal).
+		Wrap(err)
+}
+
+// ErrStorage returns an oops error wrapping a storage failure.
+func ErrStorage(err error) error {
+	return oops.
+		Code(CodeStorage).
 		Wrap(err)
 }

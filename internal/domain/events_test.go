@@ -115,6 +115,46 @@ func TestNewHostEvent_AllTypes(t *testing.T) {
 			},
 			wantType: EventTypeHostDeleted,
 		},
+		{
+			name: "HostImported",
+			event: HostImported{
+				IPAddress:  "10.0.0.5",
+				Hostname:   "imported.local",
+				Comment:    ptr("from file"),
+				Tags:       []string{"imported"},
+				Aliases:    []string{"imp"},
+				OccurredAt: now,
+			},
+			wantType: EventTypeHostImported,
+		},
+		{
+			name: "SnapshotCreated",
+			event: SnapshotCreated{
+				SnapshotID: "snap-001",
+				Name:       "pre-deploy",
+				Trigger:    "manual",
+				EntryCount: 42,
+				OccurredAt: now,
+			},
+			wantType: EventTypeSnapshotCreated,
+		},
+		{
+			name: "SnapshotRolledBack",
+			event: SnapshotRolledBack{
+				SnapshotID:      "snap-001",
+				RestoredEntries: 42,
+				OccurredAt:      now,
+			},
+			wantType: EventTypeSnapshotRolledBack,
+		},
+		{
+			name: "SnapshotDeleted",
+			event: SnapshotDeleted{
+				SnapshotID: "snap-001",
+				OccurredAt: now,
+			},
+			wantType: EventTypeSnapshotDeleted,
+		},
 	}
 
 	for _, tt := range tests {
@@ -214,6 +254,10 @@ func TestHostEvent_OccurredAt(t *testing.T) {
 		{"TagsModified", TagsModified{OldTags: []string{}, NewTags: []string{}, ModifiedAt: now}},
 		{"AliasesModified", AliasesModified{OldAliases: []string{}, NewAliases: []string{}, ModifiedAt: now}},
 		{"HostDeleted", HostDeleted{IPAddress: "1.1.1.1", Hostname: "h", DeletedAt: now}},
+		{"HostImported", HostImported{IPAddress: "1.1.1.1", Hostname: "h", Tags: []string{}, Aliases: []string{}, OccurredAt: now}},
+		{"SnapshotCreated", SnapshotCreated{SnapshotID: "s1", Name: "n", Trigger: "manual", EntryCount: 1, OccurredAt: now}},
+		{"SnapshotRolledBack", SnapshotRolledBack{SnapshotID: "s1", RestoredEntries: 1, OccurredAt: now}},
+		{"SnapshotDeleted", SnapshotDeleted{SnapshotID: "s1", OccurredAt: now}},
 	}
 
 	for _, tt := range tests {
@@ -226,4 +270,139 @@ func TestHostEvent_OccurredAt(t *testing.T) {
 			assert.True(t, now.Equal(occurred), "expected %v, got %v", now, occurred)
 		})
 	}
+}
+
+func TestHostImported_RoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	comment := "imported host"
+
+	original := HostImported{
+		IPAddress:  "10.0.0.50",
+		Hostname:   "imported.local",
+		Comment:    &comment,
+		Tags:       []string{"imported", "dns"},
+		Aliases:    []string{"imp", "imp2"},
+		OccurredAt: now,
+	}
+
+	evt, err := NewHostEvent(original)
+	require.NoError(t, err)
+	assert.Equal(t, EventTypeHostImported, evt.Type)
+
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	var restored HostEvent
+	require.NoError(t, json.Unmarshal(data, &restored))
+
+	decoded, err := restored.Decode()
+	require.NoError(t, err)
+
+	got, ok := decoded.(HostImported)
+	require.True(t, ok)
+	assert.Equal(t, original.IPAddress, got.IPAddress)
+	assert.Equal(t, original.Hostname, got.Hostname)
+	assert.Equal(t, *original.Comment, *got.Comment)
+	assert.Equal(t, original.Tags, got.Tags)
+	assert.Equal(t, original.Aliases, got.Aliases)
+	assert.True(t, original.OccurredAt.Equal(got.OccurredAt))
+}
+
+func TestSnapshotCreated_RoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	original := SnapshotCreated{
+		SnapshotID: "snap-abc-123",
+		Name:       "pre-deploy-v2",
+		Trigger:    "manual",
+		EntryCount: 150,
+		OccurredAt: now,
+	}
+
+	evt, err := NewHostEvent(original)
+	require.NoError(t, err)
+	assert.Equal(t, EventTypeSnapshotCreated, evt.Type)
+
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	var restored HostEvent
+	require.NoError(t, json.Unmarshal(data, &restored))
+
+	decoded, err := restored.Decode()
+	require.NoError(t, err)
+
+	got, ok := decoded.(SnapshotCreated)
+	require.True(t, ok)
+	assert.Equal(t, original.SnapshotID, got.SnapshotID)
+	assert.Equal(t, original.Name, got.Name)
+	assert.Equal(t, original.Trigger, got.Trigger)
+	assert.Equal(t, original.EntryCount, got.EntryCount)
+	assert.True(t, original.OccurredAt.Equal(got.OccurredAt))
+}
+
+func TestSnapshotRolledBack_RoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	original := SnapshotRolledBack{
+		SnapshotID:      "snap-abc-123",
+		RestoredEntries: 42,
+		OccurredAt:      now,
+	}
+
+	evt, err := NewHostEvent(original)
+	require.NoError(t, err)
+	assert.Equal(t, EventTypeSnapshotRolledBack, evt.Type)
+
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	var restored HostEvent
+	require.NoError(t, json.Unmarshal(data, &restored))
+
+	decoded, err := restored.Decode()
+	require.NoError(t, err)
+
+	got, ok := decoded.(SnapshotRolledBack)
+	require.True(t, ok)
+	assert.Equal(t, original.SnapshotID, got.SnapshotID)
+	assert.Equal(t, original.RestoredEntries, got.RestoredEntries)
+	assert.True(t, original.OccurredAt.Equal(got.OccurredAt))
+}
+
+func TestSnapshotDeleted_RoundTrip(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	original := SnapshotDeleted{
+		SnapshotID: "snap-abc-123",
+		OccurredAt: now,
+	}
+
+	evt, err := NewHostEvent(original)
+	require.NoError(t, err)
+	assert.Equal(t, EventTypeSnapshotDeleted, evt.Type)
+
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	var restored HostEvent
+	require.NoError(t, json.Unmarshal(data, &restored))
+
+	decoded, err := restored.Decode()
+	require.NoError(t, err)
+
+	got, ok := decoded.(SnapshotDeleted)
+	require.True(t, ok)
+	assert.Equal(t, original.SnapshotID, got.SnapshotID)
+	assert.True(t, original.OccurredAt.Equal(got.OccurredAt))
+}
+
+func TestEventEnvelope_OccurredAt(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	env := EventEnvelope{
+		CreatedAt: now,
+	}
+
+	assert.True(t, now.Equal(env.OccurredAt()), "OccurredAt should return CreatedAt")
 }
