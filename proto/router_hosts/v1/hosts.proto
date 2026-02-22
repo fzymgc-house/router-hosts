@@ -4,6 +4,8 @@ package router_hosts.v1;
 
 import "google/protobuf/timestamp.proto";
 
+option go_package = "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1;hostsv1";
+
 // Host entry messages
 
 // Represents a single host entry in the hosts file
