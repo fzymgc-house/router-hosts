@@ -48,7 +48,6 @@ func TestWriteQueue_ConcurrentSerialised(t *testing.T) {
 	q.Start()
 	defer q.Stop()
 
-	var mu sync.Mutex
 	var order []int
 	var wg sync.WaitGroup
 
@@ -57,9 +56,8 @@ func TestWriteQueue_ConcurrentSerialised(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			err := q.Submit(context.Background(), func() error {
-				mu.Lock()
+				// No mutex needed — write queue guarantees serial execution
 				order = append(order, n)
-				mu.Unlock()
 				return nil
 			})
 			assert.NoError(t, err)

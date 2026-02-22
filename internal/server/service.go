@@ -137,7 +137,9 @@ func (s *HostsServiceImpl) DeleteHost(ctx context.Context, req *hostsv1.DeleteHo
 		return nil, status.Errorf(codes.InvalidArgument, "invalid ID %q: %v", req.GetId(), err)
 	}
 
-	// Load the entry to get current version for the delete call
+	// Load the entry to get current version since proto DeleteHostRequest
+	// lacks expected_version. This is an extra read but CommandHandler.DeleteHost
+	// also validates the entry exists, so it's safe (just a minor inefficiency).
 	entry, getErr := s.handler.GetHost(ctx, id)
 	if getErr != nil {
 		return nil, mapError(getErr)

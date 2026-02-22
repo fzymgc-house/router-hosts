@@ -147,6 +147,34 @@ func TestFormatHostsFile_NilComment_NoTags(t *testing.T) {
 	}
 }
 
+func TestFormatHostsFile_SortedByIPThenHostname(t *testing.T) {
+	gen := NewHostsFileGenerator("/tmp/test-hosts")
+	entries := []domain.HostEntry{
+		{ID: ulid.Make(), IP: "192.168.1.20", Hostname: "beta.local"},
+		{ID: ulid.Make(), IP: "10.0.0.5", Hostname: "gamma.local"},
+		{ID: ulid.Make(), IP: "192.168.1.20", Hostname: "alpha.local"},
+		{ID: ulid.Make(), IP: "10.0.0.1", Hostname: "delta.local"},
+	}
+
+	content := gen.FormatHostsFile(entries)
+	lines := strings.Split(content, "\n")
+
+	// Extract entry lines (skip header)
+	var entryLines []string
+	for _, l := range lines {
+		if l != "" && !strings.HasPrefix(l, "#") {
+			entryLines = append(entryLines, l)
+		}
+	}
+
+	require.Len(t, entryLines, 4)
+	// Sorted by IP (lexicographic), then hostname
+	assert.True(t, strings.HasPrefix(entryLines[0], "10.0.0.1\tdelta.local"))
+	assert.True(t, strings.HasPrefix(entryLines[1], "10.0.0.5\tgamma.local"))
+	assert.True(t, strings.HasPrefix(entryLines[2], "192.168.1.20\talpha.local"))
+	assert.True(t, strings.HasPrefix(entryLines[3], "192.168.1.20\tbeta.local"))
+}
+
 func TestAtomicWrite_NewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hosts")
