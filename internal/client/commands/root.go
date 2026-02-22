@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
+	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 )
 
@@ -68,6 +70,7 @@ func newHostCmd() *cobra.Command {
 		Short:   "Manage host entries",
 	}
 	addHostSubcommands(cmd)
+	addImportExportSubcommands(cmd)
 	return cmd
 }
 
@@ -78,6 +81,7 @@ func newSnapshotCmd() *cobra.Command {
 		Aliases: []string{"snap", "s"},
 		Short:   "Manage database snapshots",
 	}
+	addSnapshotSubcommands(cmd)
 	return cmd
 }
 
@@ -107,16 +111,76 @@ func newServerCmd() *cobra.Command {
 	return cmd
 }
 
-// Placeholder run functions for server health commands.
-// These will be wired up once the gRPC client wrapper exists.
-func runServerHealth(_ *cobra.Command, _ []string) error {
-	return fmt.Errorf("not yet connected to gRPC client")
+func runServerHealth(cmd *cobra.Command, _ []string) error {
+	c, err := newClientFromFlags()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	ctx, cancel := commandContext()
+	defer cancel()
+
+	resp, err := c.Hosts.Health(ctx, &hostsv1.HealthRequest{})
+	if err != nil {
+		return oops.Wrapf(err, "checking health")
+	}
+
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "Healthy: %v\n", resp.GetHealthy())
+	if s := resp.GetServer(); s != nil {
+		fmt.Fprintf(w, "Version: %s  Uptime: %ds\n", s.GetVersion(), s.GetUptimeSeconds())
+	}
+	if db := resp.GetDatabase(); db != nil {
+		fmt.Fprintf(w, "Database: %s connected=%v latency=%dms\n", db.GetBackend(), db.GetConnected(), db.GetLatencyMs())
+	}
+	if a := resp.GetAcme(); a != nil {
+		fmt.Fprintf(w, "ACME: enabled=%v status=%s\n", a.GetEnabled(), a.GetStatus())
+	}
+	if h := resp.GetHooks(); h != nil {
+		fmt.Fprintf(w, "Hooks: %d configured\n", h.GetConfiguredCount())
+	}
+	return nil
 }
 
-func runServerLiveness(_ *cobra.Command, _ []string) error {
-	return fmt.Errorf("not yet connected to gRPC client")
+func runServerLiveness(cmd *cobra.Command, _ []string) error {
+	c, err := newClientFromFlags()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	ctx, cancel := commandContext()
+	defer cancel()
+
+	resp, err := c.Hosts.Liveness(ctx, &hostsv1.LivenessRequest{})
+	if err != nil {
+		return oops.Wrapf(err, "checking liveness")
+	}
+
+	fmt.Fprintf(cmd.OutOrStdout(), "Alive: %v\n", resp.GetAlive())
+	return nil
 }
 
-func runServerReadiness(_ *cobra.Command, _ []string) error {
-	return fmt.Errorf("not yet connected to gRPC client")
+func runServerReadiness(cmd *cobra.Command, _ []string) error {
+	c, err := newClientFromFlags()
+	if err != nil {
+		return err
+	}
+	defer c.Close()
+
+	ctx, cancel := commandContext()
+	defer cancel()
+
+	resp, err := c.Hosts.Readiness(ctx, &hostsv1.ReadinessRequest{})
+	if err != nil {
+		return oops.Wrapf(err, "checking readiness")
+	}
+
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "Ready: %v\n", resp.GetReady())
+	if resp.GetReason() != "" {
+		fmt.Fprintf(w, "Reason: %s\n", resp.GetReason())
+	}
+	return nil
 }
