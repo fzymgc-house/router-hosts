@@ -11,10 +11,14 @@ import (
 // ConflictAction is the user's chosen resolution for a version conflict.
 type ConflictAction int
 
+// ConflictAction constants for version conflict resolution.
 const (
-	ConflictRetry  ConflictAction = iota // Retry with the current server version
-	ConflictSkip                         // Skip this update
-	ConflictAbort                        // Abort the operation entirely
+	// ConflictRetry retries with the current server version.
+	ConflictRetry ConflictAction = iota
+	// ConflictSkip skips this update.
+	ConflictSkip
+	// ConflictAbort aborts the operation entirely.
+	ConflictAbort
 )
 
 // ConflictInfo holds the details shown to the user during conflict resolution.
@@ -65,13 +69,14 @@ func newConflictModel(info ConflictInfo) conflictModel {
 	}
 }
 
+// Init implements tea.Model.
 func (m conflictModel) Init() tea.Cmd {
 	return nil
 }
 
+// Update implements tea.Model.
 func (m conflictModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
+	if msg, ok := msg.(tea.KeyMsg); ok {
 		switch msg.String() {
 		case "up", "k":
 			if m.cursor > 0 {
@@ -94,6 +99,7 @@ func (m conflictModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// View implements tea.Model.
 func (m conflictModel) View() string {
 	if m.quitting {
 		return ""
@@ -103,9 +109,9 @@ func (m conflictModel) View() string {
 
 	b.WriteString(titleStyle.Render("Version Conflict"))
 	b.WriteString("\n\n")
-	b.WriteString(fmt.Sprintf("Entry:    %s (%s)\n", m.info.Hostname, m.info.EntryID))
-	b.WriteString(fmt.Sprintf("Expected: %s\n", diffOldStyle.Render("v"+m.info.ExpectedVersion)))
-	b.WriteString(fmt.Sprintf("Actual:   %s\n", diffNewStyle.Render("v"+m.info.ActualVersion)))
+	fmt.Fprintf(&b, "Entry:    %s (%s)\n", m.info.Hostname, m.info.EntryID)
+	fmt.Fprintf(&b, "Expected: %s\n", diffOldStyle.Render("v"+m.info.ExpectedVersion))
+	fmt.Fprintf(&b, "Actual:   %s\n", diffNewStyle.Render("v"+m.info.ActualVersion))
 
 	if len(m.info.Changes) > 0 {
 		b.WriteString("\nChanges:\n")

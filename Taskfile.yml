@@ -2,31 +2,35 @@ version: '3'
 vars:
   IMAGE_NAME: ghcr.io/fzymgc-house/router-hosts
   IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
-  LOCAL_IMAGE: 'router-hosts:e2e-local'
 tasks:
   build:
-    desc: Build all binaries
+    desc: Build all binaries (debug)
     cmds:
-      - go build ./cmd/router-hosts
-      - go build ./cmd/operator
+      - go build -o bin/router-hosts ./cmd/router-hosts
+      - go build -o bin/operator ./cmd/operator
   build:release:
     desc: Build all binaries with optimizations
     cmds:
-      - go build -ldflags="-s -w" -o bin/router-hosts ./cmd/router-hosts
-      - go build -ldflags="-s -w" -o bin/operator ./cmd/operator
+      - go build -trimpath -ldflags="-s -w" -o bin/router-hosts ./cmd/router-hosts
+      - go build -trimpath -ldflags="-s -w" -o bin/operator ./cmd/operator
   test:
-    desc: Run all tests
+    desc: Run all unit and integration tests
     cmds:
       - go test ./... -race -count=1
-  test:coverage:
-    desc: Run tests with coverage report
+  test:e2e:
+    desc: Run E2E tests with real mTLS
     cmds:
-      - go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      - go test -tags e2e -count=1 -v ./e2e/
+  test:coverage:
+    desc: Run tests with HTML coverage report
+    cmds:
+      - go test ./internal/... -race -coverprofile=coverage.out -covermode=atomic
       - go tool cover -html=coverage.out -o coverage.html
+      - go tool cover -func=coverage.out | tail -1
   test:coverage:ci:
     desc: Run tests with coverage (CI mode - enforces 80% threshold)
     cmds:
-      - go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      - go test ./internal/... -race -coverprofile=coverage.out -covermode=atomic
       - |
         COVERAGE=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
         echo "Coverage: ${COVERAGE}%"
@@ -35,13 +39,13 @@ tasks:
           exit 1
         fi
   lint:
-    desc: Run all linters
+    desc: Run all linters (Go + protobuf)
     cmds:
       - golangci-lint run ./...
       - buf lint
       - buf format --diff --exit-code
   fmt:
-    desc: Format all code
+    desc: Format all code (Go + protobuf)
     cmds:
       - gofumpt -w .
       - buf format -w
@@ -49,8 +53,17 @@ tasks:
     desc: Generate Go code from protobuf definitions
     cmds:
       - buf generate
+  docker:build:
+    desc: Build Docker image for local architecture
+    cmds:
+      - docker build -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} .
+  clean:
+    desc: Remove build artifacts and generated files
+    cmds:
+      - rm -rf bin/
+      - rm -f coverage.out coverage.html
   ci:
-    desc: Run full CI pipeline locally
+    desc: Run full CI pipeline locally (lint + test)
     cmds:
       - task: lint
       - task: test

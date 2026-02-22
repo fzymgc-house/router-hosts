@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
@@ -135,4 +136,75 @@ func TestServerCmd_HasSubcommands(t *testing.T) {
 	assert.Contains(t, names, "health")
 	assert.Contains(t, names, "liveness")
 	assert.Contains(t, names, "readiness")
+}
+
+// ---------------------------------------------------------------------------
+// Server health/liveness/readiness via bufconn
+// ---------------------------------------------------------------------------
+
+func TestServerHealth_ViaGRPC(t *testing.T) {
+	setupCmdTest(t)
+
+	root := NewRootCmd()
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"server", "health"})
+
+	err := root.Execute()
+	require.NoError(t, err)
+
+	out := buf.String()
+	assert.Contains(t, out, "Healthy: true")
+	assert.Contains(t, out, "Version:")
+	assert.Contains(t, out, "Database:")
+}
+
+func TestServerLiveness_ViaGRPC(t *testing.T) {
+	setupCmdTest(t)
+
+	root := NewRootCmd()
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"server", "liveness"})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Alive: true")
+}
+
+func TestServerReadiness_ViaGRPC(t *testing.T) {
+	setupCmdTest(t)
+
+	root := NewRootCmd()
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"server", "readiness"})
+
+	err := root.Execute()
+	require.NoError(t, err)
+	assert.Contains(t, buf.String(), "Ready: true")
+}
+
+// ---------------------------------------------------------------------------
+// Helper functions
+// ---------------------------------------------------------------------------
+
+func TestCommandContext_ReturnsTimeout(t *testing.T) {
+	ctx, cancel := commandContext()
+	defer cancel()
+
+	dl, ok := ctx.Deadline()
+	require.True(t, ok)
+	assert.False(t, dl.IsZero())
+}
+
+func TestRootCmd_UnknownSubcommand(t *testing.T) {
+	root := NewRootCmd()
+	root.SetArgs([]string{"nonexistent"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	assert.Error(t, err)
+	assert.True(t, strings.Contains(err.Error(), "unknown command"))
 }

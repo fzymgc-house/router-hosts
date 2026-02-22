@@ -29,10 +29,14 @@ type HostMappingSpec struct {
 // +kubebuilder:validation:Enum=Pending;Synced;Error
 type HostMappingPhase string
 
+// HostMapping phase constants.
 const (
+	// HostMappingPhasePending indicates the mapping has not yet been synced.
 	HostMappingPhasePending HostMappingPhase = "Pending"
-	HostMappingPhaseSynced  HostMappingPhase = "Synced"
-	HostMappingPhaseError   HostMappingPhase = "Error"
+	// HostMappingPhaseSynced indicates the mapping is synced with the server.
+	HostMappingPhaseSynced HostMappingPhase = "Synced"
+	// HostMappingPhaseError indicates a sync error occurred.
+	HostMappingPhaseError HostMappingPhase = "Error"
 )
 
 // HostMappingStatus defines the observed state of a HostMapping.

@@ -118,24 +118,24 @@ func (g *HostsFileGenerator) atomicWrite(content string) error {
 
 	_, writeErr := f.WriteString(content)
 	if writeErr != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 		return oops.Wrapf(writeErr, "write hosts file")
 	}
 
 	if err := f.Sync(); err != nil {
-		f.Close()
-		os.Remove(tmpPath)
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 		return oops.Wrapf(err, "fsync hosts file")
 	}
 
 	if err := f.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return oops.Wrapf(err, "close hosts file")
 	}
 
 	if err := os.Rename(tmpPath, g.path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return oops.Wrapf(err, "rename hosts file")
 	}
 

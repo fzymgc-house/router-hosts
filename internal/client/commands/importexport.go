@@ -103,7 +103,7 @@ func newHostImportCmd() *cobra.Command {
 			}
 
 			if lastResp != nil && !Flags.Quiet {
-				fmt.Fprintf(cmd.OutOrStdout(),
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 					"Import complete: %d processed, %d created, %d updated, %d skipped, %d failed\n",
 					lastResp.GetProcessed(),
 					lastResp.GetCreated(),
@@ -112,10 +112,10 @@ func newHostImportCmd() *cobra.Command {
 					lastResp.GetFailed())
 
 				if lastResp.GetError() != "" {
-					fmt.Fprintf(cmd.OutOrStderr(), "Error: %s\n", lastResp.GetError())
+					_, _ = fmt.Fprintf(cmd.OutOrStderr(), "Error: %s\n", lastResp.GetError())
 				}
 				for _, ve := range lastResp.GetValidationErrors() {
-					fmt.Fprintf(cmd.OutOrStderr(), "  Validation: %s\n", ve)
+					_, _ = fmt.Fprintf(cmd.OutOrStderr(), "  Validation: %s\n", ve)
 				}
 			}
 
@@ -163,7 +163,7 @@ func newHostExportCmd() *cobra.Command {
 				return oops.Wrapf(err, "starting export stream")
 			}
 
-			var w io.Writer = cmd.OutOrStdout()
+			w := cmd.OutOrStdout()
 			if outArg != "" && outArg != "-" {
 				f, err := os.Create(outArg)
 				if err != nil {

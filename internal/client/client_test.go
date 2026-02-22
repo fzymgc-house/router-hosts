@@ -26,7 +26,7 @@ func TestNewClient_Insecure(t *testing.T) {
 
 	c, err := NewClient(cfg)
 	require.NoError(t, err)
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	assert.NotNil(t, c.Hosts)
 	assert.Equal(t, "localhost:50051", c.Address())

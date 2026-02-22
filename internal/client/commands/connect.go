@@ -8,7 +8,10 @@ import (
 
 // newClientFromFlags builds a gRPC client using global CLI flags and config
 // file resolution. CLI flags override env vars which override config file.
-func newClientFromFlags() (*client.Client, error) {
+// Tests can replace this variable to inject a bufconn-connected client.
+var newClientFromFlags = defaultNewClientFromFlags
+
+func defaultNewClientFromFlags() (*client.Client, error) {
 	overrides := &config.ClientConfigOverrides{}
 
 	if Flags.Server != "" {

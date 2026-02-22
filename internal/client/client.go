@@ -44,6 +44,18 @@ func NewClient(cfg *config.ClientConfig) (*Client, error) {
 	}, nil
 }
 
+// NewClientFromConn creates a Client from an existing gRPC connection.
+// The returned client does NOT own the connection: calling Close is a no-op.
+// This is primarily useful for testing with bufconn where the connection
+// lifecycle is managed externally.
+func NewClientFromConn(conn *grpc.ClientConn) *Client {
+	return &Client{
+		// conn is intentionally nil so Close() is a no-op.
+		// The caller retains ownership of the connection.
+		Hosts: hostsv1.NewHostsServiceClient(conn),
+	}
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error {
 	if c.conn != nil {

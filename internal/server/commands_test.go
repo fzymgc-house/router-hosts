@@ -21,7 +21,7 @@ func newTestHandler(t *testing.T) (*CommandHandler, context.Context) {
 	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
 	require.NoError(t, err)
 	require.NoError(t, store.Initialize(ctx))
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	return NewCommandHandler(store), ctx
 }
 

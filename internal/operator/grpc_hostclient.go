@@ -32,10 +32,12 @@ func NewGRPCHostClient(serverAddr, certPath, keyPath, caCertPath string) (HostCl
 	return &grpcHostClient{c: c}, nil
 }
 
+// Close implements HostClient.
 func (g *grpcHostClient) Close() error {
 	return g.c.Close()
 }
 
+// AddHost implements HostClient.
 func (g *grpcHostClient) AddHost(ctx context.Context, ip, hostname, comment string, aliases, tags []string) (string, error) {
 	var commentPtr *string
 	if comment != "" {
@@ -55,6 +57,7 @@ func (g *grpcHostClient) AddHost(ctx context.Context, ip, hostname, comment stri
 	return resp.GetId(), nil
 }
 
+// UpdateHost implements HostClient.
 func (g *grpcHostClient) UpdateHost(ctx context.Context, id, ip, hostname, comment string, aliases, tags []string, version string) error {
 	req := &hostsv1.UpdateHostRequest{
 		Id:        id,
@@ -81,6 +84,7 @@ func (g *grpcHostClient) UpdateHost(ctx context.Context, id, ip, hostname, comme
 	return nil
 }
 
+// DeleteHost implements HostClient.
 func (g *grpcHostClient) DeleteHost(ctx context.Context, id string) error {
 	_, err := g.c.Hosts.DeleteHost(ctx, &hostsv1.DeleteHostRequest{Id: id})
 	if err != nil {
@@ -89,6 +93,7 @@ func (g *grpcHostClient) DeleteHost(ctx context.Context, id string) error {
 	return nil
 }
 
+// GetHost implements HostClient.
 func (g *grpcHostClient) GetHost(ctx context.Context, id string) (*HostEntry, error) {
 	resp, err := g.c.Hosts.GetHost(ctx, &hostsv1.GetHostRequest{Id: id})
 	if err != nil {

@@ -57,10 +57,12 @@ func NewProgressModel() progressModel {
 	}
 }
 
+// Init implements tea.Model.
 func (m progressModel) Init() tea.Cmd {
 	return nil
 }
 
+// Update implements tea.Model.
 func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -93,6 +95,7 @@ func (m progressModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// View implements tea.Model.
 func (m progressModel) View() string {
 	if m.quitting && m.stats.Done {
 		return m.renderFinal()
@@ -122,7 +125,7 @@ func (m progressModel) View() string {
 		start := 0
 		if len(m.stats.ValidationErrors) > 5 {
 			start = len(m.stats.ValidationErrors) - 5
-			b.WriteString(fmt.Sprintf("  ... and %d more\n", start))
+			fmt.Fprintf(&b, "  ... and %d more\n", start)
 		}
 		for _, ve := range m.stats.ValidationErrors[start:] {
 			b.WriteString("  " + ve + "\n")
@@ -137,7 +140,7 @@ func (m progressModel) renderCounters() string {
 	var b strings.Builder
 	b.WriteString(statsLabelStyle.Render("Processed:") + fmt.Sprintf(" %d", m.stats.Processed))
 	if m.stats.Total > 0 {
-		b.WriteString(fmt.Sprintf("/%d", m.stats.Total))
+		fmt.Fprintf(&b, "/%d", m.stats.Total)
 	}
 	b.WriteString("\n")
 	b.WriteString(statsLabelStyle.Render("Created:") + successStyle.Render(fmt.Sprintf(" %d", m.stats.Created)) + "\n")
@@ -164,7 +167,7 @@ func (m progressModel) renderFinal() string {
 		b.WriteString("\n" + errorStyle.Render("Error: "+m.stats.Error) + "\n")
 	}
 	if len(m.stats.ValidationErrors) > 0 {
-		b.WriteString(fmt.Sprintf("\n%d validation error(s)\n", len(m.stats.ValidationErrors)))
+		fmt.Fprintf(&b, "\n%d validation error(s)\n", len(m.stats.ValidationErrors))
 	}
 
 	b.WriteString("\n")

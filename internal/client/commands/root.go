@@ -27,9 +27,9 @@ var Flags GlobalFlags
 // NewRootCmd creates the top-level CLI command with all subcommand groups.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "router-hosts",
-		Short: "Manage DNS host entries via gRPC",
-		Long:  "router-hosts is a CLI for managing /etc/hosts entries through a gRPC server with mTLS authentication.",
+		Use:           "router-hosts",
+		Short:         "Manage DNS host entries via gRPC",
+		Long:          "router-hosts is a CLI for managing /etc/hosts entries through a gRPC server with mTLS authentication.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -58,7 +58,7 @@ func NewRootCmd() *cobra.Command {
 func Execute() {
 	root := NewRootCmd()
 	if err := root.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
@@ -128,18 +128,18 @@ func runServerHealth(cmd *cobra.Command, _ []string) error {
 	}
 
 	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "Healthy: %v\n", resp.GetHealthy())
+	_, _ = fmt.Fprintf(w, "Healthy: %v\n", resp.GetHealthy())
 	if s := resp.GetServer(); s != nil {
-		fmt.Fprintf(w, "Version: %s  Uptime: %ds\n", s.GetVersion(), s.GetUptimeSeconds())
+		_, _ = fmt.Fprintf(w, "Version: %s  Uptime: %ds\n", s.GetVersion(), s.GetUptimeSeconds())
 	}
 	if db := resp.GetDatabase(); db != nil {
-		fmt.Fprintf(w, "Database: %s connected=%v latency=%dms\n", db.GetBackend(), db.GetConnected(), db.GetLatencyMs())
+		_, _ = fmt.Fprintf(w, "Database: %s connected=%v latency=%dms\n", db.GetBackend(), db.GetConnected(), db.GetLatencyMs())
 	}
 	if a := resp.GetAcme(); a != nil {
-		fmt.Fprintf(w, "ACME: enabled=%v status=%s\n", a.GetEnabled(), a.GetStatus())
+		_, _ = fmt.Fprintf(w, "ACME: enabled=%v status=%s\n", a.GetEnabled(), a.GetStatus())
 	}
 	if h := resp.GetHooks(); h != nil {
-		fmt.Fprintf(w, "Hooks: %d configured\n", h.GetConfiguredCount())
+		_, _ = fmt.Fprintf(w, "Hooks: %d configured\n", h.GetConfiguredCount())
 	}
 	return nil
 }
@@ -159,7 +159,7 @@ func runServerLiveness(cmd *cobra.Command, _ []string) error {
 		return oops.Wrapf(err, "checking liveness")
 	}
 
-	fmt.Fprintf(cmd.OutOrStdout(), "Alive: %v\n", resp.GetAlive())
+	_, _ = fmt.Fprintf(cmd.OutOrStdout(), "Alive: %v\n", resp.GetAlive())
 	return nil
 }
 
@@ -179,9 +179,9 @@ func runServerReadiness(cmd *cobra.Command, _ []string) error {
 	}
 
 	w := cmd.OutOrStdout()
-	fmt.Fprintf(w, "Ready: %v\n", resp.GetReady())
+	_, _ = fmt.Fprintf(w, "Ready: %v\n", resp.GetReady())
 	if resp.GetReason() != "" {
-		fmt.Fprintf(w, "Reason: %s\n", resp.GetReason())
+		_, _ = fmt.Fprintf(w, "Reason: %s\n", resp.GetReason())
 	}
 	return nil
 }

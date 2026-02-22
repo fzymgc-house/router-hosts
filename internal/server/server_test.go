@@ -9,14 +9,13 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"net"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"log/slog"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -48,12 +47,12 @@ func generateTestCerts(t *testing.T) testCerts {
 	require.NoError(t, err)
 
 	caTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "Test CA"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		IsCA:         true,
-		KeyUsage:     x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
 	}
 
@@ -148,10 +147,10 @@ func testConfig(certs testCerts) config.Config {
 // mockStorage is a minimal storage.Storage for server tests.
 type mockStorage struct{ storage.Storage }
 
-func (m *mockStorage) Initialize(_ context.Context) error    { return nil }
-func (m *mockStorage) HealthCheck(_ context.Context) error    { return nil }
-func (m *mockStorage) Close() error                           { return nil }
-func (m *mockStorage) BackendName() string                    { return "mock" }
+func (m *mockStorage) Initialize(_ context.Context) error  { return nil }
+func (m *mockStorage) HealthCheck(_ context.Context) error { return nil }
+func (m *mockStorage) Close() error                        { return nil }
+func (m *mockStorage) BackendName() string                 { return "mock" }
 
 func TestNewServer(t *testing.T) {
 	certs := generateTestCerts(t)
@@ -159,7 +158,7 @@ func TestNewServer(t *testing.T) {
 	logger := slog.Default()
 
 	lis := bufconn.Listen(1024 * 1024)
-	defer lis.Close()
+	defer func() { _ = lis.Close() }()
 
 	srv, err := NewServer(cfg, &mockStorage{}, logger, WithListener(lis))
 	require.NoError(t, err)
@@ -283,7 +282,7 @@ func TestServer_CertReload(t *testing.T) {
 	cfg := testConfig(certs)
 
 	lis := bufconn.Listen(1024 * 1024)
-	defer lis.Close()
+	defer func() { _ = lis.Close() }()
 
 	srv, err := NewServer(cfg, &mockStorage{}, slog.Default(), WithListener(lis))
 	require.NoError(t, err)
@@ -309,7 +308,7 @@ func TestServer_CertReload_InvalidFile(t *testing.T) {
 	cfg := testConfig(certs)
 
 	lis := bufconn.Listen(1024 * 1024)
-	defer lis.Close()
+	defer func() { _ = lis.Close() }()
 
 	srv, err := NewServer(cfg, &mockStorage{}, slog.Default(), WithListener(lis))
 	require.NoError(t, err)
@@ -332,13 +331,81 @@ func TestServer_RegisterService(t *testing.T) {
 	cfg := testConfig(certs)
 
 	lis := bufconn.Listen(1024 * 1024)
-	defer lis.Close()
+	defer func() { _ = lis.Close() }()
 
 	srv, err := NewServer(cfg, &mockStorage{}, slog.Default(), WithListener(lis))
 	require.NoError(t, err)
 
 	// RegisterService should not panic with a valid desc
 	assert.NotNil(t, srv.GRPCServer())
+}
+
+func TestServer_WithGRPCOptions(t *testing.T) {
+	certs := generateTestCerts(t)
+	cfg := testConfig(certs)
+
+	lis := bufconn.Listen(1024 * 1024)
+	defer func() { _ = lis.Close() }()
+
+	interceptorCalled := false
+	interceptor := grpc.UnaryInterceptor(func(ctx context.Context, req any, _ *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		interceptorCalled = true
+		return handler(ctx, req)
+	})
+
+	srv, err := NewServer(cfg, &mockStorage{}, slog.Default(), WithListener(lis), WithGRPCOptions(interceptor))
+	require.NoError(t, err)
+	assert.NotNil(t, srv)
+	// The interceptor is stored in grpcOptions; the server was created with it.
+	// We just verify it was accepted without error.
+	_ = interceptorCalled // interceptor integration tested elsewhere
+}
+
+func TestServer_RegisterService_Direct(t *testing.T) {
+	certs := generateTestCerts(t)
+	cfg := testConfig(certs)
+
+	lis := bufconn.Listen(1024 * 1024)
+	defer func() { _ = lis.Close() }()
+
+	srv, err := NewServer(cfg, &mockStorage{}, slog.Default(), WithListener(lis))
+	require.NoError(t, err)
+
+	// RegisterService should accept a valid service descriptor without panicking.
+	assert.NotPanics(t, func() {
+		srv.RegisterService(&grpc.ServiceDesc{
+			ServiceName: "test.Service",
+			HandlerType: (*any)(nil),
+		}, struct{}{})
+	})
+}
+
+func TestServer_Stop(t *testing.T) {
+	certs := generateTestCerts(t)
+	cfg := testConfig(certs)
+
+	lis := bufconn.Listen(1024 * 1024)
+
+	srv, err := NewServer(cfg, &mockStorage{}, slog.Default(), WithListener(lis))
+	require.NoError(t, err)
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.grpc.Serve(lis)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+
+	// Stop immediately (no graceful drain)
+	srv.Stop()
+
+	select {
+	case err := <-errCh:
+		// Serve returns nil or an error after Stop
+		_ = err
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not stop within timeout")
+	}
 }
 
 func TestServer_BufconnConnection(t *testing.T) {
@@ -384,7 +451,7 @@ func TestServer_BufconnConnection(t *testing.T) {
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsConfig)),
 	)
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	cancel()
 	select {

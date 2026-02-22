@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,6 +20,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
+	"github.com/fzymgc-house/router-hosts/internal/config"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
 )
@@ -36,7 +40,7 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
 	require.NoError(t, err)
 	require.NoError(t, store.Initialize(ctx))
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 
 	handler := NewCommandHandler(store)
 	hostsGen := NewHostsFileGenerator("/dev/null")
@@ -57,7 +61,7 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	return &serviceTestEnv{
 		client:  hostsv1.NewHostsServiceClient(conn),
@@ -239,7 +243,7 @@ func TestService_ListHosts(t *testing.T) {
 	var entries []*hostsv1.HostEntry
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -274,7 +278,7 @@ func TestService_SearchHosts(t *testing.T) {
 	var entries []*hostsv1.HostEntry
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -314,7 +318,7 @@ func TestService_ImportHosts_HostsFormat(t *testing.T) {
 	var finalResp *hostsv1.ImportHostsResponse
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -357,7 +361,7 @@ func TestService_ImportHosts_SkipConflict(t *testing.T) {
 	var finalResp *hostsv1.ImportHostsResponse
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -403,7 +407,7 @@ func TestService_ImportHosts_ReplaceConflict(t *testing.T) {
 	var finalResp *hostsv1.ImportHostsResponse
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -446,7 +450,7 @@ func TestService_ImportHosts_StrictConflict(t *testing.T) {
 	var finalResp *hostsv1.ImportHostsResponse
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -632,7 +636,7 @@ func TestService_ListSnapshots(t *testing.T) {
 	var snapshots []*hostsv1.Snapshot
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -661,7 +665,7 @@ func TestService_DeleteSnapshot(t *testing.T) {
 	var snapshots []*hostsv1.Snapshot
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -706,7 +710,7 @@ func TestService_RollbackToSnapshot(t *testing.T) {
 	var remaining []*hostsv1.HostEntry
 	for {
 		resp, err := listStream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -748,7 +752,7 @@ func TestService_Readiness_Unhealthy(t *testing.T) {
 	require.NoError(t, store.Initialize(ctx))
 	handler := NewCommandHandler(store)
 	svc := NewHostsServiceImpl(handler, store)
-	store.Close()
+	_ = store.Close()
 
 	lis := bufconn.Listen(1024 * 1024)
 	srv := grpc.NewServer()
@@ -764,7 +768,7 @@ func TestService_Readiness_Unhealthy(t *testing.T) {
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	require.NoError(t, err)
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 
 	client := hostsv1.NewHostsServiceClient(conn)
 	resp, err := client.Readiness(ctx, &hostsv1.ReadinessRequest{})
@@ -802,3 +806,203 @@ func TestService_Health_DetailedStatus(t *testing.T) {
 	assert.Equal(t, int32(0), resp.GetHooks().GetConfiguredCount())
 }
 
+func TestService_Health_WithHooks(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	handler := NewCommandHandler(store)
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{{Name: "on-success", Command: "echo ok"}},
+		[]config.HookDefinition{{Name: "on-failure", Command: "echo fail"}},
+		5*time.Second,
+		slog.Default(),
+	)
+	svc := NewHostsServiceImpl(handler, store, WithHookExecutor(hooks))
+
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	hostsv1.RegisterHostsServiceServer(srv, svc)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.Stop() })
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	client := hostsv1.NewHostsServiceClient(conn)
+	resp, err := client.Health(ctx, &hostsv1.HealthRequest{})
+	require.NoError(t, err)
+	assert.True(t, resp.GetHealthy())
+
+	require.NotNil(t, resp.GetHooks())
+	assert.Equal(t, int32(2), resp.GetHooks().GetConfiguredCount())
+	assert.ElementsMatch(t, []string{"on-success", "on-failure"}, resp.GetHooks().GetHookNames())
+}
+
+func TestService_UpdateHost_AllFields(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	comment := "original"
+	addResp, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.1",
+		Hostname:  "host.local",
+		Comment:   &comment,
+		Tags:      []string{"old"},
+		Aliases:   []string{"h.local"},
+	})
+	require.NoError(t, err)
+
+	newIP := "10.0.0.99"
+	newHostname := "newhost.local"
+	newComment := "updated"
+	version := "1"
+	updateResp, err := env.client.UpdateHost(ctx, &hostsv1.UpdateHostRequest{
+		Id:              addResp.Id,
+		IpAddress:       &newIP,
+		Hostname:        &newHostname,
+		Comment:         &newComment,
+		Aliases:         &hostsv1.AliasesUpdate{Values: []string{"nh.local"}},
+		Tags:            &hostsv1.TagsUpdate{Values: []string{"new"}},
+		ExpectedVersion: &version,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updateResp.Entry)
+	assert.Equal(t, "10.0.0.99", updateResp.Entry.IpAddress)
+	assert.Equal(t, "newhost.local", updateResp.Entry.Hostname)
+	assert.Equal(t, "updated", updateResp.Entry.GetComment())
+	assert.Equal(t, []string{"nh.local"}, updateResp.Entry.Aliases)
+	assert.Equal(t, []string{"new"}, updateResp.Entry.Tags)
+}
+
+func TestService_UpdateHost_InvalidID(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	newIP := "10.0.0.1"
+	_, err := env.client.UpdateHost(ctx, &hostsv1.UpdateHostRequest{
+		Id:        "not-a-ulid",
+		IpAddress: &newIP,
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestService_DeleteHost_InvalidID(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	_, err := env.client.DeleteHost(ctx, &hostsv1.DeleteHostRequest{Id: "not-a-ulid"})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestService_DeleteHost_NotFound(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	_, err := env.client.DeleteHost(ctx, &hostsv1.DeleteHostRequest{Id: "01ARZ3NDEKTSV4RRFFQ69G5FAV"})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestService_UpdateHost_NotFound(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	newIP := "10.0.0.1"
+	version := "1"
+	_, err := env.client.UpdateHost(ctx, &hostsv1.UpdateHostRequest{
+		Id:              "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		IpAddress:       &newIP,
+		ExpectedVersion: &version,
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestService_ListSnapshots_WithLimit(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Create three snapshots
+	for i := range 3 {
+		_, err := env.client.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{
+			Name: fmt.Sprintf("snap-%d", i),
+		})
+		require.NoError(t, err)
+	}
+
+	stream, err := env.client.ListSnapshots(ctx, &hostsv1.ListSnapshotsRequest{
+		Limit:  2,
+		Offset: 1,
+	})
+	require.NoError(t, err)
+
+	var snapshots []*hostsv1.Snapshot
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		snapshots = append(snapshots, resp.GetSnapshot())
+	}
+	assert.Len(t, snapshots, 2)
+}
+
+func TestService_RollbackToSnapshot_NotFound(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	_, err := env.client.RollbackToSnapshot(ctx, &hostsv1.RollbackToSnapshotRequest{
+		SnapshotId: "nonexistent-snapshot-id",
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestService_UpdateHost_AliasesNilValues(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	addResp, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.1",
+		Hostname:  "host.local",
+		Aliases:   []string{"a.local"},
+	})
+	require.NoError(t, err)
+
+	// Send an AliasesUpdate with nil Values to clear aliases
+	version := "1"
+	updateResp, err := env.client.UpdateHost(ctx, &hostsv1.UpdateHostRequest{
+		Id:              addResp.Id,
+		Aliases:         &hostsv1.AliasesUpdate{Values: nil},
+		Tags:            &hostsv1.TagsUpdate{Values: nil},
+		ExpectedVersion: &version,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, updateResp.Entry)
+	assert.Empty(t, updateResp.Entry.Aliases)
+	assert.Empty(t, updateResp.Entry.Tags)
+}

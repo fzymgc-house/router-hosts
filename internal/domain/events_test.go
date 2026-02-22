@@ -406,3 +406,92 @@ func TestEventEnvelope_OccurredAt(t *testing.T) {
 
 	assert.True(t, now.Equal(env.OccurredAt()), "OccurredAt should return CreatedAt")
 }
+
+func TestHostEvent_MarshalJSON_EmptyPayload(t *testing.T) {
+	evt := HostEvent{
+		Type:    EventTypeHostCreated,
+		Payload: nil,
+	}
+
+	data, err := json.Marshal(evt)
+	require.NoError(t, err)
+
+	var m map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(data, &m))
+	assert.Contains(t, m, "type")
+}
+
+func TestHostEvent_MarshalJSON_InvalidPayload(t *testing.T) {
+	evt := HostEvent{
+		Type:    EventTypeHostCreated,
+		Payload: json.RawMessage(`"not an object"`),
+	}
+
+	_, err := json.Marshal(evt)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "event payload is not a JSON object")
+}
+
+func TestHostEvent_Decode_UnknownType(t *testing.T) {
+	evt := HostEvent{
+		Type:    "UnknownEventType",
+		Payload: json.RawMessage(`{}`),
+	}
+
+	_, err := evt.Decode()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown event type: UnknownEventType")
+}
+
+func TestHostEvent_OccurredAt_UnknownType(t *testing.T) {
+	evt := HostEvent{
+		Type:    "UnknownEventType",
+		Payload: json.RawMessage(`{}`),
+	}
+
+	_, err := evt.OccurredAt()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown event type")
+}
+
+func TestNewHostEvent_UnsupportedType(t *testing.T) {
+	_, err := NewHostEvent("not a valid event struct")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported event type")
+}
+
+func TestHostEvent_UnmarshalJSON_InvalidJSON(t *testing.T) {
+	var evt HostEvent
+	err := json.Unmarshal([]byte(`{invalid`), &evt)
+	require.Error(t, err)
+}
+
+func TestHostEvent_Decode_InvalidPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		evtType string
+	}{
+		{"HostCreated", EventTypeHostCreated},
+		{"IPAddressChanged", EventTypeIPAddressChanged},
+		{"HostnameChanged", EventTypeHostnameChanged},
+		{"CommentUpdated", EventTypeCommentUpdated},
+		{"TagsModified", EventTypeTagsModified},
+		{"AliasesModified", EventTypeAliasesModified},
+		{"HostDeleted", EventTypeHostDeleted},
+		{"HostImported", EventTypeHostImported},
+		{"SnapshotCreated", EventTypeSnapshotCreated},
+		{"SnapshotRolledBack", EventTypeSnapshotRolledBack},
+		{"SnapshotDeleted", EventTypeSnapshotDeleted},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			evt := HostEvent{
+				Type:    tt.evtType,
+				Payload: json.RawMessage(`{invalid json`),
+			}
+			_, err := evt.Decode()
+			require.Error(t, err)
+		})
+	}
+}

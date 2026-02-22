@@ -5,9 +5,9 @@ import (
 	"io"
 	"strings"
 
-	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"
+	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 )
 
 var (
@@ -30,7 +30,7 @@ var (
 
 func renderTable(w io.Writer, entries []*hostsv1.HostEntry) error {
 	if len(entries) == 0 {
-		fmt.Fprintln(w, emptyStyle.Render("No host entries found."))
+		_, _ = fmt.Fprintln(w, emptyStyle.Render("No host entries found."))
 		return nil
 	}
 
@@ -68,13 +68,13 @@ func renderTable(w io.Writer, entries []*hostsv1.HostEntry) error {
 	s.Cell = cellStyle
 	t.SetStyles(s)
 
-	fmt.Fprintln(w, t.View())
+	_, _ = fmt.Fprintln(w, t.View())
 	return nil
 }
 
 func renderSnapshotsTable(w io.Writer, snapshots []*hostsv1.Snapshot) error {
 	if len(snapshots) == 0 {
-		fmt.Fprintln(w, emptyStyle.Render("No snapshots found."))
+		_, _ = fmt.Fprintln(w, emptyStyle.Render("No snapshots found."))
 		return nil
 	}
 
@@ -112,7 +112,7 @@ func renderSnapshotsTable(w io.Writer, snapshots []*hostsv1.Snapshot) error {
 	s.Cell = cellStyle
 	t.SetStyles(s)
 
-	fmt.Fprintln(w, t.View())
+	_, _ = fmt.Fprintln(w, t.View())
 	return nil
 }
 

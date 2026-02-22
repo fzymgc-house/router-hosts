@@ -17,6 +17,12 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	var (
 		metricsAddr          string
 		healthProbeAddr      string
@@ -49,11 +55,11 @@ func main() {
 	scheme := runtime.NewScheme()
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
 		logger.Error("failed to add client-go scheme", "error", err)
-		os.Exit(1)
+		return err
 	}
 	if err := operatorv1alpha1.AddToScheme(scheme); err != nil {
 		logger.Error("failed to add operator scheme", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -67,7 +73,7 @@ func main() {
 	})
 	if err != nil {
 		logger.Error("unable to create manager", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	if defaultIngressIP == "" {
@@ -78,7 +84,7 @@ func main() {
 	hostClient, err := operator.NewGRPCHostClient(serverAddr, certPath, keyPath, caCertPath)
 	if err != nil {
 		logger.Error("unable to create gRPC host client", "error", err)
-		os.Exit(1)
+		return err
 	}
 	defer func() {
 		if cerr := hostClient.Close(); cerr != nil {
@@ -94,7 +100,7 @@ func main() {
 		Log:        logger.With("controller", "hostmapping"),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Error("unable to create HostMapping controller", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Register IngressRoute controller.
@@ -106,17 +112,17 @@ func main() {
 		DefaultTags: []string{"kubernetes"},
 	}).SetupWithManager(mgr); err != nil {
 		logger.Error("unable to create IngressRoute controller", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Health probes.
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		logger.Error("unable to set up health check", "error", err)
-		os.Exit(1)
+		return err
 	}
 	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		logger.Error("unable to set up ready check", "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	logger.Info("starting operator",
@@ -127,6 +133,7 @@ func main() {
 	)
 	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		logger.Error("manager exited with error", "error", err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }

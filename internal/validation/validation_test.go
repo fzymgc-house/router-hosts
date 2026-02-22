@@ -335,22 +335,6 @@ func TestPropertyInvalidCharsHostnameAlwaysFails(t *testing.T) {
 // Helper
 // ==========================================================================
 
-// assertOopsCode checks that the error chain contains an oops error with the
-// expected code. It walks the error chain using errors.Unwrap to find the
-// underlying oops error.
-func assertOopsCode(t *testing.T, err error, expectedCode string) {
-	t.Helper()
-	if err == nil {
-		t.Fatalf("expected error with code %q, got nil", expectedCode)
-	}
-	// Check that the error message or string representation contains the code.
-	// oops errors include their code in the formatted output.
-	errStr := fmt.Sprintf("%+v", err)
-	if !strings.Contains(errStr, expectedCode) {
-		t.Errorf("expected error code %q in error: %v", expectedCode, err)
-	}
-}
-
 // assertSliceContainsOopsCode checks that at least one error in the slice
 // contains an oops error with the expected code.
 func assertSliceContainsOopsCode(t *testing.T, errs []error, expectedCode string) {

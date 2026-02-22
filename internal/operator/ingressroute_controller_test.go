@@ -376,6 +376,224 @@ func TestHostIDsAnnotation_RoundTrip(t *testing.T) {
 	assert.Nil(t, ids)
 }
 
+func TestReconcile_IngressRoute_Delete_Failure_Requeues(t *testing.T) {
+	s := ingressRouteScheme(t)
+	now := metav1.Now()
+
+	hostIDs := map[string]string{"app.example.com": "host-fail-delete"}
+	idsJSON, _ := json.Marshal(hostIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetDeletionTimestamp(&now)
+	obj.SetAnnotations(map[string]string{
+		hostIDsAnnotation: string(idsJSON),
+	})
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(obj).
+		Build()
+
+	mock := &mockHostClient{
+		deleteHostFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("server unavailable")
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:     k8sClient,
+		HostClient: mock,
+		Log:        slog.Default(),
+		DefaultIP:  "10.0.0.1",
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayShort, result.RequeueAfter)
+
+	// Finalizer should still be present
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	assert.Contains(t, updated.GetFinalizers(), ingressRouteCleanupFinalizer)
+}
+
+func TestReconcile_IngressRoute_UpdateFailure_Requeues(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{"app.example.com": "existing-id"}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{
+		hostIDsAnnotation: string(idsJSON),
+	})
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(obj).
+		Build()
+
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			return fmt.Errorf("update failed")
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:     k8sClient,
+		HostClient: mock,
+		Log:        slog.Default(),
+		DefaultIP:  "10.0.0.1",
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayLong, result.RequeueAfter)
+
+	// Should retain the existing ID in annotations despite update failure
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids := getHostIDsAnnotation(&updated)
+	assert.Equal(t, "existing-id", ids["app.example.com"])
+}
+
+func TestReconcile_IngressRoute_StaleDeleteFailure(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{
+		"keep.example.com":   "keep-id",
+		"remove.example.com": "remove-id",
+	}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`keep.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{
+		hostIDsAnnotation: string(idsJSON),
+	})
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(obj).
+		Build()
+
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			return nil
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			return fmt.Errorf("delete failed")
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayLong, result.RequeueAfter)
+
+	// Both IDs should be retained when stale delete fails
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids := getHostIDsAnnotation(&updated)
+	assert.Equal(t, "keep-id", ids["keep.example.com"])
+	assert.Equal(t, "remove-id", ids["remove.example.com"])
+}
+
+func TestReconcile_IngressRoute_NoHosts(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	// IngressRoute with no Host() patterns in match rules
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "PathPrefix(`/api`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(obj).
+		Build()
+
+	mock := &mockHostClient{}
+
+	r := &IngressRouteReconciler{
+		Client:     k8sClient,
+		HostClient: mock,
+		Log:        slog.Default(),
+		DefaultIP:  "10.0.0.1",
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+}
+
+func TestGetHostIDsAnnotation_InvalidJSON(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	obj.SetAnnotations(map[string]string{
+		hostIDsAnnotation: "not valid json",
+	})
+
+	ids := getHostIDsAnnotation(obj)
+	assert.Nil(t, ids)
+}
+
+func TestGetHostIDsAnnotation_EmptyValue(t *testing.T) {
+	obj := &unstructured.Unstructured{Object: map[string]interface{}{}}
+	obj.SetAnnotations(map[string]string{
+		hostIDsAnnotation: "",
+	})
+
+	ids := getHostIDsAnnotation(obj)
+	assert.Nil(t, ids)
+}
+
+func TestExtractHosts_InvalidRouteType(t *testing.T) {
+	obj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "IngressRoute",
+			"metadata": map[string]interface{}{
+				"name":      "test",
+				"namespace": "default",
+			},
+			"spec": map[string]interface{}{
+				"routes": []interface{}{
+					"not-a-map",
+				},
+			},
+		},
+	}
+
+	hosts := extractHosts(obj)
+	assert.Empty(t, hosts)
+}
+
 // --- helpers ---
 
 func ingressRouteScheme(t *testing.T) *runtime.Scheme {

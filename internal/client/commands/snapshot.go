@@ -51,11 +51,11 @@ func newSnapshotCreateCmd() *cobra.Command {
 			}
 
 			if Flags.Quiet {
-				fmt.Fprintln(cmd.OutOrStdout(), resp.GetSnapshotId())
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), resp.GetSnapshotId())
 				return nil
 			}
 
-			fmt.Fprintf(cmd.OutOrStdout(),
+			_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 				"Snapshot created: %s (entries: %d)\n",
 				resp.GetSnapshotId(), resp.GetEntryCount())
 			return nil
@@ -139,7 +139,7 @@ func newSnapshotRollbackCmd() *cobra.Command {
 			}
 
 			if !Flags.Quiet {
-				fmt.Fprintf(cmd.OutOrStdout(),
+				_, _ = fmt.Fprintf(cmd.OutOrStdout(),
 					"Rollback %s: restored %d entries (backup: %s)\n",
 					successStr(resp.GetSuccess()),
 					resp.GetRestoredEntryCount(),
@@ -176,9 +176,9 @@ func newSnapshotDeleteCmd() *cobra.Command {
 
 			if !Flags.Quiet {
 				if resp.GetSuccess() {
-					fmt.Fprintln(cmd.OutOrStdout(), "Snapshot deleted successfully")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Snapshot deleted successfully")
 				} else {
-					fmt.Fprintln(cmd.OutOrStdout(), "Delete returned success=false")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Delete returned success=false")
 				}
 			}
 			return nil

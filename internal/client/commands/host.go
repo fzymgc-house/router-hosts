@@ -64,7 +64,7 @@ func newHostAddCmd() *cobra.Command {
 			}
 
 			if Flags.Quiet {
-				fmt.Fprintln(cmd.OutOrStdout(), resp.GetId())
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), resp.GetId())
 				return nil
 			}
 
@@ -202,9 +202,9 @@ func newHostDeleteCmd() *cobra.Command {
 
 			if !Flags.Quiet {
 				if resp.GetSuccess() {
-					fmt.Fprintln(cmd.OutOrStdout(), "Deleted successfully")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Deleted successfully")
 				} else {
-					fmt.Fprintln(cmd.OutOrStdout(), "Delete returned success=false")
+					_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Delete returned success=false")
 				}
 			}
 			return nil
