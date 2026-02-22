@@ -1,0 +1,257 @@
+package sqlite
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitex"
+
+	"github.com/oklog/ulid/v2"
+
+	"github.com/fzymgc-house/router-hosts/internal/domain"
+)
+
+const timeFormat = "2006-01-02T15:04:05.000Z"
+
+// AppendEvent appends a single event with optimistic concurrency control.
+func (s *Storage) AppendEvent(ctx context.Context, aggregateID ulid.ULID, event domain.EventEnvelope, expectedVersion string) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	endFn, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer endFn(&err)
+
+	if err = checkVersion(conn, aggregateID, expectedVersion); err != nil {
+		return err
+	}
+
+	if err = insertEvent(conn, event); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// AppendEvents appends multiple events atomically with optimistic concurrency control.
+func (s *Storage) AppendEvents(ctx context.Context, aggregateID ulid.ULID, events []domain.EventEnvelope, expectedVersion string) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	endFn, err := sqlitex.ImmediateTransaction(conn)
+	if err != nil {
+		return fmt.Errorf("begin transaction: %w", err)
+	}
+	defer endFn(&err)
+
+	if err = checkVersion(conn, aggregateID, expectedVersion); err != nil {
+		return err
+	}
+
+	for _, event := range events {
+		if err = insertEvent(conn, event); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// LoadEvents returns all events for an aggregate ordered by version.
+func (s *Storage) LoadEvents(ctx context.Context, aggregateID ulid.ULID) ([]domain.EventEnvelope, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	var events []domain.EventEnvelope
+	err = sqlitex.Execute(conn,
+		`SELECT event_id, aggregate_id, event_type, event_data, event_version, created_at, created_by
+		 FROM events WHERE aggregate_id = ? ORDER BY event_version ASC`,
+		&sqlitex.ExecOptions{
+			Args: []any{aggregateID.String()},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				env, scanErr := scanEventEnvelope(stmt)
+				if scanErr != nil {
+					return scanErr
+				}
+				events = append(events, env)
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, fmt.Errorf("load events: %w", err)
+	}
+	return events, nil
+}
+
+// GetCurrentVersion returns the latest event version for an aggregate, or empty string if none.
+func (s *Storage) GetCurrentVersion(ctx context.Context, aggregateID ulid.ULID) (string, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return "", fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	var version string
+	err = sqlitex.Execute(conn,
+		`SELECT event_version FROM events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1`,
+		&sqlitex.ExecOptions{
+			Args: []any{aggregateID.String()},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				version = stmt.ColumnText(0)
+				return nil
+			},
+		})
+	if err != nil {
+		return "", fmt.Errorf("get current version: %w", err)
+	}
+	return version, nil
+}
+
+// CountEvents returns the number of events for an aggregate.
+func (s *Storage) CountEvents(ctx context.Context, aggregateID ulid.ULID) (int64, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	var count int64
+	err = sqlitex.Execute(conn,
+		`SELECT COUNT(*) FROM events WHERE aggregate_id = ?`,
+		&sqlitex.ExecOptions{
+			Args: []any{aggregateID.String()},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				count = stmt.ColumnInt64(0)
+				return nil
+			},
+		})
+	if err != nil {
+		return 0, fmt.Errorf("count events: %w", err)
+	}
+	return count, nil
+}
+
+// checkVersion verifies optimistic concurrency by comparing expected vs actual version.
+func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion string) error {
+	var actual string
+	err := sqlitex.Execute(conn,
+		`SELECT event_version FROM events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1`,
+		&sqlitex.ExecOptions{
+			Args: []any{aggregateID.String()},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				actual = stmt.ColumnText(0)
+				return nil
+			},
+		})
+	if err != nil {
+		return fmt.Errorf("check version: %w", err)
+	}
+	if actual != expectedVersion {
+		return domain.ErrVersionConflict(aggregateID.String(), expectedVersion, actual)
+	}
+	return nil
+}
+
+// insertEvent persists a single event envelope to the events table.
+func insertEvent(conn *sqlite.Conn, env domain.EventEnvelope) error {
+	eventData, err := json.Marshal(env.Event)
+	if err != nil {
+		return fmt.Errorf("marshal event: %w", err)
+	}
+
+	return sqlitex.Execute(conn,
+		`INSERT INTO events (event_id, aggregate_id, event_type, event_data, event_version, created_at, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		&sqlitex.ExecOptions{
+			Args: []any{
+				env.EventID.String(),
+				env.AggregateID.String(),
+				env.Event.Type,
+				string(eventData),
+				env.Version,
+				env.CreatedAt.UTC().Format(timeFormat),
+				ptrToAny(env.CreatedBy),
+			},
+		})
+}
+
+// scanEventEnvelope reads an EventEnvelope from a query result row.
+func scanEventEnvelope(stmt *sqlite.Stmt) (domain.EventEnvelope, error) {
+	var env domain.EventEnvelope
+
+	eventID, err := ulid.Parse(stmt.ColumnText(0))
+	if err != nil {
+		return env, fmt.Errorf("parse event_id: %w", err)
+	}
+	env.EventID = eventID
+
+	aggregateID, err := ulid.Parse(stmt.ColumnText(1))
+	if err != nil {
+		return env, fmt.Errorf("parse aggregate_id: %w", err)
+	}
+	env.AggregateID = aggregateID
+
+	// Column 2 is event_type (used indirectly via event_data)
+	eventDataStr := stmt.ColumnText(3)
+	if err := json.Unmarshal([]byte(eventDataStr), &env.Event); err != nil {
+		return env, fmt.Errorf("unmarshal event_data: %w", err)
+	}
+
+	env.Version = stmt.ColumnText(4)
+
+	createdAt, err := parseTime(stmt.ColumnText(5))
+	if err != nil {
+		return env, fmt.Errorf("parse created_at: %w", err)
+	}
+	env.CreatedAt = createdAt
+
+	env.CreatedBy = columnTextPtr(stmt, 6)
+
+	return env, nil
+}
+
+// ptrToAny converts a *string to an any suitable for SQL parameters.
+func ptrToAny(s *string) any {
+	if s == nil {
+		return nil
+	}
+	return *s
+}
+
+// columnTextPtr reads a nullable TEXT column as *string.
+func columnTextPtr(stmt *sqlite.Stmt, col int) *string {
+	if stmt.ColumnType(col) == sqlite.TypeNull {
+		return nil
+	}
+	v := stmt.ColumnText(col)
+	return &v
+}
+
+// parseTime attempts multiple time formats for flexibility.
+func parseTime(s string) (time.Time, error) {
+	formats := []string{
+		timeFormat,
+		time.RFC3339,
+		time.RFC3339Nano,
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t, nil
+		}
+	}
+	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
+}
