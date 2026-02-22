@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 
@@ -34,7 +35,7 @@ func newSnapshotCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			req := &hostsv1.CreateSnapshotRequest{
 				Name:    name,
@@ -83,7 +84,7 @@ func newSnapshotListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			req := &hostsv1.ListSnapshotsRequest{
 				Limit:  limit,
@@ -125,7 +126,7 @@ func newSnapshotRollbackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -161,7 +162,7 @@ func newSnapshotDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -191,7 +192,7 @@ func collectSnapshotStream(stream hostsv1.HostsService_ListSnapshotsClient) ([]*
 	var snapshots []*hostsv1.Snapshot
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

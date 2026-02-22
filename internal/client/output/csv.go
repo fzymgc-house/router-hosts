@@ -10,7 +10,6 @@ import (
 
 func renderCSV(w io.Writer, entries []*hostsv1.HostEntry) error {
 	cw := csv.NewWriter(w)
-	defer cw.Flush()
 
 	if err := cw.Write([]string{"id", "ip_address", "hostname", "aliases", "comment", "tags", "version"}); err != nil {
 		return err
@@ -34,12 +33,12 @@ func renderCSV(w io.Writer, entries []*hostsv1.HostEntry) error {
 			return err
 		}
 	}
-	return nil
+	cw.Flush()
+	return cw.Error()
 }
 
 func renderSnapshotsCSV(w io.Writer, snapshots []*hostsv1.Snapshot) error {
 	cw := csv.NewWriter(w)
-	defer cw.Flush()
 
 	if err := cw.Write([]string{"snapshot_id", "name", "trigger", "entry_count", "created_at"}); err != nil {
 		return err
@@ -61,5 +60,6 @@ func renderSnapshotsCSV(w io.Writer, snapshots []*hostsv1.Snapshot) error {
 			return err
 		}
 	}
-	return nil
+	cw.Flush()
+	return cw.Error()
 }

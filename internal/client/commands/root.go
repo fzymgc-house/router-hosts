@@ -116,7 +116,7 @@ func runServerHealth(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctx, cancel := commandContext()
 	defer cancel()
@@ -148,7 +148,7 @@ func runServerLiveness(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctx, cancel := commandContext()
 	defer cancel()
@@ -167,7 +167,7 @@ func runServerReadiness(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 
 	ctx, cancel := commandContext()
 	defer cancel()

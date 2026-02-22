@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -12,16 +13,6 @@ import (
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 )
-
-func init() {
-	registerHostSubcommands()
-}
-
-func registerHostSubcommands() {
-	// Registered by newHostCmd in root.go via AddCommand;
-	// subcommands are added in the PersistentPreRun of the parent
-	// after Cobra wires up the tree.
-}
 
 // addHostSubcommands attaches all host CRUD subcommands to the parent.
 func addHostSubcommands(parent *cobra.Command) {
@@ -52,7 +43,7 @@ func newHostAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			req := &hostsv1.AddHostRequest{
 				IpAddress: ip,
@@ -104,7 +95,7 @@ func newHostGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -140,7 +131,7 @@ func newHostUpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			req := &hostsv1.UpdateHostRequest{
 				Id: args[0],
@@ -199,7 +190,7 @@ func newHostDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -238,7 +229,7 @@ func newHostListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			req := &hostsv1.ListHostsRequest{}
 			if cmd.Flags().Changed("filter") {
@@ -287,7 +278,7 @@ func newHostSearchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -329,7 +320,7 @@ func collectHostStream(stream hostsv1.HostsService_ListHostsClient) ([]*hostsv1.
 	var entries []*hostsv1.HostEntry
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -347,7 +338,7 @@ func collectSearchStream(stream hostsv1.HostsService_SearchHostsClient) ([]*host
 	var entries []*hostsv1.HostEntry
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {

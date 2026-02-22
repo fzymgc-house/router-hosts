@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,10 +12,6 @@ import (
 )
 
 const importChunkSize = 64 * 1024 // 64 KiB
-
-func init() {
-	// host import/export are registered as host subcommands
-}
 
 // addImportExportSubcommands attaches import/export to the host parent.
 func addImportExportSubcommands(parent *cobra.Command) {
@@ -41,13 +38,13 @@ func newHostImportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			file, err := os.Open(args[0])
 			if err != nil {
 				return oops.Wrapf(err, "opening import file %s", args[0])
 			}
-			defer file.Close()
+			defer func() { _ = file.Close() }()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -96,7 +93,7 @@ func newHostImportCmd() *cobra.Command {
 			var lastResp *hostsv1.ImportHostsResponse
 			for {
 				resp, err := stream.Recv()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				if err != nil {
@@ -149,7 +146,7 @@ func newHostExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer c.Close()
+			defer func() { _ = c.Close() }()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -172,13 +169,13 @@ func newHostExportCmd() *cobra.Command {
 				if err != nil {
 					return oops.Wrapf(err, "creating output file %s", outArg)
 				}
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 				w = f
 			}
 
 			for {
 				resp, err := stream.Recv()
-				if err == io.EOF {
+				if errors.Is(err, io.EOF) {
 					break
 				}
 				if err != nil {
