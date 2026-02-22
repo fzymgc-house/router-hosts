@@ -172,57 +172,57 @@ func TestHostnameMaxTotalLength(t *testing.T) {
 // ==========================================================================
 
 func TestValidateAliasesEmptyAllowed(t *testing.T) {
-	if err := ValidateAliases([]string{}, "server.local"); err != nil {
-		t.Errorf("empty aliases should be valid: %v", err)
+	if errs := ValidateAliases([]string{}, "server.local"); errs != nil {
+		t.Errorf("empty aliases should be valid: %v", errs)
 	}
 }
 
 func TestValidateAliasesValid(t *testing.T) {
 	aliases := []string{"srv", "s.local"}
-	if err := ValidateAliases(aliases, "server.local"); err != nil {
-		t.Errorf("valid aliases should pass: %v", err)
+	if errs := ValidateAliases(aliases, "server.local"); errs != nil {
+		t.Errorf("valid aliases should pass: %v", errs)
 	}
 }
 
 func TestValidateAliasesMatchesHostname(t *testing.T) {
 	aliases := []string{"srv", "server.local"}
-	err := ValidateAliases(aliases, "server.local")
-	if err == nil {
+	errs := ValidateAliases(aliases, "server.local")
+	if len(errs) == 0 {
 		t.Fatal("alias matching hostname should fail")
 	}
-	assertOopsCode(t, err, "alias_matches_hostname")
+	assertSliceContainsOopsCode(t, errs, "alias_matches_hostname")
 }
 
 func TestValidateAliasesCaseInsensitiveMatch(t *testing.T) {
 	aliases := []string{"SERVER.LOCAL"}
-	err := ValidateAliases(aliases, "server.local")
-	if err == nil {
+	errs := ValidateAliases(aliases, "server.local")
+	if len(errs) == 0 {
 		t.Fatal("case-insensitive match should fail")
 	}
-	assertOopsCode(t, err, "alias_matches_hostname")
+	assertSliceContainsOopsCode(t, errs, "alias_matches_hostname")
 }
 
 func TestValidateAliasesDuplicate(t *testing.T) {
 	aliases := []string{"srv", "srv"}
-	err := ValidateAliases(aliases, "server.local")
-	if err == nil {
+	errs := ValidateAliases(aliases, "server.local")
+	if len(errs) == 0 {
 		t.Fatal("duplicate alias should fail")
 	}
-	assertOopsCode(t, err, "duplicate_alias")
+	assertSliceContainsOopsCode(t, errs, "duplicate_alias")
 }
 
 func TestValidateAliasesDuplicateCaseInsensitive(t *testing.T) {
 	aliases := []string{"srv", "SRV"}
-	err := ValidateAliases(aliases, "server.local")
-	if err == nil {
+	errs := ValidateAliases(aliases, "server.local")
+	if len(errs) == 0 {
 		t.Fatal("case-insensitive duplicate should fail")
 	}
-	assertOopsCode(t, err, "duplicate_alias")
+	assertSliceContainsOopsCode(t, errs, "duplicate_alias")
 }
 
 func TestValidateAliasesInvalidFormat(t *testing.T) {
 	aliases := []string{"-invalid"}
-	if err := ValidateAliases(aliases, "server.local"); err == nil {
+	if errs := ValidateAliases(aliases, "server.local"); len(errs) == 0 {
 		t.Error("invalid alias format should fail")
 	}
 }
@@ -230,27 +230,27 @@ func TestValidateAliasesInvalidFormat(t *testing.T) {
 func TestValidateAliasesIPAddressRejected(t *testing.T) {
 	t.Run("ipv4", func(t *testing.T) {
 		aliases := []string{"192.168.1.1"}
-		err := ValidateAliases(aliases, "server.local")
-		if err == nil {
+		errs := ValidateAliases(aliases, "server.local")
+		if len(errs) == 0 {
 			t.Fatal("IPv4 alias should be rejected")
 		}
-		assertOopsCode(t, err, "alias_is_ip_address")
+		assertSliceContainsOopsCode(t, errs, "alias_is_ip_address")
 	})
 	t.Run("ipv6", func(t *testing.T) {
 		aliases := []string{"::1"}
-		err := ValidateAliases(aliases, "server.local")
-		if err == nil {
+		errs := ValidateAliases(aliases, "server.local")
+		if len(errs) == 0 {
 			t.Fatal("IPv6 alias should be rejected")
 		}
-		assertOopsCode(t, err, "alias_is_ip_address")
+		assertSliceContainsOopsCode(t, errs, "alias_is_ip_address")
 	})
 	t.Run("ipv6_full", func(t *testing.T) {
 		aliases := []string{"2001:db8::1"}
-		err := ValidateAliases(aliases, "server.local")
-		if err == nil {
+		errs := ValidateAliases(aliases, "server.local")
+		if len(errs) == 0 {
 			t.Fatal("full IPv6 alias should be rejected")
 		}
-		assertOopsCode(t, err, "alias_is_ip_address")
+		assertSliceContainsOopsCode(t, errs, "alias_is_ip_address")
 	})
 }
 
@@ -259,11 +259,11 @@ func TestValidateAliasesTooMany(t *testing.T) {
 	for i := range aliases {
 		aliases[i] = fmt.Sprintf("alias%d", i)
 	}
-	err := ValidateAliases(aliases, "server.local")
-	if err == nil {
+	errs := ValidateAliases(aliases, "server.local")
+	if len(errs) == 0 {
 		t.Fatal("too many aliases should fail")
 	}
-	assertOopsCode(t, err, "too_many_aliases")
+	assertSliceContainsOopsCode(t, errs, "too_many_aliases")
 }
 
 func TestValidateAliasesMaxAllowed(t *testing.T) {
@@ -271,8 +271,8 @@ func TestValidateAliasesMaxAllowed(t *testing.T) {
 	for i := range aliases {
 		aliases[i] = fmt.Sprintf("alias%d", i)
 	}
-	if err := ValidateAliases(aliases, "server.local"); err != nil {
-		t.Errorf("exactly max aliases should be valid: %v", err)
+	if errs := ValidateAliases(aliases, "server.local"); errs != nil {
+		t.Errorf("exactly max aliases should be valid: %v", errs)
 	}
 }
 
@@ -304,13 +304,29 @@ func TestPropertyIPValidationConsistent(t *testing.T) {
 	})
 }
 
-func TestPropertyUnderscoreHostnameAlwaysFails(t *testing.T) {
+func TestPropertyValidHostnamesAlwaysPass(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
+		numLabels := rapid.IntRange(1, 3).Draw(t, "numLabels")
+		labels := make([]string, numLabels)
+		for i := range labels {
+			labels[i] = rapid.StringMatching("[a-z][a-z0-9]{0,9}").Draw(t, fmt.Sprintf("label%d", i))
+		}
+		hostname := strings.Join(labels, ".")
+		if err := ValidateHostname(hostname); err != nil {
+			t.Fatalf("valid hostname %q should pass: %v", hostname, err)
+		}
+	})
+}
+
+func TestPropertyInvalidCharsHostnameAlwaysFails(t *testing.T) {
+	rapid.Check(t, func(t *rapid.T) {
+		invalidChars := []byte("_@!#$%^&* ")
 		prefix := rapid.StringMatching("[a-z]{1,5}").Draw(t, "prefix")
 		suffix := rapid.StringMatching("[a-z]{1,5}").Draw(t, "suffix")
-		hostname := prefix + "_" + suffix
+		badChar := invalidChars[rapid.IntRange(0, len(invalidChars)-1).Draw(t, "charIdx")]
+		hostname := prefix + string(badChar) + suffix
 		if err := ValidateHostname(hostname); err == nil {
-			t.Fatalf("underscore hostname %q should fail", hostname)
+			t.Fatalf("hostname with invalid char %q (%q) should fail", hostname, string(badChar))
 		}
 	})
 }
@@ -333,4 +349,20 @@ func assertOopsCode(t *testing.T, err error, expectedCode string) {
 	if !strings.Contains(errStr, expectedCode) {
 		t.Errorf("expected error code %q in error: %v", expectedCode, err)
 	}
+}
+
+// assertSliceContainsOopsCode checks that at least one error in the slice
+// contains an oops error with the expected code.
+func assertSliceContainsOopsCode(t *testing.T, errs []error, expectedCode string) {
+	t.Helper()
+	if len(errs) == 0 {
+		t.Fatalf("expected errors with code %q, got empty slice", expectedCode)
+	}
+	for _, err := range errs {
+		errStr := fmt.Sprintf("%+v", err)
+		if strings.Contains(errStr, expectedCode) {
+			return
+		}
+	}
+	t.Errorf("expected error code %q in error slice: %v", expectedCode, errs)
 }

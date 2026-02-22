@@ -81,22 +81,26 @@ func ValidateHostname(hostname string) error {
 }
 
 // ValidateAliases validates a list of aliases for a host entry.
+// It collects ALL validation errors rather than returning on the first one.
 //
 // Rules:
-//   - Maximum MaxAliasesPerEntry aliases
+//   - Maximum MaxAliasesPerEntry aliases (returns immediately if exceeded)
 //   - Each alias must be a valid hostname
 //   - Cannot match canonical hostname (case-insensitive)
 //   - No duplicate aliases (case-insensitive)
 //   - Cannot be an IP address (checked before hostname validation for better
 //     error messages on IPv6 addresses like "::1")
-func ValidateAliases(aliases []string, canonicalHostname string) error {
+func ValidateAliases(aliases []string, canonicalHostname string) []error {
 	if len(aliases) > MaxAliasesPerEntry {
-		return oops.
-			Code("too_many_aliases").
-			Errorf("too many aliases: %d exceeds maximum of %d",
-				len(aliases), MaxAliasesPerEntry)
+		return []error{
+			oops.
+				Code("too_many_aliases").
+				Errorf("too many aliases: %d exceeds maximum of %d",
+					len(aliases), MaxAliasesPerEntry),
+		}
 	}
 
+	var errs []error
 	seen := make(map[string]struct{}, len(aliases))
 
 	for _, alias := range aliases {
@@ -104,32 +108,37 @@ func ValidateAliases(aliases []string, canonicalHostname string) error {
 		// This gives a more specific error for IPv6 addresses like "::1"
 		// which would otherwise fail hostname validation due to colons.
 		if net.ParseIP(alias) != nil {
-			return oops.
+			errs = append(errs, oops.
 				Code("alias_is_ip_address").
-				Errorf("alias '%s' cannot be an IP address", alias)
+				Errorf("alias '%s' cannot be an IP address", alias))
+			continue
 		}
 
 		// Validate as hostname (after IP check).
 		if err := ValidateHostname(alias); err != nil {
-			return fmt.Errorf("invalid alias '%s': %w", alias, err)
+			errs = append(errs, fmt.Errorf("invalid alias '%s': %w", alias, err))
+			continue
 		}
 
 		// Cannot match canonical hostname (case-insensitive).
 		if strings.EqualFold(alias, canonicalHostname) {
-			return oops.
+			errs = append(errs, oops.
 				Code("alias_matches_hostname").
-				Errorf("alias '%s' matches canonical hostname", alias)
+				Errorf("alias '%s' matches canonical hostname", alias))
 		}
 
 		// No duplicates (case-insensitive).
 		lower := strings.ToLower(alias)
 		if _, exists := seen[lower]; exists {
-			return oops.
+			errs = append(errs, oops.
 				Code("duplicate_alias").
-				Errorf("duplicate alias '%s' in entry", alias)
+				Errorf("duplicate alias '%s' in entry", alias))
 		}
 		seen[lower] = struct{}{}
 	}
 
-	return nil
+	if len(errs) == 0 {
+		return nil
+	}
+	return errs
 }
