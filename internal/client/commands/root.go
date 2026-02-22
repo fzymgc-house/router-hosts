@@ -67,6 +67,7 @@ func newHostCmd() *cobra.Command {
 		Aliases: []string{"h"},
 		Short:   "Manage host entries",
 	}
+	addHostSubcommands(cmd)
 	return cmd
 }
 
