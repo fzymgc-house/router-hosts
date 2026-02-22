@@ -24,16 +24,25 @@ const (
 
 	// MaxHookNameLength is the maximum allowed length for hook names.
 	MaxHookNameLength = 50
+
+	// DefaultRenewalDays is the number of days before certificate expiry to trigger renewal.
+	DefaultRenewalDays = 30
+
+	// DefaultCheckInterval is the interval in seconds between ACME renewal checks (12 hours).
+	DefaultCheckInterval = 43200
+
+	// LetsEncryptProductionURL is the default ACME directory URL.
+	LetsEncryptProductionURL = "https://acme-v02.api.letsencrypt.org/directory"
 )
 
 // Config is the top-level server configuration, loaded from TOML.
 type Config struct {
-	Server    ServerConfig     `toml:"server"`
-	Database  DatabaseConfig   `toml:"database"`
-	TLS       TLSConfig        `toml:"tls"`
-	Retention RetentionConfig  `toml:"retention"`
-	Hooks     HooksConfig      `toml:"hooks"`
-	Metrics   *MetricsConfig   `toml:"metrics,omitempty"`
+	Server    ServerConfig    `toml:"server"`
+	Database  DatabaseConfig  `toml:"database"`
+	TLS       TLSConfig       `toml:"tls"`
+	Retention RetentionConfig `toml:"retention"`
+	Hooks     HooksConfig     `toml:"hooks"`
+	Metrics   *MetricsConfig  `toml:"metrics,omitempty"`
 }
 
 // ServerConfig holds the core server settings.
@@ -50,9 +59,33 @@ type DatabaseConfig struct {
 
 // TLSConfig holds paths to TLS certificates for mTLS.
 type TLSConfig struct {
-	CertPath   string `toml:"cert_path"`
-	KeyPath    string `toml:"key_path"`
-	CACertPath string `toml:"ca_cert_path"`
+	CertPath   string      `toml:"cert_path"`
+	KeyPath    string      `toml:"key_path"`
+	CACertPath string      `toml:"ca_cert_path"`
+	ACME       *ACMEConfig `toml:"acme,omitempty"`
+}
+
+// ACMEConfig holds ACME certificate automation settings.
+type ACMEConfig struct {
+	Enabled       bool          `toml:"enabled"`
+	DirectoryURL  string        `toml:"directory_url"`
+	Email         string        `toml:"email"`
+	Domains       []string      `toml:"domains"`
+	DNS           ACMEDNSConfig `toml:"dns"`
+	RenewalDays   int           `toml:"renewal_days"`
+	CheckInterval int           `toml:"check_interval"`
+	StoragePath   string        `toml:"storage_path"`
+}
+
+// ACMEDNSConfig holds DNS provider settings for DNS-01 challenges.
+type ACMEDNSConfig struct {
+	Provider   string         `toml:"provider"`
+	Cloudflare *CloudflareDNS `toml:"cloudflare,omitempty"`
+}
+
+// CloudflareDNS holds Cloudflare-specific DNS challenge settings.
+type CloudflareDNS struct {
+	APIToken string `toml:"api_token"` // supports ${ENV_VAR} expansion
 }
 
 // RetentionConfig controls snapshot retention policy.
@@ -151,6 +184,20 @@ func LoadServerConfig(path string) (*Config, error) {
 		cfg.Retention.MaxAgeDays = DefaultMaxAgeDays
 	}
 
+	// Apply ACME defaults
+	if cfg.TLS.ACME != nil && cfg.TLS.ACME.Enabled {
+		acme := cfg.TLS.ACME
+		if acme.DirectoryURL == "" {
+			acme.DirectoryURL = LetsEncryptProductionURL
+		}
+		if acme.RenewalDays == 0 {
+			acme.RenewalDays = DefaultRenewalDays
+		}
+		if acme.CheckInterval == 0 {
+			acme.CheckInterval = DefaultCheckInterval
+		}
+	}
+
 	// Apply OTel defaults
 	if cfg.Metrics != nil && cfg.Metrics.OTel != nil {
 		otel := cfg.Metrics.OTel
@@ -188,6 +235,36 @@ func (c *Config) validate() error {
 
 	if err := c.Hooks.validate(); err != nil {
 		return err
+	}
+
+	if err := c.TLS.validateACME(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// validateACME checks ACME configuration when enabled.
+func (t *TLSConfig) validateACME() error {
+	if t.ACME == nil || !t.ACME.Enabled {
+		return nil
+	}
+
+	acme := t.ACME
+	if acme.Email == "" {
+		return fmt.Errorf("config: acme.email is required when ACME is enabled")
+	}
+	if len(acme.Domains) == 0 {
+		return fmt.Errorf("config: acme.domains must contain at least one domain when ACME is enabled")
+	}
+	if acme.DNS.Provider != "cloudflare" {
+		return fmt.Errorf("config: acme.dns.provider must be \"cloudflare\" (got %q)", acme.DNS.Provider)
+	}
+	if acme.DNS.Provider == "cloudflare" && acme.DNS.Cloudflare == nil {
+		return fmt.Errorf("config: acme.dns.cloudflare section is required when provider is \"cloudflare\"")
+	}
+	if acme.DNS.Cloudflare != nil && acme.DNS.Cloudflare.APIToken == "" {
+		return fmt.Errorf("config: acme.dns.cloudflare.api_token is required")
 	}
 
 	return nil
@@ -261,6 +338,64 @@ func isValidKebabCase(s string) bool {
 		}
 	}
 	return true
+}
+
+// ExpandEnvVars replaces ${VAR} references in s with environment variable values.
+// It supports ${VAR:-default} for fallback values when VAR is unset or empty.
+// Use $$ to produce a literal $.
+// Returns an error if a referenced variable is unset and no default is provided.
+func ExpandEnvVars(s string) (string, error) {
+	var b strings.Builder
+	b.Grow(len(s))
+
+	i := 0
+	for i < len(s) {
+		if s[i] != '$' {
+			b.WriteByte(s[i])
+			i++
+			continue
+		}
+
+		// Escaped dollar
+		if i+1 < len(s) && s[i+1] == '$' {
+			b.WriteByte('$')
+			i += 2
+			continue
+		}
+
+		// ${VAR} or ${VAR:-default}
+		if i+1 < len(s) && s[i+1] == '{' {
+			end := strings.IndexByte(s[i:], '}')
+			if end == -1 {
+				return "", fmt.Errorf("config: unclosed ${...} in %q", s)
+			}
+			expr := s[i+2 : i+end]
+			i += end + 1
+
+			varName, defaultVal, hasDefault := strings.Cut(expr, ":-")
+			if varName == "" {
+				return "", fmt.Errorf("config: empty variable name in ${...}")
+			}
+
+			val, ok := os.LookupEnv(varName)
+			if !ok || val == "" {
+				if hasDefault {
+					b.WriteString(defaultVal)
+				} else {
+					return "", fmt.Errorf("config: environment variable %q is not set", varName)
+				}
+			} else {
+				b.WriteString(val)
+			}
+			continue
+		}
+
+		// Bare $ not followed by { or $ — pass through literally
+		b.WriteByte(s[i])
+		i++
+	}
+
+	return b.String(), nil
 }
 
 // checkConfigPermissions rejects world-writable config files on Unix.

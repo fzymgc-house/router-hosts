@@ -390,3 +390,188 @@ func TestHookDefinition_Validate(t *testing.T) {
 		})
 	}
 }
+
+func TestExpandEnvVars_Simple(t *testing.T) {
+	t.Setenv("TEST_EXPAND_VAR", "hello-world")
+	result, err := ExpandEnvVars("${TEST_EXPAND_VAR}")
+	require.NoError(t, err)
+	assert.Equal(t, "hello-world", result)
+}
+
+func TestExpandEnvVars_Default(t *testing.T) {
+	// Use a variable name that is extremely unlikely to exist
+	result, err := ExpandEnvVars("${TEST_EXPAND_MISSING_2ae7c1b4:-fallback-value}")
+	require.NoError(t, err)
+	assert.Equal(t, "fallback-value", result)
+}
+
+func TestExpandEnvVars_DefaultUsedWhenEmpty(t *testing.T) {
+	t.Setenv("TEST_EXPAND_EMPTY", "")
+	result, err := ExpandEnvVars("${TEST_EXPAND_EMPTY:-default-val}")
+	require.NoError(t, err)
+	assert.Equal(t, "default-val", result)
+}
+
+func TestExpandEnvVars_Missing(t *testing.T) {
+	// Use a variable name that is extremely unlikely to exist
+	_, err := ExpandEnvVars("${TEST_EXPAND_DOES_NOT_EXIST_9f3a0b2c}")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not set")
+}
+
+func TestExpandEnvVars_Escape(t *testing.T) {
+	result, err := ExpandEnvVars("price is $$100")
+	require.NoError(t, err)
+	assert.Equal(t, "price is $100", result)
+}
+
+func TestExpandEnvVars_Multiple(t *testing.T) {
+	t.Setenv("TEST_EXPAND_A", "alpha")
+	t.Setenv("TEST_EXPAND_B", "beta")
+
+	result, err := ExpandEnvVars("${TEST_EXPAND_A}-${TEST_EXPAND_B}")
+	require.NoError(t, err)
+	assert.Equal(t, "alpha-beta", result)
+}
+
+func TestExpandEnvVars_NoVars(t *testing.T) {
+	result, err := ExpandEnvVars("plain string with no vars")
+	require.NoError(t, err)
+	assert.Equal(t, "plain string with no vars", result)
+}
+
+func TestExpandEnvVars_UnclosedBrace(t *testing.T) {
+	_, err := ExpandEnvVars("${UNCLOSED")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unclosed")
+}
+
+func TestACMEConfig_Validation(t *testing.T) {
+	base := func() Config {
+		return Config{
+			Server: ServerConfig{BindAddress: "0.0.0.0:50051", HostsFilePath: "/etc/hosts"},
+			TLS: TLSConfig{
+				CertPath:   "/cert.pem",
+				KeyPath:    "/key.pem",
+				CACertPath: "/ca.pem",
+				ACME: &ACMEConfig{
+					Enabled:      true,
+					Email:        "test@example.com",
+					Domains:      []string{"example.com"},
+					DNS:          ACMEDNSConfig{Provider: "cloudflare", Cloudflare: &CloudflareDNS{APIToken: "tok"}},
+					RenewalDays:  30,
+					DirectoryURL: "https://acme.example.com",
+				},
+			},
+		}
+	}
+
+	t.Run("valid", func(t *testing.T) {
+		cfg := base()
+		assert.NoError(t, cfg.validate())
+	})
+
+	t.Run("missing email", func(t *testing.T) {
+		cfg := base()
+		cfg.TLS.ACME.Email = ""
+		err := cfg.validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "email is required")
+	})
+
+	t.Run("missing domains", func(t *testing.T) {
+		cfg := base()
+		cfg.TLS.ACME.Domains = nil
+		err := cfg.validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "at least one domain")
+	})
+
+	t.Run("unsupported provider", func(t *testing.T) {
+		cfg := base()
+		cfg.TLS.ACME.DNS.Provider = "route53"
+		err := cfg.validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cloudflare")
+	})
+
+	t.Run("missing cloudflare section", func(t *testing.T) {
+		cfg := base()
+		cfg.TLS.ACME.DNS.Cloudflare = nil
+		err := cfg.validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "cloudflare section is required")
+	})
+
+	t.Run("missing api token", func(t *testing.T) {
+		cfg := base()
+		cfg.TLS.ACME.DNS.Cloudflare.APIToken = ""
+		err := cfg.validate()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "api_token is required")
+	})
+
+	t.Run("disabled skips validation", func(t *testing.T) {
+		cfg := base()
+		cfg.TLS.ACME.Enabled = false
+		cfg.TLS.ACME.Email = "" // would fail if enabled
+		assert.NoError(t, cfg.validate())
+	})
+
+	t.Run("nil ACME skips validation", func(t *testing.T) {
+		cfg := base()
+		cfg.TLS.ACME = nil
+		assert.NoError(t, cfg.validate())
+	})
+}
+
+func TestLoadServerConfig_WithACME(t *testing.T) {
+	content := minimalConfig + `
+[tls.acme]
+enabled = true
+directory_url = "https://acme-staging-v02.api.letsencrypt.org/directory"
+email = "admin@example.com"
+domains = ["example.com", "www.example.com"]
+storage_path = "/var/lib/router-hosts/acme"
+
+[tls.acme.dns]
+provider = "cloudflare"
+
+[tls.acme.dns.cloudflare]
+api_token = "my-token"
+`
+	path := writeConfigFile(t, content)
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+
+	require.NotNil(t, cfg.TLS.ACME)
+	assert.True(t, cfg.TLS.ACME.Enabled)
+	assert.Equal(t, "admin@example.com", cfg.TLS.ACME.Email)
+	assert.Equal(t, []string{"example.com", "www.example.com"}, cfg.TLS.ACME.Domains)
+	assert.Equal(t, DefaultRenewalDays, cfg.TLS.ACME.RenewalDays)
+	assert.Equal(t, DefaultCheckInterval, cfg.TLS.ACME.CheckInterval)
+	assert.Equal(t, "cloudflare", cfg.TLS.ACME.DNS.Provider)
+	assert.Equal(t, "my-token", cfg.TLS.ACME.DNS.Cloudflare.APIToken)
+}
+
+func TestLoadServerConfig_ACMEDefaults(t *testing.T) {
+	content := minimalConfig + `
+[tls.acme]
+enabled = true
+email = "admin@example.com"
+domains = ["example.com"]
+
+[tls.acme.dns]
+provider = "cloudflare"
+
+[tls.acme.dns.cloudflare]
+api_token = "tok"
+`
+	path := writeConfigFile(t, content)
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+
+	assert.Equal(t, LetsEncryptProductionURL, cfg.TLS.ACME.DirectoryURL)
+	assert.Equal(t, DefaultRenewalDays, cfg.TLS.ACME.RenewalDays)
+	assert.Equal(t, DefaultCheckInterval, cfg.TLS.ACME.CheckInterval)
+}
