@@ -510,3 +510,150 @@ func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream g
 
 	return stream.Send(&hostsv1.ExportHostsResponse{Chunk: data})
 }
+
+// ---------------------------------------------------------------------------
+// Snapshot RPCs
+// ---------------------------------------------------------------------------
+
+// CreateSnapshot captures the current state of the hosts database.
+func (s *HostsServiceImpl) CreateSnapshot(ctx context.Context, req *hostsv1.CreateSnapshotRequest) (*hostsv1.CreateSnapshotResponse, error) {
+	entries, err := s.store.ListAll(ctx)
+	if err != nil {
+		return nil, mapError(err)
+	}
+
+	gen := s.hostsGen
+	if gen == nil {
+		gen = NewHostsFileGenerator("/dev/null")
+	}
+	content := gen.FormatHostsFile(entries)
+
+	trigger := req.GetTrigger()
+	if trigger == "" {
+		trigger = "manual"
+	}
+
+	snapshotID := ulid.Make().String()
+	now := time.Now().UTC()
+
+	var name *string
+	if req.GetName() != "" {
+		n := req.GetName()
+		name = &n
+	}
+
+	snap := domain.Snapshot{
+		SnapshotID:   snapshotID,
+		CreatedAt:    now,
+		HostsContent: content,
+		Entries:      entries,
+		EntryCount:   int32(len(entries)),
+		Trigger:      trigger,
+		Name:         name,
+	}
+
+	if err := s.store.SaveSnapshot(ctx, snap); err != nil {
+		return nil, mapError(err)
+	}
+
+	// Best-effort retention policy — no config injection yet, use reasonable defaults
+	_, _ = s.store.ApplyRetentionPolicy(ctx, nil, nil)
+
+	return &hostsv1.CreateSnapshotResponse{
+		SnapshotId: snapshotID,
+		CreatedAt:  now.UnixMicro(),
+		EntryCount: int32(len(entries)),
+	}, nil
+}
+
+// ListSnapshots streams snapshot metadata.
+func (s *HostsServiceImpl) ListSnapshots(req *hostsv1.ListSnapshotsRequest, stream grpc.ServerStreamingServer[hostsv1.ListSnapshotsResponse]) error {
+	ctx := stream.Context()
+
+	var limit, offset *uint32
+	if req.GetLimit() > 0 {
+		l := req.GetLimit()
+		limit = &l
+	}
+	if req.GetOffset() > 0 {
+		o := req.GetOffset()
+		offset = &o
+	}
+
+	metas, err := s.store.ListSnapshots(ctx, limit, offset)
+	if err != nil {
+		return mapError(err)
+	}
+
+	for _, m := range metas {
+		name := ""
+		if m.Name != nil {
+			name = *m.Name
+		}
+		if err := stream.Send(&hostsv1.ListSnapshotsResponse{
+			Snapshot: &hostsv1.Snapshot{
+				SnapshotId: m.SnapshotID,
+				CreatedAt:  timestamppb.New(m.CreatedAt),
+				EntryCount: m.EntryCount,
+				Trigger:    m.Trigger,
+				Name:       name,
+			},
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// RollbackToSnapshot restores the hosts database to a snapshot state.
+func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.RollbackToSnapshotRequest) (*hostsv1.RollbackToSnapshotResponse, error) {
+	// Load the target snapshot
+	target, err := s.store.GetSnapshot(ctx, req.GetSnapshotId())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	if target == nil {
+		return nil, status.Errorf(codes.NotFound, "snapshot %q not found", req.GetSnapshotId())
+	}
+
+	// Create a pre-rollback backup snapshot of current state
+	backupResp, err := s.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{
+		Name:    "pre-rollback-backup",
+		Trigger: "pre-rollback",
+	})
+	if err != nil {
+		return nil, oops.Wrapf(err, "create pre-rollback backup")
+	}
+
+	// Delete all current entries, then re-import from the snapshot
+	currentEntries, err := s.store.ListAll(ctx)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	for _, entry := range currentEntries {
+		_ = s.handler.DeleteHost(ctx, entry.ID, entry.Version)
+	}
+
+	// Re-import each entry from the target snapshot
+	var restoredCount int32
+	for _, entry := range target.Entries {
+		_, addErr := s.handler.AddHost(ctx, entry.IP, entry.Hostname, entry.Comment, entry.Tags, entry.Aliases)
+		if addErr == nil {
+			restoredCount++
+		}
+	}
+
+	return &hostsv1.RollbackToSnapshotResponse{
+		Success:            true,
+		NewSnapshotId:      backupResp.GetSnapshotId(),
+		RestoredEntryCount: restoredCount,
+	}, nil
+}
+
+// DeleteSnapshot removes a snapshot by ID.
+func (s *HostsServiceImpl) DeleteSnapshot(ctx context.Context, req *hostsv1.DeleteSnapshotRequest) (*hostsv1.DeleteSnapshotResponse, error) {
+	if err := s.store.DeleteSnapshot(ctx, req.GetSnapshotId()); err != nil {
+		return nil, mapError(err)
+	}
+	return &hostsv1.DeleteSnapshotResponse{Success: true}, nil
+}

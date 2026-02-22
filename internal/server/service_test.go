@@ -549,5 +549,130 @@ func TestParseHostsFormat_TagsOnly(t *testing.T) {
 	assert.Equal(t, []string{"web", "prod"}, entries[0].Tags)
 }
 
+// ---------------------------------------------------------------------------
+// Snapshot Tests (Task 21)
+// ---------------------------------------------------------------------------
+
+func TestService_CreateSnapshot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Add some entries first
+	_, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.10",
+		Hostname:  "server.local",
+	})
+	require.NoError(t, err)
+
+	resp, err := env.client.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{
+		Name:    "test-snapshot",
+		Trigger: "manual",
+	})
+	require.NoError(t, err)
+	assert.NotEmpty(t, resp.GetSnapshotId())
+	assert.Equal(t, int32(1), resp.GetEntryCount())
+	assert.Greater(t, resp.GetCreatedAt(), int64(0))
+}
+
+func TestService_ListSnapshots(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Create two snapshots
+	_, err := env.client.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{Name: "snap1"})
+	require.NoError(t, err)
+	_, err = env.client.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{Name: "snap2"})
+	require.NoError(t, err)
+
+	stream, err := env.client.ListSnapshots(ctx, &hostsv1.ListSnapshotsRequest{})
+	require.NoError(t, err)
+
+	var snapshots []*hostsv1.Snapshot
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		snapshots = append(snapshots, resp.GetSnapshot())
+	}
+	assert.Len(t, snapshots, 2)
+}
+
+func TestService_DeleteSnapshot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	createResp, err := env.client.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{Name: "to-delete"})
+	require.NoError(t, err)
+
+	delResp, err := env.client.DeleteSnapshot(ctx, &hostsv1.DeleteSnapshotRequest{
+		SnapshotId: createResp.GetSnapshotId(),
+	})
+	require.NoError(t, err)
+	assert.True(t, delResp.GetSuccess())
+
+	// Verify it's gone by listing
+	stream, err := env.client.ListSnapshots(ctx, &hostsv1.ListSnapshotsRequest{})
+	require.NoError(t, err)
+
+	var snapshots []*hostsv1.Snapshot
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		snapshots = append(snapshots, resp.GetSnapshot())
+	}
+	assert.Empty(t, snapshots)
+}
+
+func TestService_RollbackToSnapshot(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Add entries and create a snapshot
+	_, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.10",
+		Hostname:  "server.local",
+	})
+	require.NoError(t, err)
+
+	snapResp, err := env.client.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{Name: "baseline"})
+	require.NoError(t, err)
+
+	// Add another entry so current state differs
+	_, err = env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "10.0.0.1",
+		Hostname:  "extra.local",
+	})
+	require.NoError(t, err)
+
+	// Rollback
+	rollResp, err := env.client.RollbackToSnapshot(ctx, &hostsv1.RollbackToSnapshotRequest{
+		SnapshotId: snapResp.GetSnapshotId(),
+	})
+	require.NoError(t, err)
+	assert.True(t, rollResp.GetSuccess())
+	assert.NotEmpty(t, rollResp.GetNewSnapshotId())
+	assert.Equal(t, int32(1), rollResp.GetRestoredEntryCount())
+
+	// Verify only original entry exists
+	listStream, err := env.client.ListHosts(ctx, &hostsv1.ListHostsRequest{})
+	require.NoError(t, err)
+	var remaining []*hostsv1.HostEntry
+	for {
+		resp, err := listStream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		remaining = append(remaining, resp.Entry)
+	}
+	assert.Len(t, remaining, 1)
+	assert.Equal(t, "server.local", remaining[0].Hostname)
+}
+
 // Ensure unused imports are referenced
 var _ = strings.Contains
