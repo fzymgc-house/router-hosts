@@ -105,30 +105,38 @@ func findClientConfigFile() (string, error) {
 }
 
 // clientConfigSearchPaths returns the ordered list of paths to search.
+// Within each directory, client.toml is preferred over config.toml.
 func clientConfigSearchPaths() []string {
+	filenames := []string{"client.toml", "config.toml"}
 	var paths []string
 
 	// 1. XDG_CONFIG_HOME
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
-		paths = append(paths, filepath.Join(xdg, "router-hosts", "client.toml"))
+		for _, name := range filenames {
+			paths = append(paths, filepath.Join(xdg, "router-hosts", name))
+		}
 	}
 
 	// 2. ~/.config fallback
 	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".config", "router-hosts", "client.toml"))
+		for _, name := range filenames {
+			paths = append(paths, filepath.Join(home, ".config", "router-hosts", name))
+		}
 	}
 
 	// 3. Platform config dir (macOS only — separate from ~/.config)
 	if runtime.GOOS == "darwin" {
 		if home, err := os.UserHomeDir(); err == nil {
-			paths = append(paths, filepath.Join(home, "Library", "Application Support", "router-hosts", "client.toml"))
+			for _, name := range filenames {
+				paths = append(paths, filepath.Join(home, "Library", "Application Support", "router-hosts", name))
+			}
 		}
 	}
 
 	return paths
 }
 
-// applyClientEnv applies environment variable values to empty config fields.
+// applyClientEnv overrides config fields with environment variable values when set.
 func applyClientEnv(cfg *ClientConfig) {
 	if v := os.Getenv(EnvServer); v != "" {
 		cfg.ServerAddress = v

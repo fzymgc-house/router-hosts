@@ -131,6 +131,7 @@ func TestClientConfigSearchPaths_XDGFirst(t *testing.T) {
 	paths := clientConfigSearchPaths()
 	require.NotEmpty(t, paths)
 	assert.Equal(t, "/custom/xdg/router-hosts/client.toml", paths[0])
+	assert.Equal(t, "/custom/xdg/router-hosts/config.toml", paths[1])
 }
 
 func TestClientConfigSearchPaths_FallbackToHomeConfig(t *testing.T) {
@@ -143,6 +144,36 @@ func TestClientConfigSearchPaths_FallbackToHomeConfig(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, filepath.Join(home, ".config", "router-hosts", "client.toml"), paths[0])
+	assert.Equal(t, filepath.Join(home, ".config", "router-hosts", "config.toml"), paths[1])
+}
+
+func TestFindClientConfigFile_PrefersClientTomlOverConfigToml(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, "router-hosts")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+
+	// Create both client.toml and config.toml
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "client.toml"), []byte(`server_address = "from-client"`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(`server_address = "from-config"`), 0o600))
+
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path, err := findClientConfigFile()
+	require.NoError(t, err)
+	assert.Contains(t, path, "client.toml")
+}
+
+func TestFindClientConfigFile_FallsBackToConfigToml(t *testing.T) {
+	dir := t.TempDir()
+	cfgDir := filepath.Join(dir, "router-hosts")
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+
+	// Only config.toml exists (no client.toml)
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(clientConfigContent), 0o600))
+
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	path, err := findClientConfigFile()
+	require.NoError(t, err)
+	assert.Contains(t, path, "config.toml")
 }
 
 func TestFindClientConfigFile_XDGPriority(t *testing.T) {
