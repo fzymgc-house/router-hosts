@@ -631,16 +631,19 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		return nil, mapError(err)
 	}
 	for _, entry := range currentEntries {
-		_ = s.handler.DeleteHost(ctx, entry.ID, entry.Version)
+		if delErr := s.handler.DeleteHost(ctx, entry.ID, entry.Version); delErr != nil {
+			return nil, oops.Wrapf(delErr, "rollback: delete entry %s", entry.ID)
+		}
 	}
 
 	// Re-import each entry from the target snapshot
 	var restoredCount int32
 	for _, entry := range target.Entries {
 		_, addErr := s.handler.AddHost(ctx, entry.IP, entry.Hostname, entry.Comment, entry.Tags, entry.Aliases)
-		if addErr == nil {
-			restoredCount++
+		if addErr != nil {
+			return nil, oops.Wrapf(addErr, "rollback: restore entry %s/%s", entry.IP, entry.Hostname)
 		}
+		restoredCount++
 	}
 
 	return &hostsv1.RollbackToSnapshotResponse{

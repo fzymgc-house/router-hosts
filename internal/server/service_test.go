@@ -6,7 +6,6 @@ import (
 	"io"
 	"log/slog"
 	"net"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -417,6 +416,49 @@ func TestService_ImportHosts_ReplaceConflict(t *testing.T) {
 	assert.Equal(t, int32(0), finalResp.Failed)
 }
 
+func TestService_ImportHosts_StrictConflict(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Pre-create an entry
+	_, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.10",
+		Hostname:  "server.local",
+	})
+	require.NoError(t, err)
+
+	hostsData := "192.168.1.10\tserver.local\n10.0.0.1\tnew.local\n"
+	format := "hosts"
+	mode := "strict"
+
+	stream, err := env.client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:        []byte(hostsData),
+		LastChunk:    true,
+		Format:       &format,
+		ConflictMode: &mode,
+	})
+	require.NoError(t, err)
+	require.NoError(t, stream.CloseSend())
+
+	var finalResp *hostsv1.ImportHostsResponse
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		finalResp = resp
+	}
+
+	require.NotNil(t, finalResp)
+	assert.Equal(t, int32(1), finalResp.Failed)
+	assert.NotNil(t, finalResp.Error)
+	assert.Contains(t, *finalResp.Error, "duplicate")
+}
+
 func TestService_ExportHosts_HostsFormat(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()
@@ -697,6 +739,40 @@ func TestService_Readiness_Healthy(t *testing.T) {
 	assert.Empty(t, resp.GetReason())
 }
 
+func TestService_Readiness_Unhealthy(t *testing.T) {
+	ctx := context.Background()
+
+	// Create a store and close it to make HealthCheck fail
+	store, err := sqlite.New("file::memory:?mode=memory", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	handler := NewCommandHandler(store)
+	svc := NewHostsServiceImpl(handler, store)
+	store.Close()
+
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	hostsv1.RegisterHostsServiceServer(srv, svc)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.Stop() })
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { conn.Close() })
+
+	client := hostsv1.NewHostsServiceClient(conn)
+	resp, err := client.Readiness(ctx, &hostsv1.ReadinessRequest{})
+	require.NoError(t, err) // gRPC call succeeds, but readiness is false
+	assert.False(t, resp.GetReady())
+	assert.NotEmpty(t, resp.GetReason())
+}
+
 func TestService_Health_DetailedStatus(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()
@@ -726,5 +802,3 @@ func TestService_Health_DetailedStatus(t *testing.T) {
 	assert.Equal(t, int32(0), resp.GetHooks().GetConfiguredCount())
 }
 
-// Ensure unused imports are referenced
-var _ = strings.Contains
