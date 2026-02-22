@@ -7,6 +7,8 @@ import (
 	"log/slog"
 
 	"zombiezen.com/go/sqlite/sqlitex"
+
+	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
 //go:embed migrations/*.sql
@@ -17,6 +19,9 @@ type Storage struct {
 	pool *sqlitex.Pool
 	log  *slog.Logger
 }
+
+// Compile-time check that Storage implements storage.Storage.
+var _ storage.Storage = (*Storage)(nil)
 
 // New creates a new SQLite storage instance.
 func New(dbPath string, logger *slog.Logger) (*Storage, error) {

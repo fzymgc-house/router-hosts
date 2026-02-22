@@ -1,0 +1,324 @@
+package sqlite
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"time"
+
+	"zombiezen.com/go/sqlite"
+	"zombiezen.com/go/sqlite/sqlitex"
+
+	"github.com/oklog/ulid/v2"
+
+	"github.com/fzymgc-house/router-hosts/internal/domain"
+)
+
+// ListAll returns all non-deleted host entries by replaying events.
+func (s *Storage) ListAll(ctx context.Context) ([]domain.HostEntry, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	aggIDs, err := getDistinctAggregateIDs(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []domain.HostEntry
+	for _, aggID := range aggIDs {
+		events, loadErr := loadEventsForAggregate(conn, aggID)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		entry := replayEvents(aggID, events)
+		if entry != nil && !entry.Deleted {
+			entries = append(entries, *entry)
+		}
+	}
+	return entries, nil
+}
+
+// GetByID returns a single host entry by replaying its events.
+func (s *Storage) GetByID(ctx context.Context, id ulid.ULID) (*domain.HostEntry, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	events, err := loadEventsForAggregate(conn, id)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, domain.ErrNotFound("host", id.String())
+	}
+
+	entry := replayEvents(id, events)
+	if entry == nil || entry.Deleted {
+		return nil, domain.ErrNotFound("host", id.String())
+	}
+	return entry, nil
+}
+
+// FindByIPAndHostname finds a host entry matching the given IP and hostname.
+func (s *Storage) FindByIPAndHostname(ctx context.Context, ip, hostname string) (*domain.HostEntry, error) {
+	entries, err := s.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range entries {
+		if entries[i].IP == ip && entries[i].Hostname == hostname {
+			return &entries[i], nil
+		}
+	}
+	return nil, domain.ErrNotFound("host", fmt.Sprintf("%s/%s", ip, hostname))
+}
+
+// Search filters host entries using the provided search filter.
+func (s *Storage) Search(ctx context.Context, filter domain.SearchFilter) ([]domain.HostEntry, error) {
+	entries, err := s.ListAll(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if filter.IsEmpty() {
+		return entries, nil
+	}
+
+	var results []domain.HostEntry
+	for _, entry := range entries {
+		if matchesFilter(entry, filter) {
+			results = append(results, entry)
+		}
+	}
+	return results, nil
+}
+
+// GetAtTime returns the state of all hosts at a specific point in time.
+func (s *Storage) GetAtTime(ctx context.Context, at time.Time) ([]domain.HostEntry, error) {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+
+	aggIDs, err := getDistinctAggregateIDs(conn)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []domain.HostEntry
+	for _, aggID := range aggIDs {
+		events, loadErr := loadEventsForAggregate(conn, aggID)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+
+		// Filter events to only those created at or before the target time
+		var filtered []domain.EventEnvelope
+		for _, env := range events {
+			if !env.CreatedAt.After(at) {
+				filtered = append(filtered, env)
+			}
+		}
+
+		if len(filtered) == 0 {
+			continue
+		}
+
+		entry := replayEvents(aggID, filtered)
+		if entry != nil && !entry.Deleted {
+			entries = append(entries, *entry)
+		}
+	}
+	return entries, nil
+}
+
+// replayEvents applies events sequentially to build a HostEntry.
+// This is the core of the event sourcing pattern.
+func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) *domain.HostEntry {
+	if len(events) == 0 {
+		return nil
+	}
+
+	var entry *domain.HostEntry
+
+	for _, env := range events {
+		decoded, err := env.Event.Decode()
+		if err != nil {
+			continue
+		}
+
+		switch ev := decoded.(type) {
+		case domain.HostCreated:
+			entry = &domain.HostEntry{
+				ID:        aggregateID,
+				IP:        ev.IPAddress,
+				Hostname:  ev.Hostname,
+				Aliases:   ev.Aliases,
+				Comment:   ev.Comment,
+				Tags:      ev.Tags,
+				CreatedAt: ev.CreatedAt,
+				UpdatedAt: env.CreatedAt,
+				Version:   env.Version,
+			}
+
+		case domain.IPAddressChanged:
+			if entry != nil {
+				entry.IP = ev.NewIP
+				entry.UpdatedAt = env.CreatedAt
+				entry.Version = env.Version
+			}
+
+		case domain.HostnameChanged:
+			if entry != nil {
+				entry.Hostname = ev.NewHostname
+				entry.UpdatedAt = env.CreatedAt
+				entry.Version = env.Version
+			}
+
+		case domain.CommentUpdated:
+			if entry != nil {
+				entry.Comment = ev.NewComment
+				entry.UpdatedAt = env.CreatedAt
+				entry.Version = env.Version
+			}
+
+		case domain.TagsModified:
+			if entry != nil {
+				entry.Tags = ev.NewTags
+				entry.UpdatedAt = env.CreatedAt
+				entry.Version = env.Version
+			}
+
+		case domain.AliasesModified:
+			if entry != nil {
+				entry.Aliases = ev.NewAliases
+				entry.UpdatedAt = env.CreatedAt
+				entry.Version = env.Version
+			}
+
+		case domain.HostDeleted:
+			if entry != nil {
+				entry.Deleted = true
+				entry.UpdatedAt = env.CreatedAt
+				entry.Version = env.Version
+			}
+
+		case domain.HostImported:
+			entry = &domain.HostEntry{
+				ID:        aggregateID,
+				IP:        ev.IPAddress,
+				Hostname:  ev.Hostname,
+				Aliases:   ev.Aliases,
+				Comment:   ev.Comment,
+				Tags:      ev.Tags,
+				CreatedAt: ev.OccurredAt,
+				UpdatedAt: env.CreatedAt,
+				Version:   env.Version,
+			}
+		}
+	}
+
+	return entry
+}
+
+// matchesFilter checks if a host entry matches the search filter criteria.
+func matchesFilter(entry domain.HostEntry, filter domain.SearchFilter) bool {
+	if filter.Query != nil {
+		q := strings.ToLower(*filter.Query)
+		matched := strings.Contains(strings.ToLower(entry.IP), q) ||
+			strings.Contains(strings.ToLower(entry.Hostname), q)
+		if entry.Comment != nil {
+			matched = matched || strings.Contains(strings.ToLower(*entry.Comment), q)
+		}
+		for _, tag := range entry.Tags {
+			matched = matched || strings.Contains(strings.ToLower(tag), q)
+		}
+		if !matched {
+			return false
+		}
+	}
+
+	if filter.IPPattern != nil {
+		if !strings.HasPrefix(entry.IP, *filter.IPPattern) {
+			return false
+		}
+	}
+
+	if filter.HostnamePattern != nil {
+		if !strings.Contains(strings.ToLower(entry.Hostname), strings.ToLower(*filter.HostnamePattern)) {
+			return false
+		}
+	}
+
+	if len(filter.Tags) > 0 {
+		if !hasAnyTag(entry.Tags, filter.Tags) {
+			return false
+		}
+	}
+
+	return true
+}
+
+// hasAnyTag checks if the entry's tags contain any of the filter tags.
+func hasAnyTag(entryTags, filterTags []string) bool {
+	tagSet := make(map[string]struct{}, len(entryTags))
+	for _, t := range entryTags {
+		tagSet[t] = struct{}{}
+	}
+	for _, t := range filterTags {
+		if _, ok := tagSet[t]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// getDistinctAggregateIDs returns all unique aggregate IDs from the events table.
+func getDistinctAggregateIDs(conn *sqlite.Conn) ([]ulid.ULID, error) {
+	var ids []ulid.ULID
+	err := sqlitex.Execute(conn,
+		`SELECT DISTINCT aggregate_id FROM events`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				id, parseErr := ulid.Parse(stmt.ColumnText(0))
+				if parseErr != nil {
+					return parseErr
+				}
+				ids = append(ids, id)
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, fmt.Errorf("get aggregate ids: %w", err)
+	}
+	return ids, nil
+}
+
+// loadEventsForAggregate reads all events for a single aggregate, ordered by version.
+func loadEventsForAggregate(conn *sqlite.Conn, aggregateID ulid.ULID) ([]domain.EventEnvelope, error) {
+	var events []domain.EventEnvelope
+	err := sqlitex.Execute(conn,
+		`SELECT event_id, aggregate_id, event_type, event_data, event_version, created_at, created_by
+		 FROM events WHERE aggregate_id = ? ORDER BY event_version ASC`,
+		&sqlitex.ExecOptions{
+			Args: []any{aggregateID.String()},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				env, scanErr := scanEventEnvelope(stmt)
+				if scanErr != nil {
+					return scanErr
+				}
+				events = append(events, env)
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, fmt.Errorf("load events for %s: %w", aggregateID, err)
+	}
+	return events, nil
+}
