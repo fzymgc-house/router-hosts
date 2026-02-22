@@ -1,11 +1,9 @@
 package main
 
 import (
-	"fmt"
-	"os"
+	"github.com/fzymgc-house/router-hosts/internal/client/commands"
 )
 
 func main() {
-	fmt.Println("router-hosts")
-	os.Exit(0)
+	commands.Execute()
 }
