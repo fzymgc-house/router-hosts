@@ -674,5 +674,57 @@ func TestService_RollbackToSnapshot(t *testing.T) {
 	assert.Equal(t, "server.local", remaining[0].Hostname)
 }
 
+// ---------------------------------------------------------------------------
+// Health Check Tests (Task 22)
+// ---------------------------------------------------------------------------
+
+func TestService_Liveness(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	resp, err := env.client.Liveness(ctx, &hostsv1.LivenessRequest{})
+	require.NoError(t, err)
+	assert.True(t, resp.GetAlive())
+}
+
+func TestService_Readiness_Healthy(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	resp, err := env.client.Readiness(ctx, &hostsv1.ReadinessRequest{})
+	require.NoError(t, err)
+	assert.True(t, resp.GetReady())
+	assert.Empty(t, resp.GetReason())
+}
+
+func TestService_Health_DetailedStatus(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	resp, err := env.client.Health(ctx, &hostsv1.HealthRequest{})
+	require.NoError(t, err)
+	assert.True(t, resp.GetHealthy())
+
+	// Server info
+	require.NotNil(t, resp.GetServer())
+	assert.Equal(t, "dev", resp.GetServer().GetVersion())
+	assert.GreaterOrEqual(t, resp.GetServer().GetUptimeSeconds(), int64(0))
+
+	// Database
+	require.NotNil(t, resp.GetDatabase())
+	assert.True(t, resp.GetDatabase().GetConnected())
+	assert.Equal(t, "sqlite", resp.GetDatabase().GetBackend())
+	assert.GreaterOrEqual(t, resp.GetDatabase().GetLatencyMs(), int64(0))
+
+	// ACME (disabled)
+	require.NotNil(t, resp.GetAcme())
+	assert.False(t, resp.GetAcme().GetEnabled())
+	assert.Equal(t, "disabled", resp.GetAcme().GetStatus())
+
+	// Hooks (none configured in test)
+	require.NotNil(t, resp.GetHooks())
+	assert.Equal(t, int32(0), resp.GetHooks().GetConfiguredCount())
+}
+
 // Ensure unused imports are referenced
 var _ = strings.Contains

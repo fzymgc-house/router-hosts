@@ -657,3 +657,64 @@ func (s *HostsServiceImpl) DeleteSnapshot(ctx context.Context, req *hostsv1.Dele
 	}
 	return &hostsv1.DeleteSnapshotResponse{Success: true}, nil
 }
+
+// ---------------------------------------------------------------------------
+// Health Check RPCs
+// ---------------------------------------------------------------------------
+
+// Liveness returns true if the process is alive (always true if responding).
+func (s *HostsServiceImpl) Liveness(_ context.Context, _ *hostsv1.LivenessRequest) (*hostsv1.LivenessResponse, error) {
+	return &hostsv1.LivenessResponse{Alive: true}, nil
+}
+
+// Readiness checks storage connectivity.
+func (s *HostsServiceImpl) Readiness(ctx context.Context, _ *hostsv1.ReadinessRequest) (*hostsv1.ReadinessResponse, error) {
+	if err := s.store.HealthCheck(ctx); err != nil {
+		return &hostsv1.ReadinessResponse{
+			Ready:  false,
+			Reason: err.Error(),
+		}, nil
+	}
+	return &hostsv1.ReadinessResponse{Ready: true}, nil
+}
+
+// Health returns detailed component health status.
+func (s *HostsServiceImpl) Health(ctx context.Context, _ *hostsv1.HealthRequest) (*hostsv1.HealthResponse, error) {
+	uptimeSecs := int64(time.Since(s.startTime).Seconds())
+
+	// Database health check with latency measurement
+	dbStart := time.Now()
+	dbErr := s.store.HealthCheck(ctx)
+	latencyMs := time.Since(dbStart).Milliseconds()
+
+	dbHealth := &hostsv1.DatabaseHealth{
+		Connected: dbErr == nil,
+		Backend:   s.store.BackendName(),
+		LatencyMs: latencyMs,
+	}
+	if dbErr != nil {
+		dbHealth.Error = dbErr.Error()
+	}
+
+	// Hooks health
+	hooksHealth := &hostsv1.HooksHealth{}
+	if s.hooks != nil {
+		hooksHealth.ConfiguredCount = int32(s.hooks.HookCount())
+		hooksHealth.HookNames = s.hooks.HookNames()
+	}
+
+	return &hostsv1.HealthResponse{
+		Healthy: dbErr == nil,
+		Server: &hostsv1.ServerInfo{
+			Version:       "dev",
+			UptimeSeconds: uptimeSecs,
+			BuildInfo:     "dev",
+		},
+		Database: dbHealth,
+		Acme: &hostsv1.AcmeHealth{
+			Enabled: false,
+			Status:  "disabled",
+		},
+		Hooks: hooksHealth,
+	}, nil
+}
