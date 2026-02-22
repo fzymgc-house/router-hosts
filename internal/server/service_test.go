@@ -2,9 +2,11 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,6 +18,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
+	"github.com/fzymgc-house/router-hosts/internal/storage"
 	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
 )
 
@@ -23,6 +26,7 @@ import (
 type serviceTestEnv struct {
 	client  hostsv1.HostsServiceClient
 	handler *CommandHandler
+	store   storage.Storage
 	conn    *grpc.ClientConn
 }
 
@@ -36,7 +40,8 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	t.Cleanup(func() { store.Close() })
 
 	handler := NewCommandHandler(store)
-	svc := NewHostsServiceImpl(handler)
+	hostsGen := NewHostsFileGenerator("/dev/null")
+	svc := NewHostsServiceImpl(handler, store, WithHostsGenerator(hostsGen))
 
 	lis := bufconn.Listen(1024 * 1024)
 	srv := grpc.NewServer()
@@ -58,6 +63,7 @@ func newServiceTestEnv(t *testing.T) *serviceTestEnv {
 	return &serviceTestEnv{
 		client:  hostsv1.NewHostsServiceClient(conn),
 		handler: handler,
+		store:   store,
 		conn:    conn,
 	}
 }
@@ -278,3 +284,270 @@ func TestService_SearchHosts(t *testing.T) {
 	assert.Len(t, entries, 1)
 	assert.Equal(t, "webserver.local", entries[0].Hostname)
 }
+
+// ---------------------------------------------------------------------------
+// Import/Export Tests (Task 20)
+// ---------------------------------------------------------------------------
+
+func TestService_ImportHosts_HostsFormat(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	hostsData := "192.168.1.10\tserver.local srv.local\t# web server [web, prod]\n" +
+		"10.0.0.1\tdb.local\t# database\n" +
+		"# comment line\n" +
+		"\n" +
+		"172.16.0.1\tproxy.local\n"
+
+	format := "hosts"
+	stream, err := env.client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:     []byte(hostsData),
+		LastChunk: true,
+		Format:    &format,
+	})
+	require.NoError(t, err)
+	require.NoError(t, stream.CloseSend())
+
+	// Collect responses
+	var finalResp *hostsv1.ImportHostsResponse
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		finalResp = resp
+	}
+
+	require.NotNil(t, finalResp)
+	assert.Equal(t, int32(3), finalResp.Processed)
+	assert.Equal(t, int32(3), finalResp.Created)
+	assert.Equal(t, int32(0), finalResp.Failed)
+}
+
+func TestService_ImportHosts_SkipConflict(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Pre-create an entry
+	_, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.10",
+		Hostname:  "server.local",
+	})
+	require.NoError(t, err)
+
+	hostsData := "192.168.1.10\tserver.local\n10.0.0.1\tnew.local\n"
+	format := "hosts"
+	mode := "skip"
+
+	stream, err := env.client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:        []byte(hostsData),
+		LastChunk:    true,
+		Format:       &format,
+		ConflictMode: &mode,
+	})
+	require.NoError(t, err)
+	require.NoError(t, stream.CloseSend())
+
+	var finalResp *hostsv1.ImportHostsResponse
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		finalResp = resp
+	}
+
+	require.NotNil(t, finalResp)
+	assert.Equal(t, int32(2), finalResp.Processed)
+	assert.Equal(t, int32(1), finalResp.Created)
+	assert.Equal(t, int32(1), finalResp.Skipped)
+	assert.Equal(t, int32(0), finalResp.Failed)
+}
+
+func TestService_ImportHosts_ReplaceConflict(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Pre-create an entry
+	comment := "old comment"
+	_, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.10",
+		Hostname:  "server.local",
+		Comment:   &comment,
+	})
+	require.NoError(t, err)
+
+	hostsData := "192.168.1.10\tserver.local\t# new comment [updated]\n"
+	format := "hosts"
+	mode := "replace"
+
+	stream, err := env.client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:        []byte(hostsData),
+		LastChunk:    true,
+		Format:       &format,
+		ConflictMode: &mode,
+	})
+	require.NoError(t, err)
+	require.NoError(t, stream.CloseSend())
+
+	var finalResp *hostsv1.ImportHostsResponse
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
+		require.NoError(t, err)
+		finalResp = resp
+	}
+
+	require.NotNil(t, finalResp)
+	assert.Equal(t, int32(1), finalResp.Processed)
+	assert.Equal(t, int32(1), finalResp.Updated)
+	assert.Equal(t, int32(0), finalResp.Failed)
+}
+
+func TestService_ExportHosts_HostsFormat(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	_, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.10",
+		Hostname:  "server.local",
+		Tags:      []string{"web"},
+	})
+	require.NoError(t, err)
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "hosts"})
+	require.NoError(t, err)
+
+	resp, err := stream.Recv()
+	require.NoError(t, err)
+
+	content := string(resp.GetChunk())
+	assert.Contains(t, content, "192.168.1.10")
+	assert.Contains(t, content, "server.local")
+	assert.Contains(t, content, "Generated by router-hosts")
+}
+
+func TestService_ExportHosts_JSONFormat(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	_, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "10.0.0.1",
+		Hostname:  "db.local",
+	})
+	require.NoError(t, err)
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "json"})
+	require.NoError(t, err)
+
+	resp, err := stream.Recv()
+	require.NoError(t, err)
+
+	var entries []json.RawMessage
+	require.NoError(t, json.Unmarshal(resp.GetChunk(), &entries))
+	assert.Len(t, entries, 1)
+}
+
+func TestService_ExportHosts_InvalidFormat(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "xml"})
+	require.NoError(t, err)
+
+	_, err = stream.Recv()
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestService_ExportHosts_CSVFormat(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	comment := "test comment"
+	_, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "10.0.0.1",
+		Hostname:  "db.local",
+		Comment:   &comment,
+		Tags:      []string{"prod"},
+	})
+	require.NoError(t, err)
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "csv"})
+	require.NoError(t, err)
+
+	resp, err := stream.Recv()
+	require.NoError(t, err)
+
+	content := string(resp.GetChunk())
+	assert.Contains(t, content, "id,ip_address,hostname,comment,tags,aliases")
+	assert.Contains(t, content, "10.0.0.1")
+	assert.Contains(t, content, "db.local")
+	assert.Contains(t, content, "test comment")
+}
+
+// ---------------------------------------------------------------------------
+// parseHostsFormat unit tests
+// ---------------------------------------------------------------------------
+
+func TestParseHostsFormat(t *testing.T) {
+	input := "192.168.1.1\thost.local alias1\t# server [web, prod]\n" +
+		"# comment line\n" +
+		"\n" +
+		"10.0.0.1\tdb.local\n" +
+		"incomplete\n"
+
+	entries, errors := parseHostsFormat([]byte(input))
+
+	assert.Len(t, entries, 2)
+	assert.Len(t, errors, 1) // "incomplete" only has 1 field
+
+	assert.Equal(t, "192.168.1.1", entries[0].IP)
+	assert.Equal(t, "host.local", entries[0].Hostname)
+	assert.Equal(t, []string{"alias1"}, entries[0].Aliases)
+	require.NotNil(t, entries[0].Comment)
+	assert.Equal(t, "server", *entries[0].Comment)
+	assert.Equal(t, []string{"web", "prod"}, entries[0].Tags)
+
+	assert.Equal(t, "10.0.0.1", entries[1].IP)
+	assert.Equal(t, "db.local", entries[1].Hostname)
+	assert.Nil(t, entries[1].Comment)
+	assert.Empty(t, entries[1].Tags)
+}
+
+func TestParseHostsFormat_CommentOnly(t *testing.T) {
+	input := "192.168.1.1\thost.local\t# just a comment\n"
+	entries, errors := parseHostsFormat([]byte(input))
+	assert.Empty(t, errors)
+	require.Len(t, entries, 1)
+	require.NotNil(t, entries[0].Comment)
+	assert.Equal(t, "just a comment", *entries[0].Comment)
+	assert.Empty(t, entries[0].Tags)
+}
+
+func TestParseHostsFormat_TagsOnly(t *testing.T) {
+	input := "192.168.1.1\thost.local\t# [web, prod]\n"
+	entries, errors := parseHostsFormat([]byte(input))
+	assert.Empty(t, errors)
+	require.Len(t, entries, 1)
+	assert.Nil(t, entries[0].Comment)
+	assert.Equal(t, []string{"web", "prod"}, entries[0].Tags)
+}
+
+// Ensure unused imports are referenced
+var _ = strings.Contains
