@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"crypto/rand"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -37,15 +36,15 @@ func (h *CommandHandler) newID() ulid.ULID {
 
 // nextVersion returns the next integer version string given the current one.
 // An empty current version yields "1".
-func nextVersion(current string) string {
+func nextVersion(current string) (string, error) {
 	if current == "" {
-		return "1"
+		return "1", nil
 	}
 	n, err := strconv.Atoi(current)
 	if err != nil {
-		return "1"
+		return "", oops.Wrapf(err, "invalid version %q", current)
 	}
-	return strconv.Itoa(n + 1)
+	return strconv.Itoa(n + 1), nil
 }
 
 // AddHost creates a new host entry after validating inputs and checking for duplicates.
@@ -138,10 +137,10 @@ func (h *CommandHandler) UpdateHost(
 	tags, aliases *[]string,
 	expectedVersion string,
 ) (*domain.HostEntry, error) {
-	// Load and replay events to get current state
+	// Load current state from projection
 	current, err := h.store.GetByID(ctx, id)
 	if err != nil {
-		return nil, domain.ErrStorage(err)
+		return nil, oops.Wrapf(err, "update host")
 	}
 	if current == nil {
 		return nil, domain.ErrNotFound("host", id.String())
@@ -167,7 +166,10 @@ func (h *CommandHandler) UpdateHost(
 		if err != nil {
 			return nil, domain.ErrInternal(err)
 		}
-		curVersion = nextVersion(curVersion)
+		curVersion, err = nextVersion(curVersion)
+		if err != nil {
+			return nil, domain.ErrInternal(err)
+		}
 		events = append(events, domain.EventEnvelope{
 			EventID:     h.newID(),
 			AggregateID: id,
@@ -191,7 +193,10 @@ func (h *CommandHandler) UpdateHost(
 		if err != nil {
 			return nil, domain.ErrInternal(err)
 		}
-		curVersion = nextVersion(curVersion)
+		curVersion, err = nextVersion(curVersion)
+		if err != nil {
+			return nil, domain.ErrInternal(err)
+		}
 		events = append(events, domain.EventEnvelope{
 			EventID:     h.newID(),
 			AggregateID: id,
@@ -212,7 +217,10 @@ func (h *CommandHandler) UpdateHost(
 		if err != nil {
 			return nil, domain.ErrInternal(err)
 		}
-		curVersion = nextVersion(curVersion)
+		curVersion, err = nextVersion(curVersion)
+		if err != nil {
+			return nil, domain.ErrInternal(err)
+		}
 		events = append(events, domain.EventEnvelope{
 			EventID:     h.newID(),
 			AggregateID: id,
@@ -233,7 +241,10 @@ func (h *CommandHandler) UpdateHost(
 		if err != nil {
 			return nil, domain.ErrInternal(err)
 		}
-		curVersion = nextVersion(curVersion)
+		curVersion, err = nextVersion(curVersion)
+		if err != nil {
+			return nil, domain.ErrInternal(err)
+		}
 		events = append(events, domain.EventEnvelope{
 			EventID:     h.newID(),
 			AggregateID: id,
@@ -258,7 +269,10 @@ func (h *CommandHandler) UpdateHost(
 		if err != nil {
 			return nil, domain.ErrInternal(err)
 		}
-		curVersion = nextVersion(curVersion)
+		curVersion, err = nextVersion(curVersion)
+		if err != nil {
+			return nil, domain.ErrInternal(err)
+		}
 		events = append(events, domain.EventEnvelope{
 			EventID:     h.newID(),
 			AggregateID: id,
@@ -290,7 +304,7 @@ func (h *CommandHandler) DeleteHost(
 ) error {
 	current, err := h.store.GetByID(ctx, id)
 	if err != nil {
-		return domain.ErrStorage(err)
+		return oops.Wrapf(err, "delete host")
 	}
 	if current == nil {
 		return domain.ErrNotFound("host", id.String())
@@ -309,7 +323,10 @@ func (h *CommandHandler) DeleteHost(
 		return domain.ErrInternal(err)
 	}
 
-	newVersion := nextVersion(current.Version)
+	newVersion, err := nextVersion(current.Version)
+	if err != nil {
+		return domain.ErrInternal(err)
+	}
 	env := domain.EventEnvelope{
 		EventID:     h.newID(),
 		AggregateID: id,
@@ -325,7 +342,7 @@ func (h *CommandHandler) DeleteHost(
 func (h *CommandHandler) GetHost(ctx context.Context, id ulid.ULID) (*domain.HostEntry, error) {
 	entry, err := h.store.GetByID(ctx, id)
 	if err != nil {
-		return nil, fmt.Errorf("get host: %w", err)
+		return nil, oops.Wrapf(err, "get host")
 	}
 	if entry == nil || entry.Deleted {
 		return nil, domain.ErrNotFound("host", id.String())
@@ -337,7 +354,7 @@ func (h *CommandHandler) GetHost(ctx context.Context, id ulid.ULID) (*domain.Hos
 func (h *CommandHandler) ListHosts(ctx context.Context) ([]domain.HostEntry, error) {
 	entries, err := h.store.ListAll(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("list hosts: %w", err)
+		return nil, oops.Wrapf(err, "list hosts")
 	}
 	return entries, nil
 }
@@ -346,7 +363,7 @@ func (h *CommandHandler) ListHosts(ctx context.Context) ([]domain.HostEntry, err
 func (h *CommandHandler) SearchHosts(ctx context.Context, filter domain.SearchFilter) ([]domain.HostEntry, error) {
 	entries, err := h.store.Search(ctx, filter)
 	if err != nil {
-		return nil, fmt.Errorf("search hosts: %w", err)
+		return nil, oops.Wrapf(err, "search hosts")
 	}
 	return entries, nil
 }

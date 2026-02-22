@@ -106,6 +106,7 @@ func (s *Server) Run(ctx context.Context) error {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
 
 	errCh := make(chan error, 1)
 	go func() {

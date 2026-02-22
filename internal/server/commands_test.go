@@ -401,8 +401,22 @@ func TestSearchHosts_ByTags(t *testing.T) {
 // ---------- nextVersion tests ----------
 
 func TestNextVersion(t *testing.T) {
-	assert.Equal(t, "1", nextVersion(""))
-	assert.Equal(t, "2", nextVersion("1"))
-	assert.Equal(t, "10", nextVersion("9"))
-	assert.Equal(t, "100", nextVersion("99"))
+	v, err := nextVersion("")
+	require.NoError(t, err)
+	assert.Equal(t, "1", v)
+
+	v, err = nextVersion("1")
+	require.NoError(t, err)
+	assert.Equal(t, "2", v)
+
+	v, err = nextVersion("9")
+	require.NoError(t, err)
+	assert.Equal(t, "10", v)
+
+	v, err = nextVersion("99")
+	require.NoError(t, err)
+	assert.Equal(t, "100", v)
+
+	_, err = nextVersion("not-a-number")
+	assert.Error(t, err)
 }

@@ -168,14 +168,22 @@ func applyClientOverrides(cfg *ClientConfig, o *ClientConfigOverrides) {
 	}
 }
 
-// expandTilde replaces a leading ~ with the user's home directory.
+// expandTilde replaces a leading ~/ with the user's home directory.
+// Does not handle ~user syntax — only ~/path and bare ~.
 func expandTilde(path string) string {
-	if !strings.HasPrefix(path, "~") {
+	if path == "~" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return path
+		}
+		return home
+	}
+	if !strings.HasPrefix(path, "~/") {
 		return path
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return path
 	}
-	return filepath.Join(home, path[1:])
+	return filepath.Join(home, path[2:])
 }
