@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"os"
 	"strings"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
 	"google.golang.org/grpc"
+	grpccreds "google.golang.org/grpc/credentials"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
 )
@@ -123,6 +127,18 @@ func NewMetricsFromConfig(cfg *config.OTelConfig) (*Metrics, error) {
 
 	opts := []otlpmetricgrpc.Option{
 		otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
+	}
+
+	if cfg.Insecure {
+		opts = append(opts, otlpmetricgrpc.WithInsecure())
+	} else {
+		tlsCfg, err := buildOTelTLSConfig(cfg)
+		if err != nil {
+			return nil, err
+		}
+		if tlsCfg != nil {
+			opts = append(opts, otlpmetricgrpc.WithTLSCredentials(grpccreds.NewTLS(tlsCfg)))
+		}
 	}
 
 	if len(cfg.Headers) > 0 {
@@ -252,6 +268,40 @@ func (m *Metrics) Shutdown(ctx context.Context) error {
 		return oops.Wrapf(err, "shutdown meter provider")
 	}
 	return nil
+}
+
+// buildOTelTLSConfig creates a TLS config from OTel config fields.
+// Returns nil if no TLS fields are set (uses system defaults).
+func buildOTelTLSConfig(cfg *config.OTelConfig) (*tls.Config, error) {
+	if cfg.CACertFile == "" && cfg.ClientCertFile == "" {
+		return nil, nil
+	}
+
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+
+	if cfg.CACertFile != "" {
+		caPEM, err := os.ReadFile(cfg.CACertFile)
+		if err != nil {
+			return nil, oops.Wrapf(err, "read OTel CA cert %s", cfg.CACertFile)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caPEM) {
+			return nil, oops.Errorf("no valid certificates in OTel CA file %s", cfg.CACertFile)
+		}
+		tlsCfg.RootCAs = pool
+	}
+
+	if cfg.ClientCertFile != "" && cfg.ClientKeyFile != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.ClientCertFile, cfg.ClientKeyFile)
+		if err != nil {
+			return nil, oops.Wrapf(err, "load OTel client cert")
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+
+	return tlsCfg, nil
 }
 
 // extractMethodName extracts the short method name from a gRPC full method

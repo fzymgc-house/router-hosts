@@ -3,6 +3,8 @@ package server
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -341,6 +343,89 @@ func TestNewMetricsFromConfig_ExportDisabled(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, m)
 	assert.Nil(t, m.meterProvider, "expected disabled metrics when export_metrics=false")
+}
+
+func TestBuildOTelTLSConfig_NoFields(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.OTelConfig{Endpoint: "localhost:4317"}
+	tlsCfg, err := buildOTelTLSConfig(cfg)
+	require.NoError(t, err)
+	assert.Nil(t, tlsCfg, "expected nil TLS config when no TLS fields set")
+}
+
+func TestBuildOTelTLSConfig_CAOnly(t *testing.T) {
+	t.Parallel()
+
+	certs := generateTestCerts(t)
+
+	cfg := &config.OTelConfig{
+		Endpoint:   "localhost:4317",
+		CACertFile: certs.CACertPath,
+	}
+	tlsCfg, err := buildOTelTLSConfig(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, tlsCfg)
+	assert.NotNil(t, tlsCfg.RootCAs, "expected custom CA pool")
+	assert.Empty(t, tlsCfg.Certificates, "no client certs expected")
+}
+
+func TestBuildOTelTLSConfig_InvalidCAFile(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.OTelConfig{
+		Endpoint:   "localhost:4317",
+		CACertFile: "/nonexistent/ca.pem",
+	}
+	_, err := buildOTelTLSConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read OTel CA cert")
+}
+
+func TestBuildOTelTLSConfig_InvalidCAPEM(t *testing.T) {
+	t.Parallel()
+
+	badCA := filepath.Join(t.TempDir(), "bad-ca.pem")
+	require.NoError(t, os.WriteFile(badCA, []byte("not a certificate"), 0o600))
+
+	cfg := &config.OTelConfig{
+		Endpoint:   "localhost:4317",
+		CACertFile: badCA,
+	}
+	_, err := buildOTelTLSConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no valid certificates")
+}
+
+func TestBuildOTelTLSConfig_MutualTLS(t *testing.T) {
+	t.Parallel()
+
+	certs := generateTestCerts(t)
+
+	cfg := &config.OTelConfig{
+		Endpoint:       "localhost:4317",
+		CACertFile:     certs.CACertPath,
+		ClientCertFile: certs.ClientCertPath,
+		ClientKeyFile:  certs.ClientKeyPath,
+	}
+	tlsCfg, err := buildOTelTLSConfig(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, tlsCfg)
+	assert.NotNil(t, tlsCfg.RootCAs, "expected custom CA pool")
+	assert.Len(t, tlsCfg.Certificates, 1, "expected client certificate")
+}
+
+func TestBuildOTelTLSConfig_InvalidClientCert(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.OTelConfig{
+		Endpoint:       "localhost:4317",
+		ClientCertFile: "/nonexistent/client.pem",
+		ClientKeyFile:  "/nonexistent/client-key.pem",
+	}
+	_, err := buildOTelTLSConfig(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "load OTel client cert")
 }
 
 func TestShutdown(t *testing.T) {

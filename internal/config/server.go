@@ -77,6 +77,10 @@ type HooksConfig struct {
 type OTelConfig struct {
 	Endpoint          string            `toml:"endpoint"`
 	ServiceName       string            `toml:"service_name"`
+	Insecure          bool              `toml:"insecure"`
+	CACertFile        string            `toml:"ca_cert_file"`
+	ClientCertFile    string            `toml:"client_cert_file"`
+	ClientKeyFile     string            `toml:"client_key_file"`
 	ExportMetrics     *bool             `toml:"export_metrics,omitempty"`
 	ExportTraces      *bool             `toml:"export_traces,omitempty"`
 	ExportIntervalSec int               `toml:"export_interval_secs"`
