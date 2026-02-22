@@ -32,7 +32,7 @@ jobs:
           fi
           echo "Required secrets are configured"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Validate release-please config
         run: |
