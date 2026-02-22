@@ -1,0 +1,56 @@
+version: '3'
+vars:
+  IMAGE_NAME: ghcr.io/fzymgc-house/router-hosts
+  IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
+  LOCAL_IMAGE: 'router-hosts:e2e-local'
+tasks:
+  build:
+    desc: Build all binaries
+    cmds:
+      - go build ./cmd/router-hosts
+      - go build ./cmd/operator
+  build:release:
+    desc: Build all binaries with optimizations
+    cmds:
+      - go build -ldflags="-s -w" -o bin/router-hosts ./cmd/router-hosts
+      - go build -ldflags="-s -w" -o bin/operator ./cmd/operator
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./... -race -count=1
+  test:coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      - go tool cover -html=coverage.out -o coverage.html
+  test:coverage:ci:
+    desc: Run tests with coverage (CI mode - enforces 80% threshold)
+    cmds:
+      - go test ./... -race -coverprofile=coverage.out -covermode=atomic
+      - |
+        COVERAGE=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | tr -d '%')
+        echo "Coverage: ${COVERAGE}%"
+        if [ "$(echo "${COVERAGE} < 80" | bc)" -eq 1 ]; then
+          echo "FAIL: Coverage ${COVERAGE}% is below 80% threshold"
+          exit 1
+        fi
+  lint:
+    desc: Run all linters
+    cmds:
+      - golangci-lint run ./...
+      - buf lint
+      - buf format --diff --exit-code
+  fmt:
+    desc: Format all code
+    cmds:
+      - gofumpt -w .
+      - buf format -w
+  proto:generate:
+    desc: Generate Go code from protobuf definitions
+    cmds:
+      - buf generate
+  ci:
+    desc: Run full CI pipeline locally
+    cmds:
+      - task: lint
+      - task: test
