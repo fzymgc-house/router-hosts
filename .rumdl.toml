@@ -1,0 +1,29 @@
+# rumdl configuration
+# https://github.com/rvben/rumdl
+
+[global]
+disable = [
+  "MD013", # Line length - disabled for prose
+  "MD033", # Inline HTML (badges, complex formatting)
+  "MD034", # Bare URLs
+  "MD036", # Emphasis as pseudo-headings
+  "MD044", # Proper names capitalization (too noisy)
+]
+
+exclude = [
+  ".git",
+  ".worktrees",
+  ".beads",
+  ".claude",
+  ".serena",
+  "target",
+  "dist",
+]
+
+respect-gitignore = true
+
+[MD046]
+style = "fenced"
+
+[MD048]
+style = "backtick"

@@ -39,7 +39,7 @@ You SHOULD use these skills when applicable:
 
 You MUST follow Conventional Commits format:
 
-```
+```text
 <type>(<scope>): <subject>
 
 <body>
@@ -54,6 +54,7 @@ You MUST follow Conventional Commits format:
 Scopes are recommended for clarity but not enforced. See `cog.toml` for scope descriptions.
 
 **Rules:**
+
 - Subject line MUST be ≤50 characters, imperative mood, no period
 - Body SHOULD wrap at 72 characters
 - Footer MUST reference issues: `Fixes #123`, `Closes #456`
@@ -122,11 +123,14 @@ You MUST maintain ≥80% test coverage. PRs that decrease coverage below 80% MUS
 - **Rust toolchain** (stable): `rustup install stable`
 - **buf CLI** (protobuf): `brew install bufbuild/buf/buf`
 - **cocogitto** (commit validation): `brew install cocogitto`
-- **pre-commit**: `pip install pre-commit && pre-commit install`
+- **lefthook**: `brew install lefthook && lefthook install`
+- **rumdl**: `cargo install rumdl` or `brew install rumdl`
+- **yamlfmt**: `brew install yamlfmt` or `go install github.com/google/yamlfmt/cmd/yamlfmt@latest`
 
 ### Issue Tracking
 
 All tasks are tracked in GitHub Issues. You MUST:
+
 - Reference issues in commits: `Fixes #123`, `Closes #456`
 - Create new issues for discovered work or follow-up tasks
 
