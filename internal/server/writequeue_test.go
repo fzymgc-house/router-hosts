@@ -136,8 +136,11 @@ func TestWriteQueue_StopDrains(t *testing.T) {
 	q.Start()
 
 	var count atomic.Int64
+	var wg sync.WaitGroup
 	for i := 0; i < 10; i++ {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			_ = q.Submit(context.Background(), func() error {
 				count.Add(1)
 				return nil
@@ -145,11 +148,19 @@ func TestWriteQueue_StopDrains(t *testing.T) {
 		}()
 	}
 
-	// Give goroutines time to submit
-	time.Sleep(100 * time.Millisecond)
-
+	// Wait for all submits to complete before stopping
+	wg.Wait()
 	q.Stop()
 	assert.Equal(t, int64(10), count.Load())
+}
+
+func TestWriteQueue_SubmitAfterStop(t *testing.T) {
+	q := NewWriteQueue(10, slog.Default())
+	q.Start()
+	q.Stop()
+
+	err := q.Submit(context.Background(), func() error { return nil })
+	assert.ErrorIs(t, err, ErrQueueStopped)
 }
 
 func TestWriteQueue_ErrorPropagation(t *testing.T) {

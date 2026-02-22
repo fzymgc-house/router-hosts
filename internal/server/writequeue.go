@@ -2,9 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 )
+
+// ErrQueueStopped is returned by Submit when the queue has been stopped.
+var ErrQueueStopped = errors.New("write queue stopped")
 
 // WriteCommand pairs a write closure with a channel to report the result.
 type WriteCommand struct {
@@ -17,6 +22,9 @@ type WriteQueue struct {
 	ch   chan WriteCommand
 	done chan struct{}
 	log  *slog.Logger
+
+	mu      sync.Mutex
+	stopped bool
 }
 
 // NewWriteQueue creates a queue with the given buffer size.
@@ -34,21 +42,41 @@ func (q *WriteQueue) Start() {
 }
 
 // Stop closes the input channel and waits for all pending commands to drain.
+// It is safe to call Stop while Submit calls are in-flight.
 func (q *WriteQueue) Stop() {
-	close(q.ch)
+	q.mu.Lock()
+	if !q.stopped {
+		q.stopped = true
+		close(q.ch)
+	}
+	q.mu.Unlock()
 	<-q.done
 }
 
 // Submit sends a write function to the queue and blocks until it completes
-// or the context is cancelled.
+// or the context is cancelled. Returns ErrQueueStopped if the queue has
+// been stopped.
 func (q *WriteQueue) Submit(ctx context.Context, fn func() error) error {
 	result := make(chan error, 1)
 	cmd := WriteCommand{Fn: fn, Result: result}
 
+	q.mu.Lock()
+	if q.stopped {
+		q.mu.Unlock()
+		return ErrQueueStopped
+	}
+
 	select {
 	case q.ch <- cmd:
-	case <-ctx.Done():
-		return fmt.Errorf("write queue submit: %w", ctx.Err())
+		q.mu.Unlock()
+	default:
+		// Buffer full — unlock and do a blocking select
+		q.mu.Unlock()
+		select {
+		case q.ch <- cmd:
+		case <-ctx.Done():
+			return fmt.Errorf("write queue submit: %w", ctx.Err())
+		}
 	}
 
 	select {
