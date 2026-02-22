@@ -1,0 +1,47 @@
+version: 2
+builds:
+  - id: router-hosts
+    main: ./cmd/router-hosts
+    binary: router-hosts
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+  - id: operator
+    main: ./cmd/operator
+    binary: operator
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+archives:
+  - id: router-hosts
+    builds:
+      - router-hosts
+    name_template: "router-hosts_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+  - id: operator
+    builds:
+      - operator
+    name_template: "operator_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+checksum:
+  name_template: "checksums.txt"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"

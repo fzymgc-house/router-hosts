@@ -49,6 +49,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newHostCmd())
 	root.AddCommand(newSnapshotCmd())
 	root.AddCommand(newServerCmd())
+	root.AddCommand(newServeCmd())
 
 	return root
 }

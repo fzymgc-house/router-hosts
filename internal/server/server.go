@@ -26,11 +26,12 @@ const GracefulShutdownTimeout = 30 * time.Second
 
 // Server wraps a gRPC server with mTLS and lifecycle management.
 type Server struct {
-	listener net.Listener
-	grpc     *grpc.Server
-	cfg      config.Config
-	storage  storage.Storage
-	log      *slog.Logger
+	listener    net.Listener
+	grpc        *grpc.Server
+	cfg         config.Config
+	storage     storage.Storage
+	log         *slog.Logger
+	grpcOptions []grpc.ServerOption
 
 	// mTLS cert hot-reload state
 	mu       sync.RWMutex
@@ -46,6 +47,16 @@ type Option func(*Server)
 func WithListener(l net.Listener) Option {
 	return func(s *Server) {
 		s.listener = l
+	}
+}
+
+// WithGRPCOptions appends additional gRPC server options (e.g. interceptors).
+// NOTE: pass all interceptors in a single call using grpc.ChainUnaryInterceptor
+// and grpc.ChainStreamInterceptor; multiple separate interceptor options result
+// in only the last one being active.
+func WithGRPCOptions(opts ...grpc.ServerOption) Option {
+	return func(s *Server) {
+		s.grpcOptions = append(s.grpcOptions, opts...)
 	}
 }
 
@@ -69,7 +80,8 @@ func NewServer(cfg config.Config, store storage.Storage, logger *slog.Logger, op
 	}
 
 	creds := credentials.NewTLS(tlsConfig)
-	s.grpc = grpc.NewServer(grpc.Creds(creds))
+	grpcOpts := append([]grpc.ServerOption{grpc.Creds(creds)}, s.grpcOptions...)
+	s.grpc = grpc.NewServer(grpcOpts...)
 
 	return s, nil
 }
