@@ -504,6 +504,18 @@ func (s *StorageSuite) TestApplyRetentionPolicyByAge() {
 	s.Equal(recentID, metas[0].SnapshotID)
 }
 
+func (s *StorageSuite) TestApplyRetentionPolicyInvalidAge() {
+	zero := 0
+	_, err := s.store.ApplyRetentionPolicy(s.ctx, nil, &zero)
+	s.Require().Error(err)
+	s.Contains(err.Error(), "positive integer")
+
+	negative := -1
+	_, err = s.store.ApplyRetentionPolicy(s.ctx, nil, &negative)
+	s.Require().Error(err)
+	s.Contains(err.Error(), "positive integer")
+}
+
 func (s *StorageSuite) TestSaveSnapshotWithEventLogPosition() {
 	posID := ulid.Make()
 	pos := int64(42)

@@ -39,15 +39,46 @@ func New(dbPath string, logger *slog.Logger) (*Storage, error) {
 // BackendName returns the storage backend identifier.
 func (s *Storage) BackendName() string { return "sqlite" }
 
-// Initialize applies database migrations.
+// migrationFiles lists migration SQL files in order. Each file is applied
+// only when the schema_version table does not yet contain that version number.
+var migrationFiles = []struct {
+	version int
+	path    string
+}{
+	{1, "migrations/001_initial.sql"},
+	{2, "migrations/002_snapshot_entries_json.sql"},
+}
+
+// Initialize applies database migrations in order, skipping already-applied ones.
 func (s *Storage) Initialize(ctx context.Context) error {
-	migrationSQL, err := migrations.ReadFile("migrations/001_initial.sql")
-	if err != nil {
-		return oops.Wrapf(err, "read migration")
-	}
 	return s.withConn(ctx, func(conn *sqlite.Conn) error {
-		if err := sqlitex.ExecuteScript(conn, string(migrationSQL), nil); err != nil {
-			return oops.Wrapf(err, "apply migration")
+		for _, m := range migrationFiles {
+			sql, err := migrations.ReadFile(m.path)
+			if err != nil {
+				return oops.Wrapf(err, "read migration %s", m.path)
+			}
+			// Migration 1 creates schema_version; for later migrations check it.
+			if m.version > 1 {
+				var applied bool
+				checkErr := sqlitex.Execute(conn,
+					`SELECT 1 FROM schema_version WHERE version = ?`,
+					&sqlitex.ExecOptions{
+						Args: []any{m.version},
+						ResultFunc: func(*sqlite.Stmt) error {
+							applied = true
+							return nil
+						},
+					})
+				if checkErr != nil {
+					return oops.Wrapf(checkErr, "check schema_version for migration %d", m.version)
+				}
+				if applied {
+					continue
+				}
+			}
+			if err := sqlitex.ExecuteScript(conn, string(sql), nil); err != nil {
+				return oops.Wrapf(err, "apply migration %s", m.path)
+			}
 		}
 		return nil
 	})

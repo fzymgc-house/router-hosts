@@ -684,6 +684,28 @@ func TestService_DeleteSnapshot(t *testing.T) {
 	assert.Empty(t, snapshots)
 }
 
+func TestService_DeleteSnapshot_InvalidID(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	_, err := env.client.DeleteSnapshot(ctx, &hostsv1.DeleteSnapshotRequest{SnapshotId: "not-a-ulid"})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestService_DeleteSnapshot_NotFound(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	_, err := env.client.DeleteSnapshot(ctx, &hostsv1.DeleteSnapshotRequest{SnapshotId: "01ARZ3NDEKTSV4RRFFQ69G5FAV"})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.NotFound, st.Code())
+}
+
 func TestService_RollbackToSnapshot(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()

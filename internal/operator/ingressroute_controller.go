@@ -233,6 +233,9 @@ func (r *IngressRouteReconciler) reconcileDelete(ctx context.Context, log *slog.
 // (IngressRouteTCP). Hostnames that fail validation are logged and skipped.
 func extractHosts(log *slog.Logger, obj *unstructured.Unstructured) []string {
 	routes, found, err := unstructured.NestedSlice(obj.Object, "spec", "routes")
+	if err != nil {
+		log.Warn("unexpected type for spec.routes", "namespace", obj.GetNamespace(), "name", obj.GetName(), "error", err)
+	}
 	if err != nil || !found {
 		return nil
 	}

@@ -12,30 +12,32 @@ import (
 	"github.com/fzymgc-house/router-hosts/internal/domain"
 )
 
-// SaveSnapshot persists a snapshot, marshaling entries to JSON.
+// SaveSnapshot persists a snapshot, storing formatted hosts text in
+// hosts_content and JSON-encoded entries in entries_json separately.
 func (s *Storage) SaveSnapshot(ctx context.Context, snapshot domain.Snapshot) error {
-	hostsContent := snapshot.HostsContent
+	var entriesJSON any
 	if snapshot.Entries != nil {
 		data, marshalErr := json.Marshal(snapshot.Entries)
 		if marshalErr != nil {
 			return oops.Wrapf(marshalErr, "marshal entries")
 		}
-		hostsContent = string(data)
+		entriesJSON = string(data)
 	}
 
 	return s.withConn(ctx, func(conn *sqlite.Conn) error {
 		return sqlitex.Execute(conn,
-			`INSERT INTO snapshots (snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position)
-			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			`INSERT INTO snapshots (snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position, entries_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 			&sqlitex.ExecOptions{
 				Args: []any{
 					snapshot.SnapshotID.String(),
 					snapshot.CreatedAt.UTC().Format(timeFormat),
-					hostsContent,
+					snapshot.HostsContent,
 					snapshot.EntryCount,
 					snapshot.Trigger,
 					ptrToAny(snapshot.Name),
 					int64PtrToAny(snapshot.EventLogPosition),
+					entriesJSON,
 				},
 			})
 	})
@@ -46,7 +48,7 @@ func (s *Storage) GetSnapshot(ctx context.Context, snapshotID ulid.ULID) (*domai
 	var snap *domain.Snapshot
 	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
 		return sqlitex.Execute(conn,
-			`SELECT snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position
+			`SELECT snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position, entries_json
 			 FROM snapshots WHERE snapshot_id = ?`,
 			&sqlitex.ExecOptions{
 				Args: []any{snapshotID.String()},
@@ -182,6 +184,14 @@ func (s *Storage) ApplyRetentionPolicy(ctx context.Context, maxCount *int, maxAg
 }
 
 // scanSnapshot reads a full Snapshot from a query result row.
+// Columns: 0=snapshot_id, 1=created_at, 2=hosts_content, 3=entry_count,
+//
+//	4=trigger_type, 5=name, 6=event_log_position, 7=entries_json
+//
+// entries_json (col 7) is the canonical source for structured entries.
+// For backward compatibility with rows written before the migration, if
+// entries_json is NULL and hosts_content starts with '[', entries are
+// parsed from hosts_content instead.
 func scanSnapshot(stmt *sqlite.Stmt) (*domain.Snapshot, error) {
 	snapshotID, err := ulid.Parse(stmt.ColumnText(0))
 	if err != nil {
@@ -194,11 +204,23 @@ func scanSnapshot(stmt *sqlite.Stmt) (*domain.Snapshot, error) {
 	}
 
 	hostsContent := stmt.ColumnText(2)
+
 	var entries []domain.HostEntry
-	if hostsContent != "" && hostsContent[0] == '[' {
-		if unmarshalErr := json.Unmarshal([]byte(hostsContent), &entries); unmarshalErr != nil {
-			return nil, oops.Wrapf(unmarshalErr, "unmarshal snapshot entries")
+	if stmt.ColumnType(7) != sqlite.TypeNull {
+		// New rows: entries_json holds the structured data.
+		entriesJSON := stmt.ColumnText(7)
+		if entriesJSON != "" {
+			if unmarshalErr := json.Unmarshal([]byte(entriesJSON), &entries); unmarshalErr != nil {
+				return nil, oops.Wrapf(unmarshalErr, "unmarshal snapshot entries_json")
+			}
 		}
+	} else if hostsContent != "" && hostsContent[0] == '[' {
+		// Legacy rows written before the migration: entries were stored in hosts_content.
+		if unmarshalErr := json.Unmarshal([]byte(hostsContent), &entries); unmarshalErr != nil {
+			return nil, oops.Wrapf(unmarshalErr, "unmarshal snapshot entries from hosts_content")
+		}
+		// hosts_content for legacy rows is JSON, not a formatted hosts file.
+		hostsContent = ""
 	}
 
 	snap := &domain.Snapshot{
