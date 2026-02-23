@@ -1403,6 +1403,9 @@ func TestService_ImportHosts_MultiChunk(t *testing.T) {
 
 // TestService_ImportHosts_MaxSizeExceeded verifies that sending a payload
 // larger than maxImportBytes (64 MiB) returns codes.ResourceExhausted.
+//
+// Chunks are kept small (1 MiB each) and sent in a loop until the server
+// rejects the stream, avoiding a single 64 MiB allocation in the test process.
 func TestService_ImportHosts_MaxSizeExceeded(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()
@@ -1410,18 +1413,29 @@ func TestService_ImportHosts_MaxSizeExceeded(t *testing.T) {
 	stream, err := env.client.ImportHosts(ctx)
 	require.NoError(t, err)
 
-	// Build a chunk just over the limit. We use a repeated single byte to
-	// keep memory allocation predictable in tests.
-	oversize := bytes.Repeat([]byte("x"), maxImportBytes+1)
+	// 1 MiB chunk sent repeatedly; 65 iterations exceeds the 64 MiB limit.
+	const chunkSize = 1 * 1024 * 1024
+	chunk := bytes.Repeat([]byte("x"), chunkSize)
 	format := "hosts"
-	err = stream.Send(&hostsv1.ImportHostsRequest{
-		Chunk:     oversize,
-		LastChunk: true,
-		Format:    &format,
-	})
-	// Send may succeed locally (buffered); the error surfaces on Recv.
-	if err != nil {
-		st, ok := status.FromError(err)
+
+	var sendErr error
+	for i := 0; i < 65; i++ {
+		req := &hostsv1.ImportHostsRequest{
+			Chunk: chunk,
+		}
+		if i == 0 {
+			req.Format = &format
+		}
+		if err := stream.Send(req); err != nil {
+			sendErr = err
+			break
+		}
+	}
+
+	// The error may surface on Send (when the server has already rejected the
+	// stream) or on the first Recv after CloseSend.
+	if sendErr != nil {
+		st, ok := status.FromError(sendErr)
 		require.True(t, ok)
 		assert.Equal(t, codes.ResourceExhausted, st.Code())
 		return
@@ -1725,4 +1739,66 @@ func TestService_ImportHosts_ReplaceConflict_NilExisting(t *testing.T) {
 	assert.Contains(t, finalResp.ValidationErrors[0], "192.168.5.1")
 	assert.Contains(t, finalResp.ValidationErrors[0], "dup.local")
 	assert.NotContains(t, finalResp.ValidationErrors[0], "<nil>")
+}
+
+func TestMapError_SanitizesInternalErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantCode    codes.Code
+		wantMessage string
+	}{
+		{
+			name:        "oops CodeInternal sanitizes message",
+			err:         domain.ErrInternal(errors.New("db password: hunter2")),
+			wantCode:    codes.Internal,
+			wantMessage: "internal server error",
+		},
+		{
+			name:        "oops CodeStorage also sanitizes message",
+			err:         domain.ErrStorage(errors.New("sql: connection refused secret_dsn")),
+			wantCode:    codes.Internal,
+			wantMessage: "internal server error",
+		},
+		{
+			name:        "non-oops error sanitizes message",
+			err:         errors.New("raw db error with stack trace details"),
+			wantCode:    codes.Internal,
+			wantMessage: "internal server error",
+		},
+		{
+			name:        "oops CodeNotFound preserves message",
+			err:         domain.ErrNotFound("host", "abc-123"),
+			wantCode:    codes.NotFound,
+			wantMessage: `host "abc-123" not found`,
+		},
+		{
+			name:        "oops CodeDuplicate preserves message",
+			err:         domain.ErrDuplicate("1.2.3.4", "foo.local"),
+			wantCode:    codes.AlreadyExists,
+			wantMessage: "duplicate entry: 1.2.3.4 -> foo.local",
+		},
+		{
+			name:        "oops CodeValidation preserves message",
+			err:         domain.ErrValidation("ip must be valid"),
+			wantCode:    codes.InvalidArgument,
+			wantMessage: "validation failed: ip must be valid",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mapError(tc.err)
+			st, ok := status.FromError(got)
+			require.True(t, ok, "mapError must return a gRPC status error")
+			assert.Equal(t, tc.wantCode, st.Code())
+			assert.Equal(t, tc.wantMessage, st.Message())
+
+			// For internal errors, verify the sensitive original message is NOT present.
+			if tc.wantCode == codes.Internal {
+				assert.NotContains(t, st.Message(), tc.err.Error(),
+					"internal error detail must not leak to client")
+			}
+		})
+	}
 }

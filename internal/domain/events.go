@@ -256,6 +256,13 @@ func NewHostEvent(v any) (HostEvent, error) {
 	case TagsModified:
 		eventType = EventTypeTagsModified
 	case AliasesModified:
+		// Validate new aliases: must not be IP addresses and must be valid hostnames.
+		// We pass an empty canonical hostname because AliasesModified does not carry
+		// the host's primary hostname; the alias-vs-hostname conflict check is
+		// enforced at the aggregate level before the event is created.
+		if errs := validation.ValidateAliases(ev.NewAliases, ""); len(errs) > 0 {
+			return HostEvent{}, ErrValidation(errs[0].Error())
+		}
 		eventType = EventTypeAliasesModified
 	case HostDeleted:
 		eventType = EventTypeHostDeleted

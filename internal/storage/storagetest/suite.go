@@ -191,6 +191,50 @@ func TestEventStoreBatchAppend(t *testing.T, store storage.EventStore) {
 	}
 }
 
+// TestEventStoreBatchAppendRollback verifies that AppendEventsBatch rolls back
+// all writes when a version conflict occurs mid-batch. The first aggregate's
+// events MUST NOT be persisted if the second aggregate's expectedVersion is
+// wrong.
+func TestEventStoreBatchAppendRollback(t *testing.T, store storage.EventStore) {
+	t.Helper()
+	ctx := context.Background()
+	agg1 := ulid.Make()
+	agg2 := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Pre-seed agg2 with one event so its current version is 1.
+	require.NoError(t, store.AppendEvent(ctx, agg2, hostCreatedEnvelope(agg2, "10.10.0.2", "rollback-agg2.local", now), 0))
+
+	// Build a batch where agg1 is fresh (expectedVersion=0, correct) but agg2
+	// uses expectedVersion=0 instead of the correct 1 — this must trigger a
+	// version conflict.
+	batch := []storage.AggregateEvents{
+		{
+			AggregateID:     agg1,
+			Events:          []domain.EventEnvelope{hostCreatedEnvelope(agg1, "10.10.0.1", "rollback-agg1.local", now)},
+			ExpectedVersion: 0,
+		},
+		{
+			AggregateID:     agg2,
+			Events:          []domain.EventEnvelope{makeEnvelope(agg2, domain.IPAddressChanged{OldIP: "10.10.0.2", NewIP: "10.10.0.3", ChangedAt: now.Add(time.Second)}, 2, now.Add(time.Second))},
+			ExpectedVersion: 0, // wrong: current version is 1
+		},
+	}
+
+	err := store.AppendEventsBatch(ctx, batch)
+	require.Error(t, err, "batch with a version conflict must return an error")
+
+	// agg1 must have no events — the transaction was rolled back.
+	events1, loadErr := store.LoadEvents(ctx, agg1)
+	require.NoError(t, loadErr)
+	require.Empty(t, events1, "agg1 events must be rolled back on batch failure")
+
+	// agg2 must still have only its original single event.
+	events2, loadErr := store.LoadEvents(ctx, agg2)
+	require.NoError(t, loadErr)
+	require.Len(t, events2, 1, "agg2 must retain only its pre-existing event")
+}
+
 // ---------- HostProjection compliance ----------
 
 // TestHostProjectionListAll verifies that creating hosts via events causes them
@@ -496,6 +540,9 @@ func RunAll(t *testing.T, factory func(t *testing.T) storage.Storage) {
 	})
 	t.Run("EventStoreBatchAppend", func(t *testing.T) {
 		TestEventStoreBatchAppend(t, factory(t))
+	})
+	t.Run("EventStoreBatchAppendRollback", func(t *testing.T) {
+		TestEventStoreBatchAppendRollback(t, factory(t))
 	})
 
 	// HostProjection

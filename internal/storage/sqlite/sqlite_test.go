@@ -1054,3 +1054,103 @@ func TestReplayEventsSkipsUnknownEventTypes(t *testing.T) {
 		t.Errorf("entry.Hostname = %q, want %q", entry.Hostname, "forward.local")
 	}
 }
+
+// TestReplayEventsUnknownEventTypeReturnsError verifies that replayEvents
+// returns an error when it encounters an event type that Decode() does not
+// recognise at all (regression for Finding 133.220). This is distinct from
+// TestReplayEventsSkipsUnknownEventTypes, which tests a valid-but-not-projected
+// type (SnapshotCreated). Here the Type field is set directly to a string that
+// has never been registered, bypassing EventType.UnmarshalJSON validation so
+// the unknown value reaches Decode()'s default case.
+func TestReplayEventsUnknownEventTypeReturnsError(t *testing.T) {
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Build a known HostCreated envelope to establish the initial host state.
+	createEnv := makeEnvelope(aggID, domain.HostCreated{
+		IPAddress: "10.0.0.1",
+		Hostname:  "corrupt.local",
+		Aliases:   []string{},
+		Tags:      []string{},
+		CreatedAt: now,
+	}, 1, now)
+
+	// Construct an envelope with a truly unrecognised event type by setting
+	// the Type field directly, bypassing EventType.UnmarshalJSON. This
+	// simulates a future or corrupt event that Decode() cannot handle.
+	unknownEnv := domain.EventEnvelope{
+		EventID:     ulid.Make(),
+		AggregateID: aggID,
+		Event: domain.HostEvent{
+			Type: domain.EventType("FutureEventV99"),
+		},
+		Version:   2,
+		CreatedAt: now.Add(time.Second),
+	}
+
+	_, err := replayEvents(aggID, []domain.EventEnvelope{createEnv, unknownEnv})
+	if err == nil {
+		t.Fatal("replayEvents returned nil error for unknown event type, want error")
+	}
+	if !containsStr(err.Error(), "FutureEventV99") {
+		t.Errorf("error %q does not mention the unknown event type %q", err.Error(), "FutureEventV99")
+	}
+}
+
+// TestListAllUnknownEventTypeInDBReturnsError verifies that ListAll surfaces an
+// error when a stored event row carries an event_type string that
+// EventType.UnmarshalJSON does not recognise. Corruption that introduces an
+// unknown event type must not silently produce an incorrect projection
+// (regression for Finding 133.220).
+func (s *StorageSuite) TestListAllUnknownEventTypeInDBReturnsError() {
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Insert a valid HostCreated event through the public API.
+	env := s.createHostEvents(aggID, "10.0.0.1", "unknown-type.local", now)
+	s.Require().NoError(s.store.AppendEvent(s.ctx, aggID, env, 0))
+
+	// Directly insert a raw event row with an unrecognised event_type. The
+	// event_data must be valid JSON so that the unmarshal step hits the
+	// EventType validation, not a JSON syntax error.
+	conn, err := s.store.pool.Take(s.ctx)
+	s.Require().NoError(err)
+	err = sqlitex.Execute(conn,
+		`INSERT INTO events (event_id, aggregate_id, event_type, event_data, event_version, created_at, created_by)
+		 VALUES (?, ?, ?, ?, ?, ?, NULL)`,
+		&sqlitex.ExecOptions{
+			Args: []any{
+				ulid.Make().String(),
+				aggID.String(),
+				"FutureEventV99",
+				`{"type":"FutureEventV99"}`,
+				int64(2),
+				now.Add(time.Second).UTC().Format(timeFormat),
+			},
+		})
+	s.store.pool.Put(conn)
+	s.Require().NoError(err)
+
+	// ListAll must return an error — unknown event type must not be silently
+	// skipped, producing a misleading partial projection.
+	_, err = s.store.ListAll(s.ctx)
+	s.Require().Error(err, "ListAll must return an error for an unknown event type in the DB")
+
+	// GetByID must likewise surface the error.
+	_, err = s.store.GetByID(s.ctx, aggID)
+	s.Require().Error(err, "GetByID must return an error for an unknown event type in the DB")
+}
+
+// containsStr is a helper that avoids a testify import in standalone test
+// functions.
+func containsStr(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(substr) == 0 ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				if s[i:i+len(substr)] == substr {
+					return true
+				}
+			}
+			return false
+		}())
+}

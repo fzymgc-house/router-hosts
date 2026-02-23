@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/samber/oops"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -170,6 +171,105 @@ func TestNewHostEvent_AllTypes(t *testing.T) {
 			var m map[string]json.RawMessage
 			require.NoError(t, json.Unmarshal(data, &m))
 			assert.Contains(t, m, "type", "JSON should contain type discriminator")
+		})
+	}
+}
+
+func TestNewHostEvent_ValidationErrors(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	tests := []struct {
+		name        string
+		event       any
+		wantErrCode string
+	}{
+		{
+			name: "HostCreated_invalid_ip",
+			event: HostCreated{
+				IPAddress: "not-an-ip",
+				Hostname:  "host.local",
+				Aliases:   []string{},
+				Tags:      []string{},
+				CreatedAt: now,
+			},
+			wantErrCode: CodeValidation,
+		},
+		{
+			name: "HostCreated_invalid_hostname",
+			event: HostCreated{
+				IPAddress: "10.0.0.1",
+				Hostname:  "-bad-hostname",
+				Aliases:   []string{},
+				Tags:      []string{},
+				CreatedAt: now,
+			},
+			wantErrCode: CodeValidation,
+		},
+		{
+			name: "IPAddressChanged_invalid_new_ip",
+			event: IPAddressChanged{
+				OldIP:     "10.0.0.1",
+				NewIP:     "not-an-ip",
+				ChangedAt: now,
+			},
+			wantErrCode: CodeValidation,
+		},
+		{
+			name: "HostnameChanged_invalid_new_hostname",
+			event: HostnameChanged{
+				OldHostname: "old.local",
+				NewHostname: "-bad",
+				ChangedAt:   now,
+			},
+			wantErrCode: CodeValidation,
+		},
+		{
+			name: "AliasesModified_ip_address_as_alias",
+			event: AliasesModified{
+				OldAliases: []string{},
+				NewAliases: []string{"192.168.1.1"},
+				ModifiedAt: now,
+			},
+			wantErrCode: CodeValidation,
+		},
+		{
+			name: "AliasesModified_invalid_alias_hostname",
+			event: AliasesModified{
+				OldAliases: []string{},
+				NewAliases: []string{"-bad-alias"},
+				ModifiedAt: now,
+			},
+			wantErrCode: CodeValidation,
+		},
+		{
+			name: "AliasesModified_duplicate_alias",
+			event: AliasesModified{
+				OldAliases: []string{},
+				NewAliases: []string{"alias.local", "alias.local"},
+				ModifiedAt: now,
+			},
+			wantErrCode: CodeValidation,
+		},
+		{
+			name: "AliasesModified_ipv6_as_alias",
+			event: AliasesModified{
+				OldAliases: []string{},
+				NewAliases: []string{"::1"},
+				ModifiedAt: now,
+			},
+			wantErrCode: CodeValidation,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := NewHostEvent(tt.event)
+			require.Error(t, err)
+
+			oopsErr, ok := oops.AsOops(err)
+			require.True(t, ok, "expected oops error")
+			code, _ := oopsErr.Code().(string)
+			require.Equal(t, tt.wantErrCode, code)
 		})
 	}
 }

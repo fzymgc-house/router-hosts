@@ -181,6 +181,44 @@ func TestHookExecutor_ErrorMessageSanitization(t *testing.T) {
 	}
 }
 
+func TestHookExecutor_ErrorMessageSanitizesAllControlChars(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "ctrl-env.txt")
+
+	executor := NewHookExecutor(
+		nil,
+		[]config.HookDefinition{{
+			Name:    "ctrl-check",
+			Command: "printenv ROUTER_HOSTS_ERROR > " + envFile,
+		}},
+		5*time.Second,
+		slog.Default(),
+	)
+
+	// errMsg contains \r\n (CRLF), standalone \n, standalone \r, and a null byte.
+	dirtyErrMsg := "before\r\nafter\nnewline\rcarriage\x00null"
+	executor.RunFailure(context.Background(), 1, dirtyErrMsg)
+
+	data, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	// printenv appends a trailing newline; trim it before checking so the
+	// assertion does not false-positive on that shell-appended newline.
+	content := strings.TrimRight(string(data), "\n")
+
+	// None of the raw control characters must survive sanitization.
+	assert.NotContains(t, content, "\r\n", "CRLF must be removed from ROUTER_HOSTS_ERROR")
+	assert.NotContains(t, content, "\n", "LF must be removed from ROUTER_HOSTS_ERROR")
+	assert.NotContains(t, content, "\r", "CR must be removed from ROUTER_HOSTS_ERROR")
+	assert.NotContains(t, content, "\x00", "null byte must be removed from ROUTER_HOSTS_ERROR")
+
+	// The non-control text from each segment must still be present.
+	assert.Contains(t, content, "before")
+	assert.Contains(t, content, "after")
+	assert.Contains(t, content, "newline")
+	assert.Contains(t, content, "carriage")
+	assert.Contains(t, content, "null")
+}
+
 func TestHookExecutor_SequentialOrder(t *testing.T) {
 	dir := t.TempDir()
 	orderFile := filepath.Join(dir, "order.txt")

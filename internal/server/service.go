@@ -88,17 +88,18 @@ func NewHostsServiceImpl(handler *CommandHandler, store storage.Storage, opts ..
 
 // mapError converts oops-coded domain errors to gRPC status errors.
 // For codes.Internal, the detailed error message is not forwarded to the
-// client to avoid leaking internal state; it is expected to be logged by
-// the caller before returning.
+// client to avoid leaking internal state; it is logged server-side here.
 func mapError(err error) error {
 	if oopsErr, ok := oops.AsOops(err); ok {
 		code, _ := oopsErr.Code().(string)
 		grpcCode := domain.GRPCCode(code)
 		if grpcCode == codes.Internal {
+			slog.Error("internal server error", "error", oopsErr)
 			return status.Error(codes.Internal, "internal server error")
 		}
 		return status.Error(grpcCode, oopsErr.Error())
 	}
+	slog.Error("internal server error", "error", err)
 	return status.Error(codes.Internal, "internal server error")
 }
 

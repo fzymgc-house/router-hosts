@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -228,12 +227,12 @@ func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) (*domain
 				Version:   env.Version,
 			}
 
-		default:
-			slog.Error("replayEvents: unknown event type, skipping",
-				slog.String("aggregate_id", aggregateID.String()),
-				slog.String("event_type", string(env.Event.Type)),
-			)
+		case domain.SnapshotCreated, domain.SnapshotRolledBack, domain.SnapshotDeleted:
+			// Snapshot events are valid but not relevant to host projection.
 			continue
+
+		default:
+			return nil, oops.Errorf("unknown event type %q for aggregate %s", env.Event.Type, aggregateID)
 		}
 	}
 
