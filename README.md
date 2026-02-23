@@ -1,10 +1,10 @@
 # router-hosts
 
-[![CI](https://github.com/fzymgc-house/router-hosts/actions/workflows/ci.yml/badge.svg)](https://github.com/fzymgc-house/router-hosts/actions/workflows/ci.yml)
+[![CI](https://github.com/fzymgc-house/router-hosts/actions/workflows/ci-go.yml/badge.svg)](https://github.com/fzymgc-house/router-hosts/actions/workflows/ci-go.yml)
 [![Coverage](https://img.shields.io/badge/coverage-%E2%89%A580%25-green)](docs/test-coverage-audit.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Rust CLI tool for managing DNS host entries on routers via gRPC.
+Go CLI tool for managing DNS host entries on routers via gRPC.
 
 ## Overview
 
@@ -17,35 +17,39 @@ Rust CLI tool for managing DNS host entries on routers via gRPC.
 - TLS with mutual authentication for security
 - OpenTelemetry metrics and tracing for observability
 
-See [Architecture](docs/architecture.md) for detailed design.
+See [Architecture](docs/contributing/architecture.md) for detailed design.
 
 ## Project Structure
 
-```
+```text
 router-hosts/
-├── crates/
-│   ├── router-hosts-common/   # Shared validation, types, protobuf
-│   ├── router-hosts-storage/  # Storage backends (SQLite, PostgreSQL, DuckDB)
-│   ├── router-hosts/          # Main binary (client + server modes)
-│   ├── router-hosts-duckdb/   # DuckDB variant binary
-│   ├── router-hosts-operator/ # Kubernetes operator
-│   └── router-hosts-e2e/      # End-to-end tests
-├── charts/
-│   └── router-hosts-operator/ # Helm chart for operator
-└── proto/
-    └── router_hosts/
-        └── v1/
-            └── hosts.proto    # gRPC service definitions
+├── cmd/
+│   ├── router-hosts/     # Server + client binary
+│   └── operator/         # Kubernetes operator binary
+├── internal/
+│   ├── acme/             # ACME certificate management
+│   ├── client/           # CLI client (commands, output, TUI)
+│   ├── config/           # Configuration loading
+│   ├── domain/           # Domain types, events, errors
+│   ├── operator/         # K8s operator controllers
+│   ├── server/           # gRPC server, hosts file, hooks
+│   ├── storage/          # Storage interfaces
+│   │   └── sqlite/       # SQLite implementation
+│   └── validation/       # IP/hostname validation
+├── e2e/                  # E2E tests with real mTLS
+└── proto/                # Protobuf definitions
 ```
 
 ## Development
 
 ### Prerequisites
 
-- Rust 1.75+
+- Go 1.24+
 - Docker
 - [Task](https://taskfile.dev/) (recommended)
 - [buf](https://buf.build/) (for protobuf)
+- [golangci-lint](https://golangci-lint.run/) (for linting)
+- [gofumpt](https://github.com/mvdan/gofumpt) (for formatting)
 
 ### Quick Start
 
@@ -60,7 +64,7 @@ task build
 task test
 
 # Run E2E tests (requires Docker)
-task e2e
+task test:e2e
 
 # Full CI pipeline locally
 task ci
@@ -70,40 +74,43 @@ task ci
 
 | Task | Description |
 |------|-------------|
-| `task build` | Build all crates (debug) |
-| `task build:release` | Build all crates (release) |
-| `task test` | Run unit and integration tests |
-| `task lint` | Run all linters |
-| `task fmt` | Format all code |
-| `task docker:build` | Build server Docker image |
-| `task e2e` | Run E2E acceptance tests |
-| `task ci` | Run full CI pipeline locally |
+| `task build` | Build all binaries (debug) |
+| `task build:release` | Build all binaries with optimizations |
+| `task test` | Run all unit and integration tests |
+| `task test:e2e` | Run E2E tests with real mTLS |
+| `task test:coverage` | Run tests with HTML coverage report |
+| `task test:coverage:ci` | Coverage with 80% threshold |
+| `task lint` | Run all linters (Go + protobuf) |
+| `task fmt` | Format all code (Go + protobuf) |
+| `task proto:generate` | Generate Go code from protobuf |
+| `task docker:build` | Build Docker image |
+| `task clean` | Remove build artifacts |
+| `task ci` | Full CI pipeline locally |
 
 ### Manual Commands
 
 #### Build
 
 ```bash
-cargo build
+go build ./cmd/router-hosts && go build ./cmd/operator
 ```
 
 #### Test
 
 ```bash
-cargo test
+go test ./... -race
 ```
 
-#### Run in Client Mode (default)
+#### Run Client
 
 ```bash
-cargo run -- --help
-cargo run -- add --ip 192.168.1.10 --hostname server.local
+./bin/router-hosts --help
 ```
 
-#### Run in Server Mode
+#### Run Server
 
 ```bash
-cargo run -- server --config server.toml
+./bin/router-hosts serve --config server.toml
 ```
 
 ### Docker
@@ -111,119 +118,46 @@ cargo run -- server --config server.toml
 ```bash
 # Build server image
 task docker:build
-
-# Run specific E2E scenario
-task e2e:scenario -- daily_operations
 ```
 
 ## Installation
-
-### Shell Installer (macOS/Linux)
-
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf \
-  https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts-installer.sh | sh
-```
-
-### Homebrew (macOS/Linux)
-
-```bash
-# Download Homebrew formula from release
-curl -LO https://github.com/fzymgc-house/router-hosts/releases/latest/download/router-hosts.rb
-
-# Install from formula
-brew install --formula ./router-hosts.rb
-```
-
-> **Note:** Shell installer and Homebrew install binaries to `~/.local/bin`. Ensure this directory is in your `PATH`:
-> ```bash
-> export PATH="$HOME/.local/bin:$PATH"
-> ```
-> Add this line to your shell profile (`~/.bashrc`, `~/.zshrc`, etc.) to make it permanent.
-
-<details>
-<summary>Troubleshooting Installation</summary>
-
-If `router-hosts` command is not found after installation:
-
-1. **Verify installation:** `ls -la ~/.local/bin/router-hosts`
-2. **Check PATH:** `echo $PATH | grep -o ~/.local/bin`
-3. **Restart shell** or run: `source ~/.bashrc` (or `~/.zshrc`)
-4. **Manual PATH fix:** `export PATH="$HOME/.local/bin:$PATH"`
-
-</details>
-
-### Pre-built Binaries
-
-Download from [GitHub Releases](https://github.com/fzymgc-house/router-hosts/releases/latest):
-- macOS (Intel & Apple Silicon)
-- Linux (x64 & ARM64)
-
-### Verifying Binaries
-
-All release binaries include [GitHub attestations](https://docs.github.com/en/actions/security-for-github-actions/using-artifact-attestations/using-artifact-attestations-to-establish-provenance-for-builds) and embedded dependency information (via [cargo-auditable](https://github.com/rust-secure-code/cargo-auditable)) for supply chain security:
-
-```bash
-# Verify cryptographic attestation (proves binary came from this repo)
-gh attestation verify router-hosts --repo fzymgc-house/router-hosts
-
-# Audit embedded dependency information for known vulnerabilities
-cargo auditable audit router-hosts
-```
-
-> **Note:** GitHub attestations are automatically generated by [cargo-dist](https://github.com/axodotdev/cargo-dist) v0.30.3+ during the release workflow.
 
 ### Build from Source
 
 ```bash
 git clone https://github.com/fzymgc-house/router-hosts.git
 cd router-hosts
-cargo build --release
+task build:release
+# Binaries in bin/
 ```
 
-### Distribution Methods
-
-**router-hosts** uses two complementary distribution workflows:
-
-**CLI Binaries (cargo-dist)**:
-- Published to [GitHub Releases](https://github.com/fzymgc-house/router-hosts/releases) on version tags (e.g., `v0.5.0`)
-- Multi-platform binaries: macOS (Intel/ARM), Linux (x64/ARM64)
-- Includes shell installer and Homebrew formula
-- Use for: Installing CLI on workstations for remote management
-
-**Server Containers (Docker)**:
-- Published to [GitHub Container Registry](https://github.com/fzymgc-house/router-hosts/pkgs/container/router-hosts) on every main branch commit
-- Multi-arch images: `linux/amd64`, `linux/arm64`
-- Tagged with commit SHA and `latest`
-- Use for: Deploying server on routers, servers, or containers
+### Docker
 
 ```bash
 # Pull latest server image
 docker pull ghcr.io/fzymgc-house/router-hosts:latest
 
 # Run server container
-docker run -v /path/to/config:/config ghcr.io/fzymgc-house/router-hosts:latest server --config /config/server.toml
+docker run -v /path/to/config:/config ghcr.io/fzymgc-house/router-hosts:latest serve --config /config/server.toml
 ```
 
 ## Status
 
-✅ **v0.7.0 Released** - Production-ready with operator high availability
+**Go Rewrite** - Rewritten from Rust to Go for simplified development and deployment
 
 **Features:**
-- ✅ Client CLI with all commands (host, snapshot, config)
-- ✅ Server with event sourcing and multiple storage backends
-- ✅ SQLite (default), PostgreSQL, and DuckDB storage options
-- ✅ Import/Export (hosts, JSON, CSV formats)
-- ✅ Snapshots with rollback and retention
-- ✅ mTLS authentication with SIGHUP certificate reload
-- ✅ ACME certificate automation (HTTP-01 and DNS-01)
-- ✅ Kubernetes operator for Traefik integration
-- ✅ Leader election for operator HA
-- ✅ Health RPCs for monitoring and probes
-- ✅ OpenTelemetry metrics and tracing
-- ✅ Full E2E test coverage (10 scenarios)
 
-See [Releases](https://github.com/fzymgc-house/router-hosts/releases) for version history.
+- Client CLI with all commands (host, snapshot, config)
+- Server with event sourcing and SQLite storage
+- Import/Export (hosts, JSON, CSV formats)
+- Snapshots with rollback and retention
+- mTLS authentication with SIGHUP certificate reload
+- ACME certificate automation (HTTP-01 and DNS-01)
+- Kubernetes operator for Traefik integration
+- Leader election for operator HA
+- Health RPCs for monitoring and probes
+- OpenTelemetry metrics and tracing
+- E2E test coverage with real mTLS
 
 ## License
 

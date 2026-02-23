@@ -1,19 +1,9 @@
-# Storage Backends
+# Storage Backend
 
-router-hosts supports three storage backends. SQLite is the default and recommended for most deployments.
+router-hosts uses SQLite as its storage backend. SQLite provides an embedded,
+zero-configuration database that stores all data in a single file.
 
-## Comparison
-
-| Feature | SQLite | PostgreSQL | DuckDB |
-|---------|--------|------------|--------|
-| Setup complexity | Low | Medium | Low |
-| Concurrent connections | Limited | High | Limited |
-| Embedded | Yes | No | Yes |
-| Production ready | Yes | Yes | Experimental |
-
-## SQLite (Default)
-
-Best for single-server deployments. Zero configuration required.
+## Configuration
 
 ```toml
 [database]
@@ -22,25 +12,17 @@ path = "/var/lib/router-hosts/hosts.db"
 
 Default location (if no path specified): `~/.local/share/router-hosts/hosts.db`
 
-## PostgreSQL
+## Implementation
 
-Best for high-availability deployments with multiple server instances.
+The Go implementation uses `modernc.org/sqlite`, a pure-Go SQLite driver
+that requires no CGo or system libraries. This ensures maximum portability
+across platforms.
 
-```toml
-[database]
-url = "postgres://user:password@localhost:5432/router_hosts"
-```
+## Event Store
 
-Requires PostgreSQL 14+.
+All changes are stored as immutable events. The current state is reconstructed
+from the event log, providing a complete audit trail.
 
-## DuckDB
+## In-Memory Mode
 
-Experimental backend. Requires the `router-hosts-duckdb` binary variant.
-
-```toml
-[database]
-path = "/var/lib/router-hosts/hosts.duckdb"
-```
-
-!!! warning
-    DuckDB support is experimental. Use SQLite or PostgreSQL for production.
+For testing, use in-memory SQLite: `":memory:"` as the database path.

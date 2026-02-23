@@ -9,6 +9,7 @@ This document covers common issues and their solutions.
 **Symptoms:** Client cannot connect to server
 
 **Causes and solutions:**
+
 1. Server not running - start the server
 2. Wrong address/port - check configuration
 3. Firewall blocking connection - add firewall rule
@@ -19,6 +20,7 @@ This document covers common issues and their solutions.
 **Symptoms:** TLS handshake fails
 
 **Causes and solutions:**
+
 1. Wrong CA certificate - verify CA matches server's issuer
 2. Certificate expired - check certificate dates with `openssl x509 -in cert.pem -noout -dates`
 3. Hostname mismatch - verify server certificate includes the hostname you're connecting to
@@ -29,6 +31,7 @@ This document covers common issues and their solutions.
 **Symptoms:** Client authenticates but operations fail
 
 **Causes and solutions:**
+
 1. Client certificate not trusted by server CA
 2. Client certificate revoked (if CRL checking enabled)
 3. Certificate subject doesn't match access rules (if implemented)
@@ -40,18 +43,10 @@ This document covers common issues and their solutions.
 **Symptoms:** Operations fail with database lock errors
 
 **Causes and solutions:**
+
 1. Multiple processes accessing same database file - use PostgreSQL for multi-instance
 2. Stale lock file - delete `.db-wal` and `.db-shm` files if server crashed
 3. NFS/network filesystem - SQLite doesn't work well on network filesystems
-
-### "Connection pool exhausted" error (PostgreSQL)
-
-**Symptoms:** Operations timeout waiting for database connection
-
-**Causes and solutions:**
-1. Pool too small - increase `max_connections` in config
-2. Long-running transactions - check for stuck queries
-3. Connection leak - check server logs for unclosed connections
 
 ## Hosts File Issues
 
@@ -60,6 +55,7 @@ This document covers common issues and their solutions.
 **Symptoms:** Added/updated hosts not visible in /etc/hosts
 
 **Causes and solutions:**
+
 1. Server hasn't regenerated file - check server logs
 2. Post-edit hook failed - check hook execution logs
 3. File permissions - verify server can write to hosts file
@@ -70,8 +66,10 @@ This document covers common issues and their solutions.
 **Symptoms:** /etc/hosts has invalid content
 
 **Solutions:**
+
 1. Rollback to previous snapshot: `router-hosts snapshot rollback <id>`
 2. List snapshots and reimport:
+
    ```bash
    router-hosts snapshot list
    # Choose a snapshot ID from the list, then rollback:
@@ -99,6 +97,7 @@ See [ACME documentation](guides/acme.md#troubleshooting) for certificate-specifi
 ### Slow list/search operations
 
 **Causes and solutions:**
+
 1. Large dataset - add pagination with `--limit` and `--offset`
 2. Missing indexes - check database configuration
 3. Network latency - consider local caching or PostgreSQL read replicas
@@ -106,6 +105,7 @@ See [ACME documentation](guides/acme.md#troubleshooting) for certificate-specifi
 ### High memory usage
 
 **Causes and solutions:**
+
 1. Large import - use streaming import instead of loading all at once
 2. Event log too large - configure retention to prune old events
 3. Connection pool too large - reduce pool size
@@ -115,6 +115,7 @@ See [ACME documentation](guides/acme.md#troubleshooting) for certificate-specifi
 ### Hooks not executing
 
 **Causes and solutions:**
+
 1. Hook disabled - check `[hooks]` section in config
 2. Script not executable - `chmod +x /path/to/hook.sh`
 3. Script not found - use absolute paths
@@ -123,6 +124,7 @@ See [ACME documentation](guides/acme.md#troubleshooting) for certificate-specifi
 ### Hook executing but no effect
 
 **Causes and solutions:**
+
 1. Environment variables - hooks run in limited environment
 2. Working directory - hooks run from server's working directory
 3. Error not logged - add explicit logging to hook script
@@ -136,6 +138,7 @@ The router-hosts operator watches Kubernetes resources and creates DNS entries a
 **Symptoms:** Service exists but no DNS entry created
 
 **Causes and solutions:**
+
 1. Missing `router-hosts.fzymgc.house/enabled: "true"` annotation
 2. Missing `router-hosts.fzymgc.house/hostname` annotation - required for Services
 3. Invalid service type - only `LoadBalancer` and `NodePort` are supported
@@ -163,6 +166,7 @@ kubectl get pods -n router-hosts -l app=router-hosts-operator
 **Cause:** `router-hosts.fzymgc.house/hostname` annotation is required for Services (unlike Ingress which has `spec.rules[].host`)
 
 **Solution:** Add the hostname annotation:
+
 ```yaml
 annotations:
   router-hosts.fzymgc.house/enabled: "true"
@@ -176,12 +180,14 @@ annotations:
 **Cause:** Hostname doesn't conform to RFC 1123 format
 
 **Common issues:**
+
 - Contains underscores (use hyphens instead)
 - Starts or ends with hyphen
 - Contains consecutive dots
 - Label exceeds 63 characters
 
 **Solution:** Fix the hostname format:
+
 ```yaml
 # Wrong
 router-hosts.fzymgc.house/hostname: "my_service.example.com"
@@ -198,6 +204,7 @@ router-hosts.fzymgc.house/hostname: "my-service.example.com"
 **Cause:** NodePort Services require explicit IP address annotation because they expose on all nodes
 
 **Solution:** Add the IP annotation:
+
 ```yaml
 annotations:
   router-hosts.fzymgc.house/enabled: "true"
@@ -212,6 +219,7 @@ annotations:
 **Cause:** Cloud provider hasn't assigned an external IP yet
 
 **Solutions:**
+
 1. Wait for cloud provider to provision load balancer
 2. Check cloud provider quotas and limits
 3. For bare-metal clusters, ensure MetalLB or similar is configured
@@ -226,6 +234,7 @@ kubectl get svc <name> -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
 **Symptoms:** Changed Service but DNS doesn't reflect updates
 
 **Causes and solutions:**
+
 1. Check operator logs for errors
 2. Verify router-hosts server is reachable
 3. Check retry backoff - transient errors use exponential backoff
@@ -243,6 +252,7 @@ kubectl annotate svc <name> router-hosts.fzymgc.house/timestamp="$(date +%s)" --
 **Symptoms:** All reconciliations fail with client errors
 
 **Causes and solutions:**
+
 1. Verify server address in RouterHostsConfig
 2. Check mTLS certificates are valid and mounted
 3. Verify network connectivity between operator and server
@@ -260,14 +270,11 @@ kubectl get secrets -n router-hosts | grep tls
 ### Enable debug logging
 
 ```bash
-# Server
-RUST_LOG=debug router-hosts server
-
-# Specific component
-RUST_LOG=info,router_hosts_storage=debug router-hosts server
+# Server (with debug logging)
+LOG_LEVEL=debug router-hosts serve
 
 # Very verbose
-RUST_LOG=trace router-hosts server
+LOG_LEVEL=trace router-hosts serve
 ```
 
 ### Common log patterns
