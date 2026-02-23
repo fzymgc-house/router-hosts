@@ -9,8 +9,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// Version is set at build time via -ldflags.
-var Version = "dev"
+// Version and Commit are set at build time via -ldflags.
+var (
+	Version = "dev"
+	Commit  = "unknown"
+)
 
 // GlobalFlags holds CLI flags shared across all subcommands.
 type GlobalFlags struct {
@@ -27,13 +30,22 @@ type GlobalFlags struct {
 // Flags is the singleton global flags instance populated by Cobra.
 var Flags GlobalFlags
 
+// versionString returns the version for display. Tagged releases show just
+// the version; dev builds include the commit hash when available.
+func versionString() string {
+	if Commit != "unknown" {
+		return Version + " (" + Commit + ")"
+	}
+	return Version
+}
+
 // NewRootCmd creates the top-level CLI command with all subcommand groups.
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "router-hosts",
 		Short:         "Manage DNS host entries via gRPC",
 		Long:          "router-hosts is a CLI for managing /etc/hosts entries through a gRPC server with mTLS authentication.",
-		Version:       Version,
+		Version:       versionString(),
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
