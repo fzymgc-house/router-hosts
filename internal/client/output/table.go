@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
+	"github.com/samber/oops"
 )
 
 var (
@@ -30,7 +31,9 @@ var (
 
 func renderTable(w io.Writer, entries []*hostsv1.HostEntry) error {
 	if len(entries) == 0 {
-		_, _ = fmt.Fprintln(w, emptyStyle.Render("No host entries found."))
+		if _, err := fmt.Fprintln(w, emptyStyle.Render("No host entries found.")); err != nil {
+			return oops.Wrapf(err, "writing empty table message")
+		}
 		return nil
 	}
 
@@ -68,13 +71,17 @@ func renderTable(w io.Writer, entries []*hostsv1.HostEntry) error {
 	s.Cell = cellStyle
 	t.SetStyles(s)
 
-	_, _ = fmt.Fprintln(w, t.View())
+	if _, err := fmt.Fprintln(w, t.View()); err != nil {
+		return oops.Wrapf(err, "writing table output")
+	}
 	return nil
 }
 
 func renderSnapshotsTable(w io.Writer, snapshots []*hostsv1.Snapshot) error {
 	if len(snapshots) == 0 {
-		_, _ = fmt.Fprintln(w, emptyStyle.Render("No snapshots found."))
+		if _, err := fmt.Fprintln(w, emptyStyle.Render("No snapshots found.")); err != nil {
+			return oops.Wrapf(err, "writing empty snapshots table message")
+		}
 		return nil
 	}
 
@@ -112,7 +119,9 @@ func renderSnapshotsTable(w io.Writer, snapshots []*hostsv1.Snapshot) error {
 	s.Cell = cellStyle
 	t.SetStyles(s)
 
-	_, _ = fmt.Fprintln(w, t.View())
+	if _, err := fmt.Fprintln(w, t.View()); err != nil {
+		return oops.Wrapf(err, "writing snapshots table output")
+	}
 	return nil
 }
 

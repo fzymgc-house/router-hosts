@@ -434,10 +434,16 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 				case "replace":
 					// Find existing and update
 					existing, findErr := s.store.FindByIPAndHostname(ctx, entry.IP, entry.Hostname)
-					if findErr != nil || existing == nil {
+					if findErr != nil {
 						stats.Failed++
 						stats.ValidationErrors = append(stats.ValidationErrors,
-							fmt.Sprintf("Entry %d: failed to find existing entry for replace: %v", i+1, findErr))
+							fmt.Sprintf("Entry %d: storage error looking up existing entry: %v", i+1, findErr))
+						continue
+					}
+					if existing == nil {
+						stats.Failed++
+						stats.ValidationErrors = append(stats.ValidationErrors,
+							fmt.Sprintf("Entry %d: no existing entry found for %s -> %s", i+1, entry.IP, entry.Hostname))
 						continue
 					}
 					comment := entry.Comment

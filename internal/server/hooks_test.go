@@ -26,8 +26,7 @@ func TestHookExecutor_SuccessHook(t *testing.T) {
 		slog.Default(),
 	)
 
-	failures := executor.RunSuccess(context.Background(), 10)
-	assert.Equal(t, 0, failures)
+	executor.RunSuccess(context.Background(), 10)
 
 	_, err := os.Stat(marker)
 	assert.NoError(t, err)
@@ -47,8 +46,7 @@ func TestHookExecutor_EnvVars(t *testing.T) {
 		slog.Default(),
 	)
 
-	failures := executor.RunSuccess(context.Background(), 42)
-	assert.Equal(t, 0, failures)
+	executor.RunSuccess(context.Background(), 42)
 
 	data, err := os.ReadFile(envFile)
 	require.NoError(t, err)
@@ -66,17 +64,15 @@ func TestHookExecutor_Timeout(t *testing.T) {
 		slog.Default(),
 	)
 
-	failures := executor.RunSuccess(context.Background(), 0)
-	assert.Equal(t, 1, failures)
+	// Should complete without panic; failure is logged internally.
+	executor.RunSuccess(context.Background(), 0)
 }
 
 func TestHookExecutor_Empty(t *testing.T) {
 	executor := NewHookExecutor(nil, nil, 5*time.Second, slog.Default())
 
-	failures := executor.RunSuccess(context.Background(), 0)
-	assert.Equal(t, 0, failures)
-	failures = executor.RunFailure(context.Background(), 0, "test error")
-	assert.Equal(t, 0, failures)
+	executor.RunSuccess(context.Background(), 0)
+	executor.RunFailure(context.Background(), 0, "test error")
 }
 
 func TestHookExecutor_FailedHook(t *testing.T) {
@@ -87,8 +83,8 @@ func TestHookExecutor_FailedHook(t *testing.T) {
 		slog.Default(),
 	)
 
-	failures := executor.RunSuccess(context.Background(), 5)
-	assert.Equal(t, 1, failures)
+	// Should complete without panic; failure is logged internally.
+	executor.RunSuccess(context.Background(), 5)
 }
 
 func TestHookExecutor_PartialFailure(t *testing.T) {
@@ -106,8 +102,7 @@ func TestHookExecutor_PartialFailure(t *testing.T) {
 		slog.Default(),
 	)
 
-	failures := executor.RunSuccess(context.Background(), 3)
-	assert.Equal(t, 1, failures)
+	executor.RunSuccess(context.Background(), 3)
 
 	// First hook should have run
 	_, err := os.Stat(marker)
@@ -128,8 +123,7 @@ func TestHookExecutor_FailureHooksWithError(t *testing.T) {
 		slog.Default(),
 	)
 
-	failures := executor.RunFailure(context.Background(), 5, "disk full")
-	assert.Equal(t, 0, failures)
+	executor.RunFailure(context.Background(), 5, "disk full")
 
 	data, err := os.ReadFile(envFile)
 	require.NoError(t, err)
@@ -155,8 +149,7 @@ func TestHookExecutor_ErrorMessageSanitization(t *testing.T) {
 	// errMsg contains newline injection attempt: if not sanitized,
 	// ROUTER_HOSTS_EVENT=injected could appear as a separate env var.
 	injectedErrMsg := "real error\r\nROUTER_HOSTS_EVENT=injected\r\n"
-	failures := executor.RunFailure(context.Background(), 1, injectedErrMsg)
-	assert.Equal(t, 0, failures)
+	executor.RunFailure(context.Background(), 1, injectedErrMsg)
 
 	data, err := os.ReadFile(envFile)
 	require.NoError(t, err)
@@ -203,8 +196,7 @@ func TestHookExecutor_SequentialOrder(t *testing.T) {
 		slog.Default(),
 	)
 
-	failures := executor.RunSuccess(context.Background(), 0)
-	assert.Equal(t, 0, failures)
+	executor.RunSuccess(context.Background(), 0)
 
 	data, err := os.ReadFile(orderFile)
 	require.NoError(t, err)

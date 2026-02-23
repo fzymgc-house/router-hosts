@@ -3,6 +3,7 @@ package output
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -11,6 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// errWriter is an io.Writer that always returns an error.
+type errWriter struct{ err error }
+
+func (e *errWriter) Write(_ []byte) (int, error) { return 0, e.err }
 
 func sampleEntries() []*hostsv1.HostEntry {
 	comment := "test comment"
@@ -161,4 +167,38 @@ func TestTruncateVersion(t *testing.T) {
 func TestDetectFormat_NonTTY(t *testing.T) {
 	// In test environments stdout is not a TTY
 	assert.Equal(t, "json", DetectFormat())
+}
+
+// --- Error propagation tests ---
+
+func TestRenderTable_WriterError(t *testing.T) {
+	writeErr := errors.New("disk full")
+	w := &errWriter{err: writeErr}
+	err := renderTable(w, sampleEntries())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, writeErr)
+}
+
+func TestRenderTable_EmptyWriterError(t *testing.T) {
+	writeErr := errors.New("disk full")
+	w := &errWriter{err: writeErr}
+	err := renderTable(w, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, writeErr)
+}
+
+func TestRenderSnapshotsTable_WriterError(t *testing.T) {
+	writeErr := errors.New("disk full")
+	w := &errWriter{err: writeErr}
+	err := renderSnapshotsTable(w, sampleSnapshots())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, writeErr)
+}
+
+func TestRenderSnapshotsTable_EmptyWriterError(t *testing.T) {
+	writeErr := errors.New("disk full")
+	w := &errWriter{err: writeErr}
+	err := renderSnapshotsTable(w, nil)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, writeErr)
 }

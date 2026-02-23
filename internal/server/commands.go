@@ -83,13 +83,16 @@ func (h *CommandHandler) newEnvelope(aggregateID ulid.ULID, version int64, event
 }
 
 // AddHost creates a new host entry after validating inputs and checking for duplicates.
+// The duplicate check and the event append execute atomically inside submitWrite so that
+// two concurrent AddHost calls with the same IP+hostname cannot both pass the check.
 func (h *CommandHandler) AddHost(
 	ctx context.Context,
 	ip, hostname string,
 	comment *string,
 	tags, aliases []string,
 ) (*domain.HostEntry, error) {
-	// Validate inputs
+	// Validate inputs outside the write-queue closure — these are pure checks
+	// that do not touch storage and need not be serialized.
 	if err := validation.ValidateIPAddress(ip); err != nil {
 		return nil, err
 	}
@@ -100,24 +103,6 @@ func (h *CommandHandler) AddHost(
 		return nil, domain.ErrValidationf("alias validation: %v", errs[0])
 	}
 
-	// Check for duplicate — FindByIPAndHostname returns ErrNotFound when
-	// no match exists, which is the expected (non-duplicate) case.
-	existing, err := h.store.FindByIPAndHostname(ctx, ip, hostname)
-	if err == nil && existing != nil {
-		return nil, domain.ErrDuplicate(ip, hostname)
-	}
-	// If the error is not_found, that's fine (no duplicate).
-	// Any other error is a real storage problem.
-	if err != nil {
-		if oopsErr, ok := oops.AsOops(err); !ok || oopsErr.Code() != domain.CodeNotFound {
-			return nil, domain.ErrStorage(err)
-		}
-	}
-
-	// Generate ID and create event
-	id := h.newID()
-	now := time.Now().UTC()
-
 	if tags == nil {
 		tags = []string{}
 	}
@@ -125,7 +110,12 @@ func (h *CommandHandler) AddHost(
 		aliases = []string{}
 	}
 
-	var version int64 = 1
+	// Generate the aggregate ID before entering the queue so the returned
+	// HostEntry is available regardless of which code path resolves the closure.
+	id := h.newID()
+	now := time.Now().UTC()
+	const version int64 = 1
+
 	env, err := h.newEnvelope(id, version, domain.HostCreated{
 		IPAddress: ip,
 		Hostname:  hostname,
@@ -138,7 +128,25 @@ func (h *CommandHandler) AddHost(
 		return nil, err
 	}
 
+	// The duplicate check and the storage write are performed inside submitWrite
+	// so they execute while holding the write-queue serialization lock.  This
+	// prevents two concurrent AddHost calls with the same IP+hostname from both
+	// passing the check and creating duplicate entries.
 	if err := h.submitWrite(ctx, func() error {
+		// Check for duplicate — FindByIPAndHostname returns ErrNotFound when
+		// no match exists, which is the expected (non-duplicate) case.
+		existing, findErr := h.store.FindByIPAndHostname(ctx, ip, hostname)
+		if findErr == nil && existing != nil {
+			return domain.ErrDuplicate(ip, hostname)
+		}
+		// If the error is not_found, that's fine (no duplicate).
+		// Any other error is a real storage problem.
+		if findErr != nil {
+			if oopsErr, ok := oops.AsOops(findErr); !ok || oopsErr.Code() != domain.CodeNotFound {
+				return domain.ErrStorage(findErr)
+			}
+		}
+
 		return h.store.AppendEvent(ctx, id, env, 0)
 	}); err != nil {
 		return nil, err

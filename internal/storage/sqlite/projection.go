@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -228,7 +229,11 @@ func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) (*domain
 			}
 
 		default:
-			return nil, oops.Errorf("replayEvents: unhandled event type %q for aggregate %s", env.Event.Type, aggregateID)
+			slog.Error("replayEvents: unknown event type, skipping",
+				slog.String("aggregate_id", aggregateID.String()),
+				slog.String("event_type", string(env.Event.Type)),
+			)
+			continue
 		}
 	}
 

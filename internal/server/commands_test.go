@@ -62,6 +62,60 @@ func TestAddHost_DuplicateRejected(t *testing.T) {
 	assert.Equal(t, domain.CodeDuplicate, oopsErr.Code())
 }
 
+// TestAddHost_ConcurrentDuplicateRejected verifies that concurrent AddHost
+// calls with the same IP+hostname only succeed once.  The write queue
+// serializes the duplicate check and the event append atomically, so exactly
+// one goroutine must get ErrDuplicate.
+func TestAddHost_ConcurrentDuplicateRejected(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared&_busy_timeout=5000", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	queue := NewWriteQueue(32, slog.Default())
+	queue.Start()
+	t.Cleanup(queue.Stop)
+
+	h := NewCommandHandlerWithQueue(store, queue)
+
+	const goroutines = 20
+	type result struct {
+		entry *domain.HostEntry
+		err   error
+	}
+
+	results := make([]result, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := range goroutines {
+		go func(idx int) {
+			defer wg.Done()
+			entry, addErr := h.AddHost(ctx, "10.0.0.1", "dup.local", nil, nil, nil)
+			results[idx] = result{entry: entry, err: addErr}
+		}(i)
+	}
+
+	wg.Wait()
+
+	var successes, duplicates int
+	for _, r := range results {
+		if r.err == nil {
+			successes++
+		} else {
+			oopsErr, ok := oops.AsOops(r.err)
+			require.True(t, ok, "expected oops error, got: %v", r.err)
+			assert.Equal(t, domain.CodeDuplicate, oopsErr.Code())
+			duplicates++
+		}
+	}
+
+	assert.Equal(t, 1, successes, "exactly one AddHost should succeed")
+	assert.Equal(t, goroutines-1, duplicates, "all other goroutines should get ErrDuplicate")
+}
+
 func TestAddHost_InvalidIP(t *testing.T) {
 	h, ctx := newTestHandler(t)
 

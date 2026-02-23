@@ -7,7 +7,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -99,25 +98,38 @@ func TestWriteQueue_ContextCancellation(t *testing.T) {
 	q.Start()
 	defer q.Stop()
 
-	// Fill the queue with a blocking write
+	// Fill the queue with a blocking write. Signal when process() starts executing it
+	// so we know the buffer slot is free and process() is occupied.
 	blocker := make(chan struct{})
+	processingStarted := make(chan struct{})
 	go func() {
 		_ = q.Submit(context.Background(), func() error {
+			close(processingStarted)
 			<-blocker
 			return nil
 		})
 	}()
+	<-processingStarted // process() is now blocked; q.ch buffer is empty
 
-	// Give the blocking write time to start processing
-	time.Sleep(50 * time.Millisecond)
-
-	// Fill the buffer
+	// Fill the buffer slot. Since process() is blocked, the second Submit fast-paths
+	// into q.ch (buffer has room) and then blocks waiting for its result. We use a
+	// ready channel to know when that goroutine has enqueued the command: we signal
+	// from the goroutine right before blocking on Submit, and then spin on len(q.ch)
+	// (accessible because this test is in package server) to confirm the enqueue.
+	secondReady := make(chan struct{})
 	go func() {
+		close(secondReady) // about to call Submit
 		_ = q.Submit(context.Background(), func() error { return nil })
 	}()
-	time.Sleep(50 * time.Millisecond)
+	<-secondReady
+	// Spin until the command is in the channel buffer. This is deterministic because
+	// process() is blocked on blocker and cannot drain q.ch.
+	for len(q.ch) == 0 {
+		// yield
+	}
 
-	// Now submit with cancelled context - should fail on send
+	// Now submit with an already-cancelled context — buffer is full, slow path is
+	// taken, ctx.Done() fires immediately.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -125,7 +137,7 @@ func TestWriteQueue_ContextCancellation(t *testing.T) {
 	assert.Error(t, err)
 	assert.ErrorIs(t, err, context.Canceled)
 
-	// Unblock
+	// Unblock the first command.
 	close(blocker)
 }
 
@@ -170,25 +182,34 @@ func TestWriteQueue_ConcurrentStopAndSubmit(t *testing.T) {
 
 		// Fill the buffer with a slow write so the slow path is exercised.
 		blocker := make(chan struct{})
+		processingStarted := make(chan struct{})
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			_ = q.Submit(context.Background(), func() error {
+				close(processingStarted) // process() is now executing this fn
 				<-blocker
 				return nil
 			})
 		}()
-		// Give the blocker time to enter the processor.
-		time.Sleep(time.Millisecond)
+		// Wait until the first command is actively being processed (buffer slot free).
+		<-processingStarted
 
 		// Enqueue a second command to fill the buffer slot.
+		secondReady := make(chan struct{})
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			close(secondReady) // about to call Submit
 			_ = q.Submit(context.Background(), func() error { return nil })
 		}()
-		time.Sleep(time.Millisecond)
+		<-secondReady
+		// Spin until the second command is in the buffer. process() is blocked so
+		// it cannot drain q.ch, making this deterministic.
+		for len(q.ch) == 0 {
+			// yield
+		}
 
 		// Submit a third command that will hit the slow path (buffer full),
 		// while Stop races to close the channel.

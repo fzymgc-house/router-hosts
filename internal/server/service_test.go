@@ -1503,3 +1503,91 @@ func TestService_UpdateHost_AliasMatchesHostname(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
+
+// storageWithNilFind wraps a real Storage and overrides FindByIPAndHostname to
+// return (nil, nil) — simulating a storage implementation that signals
+// "not found" by returning nil rather than an error.  Used only in tests.
+type storageWithNilFind struct {
+	storage.Storage
+}
+
+func (s *storageWithNilFind) FindByIPAndHostname(_ context.Context, _, _ string) (*domain.HostEntry, error) {
+	return nil, nil
+}
+
+// TestService_ImportHosts_ReplaceConflict_NilExisting verifies that when the
+// replace-mode handler receives (nil, nil) from FindByIPAndHostname the error
+// message identifies the missing entry by IP and hostname rather than printing
+// "<nil>" (Finding 133.188).
+func TestService_ImportHosts_ReplaceConflict_NilExisting(t *testing.T) {
+	ctx := context.Background()
+
+	realStore, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, realStore.Initialize(ctx))
+	t.Cleanup(func() { _ = realStore.Close() })
+
+	// Pre-create the entry so AddHost will return a duplicate error during import.
+	handler := NewCommandHandler(realStore)
+	_, err = handler.AddHost(ctx, "192.168.5.1", "dup.local", nil, nil, nil)
+	require.NoError(t, err)
+
+	// Wrap the store so FindByIPAndHostname returns (nil, nil).
+	nilFindStore := &storageWithNilFind{Storage: realStore}
+
+	hostsGen := NewHostsFileGenerator("/dev/null")
+	svc := NewHostsServiceImpl(handler, nilFindStore, WithHostsGenerator(hostsGen))
+
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	hostsv1.RegisterHostsServiceServer(srv, svc)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.Stop() })
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	client := hostsv1.NewHostsServiceClient(conn)
+
+	hostsData := "192.168.5.1\tdup.local\n"
+	format := "hosts"
+	mode := "replace"
+
+	stream, err := client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:        []byte(hostsData),
+		LastChunk:    true,
+		Format:       &format,
+		ConflictMode: &mode,
+	})
+	require.NoError(t, err)
+	require.NoError(t, stream.CloseSend())
+
+	var finalResp *hostsv1.ImportHostsResponse
+	for {
+		resp, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		require.NoError(t, recvErr)
+		finalResp = resp
+	}
+
+	require.NotNil(t, finalResp)
+	assert.Equal(t, int32(1), finalResp.Failed, "entry should fail when existing is nil")
+	require.Len(t, finalResp.ValidationErrors, 1)
+	// Must contain the IP and hostname, not "<nil>".
+	assert.Contains(t, finalResp.ValidationErrors[0], "no existing entry found for")
+	assert.Contains(t, finalResp.ValidationErrors[0], "192.168.5.1")
+	assert.Contains(t, finalResp.ValidationErrors[0], "dup.local")
+	assert.NotContains(t, finalResp.ValidationErrors[0], "<nil>")
+}

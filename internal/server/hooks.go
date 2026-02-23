@@ -32,16 +32,16 @@ func NewHookExecutor(onSuccess, onFailure []config.HookDefinition, timeout time.
 	}
 }
 
-// RunSuccess executes on-success hooks sequentially. Returns the count of
-// hooks that failed.
-func (h *HookExecutor) RunSuccess(ctx context.Context, entryCount int) int {
-	return h.runHooks(ctx, h.onSuccess, "success", entryCount, "")
+// RunSuccess executes on-success hooks sequentially. Hook failures are logged
+// but not propagated to the caller.
+func (h *HookExecutor) RunSuccess(ctx context.Context, entryCount int) {
+	h.runHooks(ctx, h.onSuccess, "success", entryCount, "")
 }
 
-// RunFailure executes on-failure hooks sequentially. Returns the count of
-// hooks that failed.
-func (h *HookExecutor) RunFailure(ctx context.Context, entryCount int, errMsg string) int {
-	return h.runHooks(ctx, h.onFailure, "failure", entryCount, errMsg)
+// RunFailure executes on-failure hooks sequentially. Hook failures are logged
+// but not propagated to the caller.
+func (h *HookExecutor) RunFailure(ctx context.Context, entryCount int, errMsg string) {
+	h.runHooks(ctx, h.onFailure, "failure", entryCount, errMsg)
 }
 
 // HookNames returns the names of all configured hooks (success + failure).
@@ -62,11 +62,9 @@ func (h *HookExecutor) HookCount() int {
 }
 
 // runHooks executes hooks sequentially, logging failures without propagating.
-func (h *HookExecutor) runHooks(ctx context.Context, hooks []config.HookDefinition, event string, entryCount int, errMsg string) int {
-	failures := 0
+func (h *HookExecutor) runHooks(ctx context.Context, hooks []config.HookDefinition, event string, entryCount int, errMsg string) {
 	for _, hook := range hooks {
 		if err := h.executeHook(ctx, hook, event, entryCount, errMsg); err != nil {
-			failures++
 			h.log.Error("hook failed",
 				"hook", hook.Name,
 				"event", event,
@@ -79,7 +77,6 @@ func (h *HookExecutor) runHooks(ctx context.Context, hooks []config.HookDefiniti
 			)
 		}
 	}
-	return failures
 }
 
 // executeHook runs a single hook command with timeout and environment variables.

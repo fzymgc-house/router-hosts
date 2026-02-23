@@ -943,3 +943,47 @@ func (s *StorageSuite) TestHealthCheckSucceeds() {
 func (s *StorageSuite) TestBackendName() {
 	s.Equal("sqlite", s.store.BackendName())
 }
+
+// ---------- replayEvents forward-compatibility tests ----------
+
+// TestReplayEventsSkipsUnknownEventTypes verifies that replayEvents does not
+// return an error when it encounters an event type that is not handled in the
+// host projection switch (e.g. a future or unrelated event type). The host
+// entry built from all prior known events must be returned unchanged.
+func TestReplayEventsSkipsUnknownEventTypes(t *testing.T) {
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// A known HostCreated event builds the initial entry.
+	createEnv := makeEnvelope(aggID, domain.HostCreated{
+		IPAddress: "10.0.0.1",
+		Hostname:  "forward.local",
+		Aliases:   []string{},
+		Tags:      []string{},
+		CreatedAt: now,
+	}, 1, now)
+
+	// SnapshotCreated is a valid event type that Decode() handles but the host
+	// projection switch does not — exercising the default:continue path.
+	snapshotEnv := makeEnvelope(aggID, domain.SnapshotCreated{
+		SnapshotID: ulid.Make(),
+		Name:       "test-snap",
+		Trigger:    "manual",
+		EntryCount: 1,
+		OccurredAt: now.Add(time.Second),
+	}, 2, now.Add(time.Second))
+
+	entry, err := replayEvents(aggID, []domain.EventEnvelope{createEnv, snapshotEnv})
+	if err != nil {
+		t.Fatalf("replayEvents returned unexpected error: %v", err)
+	}
+	if entry == nil {
+		t.Fatal("replayEvents returned nil entry, want non-nil")
+	}
+	if entry.IP != "10.0.0.1" {
+		t.Errorf("entry.IP = %q, want %q", entry.IP, "10.0.0.1")
+	}
+	if entry.Hostname != "forward.local" {
+		t.Errorf("entry.Hostname = %q, want %q", entry.Hostname, "forward.local")
+	}
+}
