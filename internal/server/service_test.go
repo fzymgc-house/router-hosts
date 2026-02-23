@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -1021,6 +1022,62 @@ func TestService_DeleteHost_NotFound(t *testing.T) {
 	assert.Equal(t, codes.NotFound, st.Code())
 }
 
+func TestService_DeleteHost_NoExpectedVersion(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	addResp, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.50",
+		Hostname:  "noversion.local",
+	})
+	require.NoError(t, err)
+
+	// Delete without providing ExpectedVersion (nil) — exercises the racy fallback path.
+	delResp, err := env.client.DeleteHost(ctx, &hostsv1.DeleteHostRequest{Id: addResp.Id})
+	require.NoError(t, err)
+	assert.True(t, delResp.Success)
+
+	// Verify the host is actually deleted.
+	_, err = env.client.GetHost(ctx, &hostsv1.GetHostRequest{Id: addResp.Id})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestService_DeleteHost_NoExpectedVersion_ConcurrentModification(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	addResp, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.51",
+		Hostname:  "conflict.local",
+	})
+	require.NoError(t, err)
+
+	// Update the host so its version advances from "1" to "2".
+	newIP := "10.0.0.42"
+	version1 := "1"
+	_, err = env.client.UpdateHost(ctx, &hostsv1.UpdateHostRequest{
+		Id:              addResp.Id,
+		IpAddress:       &newIP,
+		ExpectedVersion: &version1,
+	})
+	require.NoError(t, err)
+
+	// Now attempt to delete with the *old* version "1" — simulates a stale
+	// client that didn't observe the update, i.e. a version conflict.
+	oldVersion := "1"
+	_, err = env.client.DeleteHost(ctx, &hostsv1.DeleteHostRequest{
+		Id:              addResp.Id,
+		ExpectedVersion: &oldVersion,
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.Aborted, st.Code())
+}
+
 func TestService_UpdateHost_NotFound(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()
@@ -1153,6 +1210,17 @@ func TestService_RollbackToSnapshot_NotFound(t *testing.T) {
 	assert.Equal(t, codes.NotFound, st.Code())
 }
 
+func TestService_RollbackToSnapshot_InvalidID(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	_, err := env.client.RollbackToSnapshot(ctx, &hostsv1.RollbackToSnapshotRequest{SnapshotId: "not-a-ulid"})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
 // TestService_RollbackToSnapshot_Atomicity verifies that all entries added after
 // a snapshot are removed when rolling back, and only the snapshotted entries
 // remain (Finding 133.46).
@@ -1224,6 +1292,51 @@ func TestService_RollbackToSnapshot_Atomicity(t *testing.T) {
 	// The restored entry gets a new ID since rollback re-imports from snapshot data.
 	assert.NotEmpty(t, after[0].Id)
 	_ = baseResp
+}
+
+// TestService_RollbackToSnapshot_InvalidSnapshotEntry verifies that if a
+// snapshot contains an entry with an invalid IP address, RollbackToSnapshot
+// returns an error rather than succeeding (Finding 133.209).
+func TestService_RollbackToSnapshot_InvalidSnapshotEntry(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Directly inject a snapshot with an invalid IP ("999.999.999.999") into
+	// storage, bypassing the normal AddHost validation path. This simulates
+	// data corruption or a snapshot created outside the normal API.
+	snapID := ulid.Make()
+	invalidName := "bad-data"
+	snap := domain.Snapshot{
+		SnapshotID:   snapID,
+		CreatedAt:    time.Now().UTC(),
+		HostsContent: "",
+		Entries: []domain.HostEntry{
+			{
+				ID:        ulid.Make(),
+				IP:        "999.999.999.999",
+				Hostname:  "valid.local",
+				Aliases:   []string{},
+				Tags:      []string{},
+				Version:   1,
+				CreatedAt: time.Now().UTC(),
+				UpdatedAt: time.Now().UTC(),
+			},
+		},
+		EntryCount: 1,
+		Trigger:    "test",
+		Name:       &invalidName,
+	}
+	require.NoError(t, env.store.SaveSnapshot(ctx, snap))
+
+	// RollbackToSnapshot must fail because PrepareAddEvent validates the IP.
+	// The validation error propagates as InvalidArgument via mapError.
+	_, err := env.client.RollbackToSnapshot(ctx, &hostsv1.RollbackToSnapshotRequest{
+		SnapshotId: snapID.String(),
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
 // TestService_ImportHosts_MultiChunk verifies that an import stream whose data

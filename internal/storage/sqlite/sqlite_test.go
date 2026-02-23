@@ -9,6 +9,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/suite"
+	sqlib "zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
@@ -516,6 +517,18 @@ func (s *StorageSuite) TestApplyRetentionPolicyInvalidAge() {
 	s.Contains(err.Error(), "positive integer")
 }
 
+func (s *StorageSuite) TestApplyRetentionPolicyInvalidCount() {
+	zero := 0
+	_, err := s.store.ApplyRetentionPolicy(s.ctx, &zero, nil)
+	s.Require().Error(err)
+	s.Contains(err.Error(), "positive integer")
+
+	negative := -1
+	_, err = s.store.ApplyRetentionPolicy(s.ctx, &negative, nil)
+	s.Require().Error(err)
+	s.Contains(err.Error(), "positive integer")
+}
+
 func (s *StorageSuite) TestSaveSnapshotWithEventLogPosition() {
 	posID := ulid.Make()
 	pos := int64(42)
@@ -533,6 +546,48 @@ func (s *StorageSuite) TestSaveSnapshotWithEventLogPosition() {
 	s.Require().NoError(err)
 	s.Require().NotNil(got.EventLogPosition)
 	s.Equal(int64(42), *got.EventLogPosition)
+}
+
+// TestGetSnapshotLegacyEntriesInHostsContent is a regression test for the
+// backward-compatibility branch in scanSnapshot (snapshots.go:220-226).
+// Before migration 002, entries were stored as a JSON array in hosts_content
+// with entries_json left NULL. This test directly INSERTs such a row and
+// verifies that GetSnapshot still populates the Entries slice correctly.
+func (s *StorageSuite) TestGetSnapshotLegacyEntriesInHostsContent() {
+	snapID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	entryID := ulid.Make()
+	legacyJSON := `[{"id":"` + entryID.String() + `","ip_address":"192.168.1.1","hostname":"test.local","aliases":[],"tags":[],"version":1,"created_at":"` + now.Format(time.RFC3339Nano) + `","updated_at":"` + now.Format(time.RFC3339Nano) + `","deleted":false}]`
+
+	// Bypass SaveSnapshot (which always writes entries_json) and INSERT the row
+	// directly with entries_json = NULL, as it would have been written before
+	// migration 002.
+	err := s.store.withConn(s.ctx, func(conn *sqlib.Conn) error {
+		return sqlitex.Execute(conn,
+			`INSERT INTO snapshots (snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position, entries_json)
+			 VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+			&sqlitex.ExecOptions{
+				Args: []any{
+					snapID.String(),
+					now.Format(timeFormat),
+					legacyJSON,
+					int64(1),
+					"manual",
+				},
+			})
+	})
+	s.Require().NoError(err)
+
+	got, err := s.store.GetSnapshot(s.ctx, snapID)
+	s.Require().NoError(err)
+	s.Equal(snapID, got.SnapshotID)
+	s.Require().Len(got.Entries, 1, "entries should be populated from legacy hosts_content fallback")
+	s.Equal("192.168.1.1", got.Entries[0].IP)
+	s.Equal("test.local", got.Entries[0].Hostname)
+	s.Equal(entryID, got.Entries[0].ID)
+	// hostsContent must be cleared for legacy rows (the JSON is not a hosts file).
+	s.Empty(got.HostsContent)
 }
 
 // ---------- HostProjection tests ----------

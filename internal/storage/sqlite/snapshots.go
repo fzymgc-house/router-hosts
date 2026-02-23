@@ -152,6 +152,9 @@ func (s *Storage) ApplyRetentionPolicy(ctx context.Context, maxCount *int, maxAg
 	var totalDeleted int
 
 	if maxCount != nil {
+		if *maxCount <= 0 {
+			return 0, oops.Errorf("maxCount must be a positive integer, got %d", *maxCount)
+		}
 		err = sqlitex.Execute(conn,
 			`DELETE FROM snapshots WHERE snapshot_id NOT IN (
 				SELECT snapshot_id FROM snapshots ORDER BY created_at DESC LIMIT ?
