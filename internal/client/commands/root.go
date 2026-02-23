@@ -9,6 +9,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version is set at build time via -ldflags.
+var Version = "dev"
+
 // GlobalFlags holds CLI flags shared across all subcommands.
 type GlobalFlags struct {
 	Server  string
@@ -30,6 +33,7 @@ func NewRootCmd() *cobra.Command {
 		Use:           "router-hosts",
 		Short:         "Manage DNS host entries via gRPC",
 		Long:          "router-hosts is a CLI for managing /etc/hosts entries through a gRPC server with mTLS authentication.",
+		Version:       Version,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
