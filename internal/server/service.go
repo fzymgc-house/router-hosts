@@ -125,6 +125,11 @@ func (s *HostsServiceImpl) AddHost(ctx context.Context, req *hostsv1.AddHostRequ
 	if err != nil {
 		return nil, mapError(err)
 	}
+	if s.hostsGen != nil {
+		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
+			slog.Error("hosts file regeneration failed after AddHost", "error", regenErr)
+		}
+	}
 	return &hostsv1.AddHostResponse{
 		Id:    entry.ID.String(),
 		Entry: domainToProto(entry),
@@ -198,6 +203,11 @@ func (s *HostsServiceImpl) UpdateHost(ctx context.Context, req *hostsv1.UpdateHo
 	if err != nil {
 		return nil, mapError(err)
 	}
+	if s.hostsGen != nil {
+		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
+			slog.Error("hosts file regeneration failed after UpdateHost", "error", regenErr)
+		}
+	}
 	return &hostsv1.UpdateHostResponse{
 		Entry: domainToProto(entry),
 	}, nil
@@ -218,16 +228,18 @@ func (s *HostsServiceImpl) DeleteHost(ctx context.Context, req *hostsv1.DeleteHo
 		}
 		expectedVersion = v
 	} else {
-		// Fallback: fetch current version (backward compatible, racy under concurrency).
-		entry, getErr := s.handler.GetHost(ctx, id)
-		if getErr != nil {
-			return nil, mapError(getErr)
-		}
-		expectedVersion = entry.Version
+		// No expected_version provided: use -1 to signal unconditional delete
+		// (skip optimistic concurrency check in the storage layer).
+		expectedVersion = -1
 	}
 
 	if err := s.handler.DeleteHost(ctx, id, expectedVersion); err != nil {
 		return nil, mapError(err)
+	}
+	if s.hostsGen != nil {
+		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
+			slog.Error("hosts file regeneration failed after DeleteHost", "error", regenErr)
+		}
 	}
 	return &hostsv1.DeleteHostResponse{Success: true}, nil
 }
@@ -371,7 +383,7 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 			return err
 		}
 
-		_, _ = buf.Write(req.GetChunk())
+		_, _ = buf.Write(req.GetChunk()) // bytes.Buffer.Write never returns an error
 		if buf.Len() > maxImportBytes {
 			return status.Errorf(codes.ResourceExhausted, "import payload exceeds maximum size (%d bytes)", maxImportBytes)
 		}
@@ -505,6 +517,12 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 		)
 	}
 
+	if s.hostsGen != nil && (stats.Created > 0 || stats.Updated > 0) {
+		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
+			slog.Error("hosts file regeneration failed after ImportHosts", "error", regenErr)
+		}
+	}
+
 	// Send final stats
 	return stream.Send(&stats)
 }
@@ -561,14 +579,13 @@ func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream g
 	case "csv":
 		var csvBuf bytes.Buffer
 		w := csv.NewWriter(&csvBuf)
-		// csv.Writer buffers errors; w.Error() below catches any failures.
-		_ = w.Write([]string{"id", "ip_address", "hostname", "comment", "tags", "aliases"})
+		_ = w.Write([]string{"id", "ip_address", "hostname", "comment", "tags", "aliases"}) // csv.Writer buffers errors; checked via w.Error() after Flush
 		for _, e := range entries {
 			comment := ""
 			if e.Comment != nil {
 				comment = *e.Comment
 			}
-			_ = w.Write([]string{
+			_ = w.Write([]string{ // error buffered; checked via w.Error() after Flush
 				e.ID.String(),
 				e.IP,
 				e.Hostname,
@@ -758,6 +775,11 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 	})
 	if writeErr != nil {
 		return nil, mapError(writeErr)
+	}
+	if s.hostsGen != nil {
+		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
+			slog.Error("hosts file regeneration failed after RollbackToSnapshot", "error", regenErr)
+		}
 	}
 	return resp, nil
 }

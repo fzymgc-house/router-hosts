@@ -49,7 +49,11 @@ func newHostImportCmd() *cobra.Command {
 			if err != nil {
 				return oops.Wrapf(err, "opening import file %s", args[0])
 			}
-			defer func() { _ = file.Close() }()
+			defer func() {
+				if cerr := file.Close(); cerr != nil {
+					slog.Warn("closing import file", "file", args[0], "err", cerr)
+				}
+			}()
 
 			ctx, cancel := commandContext()
 			defer cancel()

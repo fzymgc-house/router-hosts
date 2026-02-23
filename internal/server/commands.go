@@ -293,13 +293,42 @@ func (h *CommandHandler) UpdateHost(
 }
 
 // DeleteHost soft-deletes a host by appending a HostDeleted event.
-// It uses optimistic concurrency control: it checks the current version and compares it against
-// expectedVersion when appending the delete event to prevent concurrent modification conflicts.
+// When expectedVersion >= 0, optimistic concurrency control prevents concurrent
+// modification conflicts. When expectedVersion == -1, the delete is unconditional:
+// the version check is skipped and the current version is re-read inside the write
+// lock so the event version is always correct.
 func (h *CommandHandler) DeleteHost(
 	ctx context.Context,
 	id ulid.ULID,
 	expectedVersion int64,
 ) error {
+	if expectedVersion == -1 {
+		// Unconditional delete: build the envelope inside submitWrite so that
+		// the event version is computed from a consistent read under the lock.
+		return h.submitWrite(ctx, func() error {
+			current, err := h.store.GetByID(ctx, id)
+			if err != nil {
+				return oops.Wrapf(err, "delete host")
+			}
+			if current == nil {
+				return domain.ErrNotFound("host", id.String())
+			}
+			if current.Deleted {
+				return domain.ErrNotFound("host", id.String())
+			}
+			now := time.Now().UTC()
+			env, err := h.newEnvelope(id, nextVersion(current.Version), domain.HostDeleted{
+				IPAddress: current.IP,
+				Hostname:  current.Hostname,
+				DeletedAt: now,
+			})
+			if err != nil {
+				return err
+			}
+			return h.store.AppendEvent(ctx, id, env, -1)
+		})
+	}
+
 	current, err := h.store.GetByID(ctx, id)
 	if err != nil {
 		return oops.Wrapf(err, "delete host")

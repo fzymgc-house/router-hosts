@@ -165,7 +165,11 @@ func (s *Storage) CountEvents(ctx context.Context, aggregateID ulid.ULID) (int64
 }
 
 // checkVersion verifies optimistic concurrency by comparing expected vs actual version.
+// Pass expectedVersion = -1 to skip the version check entirely (unconditional write).
 func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion int64) error {
+	if expectedVersion == -1 {
+		return nil
+	}
 	var actual int64
 	err := sqlitex.Execute(conn,
 		`SELECT event_version FROM events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1`,
