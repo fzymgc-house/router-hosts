@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -908,6 +909,21 @@ func TestService_UpdateHost_InvalidID(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
+func TestService_UpdateHost_InvalidExpectedVersion(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	badVersion := "not-a-number"
+	_, err := env.client.UpdateHost(ctx, &hostsv1.UpdateHostRequest{
+		Id:              "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		ExpectedVersion: &badVersion,
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
 func TestService_DeleteHost_InvalidID(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()
@@ -1123,6 +1139,127 @@ func TestService_ImportHosts_MultiChunk(t *testing.T) {
 		entries = append(entries, resp.Entry)
 	}
 	assert.Len(t, entries, 3)
+}
+
+// TestService_ImportHosts_MaxSizeExceeded verifies that sending a payload
+// larger than maxImportBytes (64 MiB) returns codes.ResourceExhausted.
+func TestService_ImportHosts_MaxSizeExceeded(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	stream, err := env.client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	// Build a chunk just over the limit. We use a repeated single byte to
+	// keep memory allocation predictable in tests.
+	oversize := bytes.Repeat([]byte("x"), maxImportBytes+1)
+	format := "hosts"
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:     oversize,
+		LastChunk: true,
+		Format:    &format,
+	})
+	// Send may succeed locally (buffered); the error surfaces on Recv.
+	if err != nil {
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.ResourceExhausted, st.Code())
+		return
+	}
+	require.NoError(t, stream.CloseSend())
+
+	var recvErr error
+	for {
+		_, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			recvErr = err
+			break
+		}
+	}
+
+	require.Error(t, recvErr)
+	st, ok := status.FromError(recvErr)
+	require.True(t, ok)
+	assert.Equal(t, codes.ResourceExhausted, st.Code())
+}
+
+// TestService_ImportHosts_UnsupportedFormat verifies that requesting an
+// unsupported format (e.g. "csv") returns codes.InvalidArgument.
+func TestService_ImportHosts_UnsupportedFormat(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	stream, err := env.client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	format := "csv"
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:     []byte("192.168.1.1,host.local\n"),
+		LastChunk: true,
+		Format:    &format,
+	})
+	require.NoError(t, err)
+	require.NoError(t, stream.CloseSend())
+
+	var recvErr error
+	for {
+		_, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			recvErr = err
+			break
+		}
+	}
+
+	require.Error(t, recvErr)
+	st, ok := status.FromError(recvErr)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+	assert.Contains(t, st.Message(), "csv")
+}
+
+// TestService_ImportHosts_InvalidConflictMode verifies that an unrecognised
+// conflict_mode value returns codes.InvalidArgument.
+func TestService_ImportHosts_InvalidConflictMode(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	stream, err := env.client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	format := "hosts"
+	mode := "overwrite"
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:        []byte("192.168.1.1\thost.local\n"),
+		LastChunk:    true,
+		Format:       &format,
+		ConflictMode: &mode,
+	})
+	require.NoError(t, err)
+	require.NoError(t, stream.CloseSend())
+
+	var recvErr error
+	for {
+		_, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			recvErr = err
+			break
+		}
+	}
+
+	require.Error(t, recvErr)
+	st, ok := status.FromError(recvErr)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+	assert.Contains(t, st.Message(), "overwrite")
 }
 
 func TestService_UpdateHost_AliasesNilValues(t *testing.T) {

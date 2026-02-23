@@ -177,12 +177,13 @@ func newHostExportCmd() *cobra.Command {
 			}
 
 			w := cmd.OutOrStdout()
+			var outFile *os.File
 			if outArg != "" && outArg != "-" {
 				f, err := os.Create(outArg)
 				if err != nil {
 					return oops.Wrapf(err, "creating output file %s", outArg)
 				}
-				defer func() { _ = f.Close() }()
+				outFile = f
 				w = f
 			}
 
@@ -192,10 +193,22 @@ func newHostExportCmd() *cobra.Command {
 					break
 				}
 				if err != nil {
+					if outFile != nil {
+						_ = outFile.Close()
+					}
 					return oops.Wrapf(err, "receiving export chunk")
 				}
 				if _, err := w.Write(resp.GetChunk()); err != nil {
+					if outFile != nil {
+						_ = outFile.Close()
+					}
 					return oops.Wrapf(err, "writing export data")
+				}
+			}
+
+			if outFile != nil {
+				if err := outFile.Close(); err != nil {
+					return oops.Wrapf(err, "closing output file %s", outArg)
 				}
 			}
 

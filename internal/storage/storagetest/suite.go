@@ -266,6 +266,55 @@ func TestHostProjectionDeletedExcludedFromListAll(t *testing.T, store storage.St
 	require.Empty(t, entries)
 }
 
+// TestHostProjectionSearchByQuery verifies that Search with a text Query
+// returns matching hosts and returns an empty slice for a non-matching query.
+func TestHostProjectionSearchByQuery(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	require.NoError(t, store.AppendEvent(ctx, aggID, hostCreatedEnvelope(aggID, "10.8.0.1", "search-target.local", now), 0))
+
+	// Matching query — host must be returned.
+	results, err := store.Search(ctx, domain.SearchFilter{Query: ptr("search-target")})
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	require.Equal(t, aggID, results[0].ID)
+	require.Equal(t, "10.8.0.1", results[0].IP)
+	require.Equal(t, "search-target.local", results[0].Hostname)
+
+	// Non-matching query — must return empty, not an error.
+	results, err = store.Search(ctx, domain.SearchFilter{Query: ptr("no-such-host-xyzzy")})
+	require.NoError(t, err)
+	require.Empty(t, results)
+}
+
+// TestHostProjectionFindByIPAndHostname verifies point lookup by IP + hostname
+// pair and nil-return for an unknown pair.
+func TestHostProjectionFindByIPAndHostname(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	require.NoError(t, store.AppendEvent(ctx, aggID, hostCreatedEnvelope(aggID, "10.9.0.1", "findpair.local", now), 0))
+
+	// Matching pair — must return the entry.
+	entry, err := store.FindByIPAndHostname(ctx, "10.9.0.1", "findpair.local")
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Equal(t, aggID, entry.ID)
+	require.Equal(t, "10.9.0.1", entry.IP)
+	require.Equal(t, "findpair.local", entry.Hostname)
+
+	// Non-existent pair — must return a "not found" error.
+	entry, err = store.FindByIPAndHostname(ctx, "10.9.0.1", "does-not-exist.local")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found")
+	require.Nil(t, entry)
+}
+
 // ---------- SnapshotStore compliance ----------
 
 // TestSnapshotStoreRoundTrip verifies that a snapshot saved via SaveSnapshot can
@@ -458,6 +507,12 @@ func RunAll(t *testing.T, factory func(t *testing.T) storage.Storage) {
 	})
 	t.Run("HostProjectionDeletedExcludedFromListAll", func(t *testing.T) {
 		TestHostProjectionDeletedExcludedFromListAll(t, factory(t))
+	})
+	t.Run("HostProjectionSearchByQuery", func(t *testing.T) {
+		TestHostProjectionSearchByQuery(t, factory(t))
+	})
+	t.Run("HostProjectionFindByIPAndHostname", func(t *testing.T) {
+		TestHostProjectionFindByIPAndHostname(t, factory(t))
 	})
 
 	// SnapshotStore

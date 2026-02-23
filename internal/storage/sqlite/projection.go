@@ -10,6 +10,7 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/samber/oops"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
 )
@@ -154,7 +155,7 @@ func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) (*domain
 	for _, env := range events {
 		decoded, err := env.Event.Decode()
 		if err != nil {
-			return nil, fmt.Errorf("decode event %s for aggregate %s: %w", env.EventID, aggregateID, err)
+			return nil, oops.Wrapf(err, "decode event %s for aggregate %s", env.EventID, aggregateID)
 		}
 
 		switch ev := decoded.(type) {
@@ -225,6 +226,9 @@ func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) (*domain
 				UpdatedAt: env.CreatedAt,
 				Version:   env.Version,
 			}
+
+		default:
+			return nil, oops.Errorf("replayEvents: unhandled event type %q for aggregate %s", env.Event.Type, aggregateID)
 		}
 	}
 
@@ -299,7 +303,7 @@ func getDistinctAggregateIDs(conn *sqlite.Conn) ([]ulid.ULID, error) {
 			},
 		})
 	if err != nil {
-		return nil, fmt.Errorf("get aggregate ids: %w", err)
+		return nil, oops.Wrapf(err, "get aggregate ids")
 	}
 	return ids, nil
 }
@@ -322,7 +326,7 @@ func loadEventsForAggregate(conn *sqlite.Conn, aggregateID ulid.ULID) ([]domain.
 			},
 		})
 	if err != nil {
-		return nil, fmt.Errorf("load events for %s: %w", aggregateID, err)
+		return nil, oops.Wrapf(err, "load events for %s", aggregateID)
 	}
 	return events, nil
 }

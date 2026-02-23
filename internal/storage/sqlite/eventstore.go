@@ -3,7 +3,6 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"zombiezen.com/go/sqlite"
@@ -178,7 +177,7 @@ func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion int6
 			},
 		})
 	if err != nil {
-		return fmt.Errorf("check version: %w", err)
+		return oops.Wrapf(err, "check version")
 	}
 	if actual != expectedVersion {
 		return domain.ErrVersionConflict(aggregateID.String(), expectedVersion, actual)
@@ -190,7 +189,7 @@ func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion int6
 func insertEvent(conn *sqlite.Conn, env domain.EventEnvelope) error {
 	eventData, err := json.Marshal(env.Event)
 	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
+		return oops.Wrapf(err, "marshal event")
 	}
 
 	return sqlitex.Execute(conn,
@@ -215,27 +214,27 @@ func scanEventEnvelope(stmt *sqlite.Stmt) (domain.EventEnvelope, error) {
 
 	eventID, err := ulid.Parse(stmt.ColumnText(0))
 	if err != nil {
-		return env, fmt.Errorf("parse event_id: %w", err)
+		return env, oops.Wrapf(err, "parse event_id")
 	}
 	env.EventID = eventID
 
 	aggregateID, err := ulid.Parse(stmt.ColumnText(1))
 	if err != nil {
-		return env, fmt.Errorf("parse aggregate_id: %w", err)
+		return env, oops.Wrapf(err, "parse aggregate_id")
 	}
 	env.AggregateID = aggregateID
 
 	// Column 2 is event_type (used indirectly via event_data)
 	eventDataStr := stmt.ColumnText(3)
 	if err := json.Unmarshal([]byte(eventDataStr), &env.Event); err != nil {
-		return env, fmt.Errorf("unmarshal event_data: %w", err)
+		return env, oops.Wrapf(err, "unmarshal event_data")
 	}
 
 	env.Version = stmt.ColumnInt64(4)
 
 	createdAt, err := parseTime(stmt.ColumnText(5))
 	if err != nil {
-		return env, fmt.Errorf("parse created_at: %w", err)
+		return env, oops.Wrapf(err, "parse created_at")
 	}
 	env.CreatedAt = createdAt
 
@@ -273,5 +272,5 @@ func parseTime(s string) (time.Time, error) {
 			return t, nil
 		}
 	}
-	return time.Time{}, fmt.Errorf("cannot parse time %q", s)
+	return time.Time{}, oops.Errorf("cannot parse time %q", s)
 }

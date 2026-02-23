@@ -3,9 +3,9 @@ package sqlite
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/samber/oops"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 
@@ -18,7 +18,7 @@ func (s *Storage) SaveSnapshot(ctx context.Context, snapshot domain.Snapshot) er
 	if snapshot.Entries != nil {
 		data, marshalErr := json.Marshal(snapshot.Entries)
 		if marshalErr != nil {
-			return fmt.Errorf("marshal entries: %w", marshalErr)
+			return oops.Wrapf(marshalErr, "marshal entries")
 		}
 		hostsContent = string(data)
 	}
@@ -58,7 +58,7 @@ func (s *Storage) GetSnapshot(ctx context.Context, snapshotID ulid.ULID) (*domai
 			})
 	})
 	if err != nil {
-		return nil, fmt.Errorf("get snapshot: %w", err)
+		return nil, oops.Wrapf(err, "get snapshot")
 	}
 	if snap == nil {
 		return nil, domain.ErrNotFound("snapshot", snapshotID.String())
@@ -91,7 +91,7 @@ func (s *Storage) ListSnapshots(ctx context.Context, limit, offset *uint32) ([]d
 			ResultFunc: func(stmt *sqlite.Stmt) error {
 				sid, parseErr := ulid.Parse(stmt.ColumnText(0))
 				if parseErr != nil {
-					return fmt.Errorf("parse snapshot_id %q: %w", stmt.ColumnText(0), parseErr)
+					return oops.Wrapf(parseErr, "parse snapshot_id %q", stmt.ColumnText(0))
 				}
 				createdAt, parseErr := parseTime(stmt.ColumnText(1))
 				if parseErr != nil {
@@ -109,7 +109,7 @@ func (s *Storage) ListSnapshots(ctx context.Context, limit, offset *uint32) ([]d
 		})
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list snapshots: %w", err)
+		return nil, oops.Wrapf(err, "list snapshots")
 	}
 	return metas, nil
 }
@@ -123,7 +123,7 @@ func (s *Storage) DeleteSnapshot(ctx context.Context, snapshotID ulid.ULID) erro
 				Args: []any{snapshotID.String()},
 			})
 		if err != nil {
-			return fmt.Errorf("delete snapshot: %w", err)
+			return oops.Wrapf(err, "delete snapshot")
 		}
 		if conn.Changes() == 0 {
 			return domain.ErrNotFound("snapshot", snapshotID.String())
@@ -137,13 +137,13 @@ func (s *Storage) DeleteSnapshot(ctx context.Context, snapshotID ulid.ULID) erro
 func (s *Storage) ApplyRetentionPolicy(ctx context.Context, maxCount *int, maxAgeDays *int) (int, error) {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("take connection: %w", err)
+		return 0, oops.Wrapf(err, "take connection")
 	}
 	defer s.pool.Put(conn)
 
 	endFn, err := sqlitex.ImmediateTransaction(conn)
 	if err != nil {
-		return 0, fmt.Errorf("begin transaction: %w", err)
+		return 0, oops.Wrapf(err, "begin transaction")
 	}
 	defer endFn(&err)
 
@@ -158,14 +158,14 @@ func (s *Storage) ApplyRetentionPolicy(ctx context.Context, maxCount *int, maxAg
 				Args: []any{*maxCount},
 			})
 		if err != nil {
-			return 0, fmt.Errorf("apply count retention: %w", err)
+			return 0, oops.Wrapf(err, "apply count retention")
 		}
 		totalDeleted += conn.Changes()
 	}
 
 	if maxAgeDays != nil {
 		if *maxAgeDays <= 0 {
-			return 0, fmt.Errorf("maxAgeDays must be a positive integer, got %d", *maxAgeDays)
+			return 0, oops.Errorf("maxAgeDays must be a positive integer, got %d", *maxAgeDays)
 		}
 		err = sqlitex.Execute(conn,
 			`DELETE FROM snapshots WHERE created_at < datetime('now', '-' || CAST(? AS TEXT) || ' days')`,
@@ -173,7 +173,7 @@ func (s *Storage) ApplyRetentionPolicy(ctx context.Context, maxCount *int, maxAg
 				Args: []any{*maxAgeDays},
 			})
 		if err != nil {
-			return 0, fmt.Errorf("apply age retention: %w", err)
+			return 0, oops.Wrapf(err, "apply age retention")
 		}
 		totalDeleted += conn.Changes()
 	}
@@ -185,7 +185,7 @@ func (s *Storage) ApplyRetentionPolicy(ctx context.Context, maxCount *int, maxAg
 func scanSnapshot(stmt *sqlite.Stmt) (*domain.Snapshot, error) {
 	snapshotID, err := ulid.Parse(stmt.ColumnText(0))
 	if err != nil {
-		return nil, fmt.Errorf("parse snapshot_id %q: %w", stmt.ColumnText(0), err)
+		return nil, oops.Wrapf(err, "parse snapshot_id %q", stmt.ColumnText(0))
 	}
 
 	createdAt, err := parseTime(stmt.ColumnText(1))
@@ -197,7 +197,7 @@ func scanSnapshot(stmt *sqlite.Stmt) (*domain.Snapshot, error) {
 	var entries []domain.HostEntry
 	if hostsContent != "" && hostsContent[0] == '[' {
 		if unmarshalErr := json.Unmarshal([]byte(hostsContent), &entries); unmarshalErr != nil {
-			return nil, fmt.Errorf("unmarshal snapshot entries: %w", unmarshalErr)
+			return nil, oops.Wrapf(unmarshalErr, "unmarshal snapshot entries")
 		}
 	}
 

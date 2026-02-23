@@ -594,6 +594,59 @@ func TestExtractHosts_InvalidRouteType(t *testing.T) {
 	assert.Empty(t, hosts)
 }
 
+func TestReconcile_IngressRouteTCP_Create(t *testing.T) {
+	s := ingressRouteScheme(t)
+	obj := newIngressRouteTCP("my-tcp-ir", "default", []map[string]interface{}{
+		{"match": "HostSNI(`tcp.example.com`)"},
+	})
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(obj).
+		Build()
+
+	var addedHosts []string
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, comment string, aliases, tags []string) (string, error) {
+			addedHosts = append(addedHosts, hostname)
+			assert.Equal(t, "10.0.0.1", ip)
+			assert.Contains(t, tags, "traefik")
+			assert.Contains(t, tags, "ingress")
+			return "tcp-ingress-host-1", nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	// First reconcile: adds finalizer.
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-tcp-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+
+	// Second reconcile: creates hosts.
+	result, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-tcp-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, []string{"tcp.example.com"}, addedHosts)
+
+	// Verify annotation was set on the TCP object.
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteTCPGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-tcp-ir", Namespace: "default"}, &updated))
+	ids := getHostIDsAnnotation(slog.Default(), &updated)
+	assert.Equal(t, "tcp-ingress-host-1", ids["tcp.example.com"])
+}
+
 // --- helpers ---
 
 func ingressRouteScheme(t *testing.T) *runtime.Scheme {
@@ -630,6 +683,28 @@ func newIngressRoute(name, namespace string, routes []map[string]interface{}) *u
 		Object: map[string]interface{}{
 			"apiVersion": "traefik.io/v1alpha1",
 			"kind":       "IngressRoute",
+			"metadata": map[string]interface{}{
+				"name":      name,
+				"namespace": namespace,
+			},
+			"spec": map[string]interface{}{
+				"routes": routeInterfaces,
+			},
+		},
+	}
+	return obj
+}
+
+func newIngressRouteTCP(name, namespace string, routes []map[string]interface{}) *unstructured.Unstructured {
+	routeInterfaces := make([]interface{}, len(routes))
+	for i, r := range routes {
+		routeInterfaces[i] = r
+	}
+
+	obj := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "traefik.io/v1alpha1",
+			"kind":       "IngressRouteTCP",
 			"metadata": map[string]interface{}{
 				"name":      name,
 				"namespace": namespace,

@@ -161,6 +161,56 @@ func TestWriteQueue_SubmitAfterStop(t *testing.T) {
 	assert.ErrorIs(t, err, ErrQueueStopped)
 }
 
+func TestWriteQueue_ConcurrentStopAndSubmit(t *testing.T) {
+	// Regression test: concurrent Stop + Submit with a full buffer must not
+	// panic with "send on closed channel".
+	for range 100 {
+		q := NewWriteQueue(1, slog.Default())
+		q.Start()
+
+		// Fill the buffer with a slow write so the slow path is exercised.
+		blocker := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = q.Submit(context.Background(), func() error {
+				<-blocker
+				return nil
+			})
+		}()
+		// Give the blocker time to enter the processor.
+		time.Sleep(time.Millisecond)
+
+		// Enqueue a second command to fill the buffer slot.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = q.Submit(context.Background(), func() error { return nil })
+		}()
+		time.Sleep(time.Millisecond)
+
+		// Submit a third command that will hit the slow path (buffer full),
+		// while Stop races to close the channel.
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			err := q.Submit(context.Background(), func() error { return nil })
+			// Accept either success, stopped, or cancelled — no panic is the goal.
+			if err != nil {
+				assert.True(t,
+					errors.Is(err, ErrQueueStopped) || errors.Is(err, context.Canceled),
+					"unexpected error: %v", err)
+			}
+		}()
+
+		// Stop races with the in-flight Submit.
+		close(blocker)
+		q.Stop()
+		wg.Wait()
+	}
+}
+
 func TestWriteQueue_ErrorPropagation(t *testing.T) {
 	q := NewWriteQueue(10, slog.Default())
 	q.Start()

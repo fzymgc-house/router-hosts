@@ -30,11 +30,15 @@ import (
 // HostsServiceImpl implements the gRPC HostsService methods.
 type HostsServiceImpl struct {
 	hostsv1.UnimplementedHostsServiceServer
-	handler   *CommandHandler
-	store     storage.Storage
-	hostsGen  *HostsFileGenerator
-	hooks     *HookExecutor
-	startTime time.Time
+	handler           *CommandHandler
+	store             storage.Storage
+	hostsGen          *HostsFileGenerator
+	hooks             *HookExecutor
+	startTime         time.Time
+	retentionMaxSnaps *int
+	retentionMaxAge   *int
+	version           string
+	buildInfo         string
 }
 
 // ServiceOption configures optional dependencies on HostsServiceImpl.
@@ -50,12 +54,31 @@ func WithHookExecutor(hooks *HookExecutor) ServiceOption {
 	return func(s *HostsServiceImpl) { s.hooks = hooks }
 }
 
+// WithVersion sets the version and build info strings returned by the Health RPC.
+func WithVersion(version, buildInfo string) ServiceOption {
+	return func(s *HostsServiceImpl) {
+		s.version = version
+		s.buildInfo = buildInfo
+	}
+}
+
+// WithRetentionConfig sets the snapshot retention policy applied after each
+// CreateSnapshot call. Pass nil for either parameter to use the storage default.
+func WithRetentionConfig(maxSnapshots *int, maxAgeDays *int) ServiceOption {
+	return func(s *HostsServiceImpl) {
+		s.retentionMaxSnaps = maxSnapshots
+		s.retentionMaxAge = maxAgeDays
+	}
+}
+
 // NewHostsServiceImpl creates a new service backed by the given CommandHandler.
 func NewHostsServiceImpl(handler *CommandHandler, store storage.Storage, opts ...ServiceOption) *HostsServiceImpl {
 	svc := &HostsServiceImpl{
 		handler:   handler,
 		store:     store,
 		startTime: time.Now(),
+		version:   "dev",
+		buildInfo: "dev",
 	}
 	for _, opt := range opts {
 		opt(svc)
@@ -575,8 +598,8 @@ func (s *HostsServiceImpl) CreateSnapshot(ctx context.Context, req *hostsv1.Crea
 		return nil, mapError(err)
 	}
 
-	// Best-effort retention policy — no config injection yet, use reasonable defaults
-	if _, err := s.store.ApplyRetentionPolicy(ctx, nil, nil); err != nil {
+	// Best-effort retention policy using configured values (nil = storage default).
+	if _, err := s.store.ApplyRetentionPolicy(ctx, s.retentionMaxSnaps, s.retentionMaxAge); err != nil {
 		slog.Warn("retention policy failed", "error", err)
 	}
 
@@ -651,7 +674,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		Trigger: "pre-rollback",
 	})
 	if err != nil {
-		return nil, oops.Wrapf(err, "create pre-rollback backup")
+		return nil, status.Errorf(codes.Internal, "create pre-rollback backup: %v", err)
 	}
 
 	// Load current entries to build delete events.
@@ -755,9 +778,9 @@ func (s *HostsServiceImpl) Health(ctx context.Context, _ *hostsv1.HealthRequest)
 	return &hostsv1.HealthResponse{
 		Healthy: dbErr == nil,
 		Server: &hostsv1.ServerInfo{
-			Version:       "dev",
+			Version:       s.version,
 			UptimeSeconds: uptimeSecs,
-			BuildInfo:     "dev",
+			BuildInfo:     s.buildInfo,
 		},
 		Database: dbHealth,
 		Acme: &hostsv1.AcmeHealth{

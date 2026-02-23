@@ -3,11 +3,12 @@ package sqlite
 import (
 	"context"
 	"embed"
-	"fmt"
 	"log/slog"
 
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
+
+	"github.com/samber/oops"
 
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
@@ -30,7 +31,7 @@ func New(dbPath string, logger *slog.Logger) (*Storage, error) {
 		PoolSize: 10,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite pool: %w", err)
+		return nil, oops.Wrapf(err, "open sqlite pool")
 	}
 	return &Storage{pool: pool, log: logger}, nil
 }
@@ -42,11 +43,11 @@ func (s *Storage) BackendName() string { return "sqlite" }
 func (s *Storage) Initialize(ctx context.Context) error {
 	migrationSQL, err := migrations.ReadFile("migrations/001_initial.sql")
 	if err != nil {
-		return fmt.Errorf("read migration: %w", err)
+		return oops.Wrapf(err, "read migration")
 	}
 	return s.withConn(ctx, func(conn *sqlite.Conn) error {
 		if err := sqlitex.ExecuteScript(conn, string(migrationSQL), nil); err != nil {
-			return fmt.Errorf("apply migration: %w", err)
+			return oops.Wrapf(err, "apply migration")
 		}
 		return nil
 	})
@@ -70,7 +71,7 @@ func (s *Storage) Close() error {
 func (s *Storage) withConn(ctx context.Context, fn func(*sqlite.Conn) error) error {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
-		return fmt.Errorf("take connection: %w", err)
+		return oops.Wrapf(err, "take connection")
 	}
 	defer s.pool.Put(conn)
 	return fn(conn)

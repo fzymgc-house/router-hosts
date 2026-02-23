@@ -96,6 +96,20 @@ func runServe(ctx context.Context, configPath string) error {
 		svcOpts = append(svcOpts, server.WithHookExecutor(hookExec))
 	}
 
+	// Retention policy from config — only wire axes that are explicitly
+	// configured (non-zero). ApplyRetentionPolicy treats nil as "no limit".
+	var maxSnapsPtr, maxAgePtr *int
+	if cfg.Retention.MaxSnapshots > 0 {
+		v := cfg.Retention.MaxSnapshots
+		maxSnapsPtr = &v
+	}
+	if cfg.Retention.MaxAgeDays > 0 {
+		v := cfg.Retention.MaxAgeDays
+		maxAgePtr = &v
+	}
+	svcOpts = append(svcOpts, server.WithRetentionConfig(maxSnapsPtr, maxAgePtr))
+	svcOpts = append(svcOpts, server.WithVersion(Version, versionString()))
+
 	// Create gRPC service implementation
 	svc := server.NewHostsServiceImpl(handler, store, svcOpts...)
 
