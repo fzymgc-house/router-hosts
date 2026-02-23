@@ -32,11 +32,11 @@ func (s *Storage) AppendEvent(ctx context.Context, aggregateID ulid.ULID, event 
 	defer endFn(&err)
 
 	if err = checkVersion(conn, aggregateID, expectedVersion); err != nil {
-		return err
+		return oops.Wrapf(err, "append event to aggregate %s", aggregateID)
 	}
 
 	if err = insertEvent(conn, event); err != nil {
-		return err
+		return oops.Wrapf(err, "append event to aggregate %s", aggregateID)
 	}
 
 	return nil
@@ -57,12 +57,12 @@ func (s *Storage) AppendEvents(ctx context.Context, aggregateID ulid.ULID, event
 	defer endFn(&err)
 
 	if err = checkVersion(conn, aggregateID, expectedVersion); err != nil {
-		return err
+		return oops.Wrapf(err, "append event to aggregate %s", aggregateID)
 	}
 
 	for _, event := range events {
 		if err = insertEvent(conn, event); err != nil {
-			return err
+			return oops.Wrapf(err, "append event to aggregate %s", aggregateID)
 		}
 	}
 
@@ -87,11 +87,11 @@ func (s *Storage) AppendEventsBatch(ctx context.Context, batch []storage.Aggrega
 
 	for _, ag := range batch {
 		if err = checkVersion(conn, ag.AggregateID, ag.ExpectedVersion); err != nil {
-			return err
+			return oops.Wrapf(err, "batch append: check version for aggregate %s", ag.AggregateID)
 		}
 		for _, event := range ag.Events {
 			if err = insertEvent(conn, event); err != nil {
-				return err
+				return oops.Wrapf(err, "batch append: insert event for aggregate %s", ag.AggregateID)
 			}
 		}
 	}

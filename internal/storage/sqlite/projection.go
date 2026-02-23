@@ -38,7 +38,10 @@ func (s *Storage) ListAll(ctx context.Context) ([]domain.HostEntry, error) {
 		}
 		return nil
 	})
-	return entries, err
+	if err != nil {
+		return nil, oops.Wrapf(err, "list all hosts")
+	}
+	return entries, nil
 }
 
 // GetByID returns a single host entry by replaying its events.
@@ -140,7 +143,10 @@ func (s *Storage) GetAtTime(ctx context.Context, at time.Time) ([]domain.HostEnt
 		}
 		return nil
 	})
-	return entries, err
+	if err != nil {
+		return nil, oops.Wrapf(err, "get hosts at time %s", at.Format(time.RFC3339))
+	}
+	return entries, nil
 }
 
 // replayEvents applies events sequentially to build a HostEntry.

@@ -24,7 +24,7 @@ func (s *Storage) SaveSnapshot(ctx context.Context, snapshot domain.Snapshot) er
 		entriesJSON = string(data)
 	}
 
-	return s.withConn(ctx, func(conn *sqlite.Conn) error {
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
 		return sqlitex.Execute(conn,
 			`INSERT INTO snapshots (snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position, entries_json)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -41,6 +41,10 @@ func (s *Storage) SaveSnapshot(ctx context.Context, snapshot domain.Snapshot) er
 				},
 			})
 	})
+	if err != nil {
+		return oops.Wrapf(err, "save snapshot %s", snapshot.SnapshotID)
+	}
+	return nil
 }
 
 // GetSnapshot retrieves a snapshot by ID, unmarshaling entries from JSON.
@@ -97,7 +101,7 @@ func (s *Storage) ListSnapshots(ctx context.Context, limit, offset *uint32) ([]d
 				}
 				createdAt, parseErr := parseTime(stmt.ColumnText(1))
 				if parseErr != nil {
-					return parseErr
+					return oops.Wrapf(parseErr, "parse created_at for snapshot %q", stmt.ColumnText(0))
 				}
 				metas = append(metas, domain.SnapshotMetadata{
 					SnapshotID: sid,
@@ -203,7 +207,7 @@ func scanSnapshot(stmt *sqlite.Stmt) (*domain.Snapshot, error) {
 
 	createdAt, err := parseTime(stmt.ColumnText(1))
 	if err != nil {
-		return nil, err
+		return nil, oops.Wrapf(err, "parse created_at for snapshot %s", stmt.ColumnText(0))
 	}
 
 	hostsContent := stmt.ColumnText(2)
