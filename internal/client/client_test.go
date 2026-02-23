@@ -16,20 +16,16 @@ import (
 	"github.com/fzymgc-house/router-hosts/internal/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
-func TestNewClient_Insecure(t *testing.T) {
+func TestNewClient_NoTLS_ReturnsError(t *testing.T) {
 	cfg := &config.ClientConfig{
 		ServerAddress: "localhost:50051",
 	}
 
-	c, err := NewClient(cfg)
-	require.NoError(t, err)
-	defer func() { _ = c.Close() }()
-
-	assert.NotNil(t, c.Hosts)
-	assert.Equal(t, "localhost:50051", c.Address())
+	_, err := NewClient(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TLS configuration required")
 }
 
 func TestNewClient_Close_Nil(t *testing.T) {
@@ -37,11 +33,31 @@ func TestNewClient_Close_Nil(t *testing.T) {
 	assert.NoError(t, c.Close())
 }
 
-func TestBuildTransportCredentials_Insecure(t *testing.T) {
+func TestBuildTransportCredentials_NoTLS_ReturnsError(t *testing.T) {
 	cfg := &config.ClientConfig{ServerAddress: "localhost:50051"}
-	creds, err := buildTransportCredentials(cfg)
-	require.NoError(t, err)
-	assert.IsType(t, insecure.NewCredentials(), creds)
+	_, err := buildTransportCredentials(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TLS configuration required")
+}
+
+func TestBuildTransportCredentials_MismatchedCertKey(t *testing.T) {
+	cfg := &config.ClientConfig{
+		ServerAddress: "localhost:50051",
+		CertPath:      "/some/cert.pem",
+	}
+	_, err := buildTransportCredentials(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cert_path and key_path must both be set or both be empty")
+}
+
+func TestBuildTransportCredentials_MismatchedKeyWithoutCert(t *testing.T) {
+	cfg := &config.ClientConfig{
+		ServerAddress: "localhost:50051",
+		KeyPath:       "/some/key.pem",
+	}
+	_, err := buildTransportCredentials(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cert_path and key_path must both be set or both be empty")
 }
 
 func TestBuildTransportCredentials_WithTLS(t *testing.T) {
@@ -60,6 +76,24 @@ func TestBuildTransportCredentials_WithTLS(t *testing.T) {
 	assert.NotNil(t, creds)
 
 	// Should not be insecure
+	info := creds.Info()
+	assert.Equal(t, "tls", info.SecurityProtocol)
+}
+
+func TestBuildTransportCredentials_CAOnly(t *testing.T) {
+	dir := t.TempDir()
+	_, _, caFile := generateTestCerts(t, dir)
+
+	cfg := &config.ClientConfig{
+		ServerAddress: "localhost:50051",
+		CACertPath:    caFile,
+	}
+
+	creds, err := buildTransportCredentials(cfg)
+	require.NoError(t, err)
+	assert.NotNil(t, creds)
+
+	// Should be valid TLS without client certificate
 	info := creds.Info()
 	assert.Equal(t, "tls", info.SecurityProtocol)
 }

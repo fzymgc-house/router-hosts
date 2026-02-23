@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -62,12 +64,19 @@ func NewHostsServiceImpl(handler *CommandHandler, store storage.Storage, opts ..
 }
 
 // mapError converts oops-coded domain errors to gRPC status errors.
+// For codes.Internal, the detailed error message is not forwarded to the
+// client to avoid leaking internal state; it is expected to be logged by
+// the caller before returning.
 func mapError(err error) error {
 	if oopsErr, ok := oops.AsOops(err); ok {
 		code, _ := oopsErr.Code().(string)
-		return status.Error(domain.GRPCCode(code), oopsErr.Error())
+		grpcCode := domain.GRPCCode(code)
+		if grpcCode == codes.Internal {
+			return status.Error(codes.Internal, "internal server error")
+		}
+		return status.Error(grpcCode, oopsErr.Error())
 	}
-	return status.Error(codes.Internal, err.Error())
+	return status.Error(codes.Internal, "internal server error")
 }
 
 // domainToProto converts a domain.HostEntry to the proto HostEntry.
@@ -80,7 +89,7 @@ func domainToProto(entry *domain.HostEntry) *hostsv1.HostEntry {
 		Tags:      entry.Tags,
 		CreatedAt: timestamppb.New(entry.CreatedAt),
 		UpdatedAt: timestamppb.New(entry.UpdatedAt),
-		Version:   entry.Version,
+		Version:   strconv.FormatInt(entry.Version, 10),
 		Aliases:   entry.Aliases,
 	}
 	return pb
@@ -152,9 +161,13 @@ func (s *HostsServiceImpl) UpdateHost(ctx context.Context, req *hostsv1.UpdateHo
 		tags = &v
 	}
 
-	var expectedVersion string
+	var expectedVersion int64
 	if req.ExpectedVersion != nil {
-		expectedVersion = *req.ExpectedVersion
+		v, parseErr := strconv.ParseInt(*req.ExpectedVersion, 10, 64)
+		if parseErr != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid expected_version %q: %v", *req.ExpectedVersion, parseErr)
+		}
+		expectedVersion = v
 	}
 
 	entry, err := s.handler.UpdateHost(ctx, id, ip, hostname, comment, tags, aliases, expectedVersion)
@@ -206,8 +219,13 @@ func (s *HostsServiceImpl) ListHosts(req *hostsv1.ListHostsRequest, stream grpc.
 // SearchHosts streams host entries matching the query.
 func (s *HostsServiceImpl) SearchHosts(req *hostsv1.SearchHostsRequest, stream grpc.ServerStreamingServer[hostsv1.SearchHostsResponse]) error {
 	query := req.GetQuery()
-	filter := domain.SearchFilter{
-		Query: &query,
+	filter := domain.SearchFilter{}
+	if query != "" {
+		filter.Query = &query
+	}
+
+	if err := filter.Validate(); err != nil {
+		return mapError(err)
 	}
 
 	entries, err := s.handler.SearchHosts(stream.Context(), filter)
@@ -302,6 +320,8 @@ func parseHostsFormat(data []byte) ([]parsedHostLine, []string) {
 	return entries, errors
 }
 
+const maxImportBytes = 64 * 1024 * 1024 // 64 MiB
+
 // ImportHosts implements the bidi-streaming import RPC.
 func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.ImportHostsRequest, hostsv1.ImportHostsResponse]) error {
 	ctx := stream.Context()
@@ -320,6 +340,9 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 		}
 
 		buf.Write(req.GetChunk())
+		if buf.Len() > maxImportBytes {
+			return status.Errorf(codes.ResourceExhausted, "import payload exceeds maximum size (%d bytes)", maxImportBytes)
+		}
 
 		// Capture settings from first message that sets them
 		if format == "" && req.GetFormat() != "" {
@@ -365,7 +388,7 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 		if addErr == nil {
 			stats.Created++
 		} else {
-			// Check if it's a duplicate
+			// Extract error code to distinguish duplicates from other errors
 			isDuplicate := false
 			if oopsErr, ok := oops.AsOops(addErr); ok {
 				if code, _ := oopsErr.Code().(string); code == domain.CodeDuplicate {
@@ -409,13 +432,16 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 					errMsg := fmt.Sprintf("duplicate entry at position %d: %s -> %s", i+1, entry.IP, entry.Hostname)
 					stats.Error = &errMsg
 					stats.Failed++
-					// Send final stats and abort
-					return stream.Send(&stats)
+					// Send final stats and abort with explicit error
+					if err := stream.Send(&stats); err != nil {
+						return err
+					}
+					return status.Errorf(codes.AlreadyExists, "import aborted: %s", errMsg)
 				}
 			} else {
 				stats.Failed++
 				stats.ValidationErrors = append(stats.ValidationErrors,
-					fmt.Sprintf("Entry %d: %v", i+1, addErr))
+					fmt.Sprintf("Entry %d (%s -> %s): %v", i+1, entry.IP, entry.Hostname, addErr))
 			}
 		}
 
@@ -448,11 +474,11 @@ func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream g
 
 	switch format {
 	case "hosts":
-		gen := s.hostsGen
-		if gen == nil {
-			gen = NewHostsFileGenerator("/dev/null")
+		if s.hostsGen != nil {
+			data = []byte(s.hostsGen.FormatHostsFile(entries))
+		} else {
+			data = []byte((&HostsFileGenerator{}).FormatHostsFile(entries))
 		}
-		data = []byte(gen.FormatHostsFile(entries))
 
 	case "json":
 		// Convert to proto-like structures for clean JSON
@@ -523,19 +549,19 @@ func (s *HostsServiceImpl) CreateSnapshot(ctx context.Context, req *hostsv1.Crea
 		return nil, mapError(err)
 	}
 
-	gen := s.hostsGen
-	if gen == nil {
-		gen = NewHostsFileGenerator("/dev/null")
+	var content string
+	if s.hostsGen != nil {
+		content = s.hostsGen.FormatHostsFile(entries)
+	} else {
+		content = (&HostsFileGenerator{}).FormatHostsFile(entries)
 	}
-	content := gen.FormatHostsFile(entries)
 
 	trigger := req.GetTrigger()
 	if trigger == "" {
 		trigger = "manual"
 	}
 
-	snapshotID := ulid.Make().String()
-	now := time.Now().UTC()
+	snapshotID := ulid.Make()
 
 	var name *string
 	if req.GetName() != "" {
@@ -543,27 +569,21 @@ func (s *HostsServiceImpl) CreateSnapshot(ctx context.Context, req *hostsv1.Crea
 		name = &n
 	}
 
-	snap := domain.Snapshot{
-		SnapshotID:   snapshotID,
-		CreatedAt:    now,
-		HostsContent: content,
-		Entries:      entries,
-		EntryCount:   int32(len(entries)),
-		Trigger:      trigger,
-		Name:         name,
-	}
+	snap := domain.NewSnapshot(snapshotID, content, trigger, name, entries)
 
-	if err := s.store.SaveSnapshot(ctx, snap); err != nil {
+	if err := s.store.SaveSnapshot(ctx, *snap); err != nil {
 		return nil, mapError(err)
 	}
 
 	// Best-effort retention policy — no config injection yet, use reasonable defaults
-	_, _ = s.store.ApplyRetentionPolicy(ctx, nil, nil)
+	if _, err := s.store.ApplyRetentionPolicy(ctx, nil, nil); err != nil {
+		slog.Warn("retention policy failed", "error", err)
+	}
 
 	return &hostsv1.CreateSnapshotResponse{
-		SnapshotId: snapshotID,
-		CreatedAt:  now.UnixMicro(),
-		EntryCount: int32(len(entries)),
+		SnapshotId: snapshotID.String(),
+		CreatedAt:  timestamppb.New(snap.CreatedAt),
+		EntryCount: snap.EntryCount,
 	}, nil
 }
 
@@ -593,7 +613,7 @@ func (s *HostsServiceImpl) ListSnapshots(req *hostsv1.ListSnapshotsRequest, stre
 		}
 		if err := stream.Send(&hostsv1.ListSnapshotsResponse{
 			Snapshot: &hostsv1.Snapshot{
-				SnapshotId: m.SnapshotID,
+				SnapshotId: m.SnapshotID.String(),
 				CreatedAt:  timestamppb.New(m.CreatedAt),
 				EntryCount: m.EntryCount,
 				Trigger:    m.Trigger,
@@ -607,11 +627,16 @@ func (s *HostsServiceImpl) ListSnapshots(req *hostsv1.ListSnapshotsRequest, stre
 }
 
 // RollbackToSnapshot restores the hosts database to a snapshot state.
-// NOTE: This operation is not atomic — a failure mid-rollback leaves partial
-// state. The pre-rollback backup snapshot allows manual recovery.
+// All deletes and re-imports are committed as a single atomic batch; a failure
+// at any point leaves the database unchanged.
 func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.RollbackToSnapshotRequest) (*hostsv1.RollbackToSnapshotResponse, error) {
+	snapshotID, err := ulid.Parse(req.GetSnapshotId())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid snapshot_id %q: %v", req.GetSnapshotId(), err)
+	}
+
 	// Load the target snapshot
-	target, err := s.store.GetSnapshot(ctx, req.GetSnapshotId())
+	target, err := s.store.GetSnapshot(ctx, snapshotID)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -619,7 +644,8 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		return nil, status.Errorf(codes.NotFound, "snapshot %q not found", req.GetSnapshotId())
 	}
 
-	// Create a pre-rollback backup snapshot of current state
+	// Create a pre-rollback backup snapshot of current state (best-effort, done
+	// before any mutations so the database is still consistent at this point).
 	backupResp, err := s.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{
 		Name:    "pre-rollback-backup",
 		Trigger: "pre-rollback",
@@ -628,25 +654,39 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		return nil, oops.Wrapf(err, "create pre-rollback backup")
 	}
 
-	// Delete all current entries, then re-import from the snapshot
+	// Load current entries to build delete events.
 	currentEntries, err := s.store.ListAll(ctx)
 	if err != nil {
 		return nil, mapError(err)
 	}
-	for _, entry := range currentEntries {
-		if delErr := s.handler.DeleteHost(ctx, entry.ID, entry.Version); delErr != nil {
-			return nil, oops.Wrapf(delErr, "rollback: delete entry %s", entry.ID)
+
+	// Build the entire batch of events (deletes + creates) without persisting.
+	var batch []storage.AggregateEvents
+
+	for i := range currentEntries {
+		ag, prepErr := s.handler.PrepareDeleteEvent(ctx, &currentEntries[i])
+		if prepErr != nil {
+			return nil, oops.Wrapf(prepErr, "rollback: prepare delete for %s", currentEntries[i].ID)
 		}
+		batch = append(batch, ag)
 	}
 
-	// Re-import each entry from the target snapshot
 	var restoredCount int32
 	for _, entry := range target.Entries {
-		_, addErr := s.handler.AddHost(ctx, entry.IP, entry.Hostname, entry.Comment, entry.Tags, entry.Aliases)
-		if addErr != nil {
-			return nil, oops.Wrapf(addErr, "rollback: restore entry %s/%s", entry.IP, entry.Hostname)
+		ag, _, prepErr := s.handler.PrepareAddEvent(entry.IP, entry.Hostname, entry.Comment, entry.Tags, entry.Aliases)
+		if prepErr != nil {
+			return nil, oops.Wrapf(prepErr, "rollback: prepare add for %s/%s", entry.IP, entry.Hostname)
 		}
+		batch = append(batch, ag)
 		restoredCount++
+	}
+
+	// Commit all events in one atomic transaction. If this fails, nothing is
+	// persisted and the database remains in its pre-rollback state.
+	if len(batch) > 0 {
+		if err := s.store.AppendEventsBatch(ctx, batch); err != nil {
+			return nil, oops.Wrapf(err, "rollback: atomic batch write")
+		}
 	}
 
 	return &hostsv1.RollbackToSnapshotResponse{
@@ -658,7 +698,11 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 
 // DeleteSnapshot removes a snapshot by ID.
 func (s *HostsServiceImpl) DeleteSnapshot(ctx context.Context, req *hostsv1.DeleteSnapshotRequest) (*hostsv1.DeleteSnapshotResponse, error) {
-	if err := s.store.DeleteSnapshot(ctx, req.GetSnapshotId()); err != nil {
+	snapshotID, err := ulid.Parse(req.GetSnapshotId())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid snapshot_id %q: %v", req.GetSnapshotId(), err)
+	}
+	if err := s.store.DeleteSnapshot(ctx, snapshotID); err != nil {
 		return nil, mapError(err)
 	}
 	return &hostsv1.DeleteSnapshotResponse{Success: true}, nil

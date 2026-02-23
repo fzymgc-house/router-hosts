@@ -12,14 +12,25 @@ import (
 type ConflictAction int
 
 // ConflictAction constants for version conflict resolution.
+//
+// ConflictActionUnspecified is the zero value and is intentionally invalid so
+// that an uninitialised ConflictAction can be detected with Valid().
 const (
+	// ConflictActionUnspecified is the zero value; it is not a meaningful action.
+	ConflictActionUnspecified ConflictAction = iota
 	// ConflictRetry retries with the current server version.
-	ConflictRetry ConflictAction = iota
+	ConflictRetry
 	// ConflictSkip skips this update.
 	ConflictSkip
 	// ConflictAbort aborts the operation entirely.
 	ConflictAbort
 )
+
+// Valid reports whether a is a known, meaningful ConflictAction.
+// The zero value (ConflictActionUnspecified) is not valid.
+func (a ConflictAction) Valid() bool {
+	return a >= ConflictRetry && a <= ConflictAbort
+}
 
 // ConflictInfo holds the details shown to the user during conflict resolution.
 type ConflictInfo struct {
@@ -87,7 +98,8 @@ func (m conflictModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cursor++
 			}
 		case "enter":
-			m.chosen = ConflictAction(m.cursor)
+			// cursor is 0-based; add 1 to skip ConflictActionUnspecified (zero value).
+			m.chosen = ConflictAction(m.cursor + 1)
 			m.quitting = true
 			return m, tea.Quit
 		case "q", "esc":

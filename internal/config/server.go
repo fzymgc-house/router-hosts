@@ -5,12 +5,15 @@ package config
 
 import (
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
+	// BurntSushi/toml is used instead of go-toml/v2 (referenced in the design
+	// spec) because it exposes MetaData.Undecoded() for strict decoding — i.e.,
+	// detecting unknown config keys and surfacing them as errors. go-toml/v2
+	// does not provide an equivalent API.
 	"github.com/BurntSushi/toml"
 )
 
@@ -53,6 +56,24 @@ type ServerConfig struct {
 
 // DatabaseConfig holds the database connection settings.
 // For Go, we only support SQLite, so this is simplified to a path.
+//
+// Migration from Rust implementation:
+//   - Rust used [database] url = "sqlite:///path/to/db" or database_url = "postgres://..."
+//   - Go uses [database] path = "/path/to/db" (SQLite only)
+//   - PostgreSQL and DuckDB backends were removed in the Go rewrite
+//
+// If you have an old config file with [database] url or database_url:
+//   - Remove the url/database_url field
+//   - Add path = "/path/to/db" (use the local file path from the URL)
+//   - For sqlite:///path/to/db → path = "/path/to/db"
+//   - For sqlite://path/to/db → path = "path/to/db"
+//
+// If path is empty or not specified, the default XDG-compliant location
+// is used (~/.local/share/router-hosts/hosts.db on Linux,
+// ~/Library/Application Support/router-hosts/hosts.db on macOS).
+//
+// The strict TOML decoder will reject unknown keys (like url or database_url),
+// so migrate your config file to use the new schema.
 type DatabaseConfig struct {
 	Path string `toml:"path"`
 }
@@ -92,6 +113,19 @@ type CloudflareDNS struct {
 type RetentionConfig struct {
 	MaxSnapshots int `toml:"max_snapshots"`
 	MaxAgeDays   int `toml:"max_age_days"`
+}
+
+// Validate checks that retention values are positive. Zero and negative values
+// are rejected because they would either keep no snapshots or produce undefined
+// retention behaviour. Use LoadServerConfig to apply defaults before validating.
+func (r *RetentionConfig) Validate() error {
+	if r.MaxSnapshots < 0 {
+		return fmt.Errorf("config: retention.max_snapshots must be non-negative (got %d)", r.MaxSnapshots)
+	}
+	if r.MaxAgeDays < 0 {
+		return fmt.Errorf("config: retention.max_age_days must be non-negative (got %d)", r.MaxAgeDays)
+	}
+	return nil
 }
 
 // HookDefinition is a named shell command executed on events.
@@ -172,8 +206,16 @@ func LoadServerConfig(path string) (*Config, error) {
 	}
 
 	var cfg Config
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	meta, err := toml.Decode(string(data), &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("parse config file: %w", err)
+	}
+	if keys := meta.Undecoded(); len(keys) > 0 {
+		strs := make([]string, len(keys))
+		for i, k := range keys {
+			strs[i] = k.String()
+		}
+		return nil, fmt.Errorf("config: unknown keys: [%s]", strings.Join(strs, ", "))
 	}
 
 	// Apply defaults for retention if zero-valued
@@ -238,6 +280,10 @@ func (c *Config) validate() error {
 	}
 
 	if err := c.TLS.validateACME(); err != nil {
+		return err
+	}
+
+	if err := c.Retention.Validate(); err != nil {
 		return err
 	}
 
@@ -410,21 +456,14 @@ func checkConfigPermissions(path string) error {
 	}
 
 	mode := info.Mode().Perm()
-	// Reject world-writable (o+w = 0o002)
-	if mode&0o002 != 0 {
+	// Reject group-writable (g+w = 0o020) or world-writable (o+w = 0o002).
+	// Either allows untrusted parties to tamper with hook commands.
+	if mode&0o022 != 0 {
 		return fmt.Errorf(
-			"config: file %q is world-writable (mode %04o); "+
-				"this is a security risk as the config contains hook commands; "+
-				"fix with: chmod o-w %s",
+			"config: file %q has unsafe permissions (mode %04o); "+
+				"group-write and world-write must be removed as the config contains hook commands; "+
+				"fix with: chmod go-w %s",
 			path, mode, path,
-		)
-	}
-
-	// Warn about group-writable but don't fail
-	if mode&0o020 != 0 {
-		slog.Warn("config file is group-writable, consider restricting",
-			"path", path,
-			"mode", fmt.Sprintf("%04o", mode),
 		)
 	}
 

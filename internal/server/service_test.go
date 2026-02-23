@@ -448,19 +448,26 @@ func TestService_ImportHosts_StrictConflict(t *testing.T) {
 	require.NoError(t, stream.CloseSend())
 
 	var finalResp *hostsv1.ImportHostsResponse
+	var recvErr error
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		require.NoError(t, err)
+		if err != nil {
+			recvErr = err
+			break
+		}
 		finalResp = resp
 	}
 
+	// Strict mode now returns AlreadyExists after sending final stats.
 	require.NotNil(t, finalResp)
 	assert.Equal(t, int32(1), finalResp.Failed)
 	assert.NotNil(t, finalResp.Error)
 	assert.Contains(t, *finalResp.Error, "duplicate")
+	require.Error(t, recvErr)
+	assert.Contains(t, recvErr.Error(), "AlreadyExists")
 }
 
 func TestService_ExportHosts_HostsFormat(t *testing.T) {
@@ -617,7 +624,8 @@ func TestService_CreateSnapshot(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEmpty(t, resp.GetSnapshotId())
 	assert.Equal(t, int32(1), resp.GetEntryCount())
-	assert.Greater(t, resp.GetCreatedAt(), int64(0))
+	assert.NotNil(t, resp.GetCreatedAt())
+	assert.False(t, resp.GetCreatedAt().AsTime().IsZero())
 }
 
 func TestService_ListSnapshots(t *testing.T) {
@@ -974,12 +982,147 @@ func TestService_RollbackToSnapshot_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := env.client.RollbackToSnapshot(ctx, &hostsv1.RollbackToSnapshotRequest{
-		SnapshotId: "nonexistent-snapshot-id",
+		SnapshotId: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
 	})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.NotFound, st.Code())
+}
+
+// TestService_RollbackToSnapshot_Atomicity verifies that all entries added after
+// a snapshot are removed when rolling back, and only the snapshotted entries
+// remain (Finding 133.46).
+func TestService_RollbackToSnapshot_Atomicity(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Add a baseline host entry.
+	baseResp, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.1",
+		Hostname:  "base.local",
+	})
+	require.NoError(t, err)
+
+	// Snapshot the current state (1 entry).
+	snapResp, err := env.client.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{
+		Name:    "atomicity-test",
+		Trigger: "manual",
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(1), snapResp.GetEntryCount())
+
+	// Add two more entries after the snapshot.
+	for i, ip := range []string{"10.0.0.1", "10.0.0.2"} {
+		_, err = env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+			IpAddress: ip,
+			Hostname:  fmt.Sprintf("extra%d.local", i),
+		})
+		require.NoError(t, err)
+	}
+
+	// Confirm 3 entries exist before rollback.
+	stream, err := env.client.ListHosts(ctx, &hostsv1.ListHostsRequest{})
+	require.NoError(t, err)
+	var before []*hostsv1.HostEntry
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		before = append(before, resp.Entry)
+	}
+	require.Len(t, before, 3)
+
+	// Roll back to the snapshot.
+	rollResp, err := env.client.RollbackToSnapshot(ctx, &hostsv1.RollbackToSnapshotRequest{
+		SnapshotId: snapResp.GetSnapshotId(),
+	})
+	require.NoError(t, err)
+	require.True(t, rollResp.GetSuccess())
+	require.Equal(t, int32(1), rollResp.GetRestoredEntryCount())
+
+	// Only the baseline entry must remain.
+	listStream, err := env.client.ListHosts(ctx, &hostsv1.ListHostsRequest{})
+	require.NoError(t, err)
+	var after []*hostsv1.HostEntry
+	for {
+		resp, err := listStream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		after = append(after, resp.Entry)
+	}
+	require.Len(t, after, 1, "rollback must atomically remove all post-snapshot entries")
+	assert.Equal(t, "base.local", after[0].Hostname)
+	assert.Equal(t, "192.168.1.1", after[0].IpAddress)
+	// The restored entry gets a new ID since rollback re-imports from snapshot data.
+	assert.NotEmpty(t, after[0].Id)
+	_ = baseResp
+}
+
+// TestService_ImportHosts_MultiChunk verifies that an import stream whose data
+// arrives in multiple separate chunks correctly imports all entries and returns
+// accurate progress stats (Finding 133.51).
+func TestService_ImportHosts_MultiChunk(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	// Split the hosts data across three chunks — none marked last except the final.
+	chunks := []string{
+		"192.168.1.10\tserver.local\t# web server [web]\n",
+		"10.0.0.1\tdb.local\t# database [db]\n",
+		"172.16.0.1\tproxy.local\n",
+	}
+
+	format := "hosts"
+	stream, err := env.client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	for i, chunk := range chunks {
+		isLast := i == len(chunks)-1
+		req := &hostsv1.ImportHostsRequest{
+			Chunk:     []byte(chunk),
+			LastChunk: isLast,
+		}
+		if i == 0 {
+			req.Format = &format
+		}
+		require.NoError(t, stream.Send(req))
+	}
+	require.NoError(t, stream.CloseSend())
+
+	// Collect all responses; the final one carries cumulative stats.
+	var finalResp *hostsv1.ImportHostsResponse
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		finalResp = resp
+	}
+
+	require.NotNil(t, finalResp)
+	assert.Equal(t, int32(3), finalResp.Processed, "all 3 entries across chunks must be processed")
+	assert.Equal(t, int32(3), finalResp.Created, "all 3 entries must be created")
+	assert.Equal(t, int32(0), finalResp.Failed)
+
+	// Verify all three entries are actually present in storage.
+	listStream, err := env.client.ListHosts(ctx, &hostsv1.ListHostsRequest{})
+	require.NoError(t, err)
+	var entries []*hostsv1.HostEntry
+	for {
+		resp, err := listStream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		entries = append(entries, resp.Entry)
+	}
+	assert.Len(t, entries, 3)
 }
 
 func TestService_UpdateHost_AliasesNilValues(t *testing.T) {
@@ -1005,4 +1148,30 @@ func TestService_UpdateHost_AliasesNilValues(t *testing.T) {
 	require.NotNil(t, updateResp.Entry)
 	assert.Empty(t, updateResp.Entry.Aliases)
 	assert.Empty(t, updateResp.Entry.Tags)
+}
+
+// TestService_UpdateHost_AliasMatchesHostname verifies that updating a host's
+// aliases to include the host's own hostname is rejected with InvalidArgument.
+// Validation rejects aliases that duplicate the primary hostname.
+func TestService_UpdateHost_AliasMatchesHostname(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	addResp, err := env.client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "10.0.0.50",
+		Hostname:  "target.local",
+	})
+	require.NoError(t, err)
+
+	version := "1"
+	_, err = env.client.UpdateHost(ctx, &hostsv1.UpdateHostRequest{
+		Id: addResp.Id,
+		// Setting an alias that matches the primary hostname is invalid.
+		Aliases:         &hostsv1.AliasesUpdate{Values: []string{"target.local"}},
+		ExpectedVersion: &version,
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
 }

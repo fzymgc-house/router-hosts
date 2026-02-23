@@ -11,15 +11,15 @@ import (
 // ErrQueueStopped is returned by Submit when the queue has been stopped.
 var ErrQueueStopped = errors.New("write queue stopped")
 
-// WriteCommand pairs a write closure with a channel to report the result.
-type WriteCommand struct {
-	Fn     func() error
-	Result chan<- error
+// writeCommand pairs a write closure with a channel to report the result.
+type writeCommand struct {
+	fn     func() error
+	result chan<- error
 }
 
 // WriteQueue serializes concurrent writes through a single goroutine.
 type WriteQueue struct {
-	ch   chan WriteCommand
+	ch   chan writeCommand
 	done chan struct{}
 	log  *slog.Logger
 
@@ -30,7 +30,7 @@ type WriteQueue struct {
 // NewWriteQueue creates a queue with the given buffer size.
 func NewWriteQueue(bufferSize int, logger *slog.Logger) *WriteQueue {
 	return &WriteQueue{
-		ch:   make(chan WriteCommand, bufferSize),
+		ch:   make(chan writeCommand, bufferSize),
 		done: make(chan struct{}),
 		log:  logger,
 	}
@@ -58,7 +58,7 @@ func (q *WriteQueue) Stop() {
 // been stopped.
 func (q *WriteQueue) Submit(ctx context.Context, fn func() error) error {
 	result := make(chan error, 1)
-	cmd := WriteCommand{Fn: fn, Result: result}
+	cmd := writeCommand{fn: fn, result: result}
 
 	q.mu.Lock()
 	if q.stopped {
@@ -91,7 +91,7 @@ func (q *WriteQueue) Submit(ctx context.Context, fn func() error) error {
 func (q *WriteQueue) process() {
 	defer close(q.done)
 	for cmd := range q.ch {
-		err := cmd.Fn()
-		cmd.Result <- err
+		err := cmd.fn()
+		cmd.result <- err
 	}
 }

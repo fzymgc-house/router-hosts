@@ -14,10 +14,15 @@ type HostEntry struct {
 	Aliases   []string  `json:"aliases"`
 	Comment   *string   `json:"comment,omitempty"`
 	Tags      []string  `json:"tags"`
-	Version   string    `json:"version"`
+	Version   int64     `json:"version"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
-	Deleted   bool      `json:"deleted"`
+	// Deleted is set to true by the projection when replaying a HostDeleted
+	// event. Entries with Deleted=true act as tombstones: they are retained in
+	// the projection store so that event replay remains idempotent, but are
+	// excluded from all query results returned to callers (ListAll, Search,
+	// GetAtTime, etc.). External callers should never observe Deleted=true.
+	Deleted bool `json:"deleted"`
 }
 
 // SearchFilter specifies criteria for querying host entries.
@@ -34,4 +39,18 @@ func (f SearchFilter) IsEmpty() bool {
 		f.HostnamePattern == nil &&
 		len(f.Tags) == 0 &&
 		f.Query == nil
+}
+
+// Validate checks that non-nil pattern fields are non-empty strings.
+func (f SearchFilter) Validate() error {
+	if f.IPPattern != nil && *f.IPPattern == "" {
+		return ErrValidation("ip_pattern must not be an empty string; omit the field to match all IPs")
+	}
+	if f.HostnamePattern != nil && *f.HostnamePattern == "" {
+		return ErrValidation("hostname_pattern must not be an empty string; omit the field to match all hostnames")
+	}
+	if f.Query != nil && *f.Query == "" {
+		return ErrValidation("query must not be an empty string; omit the field to return all entries")
+	}
+	return nil
 }

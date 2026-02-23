@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
@@ -84,11 +85,16 @@ func (h *HookExecutor) executeHook(ctx context.Context, hook config.HookDefiniti
 	hookCtx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 
+	sanitizedErrMsg := strings.ReplaceAll(errMsg, "\r\n", " ")
+	sanitizedErrMsg = strings.ReplaceAll(sanitizedErrMsg, "\n", " ")
+	sanitizedErrMsg = strings.ReplaceAll(sanitizedErrMsg, "\r", " ")
+	sanitizedErrMsg = strings.ReplaceAll(sanitizedErrMsg, "\x00", "")
+
 	cmd := exec.CommandContext(hookCtx, "sh", "-c", hook.Command)
 	cmd.Env = append(cmd.Environ(),
 		"ROUTER_HOSTS_EVENT="+event,
 		"ROUTER_HOSTS_ENTRY_COUNT="+strconv.Itoa(entryCount),
-		"ROUTER_HOSTS_ERROR="+errMsg,
+		"ROUTER_HOSTS_ERROR="+sanitizedErrMsg,
 	)
 
 	output, err := cmd.CombinedOutput()

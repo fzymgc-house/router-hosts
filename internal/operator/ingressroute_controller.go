@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fzymgc-house/router-hosts/internal/validation"
 	"github.com/samber/oops"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -116,13 +117,13 @@ func (r *IngressRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // It processes all hosts even when individual operations fail, persists the
 // annotation with whatever IDs are known, and requeues on any failure.
 func (r *IngressRouteReconciler) reconcileUpsert(ctx context.Context, log *slog.Logger, obj *unstructured.Unstructured) (ctrl.Result, error) {
-	hosts := extractHosts(obj)
+	hosts := extractHosts(log, obj)
 	if len(hosts) == 0 {
 		log.Debug("no hosts extracted from IngressRoute")
 		return ctrl.Result{}, nil
 	}
 
-	existingIDs := getHostIDsAnnotation(obj)
+	existingIDs := getHostIDsAnnotation(log, obj)
 	newIDs := make(map[string]string) // hostname -> hostID
 
 	comment := fmt.Sprintf("k8s-ingress:%s/%s", obj.GetNamespace(), obj.GetName())
@@ -171,7 +172,9 @@ func (r *IngressRouteReconciler) reconcileUpsert(ctx context.Context, log *slog.
 	}
 
 	// Always persist the annotation so partially-created IDs are tracked.
-	setHostIDsAnnotation(obj, newIDs)
+	if err := setHostIDsAnnotation(obj, newIDs); err != nil {
+		return ctrl.Result{}, oops.Wrapf(err, "setting host IDs annotation")
+	}
 	if err := r.Update(ctx, obj); err != nil {
 		return ctrl.Result{}, oops.Wrapf(err, "updating IngressRoute annotations")
 	}
@@ -188,7 +191,7 @@ func (r *IngressRouteReconciler) reconcileDelete(ctx context.Context, log *slog.
 		return ctrl.Result{}, nil
 	}
 
-	existingIDs := getHostIDsAnnotation(obj)
+	existingIDs := getHostIDsAnnotation(log, obj)
 	for hostname, id := range existingIDs {
 		log.Info("deleting host entry for deleted IngressRoute", "hostname", hostname, "hostId", id)
 		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
@@ -208,8 +211,8 @@ func (r *IngressRouteReconciler) reconcileDelete(ctx context.Context, log *slog.
 // extractHosts extracts hostnames from IngressRoute/IngressRouteTCP match
 // rules. It looks for Host(`...`) and HostSNI(`...`) patterns in
 // spec.routes[].match fields (IngressRoute) and spec.routes[].match
-// (IngressRouteTCP).
-func extractHosts(obj *unstructured.Unstructured) []string {
+// (IngressRouteTCP). Hostnames that fail validation are logged and skipped.
+func extractHosts(log *slog.Logger, obj *unstructured.Unstructured) []string {
 	routes, found, err := unstructured.NestedSlice(obj.Object, "spec", "routes")
 	if err != nil || !found {
 		return nil
@@ -228,10 +231,16 @@ func extractHosts(obj *unstructured.Unstructured) []string {
 			continue
 		}
 		for _, h := range extractHostsFromMatch(matchStr) {
-			if _, exists := seen[h]; !exists {
-				seen[h] = struct{}{}
-				hosts = append(hosts, h)
+			if _, exists := seen[h]; exists {
+				continue
 			}
+			if err := validation.ValidateHostname(h); err != nil {
+				log.Warn("skipping invalid hostname extracted from IngressRoute match rule",
+					"hostname", h, "error", err)
+				continue
+			}
+			seen[h] = struct{}{}
+			hosts = append(hosts, h)
 		}
 	}
 
@@ -242,30 +251,28 @@ func extractHosts(obj *unstructured.Unstructured) []string {
 // single Traefik match rule string.
 func extractHostsFromMatch(match string) []string {
 	var hosts []string
-
-	for _, m := range hostRegex.FindAllStringSubmatch(match, -1) {
-		if len(m) > 1 {
-			h := strings.TrimSpace(m[1])
-			if h != "" {
-				hosts = append(hosts, h)
-			}
-		}
+	for _, re := range []*regexp.Regexp{hostRegex, hostSNIRegex} {
+		hosts = appendRegexMatches(hosts, re, match)
 	}
-	for _, m := range hostSNIRegex.FindAllStringSubmatch(match, -1) {
-		if len(m) > 1 {
-			h := strings.TrimSpace(m[1])
-			if h != "" {
-				hosts = append(hosts, h)
-			}
-		}
-	}
-
 	return hosts
+}
+
+// appendRegexMatches appends non-empty capture group 1 matches from re against
+// s to dst and returns the result.
+func appendRegexMatches(dst []string, re *regexp.Regexp, s string) []string {
+	for _, m := range re.FindAllStringSubmatch(s, -1) {
+		if len(m) > 1 {
+			if h := strings.TrimSpace(m[1]); h != "" {
+				dst = append(dst, h)
+			}
+		}
+	}
+	return dst
 }
 
 // getHostIDsAnnotation reads the hostname -> hostID mapping from the
 // object's annotations.
-func getHostIDsAnnotation(obj *unstructured.Unstructured) map[string]string {
+func getHostIDsAnnotation(log *slog.Logger, obj *unstructured.Unstructured) map[string]string {
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		return nil
@@ -276,6 +283,8 @@ func getHostIDsAnnotation(obj *unstructured.Unstructured) map[string]string {
 	}
 	var ids map[string]string
 	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
+		log.Error("corrupt host-ids annotation, host entries may be orphaned",
+			"error", err, "object", obj.GetName())
 		return nil
 	}
 	return ids
@@ -283,18 +292,24 @@ func getHostIDsAnnotation(obj *unstructured.Unstructured) map[string]string {
 
 // setHostIDsAnnotation stores the hostname -> hostID mapping as a JSON
 // annotation on the object.
-func setHostIDsAnnotation(obj *unstructured.Unstructured, ids map[string]string) {
+func setHostIDsAnnotation(obj *unstructured.Unstructured, ids map[string]string) error {
+	if len(ids) == 0 {
+		annotations := obj.GetAnnotations()
+		delete(annotations, hostIDsAnnotation)
+		obj.SetAnnotations(annotations)
+		return nil
+	}
+	data, err := json.Marshal(ids)
+	if err != nil {
+		return fmt.Errorf("marshaling host IDs annotation: %w", err)
+	}
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
-	if len(ids) == 0 {
-		delete(annotations, hostIDsAnnotation)
-	} else {
-		data, _ := json.Marshal(ids)
-		annotations[hostIDsAnnotation] = string(data)
-	}
+	annotations[hostIDsAnnotation] = string(data)
 	obj.SetAnnotations(annotations)
+	return nil
 }
 
 // SetupWithManager registers the IngressRoute reconciler with the

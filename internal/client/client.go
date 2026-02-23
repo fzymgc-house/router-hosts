@@ -10,7 +10,6 @@ import (
 	"github.com/samber/oops"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
-	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Client wraps a gRPC connection and provides the HostsService client.
@@ -21,8 +20,8 @@ type Client struct {
 }
 
 // NewClient creates a gRPC client from the resolved ClientConfig.
-// It loads mTLS credentials when cert/key/ca paths are configured,
-// otherwise falls back to insecure (useful for testing).
+// TLS configuration is required; all three paths (cert_path, key_path,
+// ca_cert_path) must be set in the config.
 func NewClient(cfg *config.ClientConfig) (*Client, error) {
 	creds, err := buildTransportCredentials(cfg)
 	if err != nil {
@@ -70,10 +69,14 @@ func (c *Client) Address() string {
 }
 
 // buildTransportCredentials creates TLS credentials from config paths.
-// Returns insecure credentials when no cert/key/ca are configured.
+// All three paths must be provided; insecure connections are not supported.
 func buildTransportCredentials(cfg *config.ClientConfig) (credentials.TransportCredentials, error) {
+	if (cfg.CertPath != "" && cfg.KeyPath == "") || (cfg.CertPath == "" && cfg.KeyPath != "") {
+		return nil, oops.Errorf("cert_path and key_path must both be set or both be empty")
+	}
+
 	if cfg.CertPath == "" && cfg.KeyPath == "" && cfg.CACertPath == "" {
-		return insecure.NewCredentials(), nil
+		return nil, oops.Errorf("TLS configuration required: set cert_path, key_path, and ca_cert_path")
 	}
 
 	tlsCfg := &tls.Config{

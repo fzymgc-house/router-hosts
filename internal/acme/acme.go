@@ -50,10 +50,11 @@ type obtainFunc func(ctx context.Context, domains []string) (*certificate.Resour
 
 // Manager handles ACME certificate lifecycle.
 type Manager struct {
-	cfg     config.ACMEConfig
-	tlsCfg  config.TLSConfig
-	log     *slog.Logger
-	onRenew func() error
+	cfg          config.ACMEConfig
+	tlsCfg       config.TLSConfig
+	log          *slog.Logger
+	onRenew      func() error
+	onRenewError func(err error)
 
 	obtain obtainFunc
 
@@ -70,6 +71,15 @@ type Option func(*Manager)
 func WithObtainFunc(fn obtainFunc) Option {
 	return func(m *Manager) {
 		m.obtain = fn
+	}
+}
+
+// WithRenewErrorHandler registers a callback invoked when a background renewal
+// check fails. This allows callers to surface renewal failures (e.g. increment
+// a metric, send an alert) beyond what is already logged by the Manager.
+func WithRenewErrorHandler(fn func(err error)) Option {
+	return func(m *Manager) {
+		m.onRenewError = fn
 	}
 }
 
@@ -416,12 +426,24 @@ func (m *Manager) renewalLoop(ctx context.Context, interval time.Duration) {
 }
 
 // runRenewalCheck performs a single renewal check, logging any outcome.
+// Renewal errors are logged with structured fields and, if an onRenewError
+// callback was registered via WithRenewErrorHandler, that callback is invoked
+// so callers can surface the failure (e.g. increment a metric or send an alert).
 func (m *Manager) runRenewalCheck(ctx context.Context) {
 	renewed, err := m.RenewIfNeeded(ctx)
 	if err != nil {
-		m.log.Error("renewal check failed", "error", err)
+		m.log.Error("renewal check failed",
+			"error", err,
+			"domains", m.cfg.Domains,
+			"email", m.cfg.Email,
+		)
+		if m.onRenewError != nil {
+			m.onRenewError(err)
+		}
 	} else if renewed {
-		m.log.Info("certificate renewed successfully")
+		m.log.Info("certificate renewed successfully",
+			"domains", m.cfg.Domains,
+		)
 	}
 }
 

@@ -4,13 +4,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestSnapshot_Metadata(t *testing.T) {
 	name := "pre-deploy"
 	snap := &Snapshot{
-		SnapshotID:   "snap-001",
+		SnapshotID:   ulid.Make(),
 		CreatedAt:    time.Date(2025, 6, 15, 10, 0, 0, 0, time.UTC),
 		HostsContent: "192.168.1.1\tserver.local\n",
 		Entries: []HostEntry{
@@ -32,7 +33,7 @@ func TestSnapshot_Metadata(t *testing.T) {
 
 func TestSnapshot_Metadata_NilName(t *testing.T) {
 	snap := &Snapshot{
-		SnapshotID: "snap-002",
+		SnapshotID: ulid.Make(),
 		CreatedAt:  time.Now().UTC(),
 		EntryCount: 0,
 		Trigger:    "automatic",

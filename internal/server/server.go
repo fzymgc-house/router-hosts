@@ -205,7 +205,7 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 		GetCertificate: s.getCertificate,
 		ClientAuth:     tls.RequireAndVerifyClientCert,
 		ClientCAs:      caPool,
-		MinVersion:     tls.VersionTLS12,
+		MinVersion:     tls.VersionTLS13,
 	}, nil
 }
 

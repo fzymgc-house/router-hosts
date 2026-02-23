@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -43,7 +44,11 @@ func newHostAddCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			req := &hostsv1.AddHostRequest{
 				IpAddress: ip,
@@ -95,7 +100,11 @@ func newHostGetCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -131,7 +140,11 @@ func newHostUpdateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			req := &hostsv1.UpdateHostRequest{
 				Id: args[0],
@@ -190,7 +203,11 @@ func newHostDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -229,7 +246,11 @@ func newHostListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			req := &hostsv1.ListHostsRequest{}
 			if cmd.Flags().Changed("filter") {
@@ -278,7 +299,11 @@ func newHostSearchCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			ctx, cancel := commandContext()
 			defer cancel()

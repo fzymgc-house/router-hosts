@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
@@ -70,13 +71,14 @@ func NewRootCmd() *cobra.Command {
 	return root
 }
 
-// Execute runs the root command and exits with an appropriate code.
-func Execute() {
+// Execute runs the root command and returns any error for the caller to handle.
+func Execute() error {
 	root := NewRootCmd()
 	if err := root.Execute(); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
 
 // newHostCmd creates the "host" subcommand group.
@@ -133,7 +135,11 @@ func runServerHealth(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = c.Close() }()
+	defer func() {
+		if err := c.Close(); err != nil {
+			slog.Warn("closing client connection", "error", err)
+		}
+	}()
 
 	ctx, cancel := commandContext()
 	defer cancel()
@@ -165,7 +171,11 @@ func runServerLiveness(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = c.Close() }()
+	defer func() {
+		if err := c.Close(); err != nil {
+			slog.Warn("closing client connection", "error", err)
+		}
+	}()
 
 	ctx, cancel := commandContext()
 	defer cancel()
@@ -184,7 +194,11 @@ func runServerReadiness(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	defer func() { _ = c.Close() }()
+	defer func() {
+		if err := c.Close(); err != nil {
+			slog.Warn("closing client connection", "error", err)
+		}
+	}()
 
 	ctx, cancel := commandContext()
 	defer cancel()

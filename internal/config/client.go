@@ -83,8 +83,16 @@ func loadClientConfigFile(path string) (*ClientConfig, error) {
 	}
 
 	var cfg ClientConfig
-	if err := toml.Unmarshal(data, &cfg); err != nil {
+	meta, err := toml.Decode(string(data), &cfg)
+	if err != nil {
 		return nil, fmt.Errorf("parse client config: %w", err)
+	}
+	if keys := meta.Undecoded(); len(keys) > 0 {
+		strs := make([]string, len(keys))
+		for i, k := range keys {
+			strs[i] = k.String()
+		}
+		return nil, fmt.Errorf("client config: unknown keys: [%s]", strings.Join(strs, ", "))
 	}
 	return &cfg, nil
 }

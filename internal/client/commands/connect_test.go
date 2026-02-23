@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDefaultNewClientFromFlags_WithServerAddress(t *testing.T) {
+func TestDefaultNewClientFromFlags_WithServerAddress_NoTLS(t *testing.T) {
 	origFlags := Flags
 	t.Cleanup(func() { Flags = origFlags })
 
@@ -18,10 +18,10 @@ func TestDefaultNewClientFromFlags_WithServerAddress(t *testing.T) {
 		Server: "localhost:50051",
 	}
 
-	c, err := defaultNewClientFromFlags()
-	require.NoError(t, err)
-	require.NotNil(t, c)
-	_ = c.Close()
+	// Without TLS config, connection should fail with a TLS required error.
+	_, err := defaultNewClientFromFlags()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TLS configuration required")
 }
 
 func TestDefaultNewClientFromFlags_WithAllFlags(t *testing.T) {

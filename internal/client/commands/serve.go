@@ -68,8 +68,12 @@ func runServe(ctx context.Context, configPath string) error {
 		return fmt.Errorf("initialize database: %w", err)
 	}
 
-	// Create command handler
-	handler := server.NewCommandHandler(store)
+	// Create write queue and command handler
+	writeQueue := server.NewWriteQueue(64, logger)
+	writeQueue.Start()
+	defer writeQueue.Stop()
+
+	handler := server.NewCommandHandlerWithQueue(store, writeQueue)
 
 	// Build service options
 	var svcOpts []server.ServiceOption

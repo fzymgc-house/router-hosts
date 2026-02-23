@@ -23,7 +23,7 @@ func TestExtractHosts_HostRule(t *testing.T) {
 		{"match": "Host(`example.com`)"},
 	})
 
-	hosts := extractHosts(obj)
+	hosts := extractHosts(slog.Default(), obj)
 	assert.Equal(t, []string{"example.com"}, hosts)
 }
 
@@ -32,7 +32,7 @@ func TestExtractHosts_MultipleHosts(t *testing.T) {
 		{"match": "Host(`a.com`) || Host(`b.com`)"},
 	})
 
-	hosts := extractHosts(obj)
+	hosts := extractHosts(slog.Default(), obj)
 	assert.Equal(t, []string{"a.com", "b.com"}, hosts)
 }
 
@@ -41,7 +41,7 @@ func TestExtractHosts_HostSNI(t *testing.T) {
 		{"match": "HostSNI(`secure.example.com`)"},
 	})
 
-	hosts := extractHosts(obj)
+	hosts := extractHosts(slog.Default(), obj)
 	assert.Equal(t, []string{"secure.example.com"}, hosts)
 }
 
@@ -51,7 +51,7 @@ func TestExtractHosts_MixedHostAndHostSNI(t *testing.T) {
 		{"match": "HostSNI(`secure.example.com`)"},
 	})
 
-	hosts := extractHosts(obj)
+	hosts := extractHosts(slog.Default(), obj)
 	assert.Equal(t, []string{"web.example.com", "secure.example.com"}, hosts)
 }
 
@@ -61,7 +61,7 @@ func TestExtractHosts_Deduplication(t *testing.T) {
 		{"match": "Host(`example.com`) && PathPrefix(`/v2`)"},
 	})
 
-	hosts := extractHosts(obj)
+	hosts := extractHosts(slog.Default(), obj)
 	assert.Equal(t, []string{"example.com"}, hosts)
 }
 
@@ -78,7 +78,7 @@ func TestExtractHosts_NoRoutes(t *testing.T) {
 		},
 	}
 
-	hosts := extractHosts(obj)
+	hosts := extractHosts(slog.Default(), obj)
 	assert.Empty(t, hosts)
 }
 
@@ -87,7 +87,7 @@ func TestExtractHosts_NoMatchField(t *testing.T) {
 		{"priority": int64(10)},
 	})
 
-	hosts := extractHosts(obj)
+	hosts := extractHosts(slog.Default(), obj)
 	assert.Empty(t, hosts)
 }
 
@@ -191,7 +191,7 @@ func TestReconcile_IngressRoute_Create(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(&updated)
+	ids := getHostIDsAnnotation(slog.Default(), &updated)
 	assert.Equal(t, "ingress-host-1", ids["app.example.com"])
 }
 
@@ -295,7 +295,7 @@ func TestReconcile_IngressRoute_StaleHostCleanup(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(&updated)
+	ids := getHostIDsAnnotation(slog.Default(), &updated)
 	assert.Equal(t, "keep-id", ids["keep.example.com"])
 	_, hasRemoved := ids["remove.example.com"]
 	assert.False(t, hasRemoved)
@@ -358,21 +358,21 @@ func TestHostIDsAnnotation_RoundTrip(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{}}
 
 	// Empty initially.
-	ids := getHostIDsAnnotation(obj)
+	ids := getHostIDsAnnotation(slog.Default(), obj)
 	assert.Nil(t, ids)
 
 	// Set and read back.
-	setHostIDsAnnotation(obj, map[string]string{
+	require.NoError(t, setHostIDsAnnotation(obj, map[string]string{
 		"a.com": "id-1",
 		"b.com": "id-2",
-	})
-	ids = getHostIDsAnnotation(obj)
+	}))
+	ids = getHostIDsAnnotation(slog.Default(), obj)
 	assert.Equal(t, "id-1", ids["a.com"])
 	assert.Equal(t, "id-2", ids["b.com"])
 
 	// Clear.
-	setHostIDsAnnotation(obj, nil)
-	ids = getHostIDsAnnotation(obj)
+	require.NoError(t, setHostIDsAnnotation(obj, nil))
+	ids = getHostIDsAnnotation(slog.Default(), obj)
 	assert.Nil(t, ids)
 }
 
@@ -465,7 +465,7 @@ func TestReconcile_IngressRoute_UpdateFailure_Requeues(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(&updated)
+	ids := getHostIDsAnnotation(slog.Default(), &updated)
 	assert.Equal(t, "existing-id", ids["app.example.com"])
 }
 
@@ -518,7 +518,7 @@ func TestReconcile_IngressRoute_StaleDeleteFailure(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(&updated)
+	ids := getHostIDsAnnotation(slog.Default(), &updated)
 	assert.Equal(t, "keep-id", ids["keep.example.com"])
 	assert.Equal(t, "remove-id", ids["remove.example.com"])
 }
@@ -559,7 +559,7 @@ func TestGetHostIDsAnnotation_InvalidJSON(t *testing.T) {
 		hostIDsAnnotation: "not valid json",
 	})
 
-	ids := getHostIDsAnnotation(obj)
+	ids := getHostIDsAnnotation(slog.Default(), obj)
 	assert.Nil(t, ids)
 }
 
@@ -569,7 +569,7 @@ func TestGetHostIDsAnnotation_EmptyValue(t *testing.T) {
 		hostIDsAnnotation: "",
 	})
 
-	ids := getHostIDsAnnotation(obj)
+	ids := getHostIDsAnnotation(slog.Default(), obj)
 	assert.Nil(t, ids)
 }
 
@@ -590,7 +590,7 @@ func TestExtractHosts_InvalidRouteType(t *testing.T) {
 		},
 	}
 
-	hosts := extractHosts(obj)
+	hosts := extractHosts(slog.Default(), obj)
 	assert.Empty(t, hosts)
 }
 

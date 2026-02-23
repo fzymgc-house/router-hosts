@@ -190,9 +190,9 @@ func TestAtomicWrite_NewFile(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "test content\n", string(data))
 
-	// Temp file should not exist
-	_, err = os.Stat(path + ".tmp")
-	assert.True(t, os.IsNotExist(err))
+	// No temp files should remain after successful write
+	matches, _ := filepath.Glob(filepath.Join(dir, "hosts.tmp.*"))
+	assert.Empty(t, matches, "temp files should be cleaned up after atomicWrite")
 }
 
 func TestAtomicWrite_OverwritesExisting(t *testing.T) {
@@ -218,9 +218,9 @@ func TestAtomicWrite_CleansUpTmp(t *testing.T) {
 	err := gen.atomicWrite("content\n")
 	require.NoError(t, err)
 
-	// .tmp file should be gone after successful write
-	_, err = os.Stat(path + ".tmp")
-	assert.True(t, os.IsNotExist(err))
+	// No temp files should remain after successful write
+	matches, _ := filepath.Glob(filepath.Join(dir, "hosts.tmp.*"))
+	assert.Empty(t, matches, "temp files should be cleaned up after atomicWrite")
 }
 
 func TestAtomicWrite_InvalidPath(t *testing.T) {

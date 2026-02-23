@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/oklog/ulid/v2"
 	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 
@@ -13,12 +14,6 @@ import (
 
 // SaveSnapshot persists a snapshot, marshaling entries to JSON.
 func (s *Storage) SaveSnapshot(ctx context.Context, snapshot domain.Snapshot) error {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
 	hostsContent := snapshot.HostsContent
 	if snapshot.Entries != nil {
 		data, marshalErr := json.Marshal(snapshot.Entries)
@@ -28,59 +23,51 @@ func (s *Storage) SaveSnapshot(ctx context.Context, snapshot domain.Snapshot) er
 		hostsContent = string(data)
 	}
 
-	return sqlitex.Execute(conn,
-		`INSERT INTO snapshots (snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position)
-		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		&sqlitex.ExecOptions{
-			Args: []any{
-				snapshot.SnapshotID,
-				snapshot.CreatedAt.UTC().Format(timeFormat),
-				hostsContent,
-				snapshot.EntryCount,
-				snapshot.Trigger,
-				ptrToAny(snapshot.Name),
-				int64PtrToAny(snapshot.EventLogPosition),
-			},
-		})
+	return s.withConn(ctx, func(conn *sqlite.Conn) error {
+		return sqlitex.Execute(conn,
+			`INSERT INTO snapshots (snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position)
+			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			&sqlitex.ExecOptions{
+				Args: []any{
+					snapshot.SnapshotID.String(),
+					snapshot.CreatedAt.UTC().Format(timeFormat),
+					hostsContent,
+					snapshot.EntryCount,
+					snapshot.Trigger,
+					ptrToAny(snapshot.Name),
+					int64PtrToAny(snapshot.EventLogPosition),
+				},
+			})
+	})
 }
 
 // GetSnapshot retrieves a snapshot by ID, unmarshaling entries from JSON.
-func (s *Storage) GetSnapshot(ctx context.Context, snapshotID string) (*domain.Snapshot, error) {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
+func (s *Storage) GetSnapshot(ctx context.Context, snapshotID ulid.ULID) (*domain.Snapshot, error) {
 	var snap *domain.Snapshot
-	err = sqlitex.Execute(conn,
-		`SELECT snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position
-		 FROM snapshots WHERE snapshot_id = ?`,
-		&sqlitex.ExecOptions{
-			Args: []any{snapshotID},
-			ResultFunc: func(stmt *sqlite.Stmt) error {
-				var scanErr error
-				snap, scanErr = scanSnapshot(stmt)
-				return scanErr
-			},
-		})
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		return sqlitex.Execute(conn,
+			`SELECT snapshot_id, created_at, hosts_content, entry_count, trigger_type, name, event_log_position
+			 FROM snapshots WHERE snapshot_id = ?`,
+			&sqlitex.ExecOptions{
+				Args: []any{snapshotID.String()},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					var scanErr error
+					snap, scanErr = scanSnapshot(stmt)
+					return scanErr
+				},
+			})
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get snapshot: %w", err)
 	}
 	if snap == nil {
-		return nil, domain.ErrNotFound("snapshot", snapshotID)
+		return nil, domain.ErrNotFound("snapshot", snapshotID.String())
 	}
 	return snap, nil
 }
 
 // ListSnapshots returns snapshot metadata ordered by creation time (newest first).
 func (s *Storage) ListSnapshots(ctx context.Context, limit, offset *uint32) ([]domain.SnapshotMetadata, error) {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
 	query := `SELECT snapshot_id, created_at, entry_count, trigger_type, name
 			  FROM snapshots ORDER BY created_at DESC`
 
@@ -98,22 +85,28 @@ func (s *Storage) ListSnapshots(ctx context.Context, limit, offset *uint32) ([]d
 	}
 
 	var metas []domain.SnapshotMetadata
-	err = sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
-		Args: args,
-		ResultFunc: func(stmt *sqlite.Stmt) error {
-			createdAt, parseErr := parseTime(stmt.ColumnText(1))
-			if parseErr != nil {
-				return parseErr
-			}
-			metas = append(metas, domain.SnapshotMetadata{
-				SnapshotID: stmt.ColumnText(0),
-				CreatedAt:  createdAt,
-				EntryCount: int32(stmt.ColumnInt(2)),
-				Trigger:    stmt.ColumnText(3),
-				Name:       columnTextPtr(stmt, 4),
-			})
-			return nil
-		},
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		return sqlitex.Execute(conn, query, &sqlitex.ExecOptions{
+			Args: args,
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				sid, parseErr := ulid.Parse(stmt.ColumnText(0))
+				if parseErr != nil {
+					return fmt.Errorf("parse snapshot_id %q: %w", stmt.ColumnText(0), parseErr)
+				}
+				createdAt, parseErr := parseTime(stmt.ColumnText(1))
+				if parseErr != nil {
+					return parseErr
+				}
+				metas = append(metas, domain.SnapshotMetadata{
+					SnapshotID: sid,
+					CreatedAt:  createdAt,
+					EntryCount: int32(stmt.ColumnInt(2)),
+					Trigger:    stmt.ColumnText(3),
+					Name:       columnTextPtr(stmt, 4),
+				})
+				return nil
+			},
+		})
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list snapshots: %w", err)
@@ -122,26 +115,21 @@ func (s *Storage) ListSnapshots(ctx context.Context, limit, offset *uint32) ([]d
 }
 
 // DeleteSnapshot removes a snapshot by ID.
-func (s *Storage) DeleteSnapshot(ctx context.Context, snapshotID string) error {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
-	err = sqlitex.Execute(conn,
-		`DELETE FROM snapshots WHERE snapshot_id = ?`,
-		&sqlitex.ExecOptions{
-			Args: []any{snapshotID},
-		})
-	if err != nil {
-		return fmt.Errorf("delete snapshot: %w", err)
-	}
-
-	if conn.Changes() == 0 {
-		return domain.ErrNotFound("snapshot", snapshotID)
-	}
-	return nil
+func (s *Storage) DeleteSnapshot(ctx context.Context, snapshotID ulid.ULID) error {
+	return s.withConn(ctx, func(conn *sqlite.Conn) error {
+		err := sqlitex.Execute(conn,
+			`DELETE FROM snapshots WHERE snapshot_id = ?`,
+			&sqlitex.ExecOptions{
+				Args: []any{snapshotID.String()},
+			})
+		if err != nil {
+			return fmt.Errorf("delete snapshot: %w", err)
+		}
+		if conn.Changes() == 0 {
+			return domain.ErrNotFound("snapshot", snapshotID.String())
+		}
+		return nil
+	})
 }
 
 // ApplyRetentionPolicy deletes snapshots exceeding count or age limits.
@@ -176,10 +164,13 @@ func (s *Storage) ApplyRetentionPolicy(ctx context.Context, maxCount *int, maxAg
 	}
 
 	if maxAgeDays != nil {
+		if *maxAgeDays <= 0 {
+			return 0, fmt.Errorf("maxAgeDays must be a positive integer, got %d", *maxAgeDays)
+		}
 		err = sqlitex.Execute(conn,
-			`DELETE FROM snapshots WHERE created_at < datetime('now', ? || ' days')`,
+			`DELETE FROM snapshots WHERE created_at < datetime('now', '-' || CAST(? AS TEXT) || ' days')`,
 			&sqlitex.ExecOptions{
-				Args: []any{fmt.Sprintf("-%d", *maxAgeDays)},
+				Args: []any{*maxAgeDays},
 			})
 		if err != nil {
 			return 0, fmt.Errorf("apply age retention: %w", err)
@@ -192,6 +183,11 @@ func (s *Storage) ApplyRetentionPolicy(ctx context.Context, maxCount *int, maxAg
 
 // scanSnapshot reads a full Snapshot from a query result row.
 func scanSnapshot(stmt *sqlite.Stmt) (*domain.Snapshot, error) {
+	snapshotID, err := ulid.Parse(stmt.ColumnText(0))
+	if err != nil {
+		return nil, fmt.Errorf("parse snapshot_id %q: %w", stmt.ColumnText(0), err)
+	}
+
 	createdAt, err := parseTime(stmt.ColumnText(1))
 	if err != nil {
 		return nil, err
@@ -199,15 +195,14 @@ func scanSnapshot(stmt *sqlite.Stmt) (*domain.Snapshot, error) {
 
 	hostsContent := stmt.ColumnText(2)
 	var entries []domain.HostEntry
-	if hostsContent != "" {
+	if hostsContent != "" && hostsContent[0] == '[' {
 		if unmarshalErr := json.Unmarshal([]byte(hostsContent), &entries); unmarshalErr != nil {
-			// Not JSON array — keep as raw string, no entries
-			entries = nil
+			return nil, fmt.Errorf("unmarshal snapshot entries: %w", unmarshalErr)
 		}
 	}
 
 	snap := &domain.Snapshot{
-		SnapshotID:       stmt.ColumnText(0),
+		SnapshotID:       snapshotID,
 		CreatedAt:        createdAt,
 		HostsContent:     hostsContent,
 		Entries:          entries,

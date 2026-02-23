@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
 
 	"github.com/fzymgc-house/router-hosts/internal/storage"
@@ -39,34 +40,38 @@ func (s *Storage) BackendName() string { return "sqlite" }
 
 // Initialize applies database migrations.
 func (s *Storage) Initialize(ctx context.Context) error {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
 	migrationSQL, err := migrations.ReadFile("migrations/001_initial.sql")
 	if err != nil {
 		return fmt.Errorf("read migration: %w", err)
 	}
-
-	if err := sqlitex.ExecuteScript(conn, string(migrationSQL), nil); err != nil {
-		return fmt.Errorf("apply migration: %w", err)
-	}
-	return nil
+	return s.withConn(ctx, func(conn *sqlite.Conn) error {
+		if err := sqlitex.ExecuteScript(conn, string(migrationSQL), nil); err != nil {
+			return fmt.Errorf("apply migration: %w", err)
+		}
+		return nil
+	})
 }
 
 // HealthCheck verifies the database connection is alive.
 func (s *Storage) HealthCheck(ctx context.Context) error {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return fmt.Errorf("health check: %w", err)
-	}
-	defer s.pool.Put(conn)
-	return sqlitex.ExecuteTransient(conn, "SELECT 1", nil)
+	return s.withConn(ctx, func(conn *sqlite.Conn) error {
+		return sqlitex.ExecuteTransient(conn, "SELECT 1", nil)
+	})
 }
 
 // Close releases the connection pool.
 func (s *Storage) Close() error {
 	return s.pool.Close()
+}
+
+// withConn acquires a connection from the pool, calls fn with it, and
+// returns the connection when done. Transaction management is the caller's
+// responsibility.
+func (s *Storage) withConn(ctx context.Context, fn func(*sqlite.Conn) error) error {
+	conn, err := s.pool.Take(ctx)
+	if err != nil {
+		return fmt.Errorf("take connection: %w", err)
+	}
+	defer s.pool.Put(conn)
+	return fn(conn)
 }

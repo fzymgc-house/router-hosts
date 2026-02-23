@@ -6,33 +6,76 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
+
+	"github.com/fzymgc-house/router-hosts/internal/validation"
 )
 
+// EventType is the discriminator for domain events. Only known constants are valid.
+type EventType string
+
+// Valid reports whether t is one of the known event type constants.
+func (t EventType) Valid() bool {
+	switch t {
+	case EventTypeHostCreated,
+		EventTypeIPAddressChanged,
+		EventTypeHostnameChanged,
+		EventTypeCommentUpdated,
+		EventTypeTagsModified,
+		EventTypeAliasesModified,
+		EventTypeHostDeleted,
+		EventTypeHostImported,
+		EventTypeSnapshotCreated,
+		EventTypeSnapshotRolledBack,
+		EventTypeSnapshotDeleted:
+		return true
+	}
+	return false
+}
+
+// UnmarshalJSON rejects unknown event type values.
+func (t *EventType) UnmarshalJSON(data []byte) error {
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+	candidate := EventType(s)
+	if !candidate.Valid() {
+		return fmt.Errorf("unknown event type: %q", s)
+	}
+	*t = candidate
+	return nil
+}
+
 // Event type discriminators matching Rust's serde tag values.
+//
+// The design spec defined 7 core event types (HostCreated through HostDeleted).
+// Four additional types were added beyond the original spec to support import
+// and snapshot operations: HostImported, SnapshotCreated, SnapshotRolledBack,
+// SnapshotDeleted.
 const (
-	EventTypeHostCreated        = "HostCreated"
-	EventTypeIPAddressChanged   = "IpAddressChanged"
-	EventTypeHostnameChanged    = "HostnameChanged"
-	EventTypeCommentUpdated     = "CommentUpdated"
-	EventTypeTagsModified       = "TagsModified"
-	EventTypeAliasesModified    = "AliasesModified"
-	EventTypeHostDeleted        = "HostDeleted"
-	EventTypeHostImported       = "HostImported"
-	EventTypeSnapshotCreated    = "SnapshotCreated"
-	EventTypeSnapshotRolledBack = "SnapshotRolledBack"
-	EventTypeSnapshotDeleted    = "SnapshotDeleted"
+	EventTypeHostCreated        EventType = "HostCreated"
+	EventTypeIPAddressChanged   EventType = "IpAddressChanged"
+	EventTypeHostnameChanged    EventType = "HostnameChanged"
+	EventTypeCommentUpdated     EventType = "CommentUpdated"
+	EventTypeTagsModified       EventType = "TagsModified"
+	EventTypeAliasesModified    EventType = "AliasesModified"
+	EventTypeHostDeleted        EventType = "HostDeleted"
+	EventTypeHostImported       EventType = "HostImported"
+	EventTypeSnapshotCreated    EventType = "SnapshotCreated"
+	EventTypeSnapshotRolledBack EventType = "SnapshotRolledBack"
+	EventTypeSnapshotDeleted    EventType = "SnapshotDeleted"
 )
 
 // HostEvent is a polymorphic domain event serialized with a "type" discriminator.
 // The Payload field holds the type-specific data as raw JSON.
 type HostEvent struct {
-	Type    string          `json:"type"`
+	Type    EventType       `json:"type"`
 	Payload json.RawMessage `json:"-"`
 }
 
 // hostEventJSON is the wire format combining type + payload fields.
 type hostEventJSON struct {
-	Type string `json:"type"`
+	Type EventType `json:"type"`
 }
 
 // MarshalJSON produces {"type":"...", ...payload_fields...}.
@@ -143,6 +186,15 @@ func (e *HostEvent) Decode() (any, error) {
 }
 
 // OccurredAt returns the timestamp from the underlying event payload.
+//
+// Each event type uses the field name most semantically appropriate for the
+// operation it represents: CreatedAt for HostCreated, ChangedAt for IP/hostname
+// changes, UpdatedAt for CommentUpdated, ModifiedAt for tags/aliases, DeletedAt
+// for HostDeleted, and OccurredAt for import and snapshot events. This is
+// intentional — using the most natural name per event improves readability when
+// working directly with typed events. OccurredAt() normalises them for callers
+// that need a uniform timestamp accessor without caring about the underlying
+// field name.
 func (e *HostEvent) OccurredAt() (time.Time, error) {
 	v, err := e.Decode()
 	if err != nil {
@@ -177,14 +229,27 @@ func (e *HostEvent) OccurredAt() (time.Time, error) {
 }
 
 // NewHostEvent creates a HostEvent from a typed event struct.
+// It validates IP and hostname fields on events that carry them.
 func NewHostEvent(v any) (HostEvent, error) {
-	var eventType string
-	switch v.(type) {
+	var eventType EventType
+	switch ev := v.(type) {
 	case HostCreated:
+		if err := validation.ValidateIPAddress(ev.IPAddress); err != nil {
+			return HostEvent{}, ErrValidation(err.Error())
+		}
+		if err := validation.ValidateHostname(ev.Hostname); err != nil {
+			return HostEvent{}, ErrValidation(err.Error())
+		}
 		eventType = EventTypeHostCreated
 	case IPAddressChanged:
+		if err := validation.ValidateIPAddress(ev.NewIP); err != nil {
+			return HostEvent{}, ErrValidation(err.Error())
+		}
 		eventType = EventTypeIPAddressChanged
 	case HostnameChanged:
+		if err := validation.ValidateHostname(ev.NewHostname); err != nil {
+			return HostEvent{}, ErrValidation(err.Error())
+		}
 		eventType = EventTypeHostnameChanged
 	case CommentUpdated:
 		eventType = EventTypeCommentUpdated
@@ -195,6 +260,12 @@ func NewHostEvent(v any) (HostEvent, error) {
 	case HostDeleted:
 		eventType = EventTypeHostDeleted
 	case HostImported:
+		if err := validation.ValidateIPAddress(ev.IPAddress); err != nil {
+			return HostEvent{}, ErrValidation(err.Error())
+		}
+		if err := validation.ValidateHostname(ev.Hostname); err != nil {
+			return HostEvent{}, ErrValidation(err.Error())
+		}
 		eventType = EventTypeHostImported
 	case SnapshotCreated:
 		eventType = EventTypeSnapshotCreated
@@ -282,7 +353,7 @@ type HostImported struct {
 
 // SnapshotCreated is emitted when a new snapshot is created.
 type SnapshotCreated struct {
-	SnapshotID string    `json:"snapshot_id"`
+	SnapshotID ulid.ULID `json:"snapshot_id"`
 	Name       string    `json:"name"`
 	Trigger    string    `json:"trigger"`
 	EntryCount int32     `json:"entry_count"`
@@ -291,14 +362,14 @@ type SnapshotCreated struct {
 
 // SnapshotRolledBack is emitted when a snapshot is rolled back.
 type SnapshotRolledBack struct {
-	SnapshotID      string    `json:"snapshot_id"`
+	SnapshotID      ulid.ULID `json:"snapshot_id"`
 	RestoredEntries int32     `json:"restored_entries"`
 	OccurredAt      time.Time `json:"occurred_at"`
 }
 
 // SnapshotDeleted is emitted when a snapshot is deleted.
 type SnapshotDeleted struct {
-	SnapshotID string    `json:"snapshot_id"`
+	SnapshotID ulid.ULID `json:"snapshot_id"`
 	OccurredAt time.Time `json:"occurred_at"`
 }
 
@@ -307,7 +378,7 @@ type EventEnvelope struct {
 	EventID     ulid.ULID `json:"event_id"`
 	AggregateID ulid.ULID `json:"aggregate_id"`
 	Event       HostEvent `json:"event"`
-	Version     string    `json:"event_version"`
+	Version     int64     `json:"event_version"`
 	CreatedAt   time.Time `json:"created_at"`
 	CreatedBy   *string   `json:"created_by,omitempty"`
 }

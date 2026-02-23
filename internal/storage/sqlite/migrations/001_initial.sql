@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS events (
     aggregate_id TEXT NOT NULL,
     event_type TEXT NOT NULL,
     event_data TEXT NOT NULL,
-    event_version TEXT NOT NULL,
+    event_version INTEGER NOT NULL,
     created_at TEXT NOT NULL,
     created_by TEXT
 );

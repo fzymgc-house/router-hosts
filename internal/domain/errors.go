@@ -56,13 +56,13 @@ func ErrDuplicate(ip, hostname string) error {
 }
 
 // ErrVersionConflict returns an oops error for optimistic concurrency failure.
-func ErrVersionConflict(aggregateID, expected, actual string) error {
+func ErrVersionConflict(aggregateID string, expected, actual int64) error {
 	return oops.
 		Code(CodeVersionConflict).
 		With("aggregate_id", aggregateID).
 		With("expected_version", expected).
 		With("actual_version", actual).
-		Errorf("version conflict on %s: expected %s, got %s", aggregateID, expected, actual)
+		Errorf("version conflict on %s: expected %d, got %d", aggregateID, expected, actual)
 }
 
 // ErrValidation returns an oops error for invalid input.

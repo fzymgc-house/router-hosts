@@ -333,7 +333,7 @@ func TestLoadServerConfig_WorldWritableRejected(t *testing.T) {
 
 	_, err = LoadServerConfig(path)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "world-writable")
+	assert.Contains(t, err.Error(), "unsafe permissions")
 }
 
 func TestLoadServerConfig_SecurePermissionsAccepted(t *testing.T) {

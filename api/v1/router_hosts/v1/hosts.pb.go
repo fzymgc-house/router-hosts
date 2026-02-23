@@ -478,7 +478,9 @@ type UpdateHostRequest struct {
 	ExpectedVersion *string `protobuf:"bytes,6,opt,name=expected_version,json=expectedVersion,proto3,oneof" json:"expected_version,omitempty"`
 	// New aliases (wrapper for optional semantics)
 	Aliases *AliasesUpdate `protobuf:"bytes,7,opt,name=aliases,proto3" json:"aliases,omitempty"`
-	// New tags (wrapper for optional semantics - breaking change from field 5)
+	// New tags (wrapper for optional semantics - moved from field 5)
+	// Use this field to update tags. To clear all tags, pass an empty TagsUpdate
+	// with no values. Omit this field to preserve existing tags.
 	Tags          *TagsUpdate `protobuf:"bytes,8,opt,name=tags,proto3" json:"tags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1261,8 +1263,8 @@ type CreateSnapshotResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Unique identifier for the newly created snapshot
 	SnapshotId string `protobuf:"bytes,1,opt,name=snapshot_id,json=snapshotId,proto3" json:"snapshot_id,omitempty"`
-	// Timestamp when snapshot was created (microseconds since epoch)
-	CreatedAt int64 `protobuf:"varint,2,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	// Timestamp when snapshot was created
+	CreatedAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	// Number of entries in the snapshot
 	EntryCount    int32 `protobuf:"varint,3,opt,name=entry_count,json=entryCount,proto3" json:"entry_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1306,11 +1308,11 @@ func (x *CreateSnapshotResponse) GetSnapshotId() string {
 	return ""
 }
 
-func (x *CreateSnapshotResponse) GetCreatedAt() int64 {
+func (x *CreateSnapshotResponse) GetCreatedAt() *timestamppb.Timestamp {
 	if x != nil {
 		return x.CreatedAt
 	}
-	return 0
+	return nil
 }
 
 func (x *CreateSnapshotResponse) GetEntryCount() int32 {
@@ -2363,12 +2365,12 @@ const file_router_hosts_v1_hosts_proto_rawDesc = "" +
 	"\x05chunk\x18\x01 \x01(\fR\x05chunk\"E\n" +
 	"\x15CreateSnapshotRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
-	"\atrigger\x18\x02 \x01(\tR\atrigger\"y\n" +
+	"\atrigger\x18\x02 \x01(\tR\atrigger\"\x95\x01\n" +
 	"\x16CreateSnapshotResponse\x12\x1f\n" +
 	"\vsnapshot_id\x18\x01 \x01(\tR\n" +
-	"snapshotId\x12\x1d\n" +
+	"snapshotId\x129\n" +
 	"\n" +
-	"created_at\x18\x02 \x01(\x03R\tcreatedAt\x12\x1f\n" +
+	"created_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12\x1f\n" +
 	"\ventry_count\x18\x03 \x01(\x05R\n" +
 	"entryCount\"\xb5\x01\n" +
 	"\bSnapshot\x12\x1f\n" +
@@ -2518,47 +2520,48 @@ var file_router_hosts_v1_hosts_proto_depIdxs = []int32{
 	0,  // 6: router_hosts.v1.UpdateHostResponse.entry:type_name -> router_hosts.v1.HostEntry
 	0,  // 7: router_hosts.v1.ListHostsResponse.entry:type_name -> router_hosts.v1.HostEntry
 	0,  // 8: router_hosts.v1.SearchHostsResponse.entry:type_name -> router_hosts.v1.HostEntry
-	38, // 9: router_hosts.v1.Snapshot.created_at:type_name -> google.protobuf.Timestamp
-	21, // 10: router_hosts.v1.ListSnapshotsResponse.snapshot:type_name -> router_hosts.v1.Snapshot
-	34, // 11: router_hosts.v1.HealthResponse.server:type_name -> router_hosts.v1.ServerInfo
-	35, // 12: router_hosts.v1.HealthResponse.database:type_name -> router_hosts.v1.DatabaseHealth
-	36, // 13: router_hosts.v1.HealthResponse.acme:type_name -> router_hosts.v1.AcmeHealth
-	37, // 14: router_hosts.v1.HealthResponse.hooks:type_name -> router_hosts.v1.HooksHealth
-	3,  // 15: router_hosts.v1.HostsService.AddHost:input_type -> router_hosts.v1.AddHostRequest
-	5,  // 16: router_hosts.v1.HostsService.GetHost:input_type -> router_hosts.v1.GetHostRequest
-	7,  // 17: router_hosts.v1.HostsService.UpdateHost:input_type -> router_hosts.v1.UpdateHostRequest
-	9,  // 18: router_hosts.v1.HostsService.DeleteHost:input_type -> router_hosts.v1.DeleteHostRequest
-	11, // 19: router_hosts.v1.HostsService.ListHosts:input_type -> router_hosts.v1.ListHostsRequest
-	13, // 20: router_hosts.v1.HostsService.SearchHosts:input_type -> router_hosts.v1.SearchHostsRequest
-	15, // 21: router_hosts.v1.HostsService.ImportHosts:input_type -> router_hosts.v1.ImportHostsRequest
-	17, // 22: router_hosts.v1.HostsService.ExportHosts:input_type -> router_hosts.v1.ExportHostsRequest
-	19, // 23: router_hosts.v1.HostsService.CreateSnapshot:input_type -> router_hosts.v1.CreateSnapshotRequest
-	22, // 24: router_hosts.v1.HostsService.ListSnapshots:input_type -> router_hosts.v1.ListSnapshotsRequest
-	24, // 25: router_hosts.v1.HostsService.RollbackToSnapshot:input_type -> router_hosts.v1.RollbackToSnapshotRequest
-	26, // 26: router_hosts.v1.HostsService.DeleteSnapshot:input_type -> router_hosts.v1.DeleteSnapshotRequest
-	28, // 27: router_hosts.v1.HostsService.Liveness:input_type -> router_hosts.v1.LivenessRequest
-	30, // 28: router_hosts.v1.HostsService.Readiness:input_type -> router_hosts.v1.ReadinessRequest
-	32, // 29: router_hosts.v1.HostsService.Health:input_type -> router_hosts.v1.HealthRequest
-	4,  // 30: router_hosts.v1.HostsService.AddHost:output_type -> router_hosts.v1.AddHostResponse
-	6,  // 31: router_hosts.v1.HostsService.GetHost:output_type -> router_hosts.v1.GetHostResponse
-	8,  // 32: router_hosts.v1.HostsService.UpdateHost:output_type -> router_hosts.v1.UpdateHostResponse
-	10, // 33: router_hosts.v1.HostsService.DeleteHost:output_type -> router_hosts.v1.DeleteHostResponse
-	12, // 34: router_hosts.v1.HostsService.ListHosts:output_type -> router_hosts.v1.ListHostsResponse
-	14, // 35: router_hosts.v1.HostsService.SearchHosts:output_type -> router_hosts.v1.SearchHostsResponse
-	16, // 36: router_hosts.v1.HostsService.ImportHosts:output_type -> router_hosts.v1.ImportHostsResponse
-	18, // 37: router_hosts.v1.HostsService.ExportHosts:output_type -> router_hosts.v1.ExportHostsResponse
-	20, // 38: router_hosts.v1.HostsService.CreateSnapshot:output_type -> router_hosts.v1.CreateSnapshotResponse
-	23, // 39: router_hosts.v1.HostsService.ListSnapshots:output_type -> router_hosts.v1.ListSnapshotsResponse
-	25, // 40: router_hosts.v1.HostsService.RollbackToSnapshot:output_type -> router_hosts.v1.RollbackToSnapshotResponse
-	27, // 41: router_hosts.v1.HostsService.DeleteSnapshot:output_type -> router_hosts.v1.DeleteSnapshotResponse
-	29, // 42: router_hosts.v1.HostsService.Liveness:output_type -> router_hosts.v1.LivenessResponse
-	31, // 43: router_hosts.v1.HostsService.Readiness:output_type -> router_hosts.v1.ReadinessResponse
-	33, // 44: router_hosts.v1.HostsService.Health:output_type -> router_hosts.v1.HealthResponse
-	30, // [30:45] is the sub-list for method output_type
-	15, // [15:30] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	38, // 9: router_hosts.v1.CreateSnapshotResponse.created_at:type_name -> google.protobuf.Timestamp
+	38, // 10: router_hosts.v1.Snapshot.created_at:type_name -> google.protobuf.Timestamp
+	21, // 11: router_hosts.v1.ListSnapshotsResponse.snapshot:type_name -> router_hosts.v1.Snapshot
+	34, // 12: router_hosts.v1.HealthResponse.server:type_name -> router_hosts.v1.ServerInfo
+	35, // 13: router_hosts.v1.HealthResponse.database:type_name -> router_hosts.v1.DatabaseHealth
+	36, // 14: router_hosts.v1.HealthResponse.acme:type_name -> router_hosts.v1.AcmeHealth
+	37, // 15: router_hosts.v1.HealthResponse.hooks:type_name -> router_hosts.v1.HooksHealth
+	3,  // 16: router_hosts.v1.HostsService.AddHost:input_type -> router_hosts.v1.AddHostRequest
+	5,  // 17: router_hosts.v1.HostsService.GetHost:input_type -> router_hosts.v1.GetHostRequest
+	7,  // 18: router_hosts.v1.HostsService.UpdateHost:input_type -> router_hosts.v1.UpdateHostRequest
+	9,  // 19: router_hosts.v1.HostsService.DeleteHost:input_type -> router_hosts.v1.DeleteHostRequest
+	11, // 20: router_hosts.v1.HostsService.ListHosts:input_type -> router_hosts.v1.ListHostsRequest
+	13, // 21: router_hosts.v1.HostsService.SearchHosts:input_type -> router_hosts.v1.SearchHostsRequest
+	15, // 22: router_hosts.v1.HostsService.ImportHosts:input_type -> router_hosts.v1.ImportHostsRequest
+	17, // 23: router_hosts.v1.HostsService.ExportHosts:input_type -> router_hosts.v1.ExportHostsRequest
+	19, // 24: router_hosts.v1.HostsService.CreateSnapshot:input_type -> router_hosts.v1.CreateSnapshotRequest
+	22, // 25: router_hosts.v1.HostsService.ListSnapshots:input_type -> router_hosts.v1.ListSnapshotsRequest
+	24, // 26: router_hosts.v1.HostsService.RollbackToSnapshot:input_type -> router_hosts.v1.RollbackToSnapshotRequest
+	26, // 27: router_hosts.v1.HostsService.DeleteSnapshot:input_type -> router_hosts.v1.DeleteSnapshotRequest
+	28, // 28: router_hosts.v1.HostsService.Liveness:input_type -> router_hosts.v1.LivenessRequest
+	30, // 29: router_hosts.v1.HostsService.Readiness:input_type -> router_hosts.v1.ReadinessRequest
+	32, // 30: router_hosts.v1.HostsService.Health:input_type -> router_hosts.v1.HealthRequest
+	4,  // 31: router_hosts.v1.HostsService.AddHost:output_type -> router_hosts.v1.AddHostResponse
+	6,  // 32: router_hosts.v1.HostsService.GetHost:output_type -> router_hosts.v1.GetHostResponse
+	8,  // 33: router_hosts.v1.HostsService.UpdateHost:output_type -> router_hosts.v1.UpdateHostResponse
+	10, // 34: router_hosts.v1.HostsService.DeleteHost:output_type -> router_hosts.v1.DeleteHostResponse
+	12, // 35: router_hosts.v1.HostsService.ListHosts:output_type -> router_hosts.v1.ListHostsResponse
+	14, // 36: router_hosts.v1.HostsService.SearchHosts:output_type -> router_hosts.v1.SearchHostsResponse
+	16, // 37: router_hosts.v1.HostsService.ImportHosts:output_type -> router_hosts.v1.ImportHostsResponse
+	18, // 38: router_hosts.v1.HostsService.ExportHosts:output_type -> router_hosts.v1.ExportHostsResponse
+	20, // 39: router_hosts.v1.HostsService.CreateSnapshot:output_type -> router_hosts.v1.CreateSnapshotResponse
+	23, // 40: router_hosts.v1.HostsService.ListSnapshots:output_type -> router_hosts.v1.ListSnapshotsResponse
+	25, // 41: router_hosts.v1.HostsService.RollbackToSnapshot:output_type -> router_hosts.v1.RollbackToSnapshotResponse
+	27, // 42: router_hosts.v1.HostsService.DeleteSnapshot:output_type -> router_hosts.v1.DeleteSnapshotResponse
+	29, // 43: router_hosts.v1.HostsService.Liveness:output_type -> router_hosts.v1.LivenessResponse
+	31, // 44: router_hosts.v1.HostsService.Readiness:output_type -> router_hosts.v1.ReadinessResponse
+	33, // 45: router_hosts.v1.HostsService.Health:output_type -> router_hosts.v1.HealthResponse
+	31, // [31:46] is the sub-list for method output_type
+	16, // [16:31] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_router_hosts_v1_hosts_proto_init() }

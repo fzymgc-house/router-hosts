@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
@@ -38,7 +39,11 @@ func newHostImportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			file, err := os.Open(args[0])
 			if err != nil {
@@ -55,6 +60,7 @@ func newHostImportCmd() *cobra.Command {
 			}
 
 			buf := make([]byte, importChunkSize)
+			firstChunk := true
 			for {
 				n, readErr := file.Read(buf)
 				if n > 0 {
@@ -63,14 +69,17 @@ func newHostImportCmd() *cobra.Command {
 						Chunk:     buf[:n],
 						LastChunk: isLast,
 					}
-					if format != "" {
-						req.Format = &format
-					}
-					if conflictMode != "" {
-						req.ConflictMode = &conflictMode
-					}
-					if force {
-						req.Force = &force
+					if firstChunk {
+						if format != "" {
+							req.Format = &format
+						}
+						if conflictMode != "" {
+							req.ConflictMode = &conflictMode
+						}
+						if force {
+							req.Force = &force
+						}
+						firstChunk = false
 					}
 
 					if sendErr := stream.Send(req); sendErr != nil {
@@ -146,7 +155,11 @@ func newHostExportCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			ctx, cancel := commandContext()
 			defer cancel()

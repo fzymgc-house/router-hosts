@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +48,7 @@ func TestNewHostEvent_AllTypes(t *testing.T) {
 	tests := []struct {
 		name     string
 		event    any
-		wantType string
+		wantType EventType
 	}{
 		{
 			name: "HostCreated",
@@ -130,7 +131,7 @@ func TestNewHostEvent_AllTypes(t *testing.T) {
 		{
 			name: "SnapshotCreated",
 			event: SnapshotCreated{
-				SnapshotID: "snap-001",
+				SnapshotID: ulid.Make(),
 				Name:       "pre-deploy",
 				Trigger:    "manual",
 				EntryCount: 42,
@@ -141,7 +142,7 @@ func TestNewHostEvent_AllTypes(t *testing.T) {
 		{
 			name: "SnapshotRolledBack",
 			event: SnapshotRolledBack{
-				SnapshotID:      "snap-001",
+				SnapshotID:      ulid.Make(),
 				RestoredEntries: 42,
 				OccurredAt:      now,
 			},
@@ -150,7 +151,7 @@ func TestNewHostEvent_AllTypes(t *testing.T) {
 		{
 			name: "SnapshotDeleted",
 			event: SnapshotDeleted{
-				SnapshotID: "snap-001",
+				SnapshotID: ulid.Make(),
 				OccurredAt: now,
 			},
 			wantType: EventTypeSnapshotDeleted,
@@ -255,9 +256,9 @@ func TestHostEvent_OccurredAt(t *testing.T) {
 		{"AliasesModified", AliasesModified{OldAliases: []string{}, NewAliases: []string{}, ModifiedAt: now}},
 		{"HostDeleted", HostDeleted{IPAddress: "1.1.1.1", Hostname: "h", DeletedAt: now}},
 		{"HostImported", HostImported{IPAddress: "1.1.1.1", Hostname: "h", Tags: []string{}, Aliases: []string{}, OccurredAt: now}},
-		{"SnapshotCreated", SnapshotCreated{SnapshotID: "s1", Name: "n", Trigger: "manual", EntryCount: 1, OccurredAt: now}},
-		{"SnapshotRolledBack", SnapshotRolledBack{SnapshotID: "s1", RestoredEntries: 1, OccurredAt: now}},
-		{"SnapshotDeleted", SnapshotDeleted{SnapshotID: "s1", OccurredAt: now}},
+		{"SnapshotCreated", SnapshotCreated{SnapshotID: ulid.Make(), Name: "n", Trigger: "manual", EntryCount: 1, OccurredAt: now}},
+		{"SnapshotRolledBack", SnapshotRolledBack{SnapshotID: ulid.Make(), RestoredEntries: 1, OccurredAt: now}},
+		{"SnapshotDeleted", SnapshotDeleted{SnapshotID: ulid.Make(), OccurredAt: now}},
 	}
 
 	for _, tt := range tests {
@@ -312,7 +313,7 @@ func TestSnapshotCreated_RoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	original := SnapshotCreated{
-		SnapshotID: "snap-abc-123",
+		SnapshotID: ulid.Make(),
 		Name:       "pre-deploy-v2",
 		Trigger:    "manual",
 		EntryCount: 150,
@@ -345,7 +346,7 @@ func TestSnapshotRolledBack_RoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	original := SnapshotRolledBack{
-		SnapshotID:      "snap-abc-123",
+		SnapshotID:      ulid.Make(),
 		RestoredEntries: 42,
 		OccurredAt:      now,
 	}
@@ -374,7 +375,7 @@ func TestSnapshotDeleted_RoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 
 	original := SnapshotDeleted{
-		SnapshotID: "snap-abc-123",
+		SnapshotID: ulid.Make(),
 		OccurredAt: now,
 	}
 
@@ -469,7 +470,7 @@ func TestHostEvent_UnmarshalJSON_InvalidJSON(t *testing.T) {
 func TestHostEvent_Decode_InvalidPayload(t *testing.T) {
 	tests := []struct {
 		name    string
-		evtType string
+		evtType EventType
 	}{
 		{"HostCreated", EventTypeHostCreated},
 		{"IPAddressChanged", EventTypeIPAddressChanged},

@@ -55,9 +55,9 @@ func TestErrDuplicate(t *testing.T) {
 }
 
 func TestErrVersionConflict(t *testing.T) {
-	err := ErrVersionConflict("agg-1", "v2", "v1")
+	err := ErrVersionConflict("agg-1", 2, 1)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "version conflict on agg-1: expected v2, got v1")
+	assert.Contains(t, err.Error(), "version conflict on agg-1: expected 2, got 1")
 
 	oopsErr, ok := oops.AsOops(err)
 	require.True(t, ok)

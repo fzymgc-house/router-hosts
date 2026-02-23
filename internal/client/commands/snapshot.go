@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/client/output"
@@ -35,7 +36,11 @@ func newSnapshotCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			req := &hostsv1.CreateSnapshotRequest{
 				Name:    name,
@@ -84,7 +89,11 @@ func newSnapshotListCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			req := &hostsv1.ListSnapshotsRequest{
 				Limit:  limit,
@@ -126,7 +135,11 @@ func newSnapshotRollbackCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			ctx, cancel := commandContext()
 			defer cancel()
@@ -162,7 +175,11 @@ func newSnapshotDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			defer func() { _ = c.Close() }()
+			defer func() {
+				if err := c.Close(); err != nil {
+					slog.Warn("closing client connection", "error", err)
+				}
+			}()
 
 			ctx, cancel := commandContext()
 			defer cancel()

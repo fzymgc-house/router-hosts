@@ -2,7 +2,9 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 
 	"github.com/oklog/ulid/v2"
@@ -42,7 +44,7 @@ func TestAddHost_HappyPath(t *testing.T) {
 	assert.Equal(t, "my host", *entry.Comment)
 	assert.Equal(t, []string{"web"}, entry.Tags)
 	assert.Equal(t, []string{"alias1.local"}, entry.Aliases)
-	assert.Equal(t, "1", entry.Version)
+	assert.Equal(t, int64(1), entry.Version)
 	assert.False(t, entry.CreatedAt.IsZero())
 }
 
@@ -108,7 +110,7 @@ func TestUpdateHost_IPChange(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "10.0.0.1", updated.IP)
-	assert.Equal(t, "2", updated.Version)
+	assert.Equal(t, int64(2), updated.Version)
 }
 
 func TestUpdateHost_HostnameChange(t *testing.T) {
@@ -122,7 +124,7 @@ func TestUpdateHost_HostnameChange(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Equal(t, "new.local", updated.Hostname)
-	assert.Equal(t, "2", updated.Version)
+	assert.Equal(t, int64(2), updated.Version)
 }
 
 func TestUpdateHost_CommentChange(t *testing.T) {
@@ -173,7 +175,7 @@ func TestUpdateHost_VersionConflict(t *testing.T) {
 
 	// Use wrong version
 	newIP := "10.0.0.1"
-	_, err = h.UpdateHost(ctx, entry.ID, &newIP, nil, nil, nil, nil, "999")
+	_, err = h.UpdateHost(ctx, entry.ID, &newIP, nil, nil, nil, nil, int64(999))
 	require.Error(t, err)
 
 	oopsErr, ok := oops.AsOops(err)
@@ -186,7 +188,7 @@ func TestUpdateHost_NotFound(t *testing.T) {
 
 	fakeID := ulid.Make()
 	newIP := "10.0.0.1"
-	_, err := h.UpdateHost(ctx, fakeID, &newIP, nil, nil, nil, nil, "")
+	_, err := h.UpdateHost(ctx, fakeID, &newIP, nil, nil, nil, nil, int64(0))
 	require.Error(t, err)
 
 	oopsErr, ok := oops.AsOops(err)
@@ -233,8 +235,8 @@ func TestUpdateHost_MultipleChanges(t *testing.T) {
 	assert.Equal(t, "10.0.0.1", updated.IP)
 	assert.Equal(t, "new.local", updated.Hostname)
 	assert.Equal(t, []string{"tag1"}, updated.Tags)
-	// Three changes: IP, hostname, tags → version 1 + 3 = "4"
-	assert.Equal(t, "4", updated.Version)
+	// Three changes: IP, hostname, tags → version 1 + 3 = 4
+	assert.Equal(t, int64(4), updated.Version)
 }
 
 // ---------- DeleteHost tests ----------
@@ -261,7 +263,7 @@ func TestDeleteHost_NotFound(t *testing.T) {
 	h, ctx := newTestHandler(t)
 
 	fakeID := ulid.Make()
-	err := h.DeleteHost(ctx, fakeID, "")
+	err := h.DeleteHost(ctx, fakeID, int64(0))
 	require.Error(t, err)
 
 	oopsErr, ok := oops.AsOops(err)
@@ -278,7 +280,7 @@ func TestDeleteHost_AlreadyDeleted(t *testing.T) {
 	require.NoError(t, h.DeleteHost(ctx, entry.ID, entry.Version))
 
 	// Second delete should fail (not found since it's soft-deleted)
-	err = h.DeleteHost(ctx, entry.ID, "2")
+	err = h.DeleteHost(ctx, entry.ID, int64(2))
 	require.Error(t, err)
 
 	oopsErr, ok := oops.AsOops(err)
@@ -398,25 +400,61 @@ func TestSearchHosts_ByTags(t *testing.T) {
 	assert.Equal(t, "host1.local", entries[0].Hostname)
 }
 
+// ---------- Concurrency tests ----------
+
+// TestCommandHandler_ConcurrentAddHost verifies that the MonotonicEntropy
+// source shared across goroutines in CommandHandler is safe under concurrent
+// use: no panics, no duplicate ULIDs, and every AddHost call succeeds.
+func TestCommandHandler_ConcurrentAddHost(t *testing.T) {
+	const goroutines = 20
+
+	// Each parallel sub-test gets its own in-memory DB identified by a unique
+	// URI so that concurrent runs within the same test binary do not collide.
+	h, ctx := newTestHandler(t)
+
+	type result struct {
+		entry *domain.HostEntry
+		err   error
+	}
+
+	results := make([]result, goroutines)
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+
+	for i := range goroutines {
+		go func(idx int) {
+			defer wg.Done()
+			ip := fmt.Sprintf("10.0.%d.%d", idx/256, idx%256)
+			hostname := fmt.Sprintf("host%d.concurrent.local", idx)
+			entry, err := h.AddHost(ctx, ip, hostname, nil, nil, nil)
+			results[idx] = result{entry: entry, err: err}
+		}(i)
+	}
+
+	wg.Wait()
+
+	// All calls must succeed with no errors.
+	seen := make(map[ulid.ULID]bool, goroutines)
+	for i, r := range results {
+		require.NoErrorf(t, r.err, "goroutine %d: AddHost failed", i)
+		require.NotNilf(t, r.entry, "goroutine %d: entry is nil", i)
+
+		// ULIDs must be unique across all concurrent calls.
+		require.Falsef(t, seen[r.entry.ID], "goroutine %d: duplicate ULID %s", i, r.entry.ID)
+		seen[r.entry.ID] = true
+	}
+
+	// Total stored events must equal the number of goroutines.
+	entries, err := h.ListHosts(ctx)
+	require.NoError(t, err)
+	assert.Len(t, entries, goroutines)
+}
+
 // ---------- nextVersion tests ----------
 
 func TestNextVersion(t *testing.T) {
-	v, err := nextVersion("")
-	require.NoError(t, err)
-	assert.Equal(t, "1", v)
-
-	v, err = nextVersion("1")
-	require.NoError(t, err)
-	assert.Equal(t, "2", v)
-
-	v, err = nextVersion("9")
-	require.NoError(t, err)
-	assert.Equal(t, "10", v)
-
-	v, err = nextVersion("99")
-	require.NoError(t, err)
-	assert.Equal(t, "100", v)
-
-	_, err = nextVersion("not-a-number")
-	assert.Error(t, err)
+	assert.Equal(t, int64(1), nextVersion(0))
+	assert.Equal(t, int64(2), nextVersion(1))
+	assert.Equal(t, int64(10), nextVersion(9))
+	assert.Equal(t, int64(100), nextVersion(99))
 }

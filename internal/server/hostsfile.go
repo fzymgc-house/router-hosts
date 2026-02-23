@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -109,12 +110,11 @@ func formatSuffix(comment *string, tags []string) string {
 
 // atomicWrite writes content to a temp file, fsyncs, then renames into place.
 func (g *HostsFileGenerator) atomicWrite(content string) error {
-	tmpPath := g.path + ".tmp"
-
-	f, err := os.Create(tmpPath)
+	f, err := os.CreateTemp(filepath.Dir(g.path), filepath.Base(g.path)+".tmp.*")
 	if err != nil {
 		return oops.Wrapf(err, "create temp hosts file")
 	}
+	tmpPath := f.Name()
 
 	_, writeErr := f.WriteString(content)
 	if writeErr != nil {

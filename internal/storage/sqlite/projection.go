@@ -16,55 +16,60 @@ import (
 
 // ListAll returns all non-deleted host entries by replaying events.
 func (s *Storage) ListAll(ctx context.Context) ([]domain.HostEntry, error) {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
-	aggIDs, err := getDistinctAggregateIDs(conn)
-	if err != nil {
-		return nil, err
-	}
-
 	var entries []domain.HostEntry
-	for _, aggID := range aggIDs {
-		events, loadErr := loadEventsForAggregate(conn, aggID)
-		if loadErr != nil {
-			return nil, loadErr
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		aggIDs, err := getDistinctAggregateIDs(conn)
+		if err != nil {
+			return err
 		}
-		entry := replayEvents(aggID, events)
-		if entry != nil && !entry.Deleted {
-			entries = append(entries, *entry)
+		for _, aggID := range aggIDs {
+			events, loadErr := loadEventsForAggregate(conn, aggID)
+			if loadErr != nil {
+				return loadErr
+			}
+			entry, replayErr := replayEvents(aggID, events)
+			if replayErr != nil {
+				return replayErr
+			}
+			if entry != nil && !entry.Deleted {
+				entries = append(entries, *entry)
+			}
 		}
-	}
-	return entries, nil
+		return nil
+	})
+	return entries, err
 }
 
 // GetByID returns a single host entry by replaying its events.
 func (s *Storage) GetByID(ctx context.Context, id ulid.ULID) (*domain.HostEntry, error) {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
-	events, err := loadEventsForAggregate(conn, id)
+	var entry *domain.HostEntry
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		events, loadErr := loadEventsForAggregate(conn, id)
+		if loadErr != nil {
+			return loadErr
+		}
+		if len(events) == 0 {
+			return domain.ErrNotFound("host", id.String())
+		}
+		var replayErr error
+		entry, replayErr = replayEvents(id, events)
+		if replayErr != nil {
+			return replayErr
+		}
+		if entry == nil || entry.Deleted {
+			return domain.ErrNotFound("host", id.String())
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	if len(events) == 0 {
-		return nil, domain.ErrNotFound("host", id.String())
-	}
-
-	entry := replayEvents(id, events)
-	if entry == nil || entry.Deleted {
-		return nil, domain.ErrNotFound("host", id.String())
 	}
 	return entry, nil
 }
 
 // FindByIPAndHostname finds a host entry matching the given IP and hostname.
+// Note: This is O(n) — it scans all events for all aggregates via ListAll and linearly searches them.
+// For better performance on large datasets, consider indexing by IP+hostname in the event store.
 func (s *Storage) FindByIPAndHostname(ctx context.Context, ip, hostname string) (*domain.HostEntry, error) {
 	entries, err := s.ListAll(ctx)
 	if err != nil {
@@ -100,49 +105,48 @@ func (s *Storage) Search(ctx context.Context, filter domain.SearchFilter) ([]dom
 
 // GetAtTime returns the state of all hosts at a specific point in time.
 func (s *Storage) GetAtTime(ctx context.Context, at time.Time) ([]domain.HostEntry, error) {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
-	aggIDs, err := getDistinctAggregateIDs(conn)
-	if err != nil {
-		return nil, err
-	}
-
 	var entries []domain.HostEntry
-	for _, aggID := range aggIDs {
-		events, loadErr := loadEventsForAggregate(conn, aggID)
-		if loadErr != nil {
-			return nil, loadErr
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		aggIDs, getErr := getDistinctAggregateIDs(conn)
+		if getErr != nil {
+			return getErr
 		}
+		for _, aggID := range aggIDs {
+			events, loadErr := loadEventsForAggregate(conn, aggID)
+			if loadErr != nil {
+				return loadErr
+			}
 
-		// Filter events to only those created at or before the target time
-		var filtered []domain.EventEnvelope
-		for _, env := range events {
-			if !env.CreatedAt.After(at) {
-				filtered = append(filtered, env)
+			// Filter events to only those created at or before the target time.
+			var filtered []domain.EventEnvelope
+			for _, env := range events {
+				if !env.CreatedAt.After(at) {
+					filtered = append(filtered, env)
+				}
+			}
+
+			if len(filtered) == 0 {
+				continue
+			}
+
+			entry, replayErr := replayEvents(aggID, filtered)
+			if replayErr != nil {
+				return replayErr
+			}
+			if entry != nil && !entry.Deleted {
+				entries = append(entries, *entry)
 			}
 		}
-
-		if len(filtered) == 0 {
-			continue
-		}
-
-		entry := replayEvents(aggID, filtered)
-		if entry != nil && !entry.Deleted {
-			entries = append(entries, *entry)
-		}
-	}
-	return entries, nil
+		return nil
+	})
+	return entries, err
 }
 
 // replayEvents applies events sequentially to build a HostEntry.
 // This is the core of the event sourcing pattern.
-func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) *domain.HostEntry {
+func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) (*domain.HostEntry, error) {
 	if len(events) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	var entry *domain.HostEntry
@@ -150,7 +154,7 @@ func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) *domain.
 	for _, env := range events {
 		decoded, err := env.Event.Decode()
 		if err != nil {
-			continue
+			return nil, fmt.Errorf("decode event %s for aggregate %s: %w", env.EventID, aggregateID, err)
 		}
 
 		switch ev := decoded.(type) {
@@ -224,7 +228,7 @@ func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) *domain.
 		}
 	}
 
-	return entry
+	return entry, nil
 }
 
 // matchesFilter checks if a host entry matches the search filter criteria.

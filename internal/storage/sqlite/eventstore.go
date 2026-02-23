@@ -10,23 +10,25 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/samber/oops"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
 const timeFormat = "2006-01-02T15:04:05.000Z"
 
 // AppendEvent appends a single event with optimistic concurrency control.
-func (s *Storage) AppendEvent(ctx context.Context, aggregateID ulid.ULID, event domain.EventEnvelope, expectedVersion string) error {
+func (s *Storage) AppendEvent(ctx context.Context, aggregateID ulid.ULID, event domain.EventEnvelope, expectedVersion int64) error {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
-		return fmt.Errorf("take connection: %w", err)
+		return oops.Wrapf(err, "take connection")
 	}
 	defer s.pool.Put(conn)
 
 	endFn, err := sqlitex.ImmediateTransaction(conn)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return oops.Wrapf(err, "begin transaction")
 	}
 	defer endFn(&err)
 
@@ -42,16 +44,16 @@ func (s *Storage) AppendEvent(ctx context.Context, aggregateID ulid.ULID, event 
 }
 
 // AppendEvents appends multiple events atomically with optimistic concurrency control.
-func (s *Storage) AppendEvents(ctx context.Context, aggregateID ulid.ULID, events []domain.EventEnvelope, expectedVersion string) error {
+func (s *Storage) AppendEvents(ctx context.Context, aggregateID ulid.ULID, events []domain.EventEnvelope, expectedVersion int64) error {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
-		return fmt.Errorf("take connection: %w", err)
+		return oops.Wrapf(err, "take connection")
 	}
 	defer s.pool.Put(conn)
 
 	endFn, err := sqlitex.ImmediateTransaction(conn)
 	if err != nil {
-		return fmt.Errorf("begin transaction: %w", err)
+		return oops.Wrapf(err, "begin transaction")
 	}
 	defer endFn(&err)
 
@@ -68,92 +70,110 @@ func (s *Storage) AppendEvents(ctx context.Context, aggregateID ulid.ULID, event
 	return nil
 }
 
-// LoadEvents returns all events for an aggregate ordered by version.
-func (s *Storage) LoadEvents(ctx context.Context, aggregateID ulid.ULID) ([]domain.EventEnvelope, error) {
+// AppendEventsBatch writes events for multiple aggregates atomically in a
+// single SQLite transaction. If any individual write fails (including a
+// version conflict), the entire transaction is rolled back.
+func (s *Storage) AppendEventsBatch(ctx context.Context, batch []storage.AggregateEvents) error {
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("take connection: %w", err)
+		return oops.Wrapf(err, "take connection")
 	}
 	defer s.pool.Put(conn)
 
-	var events []domain.EventEnvelope
-	err = sqlitex.Execute(conn,
-		`SELECT event_id, aggregate_id, event_type, event_data, event_version, created_at, created_by
-		 FROM events WHERE aggregate_id = ? ORDER BY event_version ASC`,
-		&sqlitex.ExecOptions{
-			Args: []any{aggregateID.String()},
-			ResultFunc: func(stmt *sqlite.Stmt) error {
-				env, scanErr := scanEventEnvelope(stmt)
-				if scanErr != nil {
-					return scanErr
-				}
-				events = append(events, env)
-				return nil
-			},
-		})
+	endFn, err := sqlitex.ImmediateTransaction(conn)
 	if err != nil {
-		return nil, fmt.Errorf("load events: %w", err)
+		return oops.Wrapf(err, "begin transaction")
+	}
+	defer endFn(&err)
+
+	for _, ag := range batch {
+		if err = checkVersion(conn, ag.AggregateID, ag.ExpectedVersion); err != nil {
+			return err
+		}
+		for _, event := range ag.Events {
+			if err = insertEvent(conn, event); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+// LoadEvents returns all events for an aggregate ordered by version.
+func (s *Storage) LoadEvents(ctx context.Context, aggregateID ulid.ULID) ([]domain.EventEnvelope, error) {
+	var events []domain.EventEnvelope
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		return sqlitex.Execute(conn,
+			`SELECT event_id, aggregate_id, event_type, event_data, event_version, created_at, created_by
+			 FROM events WHERE aggregate_id = ? ORDER BY event_version ASC`,
+			&sqlitex.ExecOptions{
+				Args: []any{aggregateID.String()},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					env, scanErr := scanEventEnvelope(stmt)
+					if scanErr != nil {
+						return scanErr
+					}
+					events = append(events, env)
+					return nil
+				},
+			})
+	})
+	if err != nil {
+		return nil, oops.Wrapf(err, "load events for aggregate %s", aggregateID)
 	}
 	return events, nil
 }
 
-// GetCurrentVersion returns the latest event version for an aggregate, or empty string if none.
-func (s *Storage) GetCurrentVersion(ctx context.Context, aggregateID ulid.ULID) (string, error) {
-	conn, err := s.pool.Take(ctx)
+// GetCurrentVersion returns the latest event version for an aggregate, or 0 if none.
+func (s *Storage) GetCurrentVersion(ctx context.Context, aggregateID ulid.ULID) (int64, error) {
+	var version int64
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		return sqlitex.Execute(conn,
+			`SELECT event_version FROM events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1`,
+			&sqlitex.ExecOptions{
+				Args: []any{aggregateID.String()},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					version = stmt.ColumnInt64(0)
+					return nil
+				},
+			})
+	})
 	if err != nil {
-		return "", fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
-	var version string
-	err = sqlitex.Execute(conn,
-		`SELECT event_version FROM events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1`,
-		&sqlitex.ExecOptions{
-			Args: []any{aggregateID.String()},
-			ResultFunc: func(stmt *sqlite.Stmt) error {
-				version = stmt.ColumnText(0)
-				return nil
-			},
-		})
-	if err != nil {
-		return "", fmt.Errorf("get current version: %w", err)
+		return 0, oops.Wrapf(err, "get current version for aggregate %s", aggregateID)
 	}
 	return version, nil
 }
 
 // CountEvents returns the number of events for an aggregate.
 func (s *Storage) CountEvents(ctx context.Context, aggregateID ulid.ULID) (int64, error) {
-	conn, err := s.pool.Take(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("take connection: %w", err)
-	}
-	defer s.pool.Put(conn)
-
 	var count int64
-	err = sqlitex.Execute(conn,
-		`SELECT COUNT(*) FROM events WHERE aggregate_id = ?`,
-		&sqlitex.ExecOptions{
-			Args: []any{aggregateID.String()},
-			ResultFunc: func(stmt *sqlite.Stmt) error {
-				count = stmt.ColumnInt64(0)
-				return nil
-			},
-		})
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		return sqlitex.Execute(conn,
+			`SELECT COUNT(*) FROM events WHERE aggregate_id = ?`,
+			&sqlitex.ExecOptions{
+				Args: []any{aggregateID.String()},
+				ResultFunc: func(stmt *sqlite.Stmt) error {
+					count = stmt.ColumnInt64(0)
+					return nil
+				},
+			})
+	})
 	if err != nil {
-		return 0, fmt.Errorf("count events: %w", err)
+		return 0, oops.Wrapf(err, "count events for aggregate %s", aggregateID)
 	}
 	return count, nil
 }
 
 // checkVersion verifies optimistic concurrency by comparing expected vs actual version.
-func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion string) error {
-	var actual string
+func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion int64) error {
+	var actual int64
 	err := sqlitex.Execute(conn,
 		`SELECT event_version FROM events WHERE aggregate_id = ? ORDER BY event_version DESC LIMIT 1`,
 		&sqlitex.ExecOptions{
 			Args: []any{aggregateID.String()},
 			ResultFunc: func(stmt *sqlite.Stmt) error {
-				actual = stmt.ColumnText(0)
+				actual = stmt.ColumnInt64(0)
 				return nil
 			},
 		})
@@ -211,7 +231,7 @@ func scanEventEnvelope(stmt *sqlite.Stmt) (domain.EventEnvelope, error) {
 		return env, fmt.Errorf("unmarshal event_data: %w", err)
 	}
 
-	env.Version = stmt.ColumnText(4)
+	env.Version = stmt.ColumnInt64(4)
 
 	createdAt, err := parseTime(stmt.ColumnText(5))
 	if err != nil {
