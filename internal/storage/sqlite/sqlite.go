@@ -16,9 +16,20 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// ConnPool abstracts SQLite connection pool operations for testability.
+// The real implementation is *sqlitex.Pool; tests may substitute a mock.
+type ConnPool interface {
+	Take(ctx context.Context) (*sqlite.Conn, error)
+	Put(conn *sqlite.Conn)
+	Close() error
+}
+
+// Compile-time check that *sqlitex.Pool satisfies ConnPool.
+var _ ConnPool = (*sqlitex.Pool)(nil)
+
 // Storage implements storage.Storage backed by SQLite (pure Go, no CGo).
 type Storage struct {
-	pool *sqlitex.Pool
+	pool ConnPool
 	log  *slog.Logger
 }
 

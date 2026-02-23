@@ -1741,6 +1741,94 @@ func TestService_ImportHosts_ReplaceConflict_NilExisting(t *testing.T) {
 	assert.NotContains(t, finalResp.ValidationErrors[0], "<nil>")
 }
 
+// storageWithFindError wraps a real Storage and overrides FindByIPAndHostname
+// to always return (nil, error) — simulating a storage failure during lookup.
+// Used only in tests.
+type storageWithFindError struct {
+	storage.Storage
+	findErr error
+}
+
+func (s *storageWithFindError) FindByIPAndHostname(_ context.Context, _, _ string) (*domain.HostEntry, error) {
+	return nil, s.findErr
+}
+
+// TestService_ImportHosts_ReplaceConflict_FindError verifies that when the
+// replace-mode handler receives an error from FindByIPAndHostname the entry is
+// counted as failed and the validation error message contains the phrase
+// "storage error looking up existing entry" (Finding 133.233).
+func TestService_ImportHosts_ReplaceConflict_FindError(t *testing.T) {
+	ctx := context.Background()
+
+	realStore, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, realStore.Initialize(ctx))
+	t.Cleanup(func() { _ = realStore.Close() })
+
+	// Pre-create the entry so AddHost will return a duplicate error during import.
+	handler := NewCommandHandler(realStore)
+	_, err = handler.AddHost(ctx, "192.168.5.2", "err.local", nil, nil, nil)
+	require.NoError(t, err)
+
+	// Wrap the store so FindByIPAndHostname returns an error.
+	errFindStore := &storageWithFindError{
+		Storage: realStore,
+		findErr: errors.New("storage down"),
+	}
+
+	hostsGen := NewHostsFileGenerator("/dev/null")
+	svc := NewHostsServiceImpl(handler, errFindStore, WithHostsGenerator(hostsGen))
+
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	hostsv1.RegisterHostsServiceServer(srv, svc)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.Stop() })
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	client := hostsv1.NewHostsServiceClient(conn)
+
+	hostsData := "192.168.5.2\terr.local\n"
+	format := "hosts"
+	mode := "replace"
+
+	stream, err := client.ImportHosts(ctx)
+	require.NoError(t, err)
+
+	err = stream.Send(&hostsv1.ImportHostsRequest{
+		Chunk:        []byte(hostsData),
+		LastChunk:    true,
+		Format:       &format,
+		ConflictMode: &mode,
+	})
+	require.NoError(t, err)
+	require.NoError(t, stream.CloseSend())
+
+	var finalResp *hostsv1.ImportHostsResponse
+	for {
+		resp, recvErr := stream.Recv()
+		if errors.Is(recvErr, io.EOF) {
+			break
+		}
+		require.NoError(t, recvErr)
+		finalResp = resp
+	}
+
+	require.NotNil(t, finalResp)
+	assert.Equal(t, int32(1), finalResp.Failed, "entry should fail when FindByIPAndHostname errors")
+	require.Len(t, finalResp.ValidationErrors, 1)
+	assert.Contains(t, finalResp.ValidationErrors[0], "storage error looking up existing entry")
+}
+
 func TestMapError_SanitizesInternalErrors(t *testing.T) {
 	tests := []struct {
 		name        string

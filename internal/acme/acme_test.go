@@ -1048,6 +1048,32 @@ func TestRunRenewalCheck_ErrorPath(t *testing.T) {
 	m.runRenewalCheck(context.Background())
 }
 
+func TestRunRenewalCheck_ErrorPath_WithHandler(t *testing.T) {
+	acmeCfg := testACMEConfig(t)
+	tlsCfg := testTLSConfig(t)
+
+	wantErr := errors.New("simulated obtain failure")
+	failObtain := func(_ context.Context, _ []string) (*certificate.Resource, error) {
+		return nil, wantErr
+	}
+
+	var handlerErr error
+	handler := func(err error) {
+		handlerErr = err
+	}
+
+	m, err := NewManager(acmeCfg, tlsCfg, testLogger(), nil,
+		WithObtainFunc(failObtain),
+		WithRenewErrorHandler(handler),
+	)
+	require.NoError(t, err)
+
+	m.runRenewalCheck(context.Background())
+
+	require.Error(t, handlerErr)
+	assert.Contains(t, handlerErr.Error(), wantErr.Error())
+}
+
 // --- ObtainCertificate error path tests ---
 
 func TestObtainCertificate_ObtainFuncError(t *testing.T) {

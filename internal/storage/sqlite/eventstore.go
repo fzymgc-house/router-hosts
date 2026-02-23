@@ -192,7 +192,7 @@ func insertEvent(conn *sqlite.Conn, env domain.EventEnvelope) error {
 		return oops.Wrapf(err, "marshal event")
 	}
 
-	return sqlitex.Execute(conn,
+	if err := sqlitex.Execute(conn,
 		`INSERT INTO events (event_id, aggregate_id, event_type, event_data, event_version, created_at, created_by)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		&sqlitex.ExecOptions{
@@ -205,7 +205,10 @@ func insertEvent(conn *sqlite.Conn, env domain.EventEnvelope) error {
 				env.CreatedAt.UTC().Format(timeFormat),
 				ptrToAny(env.CreatedBy),
 			},
-		})
+		}); err != nil {
+		return oops.Wrapf(err, "insert event %s for aggregate %s", env.EventID, env.AggregateID)
+	}
+	return nil
 }
 
 // scanEventEnvelope reads an EventEnvelope from a query result row.
