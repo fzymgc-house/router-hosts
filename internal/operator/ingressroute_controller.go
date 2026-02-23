@@ -123,7 +123,10 @@ func (r *IngressRouteReconciler) reconcileUpsert(ctx context.Context, log *slog.
 		return ctrl.Result{}, nil
 	}
 
-	existingIDs := getHostIDsAnnotation(log, obj)
+	existingIDs, err := getHostIDsAnnotation(log, obj)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, err
+	}
 	newIDs := make(map[string]string) // hostname -> hostID
 
 	comment := fmt.Sprintf("k8s-ingress:%s/%s", obj.GetNamespace(), obj.GetName())
@@ -191,7 +194,10 @@ func (r *IngressRouteReconciler) reconcileDelete(ctx context.Context, log *slog.
 		return ctrl.Result{}, nil
 	}
 
-	existingIDs := getHostIDsAnnotation(log, obj)
+	existingIDs, err := getHostIDsAnnotation(log, obj)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, err
+	}
 	for hostname, id := range existingIDs {
 		log.Info("deleting host entry for deleted IngressRoute", "hostname", hostname, "hostId", id)
 		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
@@ -271,23 +277,25 @@ func appendRegexMatches(dst []string, re *regexp.Regexp, s string) []string {
 }
 
 // getHostIDsAnnotation reads the hostname -> hostID mapping from the
-// object's annotations.
-func getHostIDsAnnotation(log *slog.Logger, obj *unstructured.Unstructured) map[string]string {
+// object's annotations. It returns an error if the annotation is present
+// but contains corrupt JSON, preventing callers from proceeding with an
+// incomplete view of existing host IDs.
+func getHostIDsAnnotation(log *slog.Logger, obj *unstructured.Unstructured) (map[string]string, error) {
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
-		return nil
+		return nil, nil
 	}
 	raw, ok := annotations[hostIDsAnnotation]
 	if !ok || raw == "" {
-		return nil
+		return nil, nil
 	}
 	var ids map[string]string
 	if err := json.Unmarshal([]byte(raw), &ids); err != nil {
 		log.Error("corrupt host-ids annotation, host entries may be orphaned",
 			"error", err, "object", obj.GetName())
-		return nil
+		return nil, err
 	}
-	return ids
+	return ids, nil
 }
 
 // setHostIDsAnnotation stores the hostname -> hostID mapping as a JSON
@@ -301,7 +309,7 @@ func setHostIDsAnnotation(obj *unstructured.Unstructured, ids map[string]string)
 	}
 	data, err := json.Marshal(ids)
 	if err != nil {
-		return fmt.Errorf("marshaling host IDs annotation: %w", err)
+		return oops.Wrapf(err, "marshaling host IDs annotation")
 	}
 	annotations := obj.GetAnnotations()
 	if annotations == nil {

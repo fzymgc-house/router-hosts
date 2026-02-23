@@ -3,9 +3,10 @@ package server
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"sync"
+
+	"github.com/samber/oops"
 )
 
 // ErrQueueStopped is returned by Submit when the queue has been stopped.
@@ -92,7 +93,7 @@ func (q *WriteQueue) Submit(ctx context.Context, fn func() error) error {
 		select {
 		case q.ch <- cmd:
 		case <-ctx.Done():
-			return fmt.Errorf("write queue submit: %w", ctx.Err())
+			return oops.Wrapf(ctx.Err(), "write queue submit")
 		case <-q.done:
 			return ErrQueueStopped
 		}
@@ -102,7 +103,7 @@ func (q *WriteQueue) Submit(ctx context.Context, fn func() error) error {
 	case err := <-result:
 		return err
 	case <-ctx.Done():
-		return fmt.Errorf("write queue result: %w", ctx.Err())
+		return oops.Wrapf(ctx.Err(), "write queue result")
 	case <-q.done:
 		return ErrQueueStopped
 	}

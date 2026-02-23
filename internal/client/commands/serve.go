@@ -2,11 +2,11 @@ package commands
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"time"
 
+	"github.com/samber/oops"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 
@@ -45,18 +45,18 @@ func runServe(ctx context.Context, configPath string) error {
 	// Load config
 	cfg, err := config.LoadServerConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("load config: %w", err)
+		return oops.Wrapf(err, "load config")
 	}
 
 	// Initialize SQLite storage
 	dbPath, err := cfg.Database.ResolveDBPath()
 	if err != nil {
-		return fmt.Errorf("resolve database path: %w", err)
+		return oops.Wrapf(err, "resolve database path")
 	}
 
 	store, err := sqlite.New(dbPath, logger)
 	if err != nil {
-		return fmt.Errorf("open database: %w", err)
+		return oops.Wrapf(err, "open database")
 	}
 	defer func() {
 		if cerr := store.Close(); cerr != nil {
@@ -65,7 +65,7 @@ func runServe(ctx context.Context, configPath string) error {
 	}()
 
 	if err := store.Initialize(ctx); err != nil {
-		return fmt.Errorf("initialize database: %w", err)
+		return oops.Wrapf(err, "initialize database")
 	}
 
 	// Create write queue and command handler
@@ -120,7 +120,7 @@ func runServe(ctx context.Context, configPath string) error {
 	if cfg.Metrics != nil && cfg.Metrics.OTel != nil {
 		metrics, err = server.NewMetricsFromConfig(cfg.Metrics.OTel)
 		if err != nil {
-			return fmt.Errorf("setup metrics: %w", err)
+			return oops.Wrapf(err, "setup metrics")
 		}
 		defer func() {
 			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -139,7 +139,7 @@ func runServe(ctx context.Context, configPath string) error {
 	// Create and configure gRPC server
 	srv, err := server.NewServer(*cfg, store, logger, serverOpts...)
 	if err != nil {
-		return fmt.Errorf("create server: %w", err)
+		return oops.Wrapf(err, "create server")
 	}
 
 	hostsv1.RegisterHostsServiceServer(srv.GRPCServer(), svc)

@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -14,10 +13,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/samber/oops"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
+	"github.com/fzymgc-house/router-hosts/internal/domain"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
@@ -76,7 +77,7 @@ func NewServer(cfg config.Config, store storage.Storage, logger *slog.Logger, op
 
 	tlsConfig, err := s.buildTLSConfig()
 	if err != nil {
-		return nil, fmt.Errorf("configure TLS: %w", err)
+		return nil, oops.Code(domain.CodeInternal).Wrapf(err, "configure TLS")
 	}
 
 	creds := credentials.NewTLS(tlsConfig)
@@ -102,7 +103,7 @@ func (s *Server) Run(ctx context.Context) error {
 	if s.listener == nil {
 		lis, err := net.Listen("tcp", s.cfg.Server.BindAddress)
 		if err != nil {
-			return fmt.Errorf("listen on %s: %w", s.cfg.Server.BindAddress, err)
+			return oops.Code(domain.CodeInternal).Wrapf(err, "listen on %s", s.cfg.Server.BindAddress)
 		}
 		s.listener = lis
 	}
@@ -185,7 +186,7 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 	// Load server cert
 	cert, err := tls.LoadX509KeyPair(s.certPath, s.keyPath)
 	if err != nil {
-		return nil, fmt.Errorf("load server certificate: %w", err)
+		return nil, oops.Code(domain.CodeInternal).Wrapf(err, "load server certificate")
 	}
 	s.mu.Lock()
 	s.cert = &cert
@@ -194,11 +195,11 @@ func (s *Server) buildTLSConfig() (*tls.Config, error) {
 	// Load CA for client verification
 	caCert, err := os.ReadFile(s.cfg.TLS.CACertPath)
 	if err != nil {
-		return nil, fmt.Errorf("read CA certificate: %w", err)
+		return nil, oops.Code(domain.CodeInternal).Wrapf(err, "read CA certificate")
 	}
 	caPool := x509.NewCertPool()
 	if !caPool.AppendCertsFromPEM(caCert) {
-		return nil, fmt.Errorf("failed to parse CA certificate")
+		return nil, oops.Code(domain.CodeInternal).Errorf("failed to parse CA certificate")
 	}
 
 	return &tls.Config{
@@ -221,7 +222,7 @@ func (s *Server) getCertificate(_ *tls.ClientHelloInfo) (*tls.Certificate, error
 func (s *Server) reloadCert() error {
 	cert, err := tls.LoadX509KeyPair(s.certPath, s.keyPath)
 	if err != nil {
-		return fmt.Errorf("reload certificate: %w", err)
+		return oops.Code(domain.CodeInternal).Wrapf(err, "reload certificate")
 	}
 	s.mu.Lock()
 	s.cert = &cert

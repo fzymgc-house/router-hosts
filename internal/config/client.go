@@ -1,13 +1,15 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/samber/oops"
+
+	"github.com/fzymgc-house/router-hosts/internal/domain"
 )
 
 // ClientConfig holds the client connection settings.
@@ -70,7 +72,7 @@ func LoadClientConfig(overrides *ClientConfigOverrides) (*ClientConfig, error) {
 // validate checks that all required fields are set.
 func (c *ClientConfig) validate() error {
 	if c.ServerAddress == "" {
-		return fmt.Errorf("client config: server_address is required")
+		return oops.Code(domain.CodeValidation).Errorf("client config: server_address is required")
 	}
 	return nil
 }
@@ -79,20 +81,20 @@ func (c *ClientConfig) validate() error {
 func loadClientConfigFile(path string) (*ClientConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read client config: %w", err)
+		return nil, oops.Wrapf(err, "read client config")
 	}
 
 	var cfg ClientConfig
 	meta, err := toml.Decode(string(data), &cfg)
 	if err != nil {
-		return nil, fmt.Errorf("parse client config: %w", err)
+		return nil, oops.Wrapf(err, "parse client config")
 	}
 	if keys := meta.Undecoded(); len(keys) > 0 {
 		strs := make([]string, len(keys))
 		for i, k := range keys {
 			strs[i] = k.String()
 		}
-		return nil, fmt.Errorf("client config: unknown keys: [%s]", strings.Join(strs, ", "))
+		return nil, oops.Code(domain.CodeValidation).Errorf("client config: unknown keys: [%s]", strings.Join(strs, ", "))
 	}
 	return &cfg, nil
 }
@@ -109,7 +111,7 @@ func findClientConfigFile() (string, error) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("no client config file found")
+	return "", oops.Errorf("no client config file found")
 }
 
 // clientConfigSearchPaths returns the ordered list of paths to search.

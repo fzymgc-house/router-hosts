@@ -2,14 +2,16 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/samber/oops"
+
 	"github.com/fzymgc-house/router-hosts/internal/config"
+	"github.com/fzymgc-house/router-hosts/internal/domain"
 )
 
 // HookExecutor runs post-edit shell hooks sequentially.
@@ -99,7 +101,7 @@ func (h *HookExecutor) executeHook(ctx context.Context, hook config.HookDefiniti
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("hook %q: %w (output: %s)", hook.Name, err, string(output))
+		return oops.Code(domain.CodeInternal).Wrapf(err, "hook %q (output: %s)", hook.Name, string(output))
 	}
 	return nil
 }

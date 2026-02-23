@@ -138,6 +138,56 @@ func TestHookExecutor_FailureHooksWithError(t *testing.T) {
 	assert.Contains(t, content, "ROUTER_HOSTS_ERROR=disk full")
 }
 
+func TestHookExecutor_ErrorMessageSanitization(t *testing.T) {
+	dir := t.TempDir()
+	envFile := filepath.Join(dir, "sanitized-env.txt")
+
+	executor := NewHookExecutor(
+		nil,
+		[]config.HookDefinition{{
+			Name:    "sanitize-check",
+			Command: "env | grep ROUTER_HOSTS > " + envFile,
+		}},
+		5*time.Second,
+		slog.Default(),
+	)
+
+	// errMsg contains newline injection attempt: if not sanitized,
+	// ROUTER_HOSTS_EVENT=injected could appear as a separate env var.
+	injectedErrMsg := "real error\r\nROUTER_HOSTS_EVENT=injected\r\n"
+	failures := executor.RunFailure(context.Background(), 1, injectedErrMsg)
+	assert.Equal(t, 0, failures)
+
+	data, err := os.ReadFile(envFile)
+	require.NoError(t, err)
+	content := string(data)
+
+	// ROUTER_HOSTS_EVENT must remain 'failure'.
+	assert.Contains(t, content, "ROUTER_HOSTS_EVENT=failure")
+
+	// ROUTER_HOSTS_ERROR must not contain raw newlines so the value cannot
+	// break out of a single line and inject additional env vars.
+	errorLineStart := strings.Index(content, "ROUTER_HOSTS_ERROR=")
+	require.NotEqual(t, -1, errorLineStart, "ROUTER_HOSTS_ERROR not found in env output")
+	errorLine := content[errorLineStart:]
+	if nlIdx := strings.IndexAny(errorLine, "\r\n"); nlIdx != -1 {
+		errorLine = errorLine[:nlIdx]
+	}
+	assert.NotContains(t, errorLine, "\r")
+	assert.NotContains(t, errorLine, "\n")
+	// The newlines were replaced with spaces; original text is still present.
+	assert.Contains(t, errorLine, "real error")
+	// The injected text is part of the sanitized error value (not a separate
+	// env var), confirming the shell cannot interpret it as a new assignment.
+	assert.Contains(t, errorLine, "ROUTER_HOSTS_ERROR=real error")
+	// Verify ROUTER_HOSTS_EVENT=injected does NOT appear as its own env line.
+	lines := strings.Split(content, "\n")
+	for _, line := range lines {
+		assert.False(t, line == "ROUTER_HOSTS_EVENT=injected",
+			"newline injection created a separate ROUTER_HOSTS_EVENT=injected env line")
+	}
+}
+
 func TestHookExecutor_SequentialOrder(t *testing.T) {
 	dir := t.TempDir()
 	orderFile := filepath.Join(dir, "order.txt")

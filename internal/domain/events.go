@@ -2,10 +2,10 @@ package domain
 
 import (
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/samber/oops"
 
 	"github.com/fzymgc-house/router-hosts/internal/validation"
 )
@@ -40,7 +40,7 @@ func (t *EventType) UnmarshalJSON(data []byte) error {
 	}
 	candidate := EventType(s)
 	if !candidate.Valid() {
-		return fmt.Errorf("unknown event type: %q", s)
+		return oops.Code(CodeValidation).Errorf("unknown event type: %q", s)
 	}
 	*t = candidate
 	return nil
@@ -88,7 +88,7 @@ func (e HostEvent) MarshalJSON() ([]byte, error) {
 	// Merge type field into the payload object
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(e.Payload, &m); err != nil {
-		return nil, fmt.Errorf("event payload is not a JSON object: %w", err)
+		return nil, oops.Code(CodeInternal).Wrapf(err, "event payload is not a JSON object")
 	}
 
 	typeBytes, err := json.Marshal(e.Type)
@@ -181,7 +181,7 @@ func (e *HostEvent) Decode() (any, error) {
 		}
 		return v, nil
 	default:
-		return nil, fmt.Errorf("unknown event type: %s", e.Type)
+		return nil, oops.Code(CodeInternal).Errorf("unknown event type: %s", e.Type)
 	}
 }
 
@@ -224,7 +224,7 @@ func (e *HostEvent) OccurredAt() (time.Time, error) {
 	case SnapshotDeleted:
 		return ev.OccurredAt, nil
 	default:
-		return time.Time{}, fmt.Errorf("unknown event type: %T", v)
+		return time.Time{}, oops.Code(CodeInternal).Errorf("unknown event type: %T", v)
 	}
 }
 
@@ -274,7 +274,7 @@ func NewHostEvent(v any) (HostEvent, error) {
 	case SnapshotDeleted:
 		eventType = EventTypeSnapshotDeleted
 	default:
-		return HostEvent{}, fmt.Errorf("unsupported event type: %T", v)
+		return HostEvent{}, oops.Code(CodeInternal).Errorf("unsupported event type: %T", v)
 	}
 
 	payload, err := json.Marshal(v)

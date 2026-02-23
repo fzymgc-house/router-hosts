@@ -191,7 +191,8 @@ func TestReconcile_IngressRoute_Create(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(slog.Default(), &updated)
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
 	assert.Equal(t, "ingress-host-1", ids["app.example.com"])
 }
 
@@ -295,7 +296,8 @@ func TestReconcile_IngressRoute_StaleHostCleanup(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(slog.Default(), &updated)
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
 	assert.Equal(t, "keep-id", ids["keep.example.com"])
 	_, hasRemoved := ids["remove.example.com"]
 	assert.False(t, hasRemoved)
@@ -358,7 +360,8 @@ func TestHostIDsAnnotation_RoundTrip(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]interface{}{}}
 
 	// Empty initially.
-	ids := getHostIDsAnnotation(slog.Default(), obj)
+	ids, err := getHostIDsAnnotation(slog.Default(), obj)
+	require.NoError(t, err)
 	assert.Nil(t, ids)
 
 	// Set and read back.
@@ -366,13 +369,15 @@ func TestHostIDsAnnotation_RoundTrip(t *testing.T) {
 		"a.com": "id-1",
 		"b.com": "id-2",
 	}))
-	ids = getHostIDsAnnotation(slog.Default(), obj)
+	ids, err = getHostIDsAnnotation(slog.Default(), obj)
+	require.NoError(t, err)
 	assert.Equal(t, "id-1", ids["a.com"])
 	assert.Equal(t, "id-2", ids["b.com"])
 
 	// Clear.
 	require.NoError(t, setHostIDsAnnotation(obj, nil))
-	ids = getHostIDsAnnotation(slog.Default(), obj)
+	ids, err = getHostIDsAnnotation(slog.Default(), obj)
+	require.NoError(t, err)
 	assert.Nil(t, ids)
 }
 
@@ -465,7 +470,8 @@ func TestReconcile_IngressRoute_UpdateFailure_Requeues(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(slog.Default(), &updated)
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
 	assert.Equal(t, "existing-id", ids["app.example.com"])
 }
 
@@ -518,7 +524,8 @@ func TestReconcile_IngressRoute_StaleDeleteFailure(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(slog.Default(), &updated)
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
 	assert.Equal(t, "keep-id", ids["keep.example.com"])
 	assert.Equal(t, "remove-id", ids["remove.example.com"])
 }
@@ -559,7 +566,8 @@ func TestGetHostIDsAnnotation_InvalidJSON(t *testing.T) {
 		hostIDsAnnotation: "not valid json",
 	})
 
-	ids := getHostIDsAnnotation(slog.Default(), obj)
+	ids, err := getHostIDsAnnotation(slog.Default(), obj)
+	assert.Error(t, err)
 	assert.Nil(t, ids)
 }
 
@@ -569,7 +577,8 @@ func TestGetHostIDsAnnotation_EmptyValue(t *testing.T) {
 		hostIDsAnnotation: "",
 	})
 
-	ids := getHostIDsAnnotation(slog.Default(), obj)
+	ids, err := getHostIDsAnnotation(slog.Default(), obj)
+	require.NoError(t, err)
 	assert.Nil(t, ids)
 }
 
@@ -643,7 +652,8 @@ func TestReconcile_IngressRouteTCP_Create(t *testing.T) {
 	var updated unstructured.Unstructured
 	updated.SetGroupVersionKind(ingressRouteTCPGVK)
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-tcp-ir", Namespace: "default"}, &updated))
-	ids := getHostIDsAnnotation(slog.Default(), &updated)
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
 	assert.Equal(t, "tcp-ingress-host-1", ids["tcp.example.com"])
 }
 

@@ -4,7 +4,6 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,6 +14,9 @@ import (
 	// detecting unknown config keys and surfacing them as errors. go-toml/v2
 	// does not provide an equivalent API.
 	"github.com/BurntSushi/toml"
+	"github.com/samber/oops"
+
+	"github.com/fzymgc-house/router-hosts/internal/domain"
 )
 
 // Default values for retention policy.
@@ -120,10 +122,10 @@ type RetentionConfig struct {
 // retention behaviour. Use LoadServerConfig to apply defaults before validating.
 func (r *RetentionConfig) Validate() error {
 	if r.MaxSnapshots < 0 {
-		return fmt.Errorf("config: retention.max_snapshots must be non-negative (got %d)", r.MaxSnapshots)
+		return oops.Code(domain.CodeValidation).Errorf("config: retention.max_snapshots must be non-negative (got %d)", r.MaxSnapshots)
 	}
 	if r.MaxAgeDays < 0 {
-		return fmt.Errorf("config: retention.max_age_days must be non-negative (got %d)", r.MaxAgeDays)
+		return oops.Code(domain.CodeValidation).Errorf("config: retention.max_age_days must be non-negative (got %d)", r.MaxAgeDays)
 	}
 	return nil
 }
@@ -167,7 +169,7 @@ func DefaultDBPath() (string, error) {
 	case "darwin":
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return "", fmt.Errorf("determine home directory: %w", err)
+			return "", oops.Wrapf(err, "determine home directory")
 		}
 		dataDir = filepath.Join(home, "Library", "Application Support")
 	default: // linux and others use XDG
@@ -176,7 +178,7 @@ func DefaultDBPath() (string, error) {
 		} else {
 			home, err := os.UserHomeDir()
 			if err != nil {
-				return "", fmt.Errorf("determine home directory: %w", err)
+				return "", oops.Wrapf(err, "determine home directory")
 			}
 			dataDir = filepath.Join(home, ".local", "share")
 		}
@@ -202,20 +204,20 @@ func LoadServerConfig(path string) (*Config, error) {
 
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config file: %w", err)
+		return nil, oops.Wrapf(err, "read config file")
 	}
 
 	var cfg Config
 	meta, err := toml.Decode(string(data), &cfg)
 	if err != nil {
-		return nil, fmt.Errorf("parse config file: %w", err)
+		return nil, oops.Wrapf(err, "parse config file")
 	}
 	if keys := meta.Undecoded(); len(keys) > 0 {
 		strs := make([]string, len(keys))
 		for i, k := range keys {
 			strs[i] = k.String()
 		}
-		return nil, fmt.Errorf("config: unknown keys: [%s]", strings.Join(strs, ", "))
+		return nil, oops.Code(domain.CodeValidation).Errorf("config: unknown keys: [%s]", strings.Join(strs, ", "))
 	}
 
 	// Apply defaults for retention if zero-valued
@@ -269,10 +271,10 @@ func LoadServerConfig(path string) (*Config, error) {
 // validate checks all required fields and hook definitions.
 func (c *Config) validate() error {
 	if c.Server.BindAddress == "" {
-		return fmt.Errorf("config: bind_address is required")
+		return oops.Code(domain.CodeValidation).Errorf("config: bind_address is required")
 	}
 	if c.Server.HostsFilePath == "" {
-		return fmt.Errorf("config: hosts_file_path is required")
+		return oops.Code(domain.CodeValidation).Errorf("config: hosts_file_path is required")
 	}
 
 	if err := c.Hooks.validate(); err != nil {
@@ -298,19 +300,19 @@ func (t *TLSConfig) validateACME() error {
 
 	acme := t.ACME
 	if acme.Email == "" {
-		return fmt.Errorf("config: acme.email is required when ACME is enabled")
+		return oops.Code(domain.CodeValidation).Errorf("config: acme.email is required when ACME is enabled")
 	}
 	if len(acme.Domains) == 0 {
-		return fmt.Errorf("config: acme.domains must contain at least one domain when ACME is enabled")
+		return oops.Code(domain.CodeValidation).Errorf("config: acme.domains must contain at least one domain when ACME is enabled")
 	}
 	if acme.DNS.Provider != "cloudflare" {
-		return fmt.Errorf("config: acme.dns.provider must be \"cloudflare\" (got %q)", acme.DNS.Provider)
+		return oops.Code(domain.CodeValidation).Errorf("config: acme.dns.provider must be \"cloudflare\" (got %q)", acme.DNS.Provider)
 	}
 	if acme.DNS.Provider == "cloudflare" && acme.DNS.Cloudflare == nil {
-		return fmt.Errorf("config: acme.dns.cloudflare section is required when provider is \"cloudflare\"")
+		return oops.Code(domain.CodeValidation).Errorf("config: acme.dns.cloudflare section is required when provider is \"cloudflare\"")
 	}
 	if acme.DNS.Cloudflare != nil && acme.DNS.Cloudflare.APIToken == "" {
-		return fmt.Errorf("config: acme.dns.cloudflare.api_token is required")
+		return oops.Code(domain.CodeValidation).Errorf("config: acme.dns.cloudflare.api_token is required")
 	}
 
 	return nil
@@ -324,7 +326,7 @@ func (h *HooksConfig) validate() error {
 			return err
 		}
 		if _, exists := seen[hook.Name]; exists {
-			return fmt.Errorf("config: duplicate hook name %q in on_success", hook.Name)
+			return oops.Code(domain.CodeValidation).Errorf("config: duplicate hook name %q in on_success", hook.Name)
 		}
 		seen[hook.Name] = struct{}{}
 	}
@@ -335,7 +337,7 @@ func (h *HooksConfig) validate() error {
 			return err
 		}
 		if _, exists := seen[hook.Name]; exists {
-			return fmt.Errorf("config: duplicate hook name %q in on_failure", hook.Name)
+			return oops.Code(domain.CodeValidation).Errorf("config: duplicate hook name %q in on_failure", hook.Name)
 		}
 		seen[hook.Name] = struct{}{}
 	}
@@ -346,16 +348,16 @@ func (h *HooksConfig) validate() error {
 // validate checks a single hook definition.
 func (h *HookDefinition) validate() error {
 	if h.Name == "" {
-		return fmt.Errorf("config: hook name must be non-empty")
+		return oops.Code(domain.CodeValidation).Errorf("config: hook name must be non-empty")
 	}
 	if len(h.Name) > MaxHookNameLength {
-		return fmt.Errorf("config: hook name %q exceeds %d character limit", h.Name, MaxHookNameLength)
+		return oops.Code(domain.CodeValidation).Errorf("config: hook name %q exceeds %d character limit", h.Name, MaxHookNameLength)
 	}
 	if !isValidKebabCase(h.Name) {
-		return fmt.Errorf("config: hook name %q is invalid (must be kebab-case: lowercase letters, numbers, and hyphens)", h.Name)
+		return oops.Code(domain.CodeValidation).Errorf("config: hook name %q is invalid (must be kebab-case: lowercase letters, numbers, and hyphens)", h.Name)
 	}
 	if strings.TrimSpace(h.Command) == "" {
-		return fmt.Errorf("config: hook %q has empty or whitespace-only command", h.Name)
+		return oops.Code(domain.CodeValidation).Errorf("config: hook %q has empty or whitespace-only command", h.Name)
 	}
 	return nil
 }
@@ -413,14 +415,14 @@ func ExpandEnvVars(s string) (string, error) {
 		if i+1 < len(s) && s[i+1] == '{' {
 			end := strings.IndexByte(s[i:], '}')
 			if end == -1 {
-				return "", fmt.Errorf("config: unclosed ${...} in %q", s)
+				return "", oops.Code(domain.CodeValidation).Errorf("config: unclosed ${...} in %q", s)
 			}
 			expr := s[i+2 : i+end]
 			i += end + 1
 
 			varName, defaultVal, hasDefault := strings.Cut(expr, ":-")
 			if varName == "" {
-				return "", fmt.Errorf("config: empty variable name in ${...}")
+				return "", oops.Code(domain.CodeValidation).Errorf("config: empty variable name in ${...}")
 			}
 
 			val, ok := os.LookupEnv(varName)
@@ -428,7 +430,7 @@ func ExpandEnvVars(s string) (string, error) {
 				if hasDefault {
 					b.WriteString(defaultVal)
 				} else {
-					return "", fmt.Errorf("config: environment variable %q is not set", varName)
+					return "", oops.Code(domain.CodeValidation).Errorf("config: environment variable %q is not set", varName)
 				}
 			} else {
 				b.WriteString(val)
@@ -452,14 +454,14 @@ func checkConfigPermissions(path string) error {
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("stat config file: %w", err)
+		return oops.Wrapf(err, "stat config file")
 	}
 
 	mode := info.Mode().Perm()
 	// Reject group-writable (g+w = 0o020) or world-writable (o+w = 0o002).
 	// Either allows untrusted parties to tamper with hook commands.
 	if mode&0o022 != 0 {
-		return fmt.Errorf(
+		return oops.Code(domain.CodeValidation).Errorf(
 			"config: file %q has unsafe permissions (mode %04o); "+
 				"group-write and world-write must be removed as the config contains hook commands; "+
 				"fix with: chmod go-w %s",

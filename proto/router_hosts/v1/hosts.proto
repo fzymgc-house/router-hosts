@@ -154,6 +154,9 @@ message UpdateHostResponse {
 message DeleteHostRequest {
   // ID of the host entry to delete
   string id = 1;
+  // Expected version for optimistic concurrency (optional).
+  // If omitted, server fetches current version (racy under concurrency).
+  optional string expected_version = 2;
 }
 
 // Response after deleting a host entry

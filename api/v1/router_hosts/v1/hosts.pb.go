@@ -615,9 +615,12 @@ func (x *UpdateHostResponse) GetEntry() *HostEntry {
 type DeleteHostRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// ID of the host entry to delete
-	Id            string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Id string `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	// Expected version for optimistic concurrency (optional).
+	// If omitted, server fetches current version (racy under concurrency).
+	ExpectedVersion *string `protobuf:"bytes,2,opt,name=expected_version,json=expectedVersion,proto3,oneof" json:"expected_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *DeleteHostRequest) Reset() {
@@ -653,6 +656,13 @@ func (*DeleteHostRequest) Descriptor() ([]byte, []int) {
 func (x *DeleteHostRequest) GetId() string {
 	if x != nil {
 		return x.Id
+	}
+	return ""
+}
+
+func (x *DeleteHostRequest) GetExpectedVersion() string {
+	if x != nil && x.ExpectedVersion != nil {
+		return *x.ExpectedVersion
 	}
 	return ""
 }
@@ -2322,9 +2332,11 @@ const file_router_hosts_v1_hosts_proto_rawDesc = "" +
 	"\b_commentB\x13\n" +
 	"\x11_expected_versionJ\x04\b\x05\x10\x06\"F\n" +
 	"\x12UpdateHostResponse\x120\n" +
-	"\x05entry\x18\x01 \x01(\v2\x1a.router_hosts.v1.HostEntryR\x05entry\"#\n" +
+	"\x05entry\x18\x01 \x01(\v2\x1a.router_hosts.v1.HostEntryR\x05entry\"h\n" +
 	"\x11DeleteHostRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\".\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12.\n" +
+	"\x10expected_version\x18\x02 \x01(\tH\x00R\x0fexpectedVersion\x88\x01\x01B\x13\n" +
+	"\x11_expected_version\".\n" +
 	"\x12DeleteHostResponse\x12\x18\n" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\"\x87\x01\n" +
 	"\x10ListHostsRequest\x12\x1b\n" +
@@ -2572,6 +2584,7 @@ func file_router_hosts_v1_hosts_proto_init() {
 	file_router_hosts_v1_hosts_proto_msgTypes[0].OneofWrappers = []any{}
 	file_router_hosts_v1_hosts_proto_msgTypes[3].OneofWrappers = []any{}
 	file_router_hosts_v1_hosts_proto_msgTypes[7].OneofWrappers = []any{}
+	file_router_hosts_v1_hosts_proto_msgTypes[9].OneofWrappers = []any{}
 	file_router_hosts_v1_hosts_proto_msgTypes[11].OneofWrappers = []any{}
 	file_router_hosts_v1_hosts_proto_msgTypes[15].OneofWrappers = []any{}
 	file_router_hosts_v1_hosts_proto_msgTypes[16].OneofWrappers = []any{}

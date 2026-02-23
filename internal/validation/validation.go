@@ -3,7 +3,6 @@
 package validation
 
 import (
-	"fmt"
 	"net"
 	"regexp"
 	"strings"
@@ -116,7 +115,7 @@ func ValidateAliases(aliases []string, canonicalHostname string) []error {
 
 		// Validate as hostname (after IP check).
 		if err := ValidateHostname(alias); err != nil {
-			errs = append(errs, fmt.Errorf("invalid alias '%s': %w", alias, err))
+			errs = append(errs, oops.Code("validation_failed").Wrapf(err, "invalid alias '%s'", alias))
 			continue
 		}
 

@@ -22,6 +22,7 @@ import (
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/config"
+	"github.com/fzymgc-house/router-hosts/internal/domain"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
 )
@@ -1399,6 +1400,72 @@ func TestService_UpdateHost_AliasesNilValues(t *testing.T) {
 // TestService_UpdateHost_AliasMatchesHostname verifies that updating a host's
 // aliases to include the host's own hostname is rejected with InvalidArgument.
 // Validation rejects aliases that duplicate the primary hostname.
+// TestMapError verifies the security contract of mapError: internal error
+// details MUST NOT be leaked to gRPC clients (Finding 133.162).
+func TestMapError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		err         error
+		wantCode    codes.Code
+		wantMessage string
+		leaked      bool // true = message IS propagated (non-internal codes)
+	}{
+		{
+			name:        "oops CodeInternal suppresses message",
+			err:         domain.ErrInternal(fmt.Errorf("secret db connection string")),
+			wantCode:    codes.Internal,
+			wantMessage: "internal server error",
+		},
+		{
+			name:        "oops CodeStorage suppresses message",
+			err:         domain.ErrStorage(fmt.Errorf("sqlite3: no such table")),
+			wantCode:    codes.Internal,
+			wantMessage: "internal server error",
+		},
+		{
+			name:        "plain error suppresses message",
+			err:         fmt.Errorf("unexpected nil pointer"),
+			wantCode:    codes.Internal,
+			wantMessage: "internal server error",
+		},
+		{
+			name:        "oops CodeNotFound propagates message",
+			err:         domain.ErrNotFound("host", "01ARZ3NDEKTSV4RRFFQ69G5FAV"),
+			wantCode:    codes.NotFound,
+			wantMessage: `host "01ARZ3NDEKTSV4RRFFQ69G5FAV" not found`,
+			leaked:      true,
+		},
+		{
+			name:        "oops CodeValidation propagates message",
+			err:         domain.ErrValidation("ip address is required"),
+			wantCode:    codes.InvalidArgument,
+			wantMessage: "validation failed: ip address is required",
+			leaked:      true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := mapError(tc.err)
+			require.Error(t, got)
+
+			st, ok := status.FromError(got)
+			require.True(t, ok, "mapError must return a gRPC status error")
+			assert.Equal(t, tc.wantCode, st.Code())
+			assert.Equal(t, tc.wantMessage, st.Message())
+
+			if !tc.leaked {
+				// Verify the original error text is not present in the status message.
+				assert.NotContains(t, st.Message(), tc.err.Error(),
+					"internal error detail must not be leaked to gRPC client")
+			}
+		})
+	}
+}
+
 func TestService_UpdateHost_AliasMatchesHostname(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()
