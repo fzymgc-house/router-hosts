@@ -174,9 +174,15 @@ func TestRenewIfNeeded_NoCertOnDisk(t *testing.T) {
 		WithObtainFunc(mockObtain(t, time.Now().Add(90*24*time.Hour))))
 	require.NoError(t, err)
 
-	_, err = m.RenewIfNeeded(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "reading certificate")
+	// When no cert exists on disk, RenewIfNeeded should obtain one instead of erroring.
+	renewed, err := m.RenewIfNeeded(context.Background())
+	require.NoError(t, err)
+	assert.True(t, renewed, "should return true when obtaining a new certificate")
+
+	// Verify that ObtainCertificate was called and wrote the cert to disk.
+	certData, readErr := os.ReadFile(tlsCfg.CertPath)
+	require.NoError(t, readErr)
+	assert.NotEmpty(t, certData)
 }
 
 func TestObtainCertificate(t *testing.T) {
@@ -1029,10 +1035,13 @@ func TestRunRenewalCheck_Success_WithRenewal(t *testing.T) {
 func TestRunRenewalCheck_ErrorPath(t *testing.T) {
 	acmeCfg := testACMEConfig(t)
 	tlsCfg := testTLSConfig(t)
-	// No cert on disk so RenewIfNeeded will fail
 
-	m, err := NewManager(acmeCfg, tlsCfg, testLogger(), nil,
-		WithObtainFunc(mockObtain(t, time.Now().Add(90*24*time.Hour))))
+	// Use a failing obtain func so RenewIfNeeded (which calls ObtainCertificate
+	// when no cert exists) will encounter an error.
+	failObtain := func(_ context.Context, _ []string) (*certificate.Resource, error) {
+		return nil, errors.New("simulated obtain failure")
+	}
+	m, err := NewManager(acmeCfg, tlsCfg, testLogger(), nil, WithObtainFunc(failObtain))
 	require.NoError(t, err)
 
 	// Should not panic (logs error internally)

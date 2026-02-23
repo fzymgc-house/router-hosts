@@ -12,6 +12,7 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
 // StorageSuite runs compliance tests against the SQLite storage implementation.
@@ -882,6 +883,50 @@ func (s *StorageSuite) TestReplayEventsDecodeError() {
 	// ListAll also uses replayEvents — must likewise return an error.
 	_, err = s.store.ListAll(s.ctx)
 	s.Require().Error(err, "ListAll must propagate decode error from corrupt event")
+}
+
+// TestAppendEventsBatchVersionConflictRollsBackEntireTx verifies that a version
+// conflict on the second aggregate in AppendEventsBatch rolls back the entire
+// transaction, leaving the first aggregate unmodified (regression for
+// Finding 133.178).
+func (s *StorageSuite) TestAppendEventsBatchVersionConflictRollsBackEntireTx() {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	// Create two hosts, each at version 1.
+	agg1 := ulid.Make()
+	agg2 := ulid.Make()
+
+	s.Require().NoError(s.store.AppendEvent(s.ctx, agg1,
+		s.createHostEvents(agg1, "10.0.1.1", "rollback1.local", now), 0))
+	s.Require().NoError(s.store.AppendEvent(s.ctx, agg2,
+		s.createHostEvents(agg2, "10.0.1.2", "rollback2.local", now), 0))
+
+	// Build a batch: agg1 with correct expected version 1, agg2 with wrong version 99.
+	newEventForAgg1 := makeEnvelope(agg1, domain.IPAddressChanged{
+		OldIP: "10.0.1.1", NewIP: "10.0.1.100", ChangedAt: now.Add(time.Second),
+	}, 2, now.Add(time.Second))
+
+	newEventForAgg2 := makeEnvelope(agg2, domain.IPAddressChanged{
+		OldIP: "10.0.1.2", NewIP: "10.0.1.200", ChangedAt: now.Add(time.Second),
+	}, 2, now.Add(time.Second))
+
+	batch := []storage.AggregateEvents{
+		{AggregateID: agg1, Events: []domain.EventEnvelope{newEventForAgg1}, ExpectedVersion: 1},
+		{AggregateID: agg2, Events: []domain.EventEnvelope{newEventForAgg2}, ExpectedVersion: 99}, // wrong
+	}
+
+	err := s.store.AppendEventsBatch(s.ctx, batch)
+	s.Require().Error(err, "AppendEventsBatch must fail on version conflict in second aggregate")
+	s.Contains(err.Error(), "version conflict")
+
+	// Verify the entire transaction rolled back: agg1 must still be at version 1.
+	ver, err := s.store.GetCurrentVersion(s.ctx, agg1)
+	s.Require().NoError(err)
+	s.Equal(int64(1), ver, "agg1 version must remain 1 after transaction rollback")
+
+	events, err := s.store.LoadEvents(s.ctx, agg1)
+	s.Require().NoError(err)
+	s.Require().Len(events, 1, "agg1 must have exactly one event after transaction rollback")
 }
 
 // ---------- Lifecycle tests ----------

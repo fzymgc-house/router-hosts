@@ -473,6 +473,12 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 				stats.Failed++
 				stats.ValidationErrors = append(stats.ValidationErrors,
 					fmt.Sprintf("Entry %d (%s -> %s): %v", i+1, entry.IP, entry.Hostname, addErr))
+				slog.Error("import entry failed due to storage or infrastructure error",
+					"entry_index", i+1,
+					"ip", entry.IP,
+					"hostname", entry.Hostname,
+					"error", addErr,
+				)
 			}
 		}
 
@@ -616,7 +622,7 @@ func (s *HostsServiceImpl) CreateSnapshot(ctx context.Context, req *hostsv1.Crea
 
 	// Best-effort retention policy using configured values (nil = storage default).
 	if _, err := s.store.ApplyRetentionPolicy(ctx, s.retentionMaxSnaps, s.retentionMaxAge); err != nil {
-		slog.Warn("retention policy failed", "error", err)
+		slog.Warn("retention policy failed", "error", err, "snapshot_id", snapshotID.String(), "max_snapshots", s.retentionMaxSnaps, "max_age_days", s.retentionMaxAge)
 	}
 
 	return &hostsv1.CreateSnapshotResponse{
@@ -684,10 +690,10 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		// Load the target snapshot
 		target, err := s.store.GetSnapshot(ctx, snapshotID)
 		if err != nil {
-			return mapError(err)
+			return err
 		}
 		if target == nil {
-			return status.Errorf(codes.NotFound, "snapshot %q not found", req.GetSnapshotId())
+			return domain.ErrNotFound("snapshot", req.GetSnapshotId())
 		}
 
 		// Create a pre-rollback backup snapshot of current state. Holding the
@@ -698,13 +704,13 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 			Trigger: "pre-rollback",
 		})
 		if err != nil {
-			return mapError(oops.Code(domain.CodeInternal).Wrapf(err, "create pre-rollback backup"))
+			return oops.Code(domain.CodeInternal).Wrapf(err, "create pre-rollback backup")
 		}
 
 		// Load current entries to build delete events.
 		currentEntries, err := s.store.ListAll(ctx)
 		if err != nil {
-			return mapError(err)
+			return err
 		}
 
 		// Build the entire batch of events (deletes + creates) without persisting.
@@ -713,7 +719,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		for i := range currentEntries {
 			ag, prepErr := s.handler.PrepareDeleteEvent(ctx, &currentEntries[i])
 			if prepErr != nil {
-				return mapError(oops.Wrapf(prepErr, "rollback: prepare delete for %s", currentEntries[i].ID))
+				return oops.Wrapf(prepErr, "rollback: prepare delete for %s", currentEntries[i].ID)
 			}
 			batch = append(batch, ag)
 		}
@@ -722,7 +728,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		for _, entry := range target.Entries {
 			ag, _, prepErr := s.handler.PrepareAddEvent(entry.IP, entry.Hostname, entry.Comment, entry.Tags, entry.Aliases)
 			if prepErr != nil {
-				return mapError(oops.Wrapf(prepErr, "rollback: prepare add for %s/%s", entry.IP, entry.Hostname))
+				return oops.Wrapf(prepErr, "rollback: prepare add for %s/%s", entry.IP, entry.Hostname)
 			}
 			batch = append(batch, ag)
 			restoredCount++
@@ -732,7 +738,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		// persisted and the database remains in its pre-rollback state.
 		if len(batch) > 0 {
 			if err := s.store.AppendEventsBatch(ctx, batch); err != nil {
-				return mapError(oops.Wrapf(err, "rollback: atomic batch write"))
+				return oops.Wrapf(err, "rollback: atomic batch write")
 			}
 		}
 
@@ -744,10 +750,6 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		return nil
 	})
 	if writeErr != nil {
-		// Status errors are already mapped; don't double-wrap them.
-		if _, ok := status.FromError(writeErr); ok {
-			return nil, writeErr
-		}
 		return nil, mapError(writeErr)
 	}
 	return resp, nil

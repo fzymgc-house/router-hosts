@@ -198,12 +198,25 @@ func (r *IngressRouteReconciler) reconcileDelete(ctx context.Context, log *slog.
 	if err != nil {
 		return ctrl.Result{RequeueAfter: requeueDelayShort}, err
 	}
+	remainingIDs := make(map[string]string, len(existingIDs))
+	var hadDeleteError bool
 	for hostname, id := range existingIDs {
 		log.Info("deleting host entry for deleted IngressRoute", "hostname", hostname, "hostId", id)
 		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
 			log.Error("failed to delete host entry during cleanup", "hostname", hostname, "error", err)
-			return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
+			remainingIDs[hostname] = id
+			hadDeleteError = true
 		}
+	}
+	if hadDeleteError {
+		// Persist remaining IDs so they are not orphaned on the next reconcile.
+		if err := setHostIDsAnnotation(obj, remainingIDs); err != nil {
+			return ctrl.Result{}, oops.Wrapf(err, "setting host IDs annotation after partial delete")
+		}
+		if err := r.Update(ctx, obj); err != nil {
+			return ctrl.Result{}, oops.Wrapf(err, "updating IngressRoute annotations after partial delete")
+		}
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
 	}
 
 	controllerutil.RemoveFinalizer(obj, ingressRouteCleanupFinalizer)

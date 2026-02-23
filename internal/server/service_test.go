@@ -962,6 +962,21 @@ func TestService_UpdateHost_InvalidExpectedVersion(t *testing.T) {
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
+func TestService_DeleteHost_InvalidExpectedVersion(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	badVersion := "not-a-number"
+	_, err := env.client.DeleteHost(ctx, &hostsv1.DeleteHostRequest{
+		Id:              "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+		ExpectedVersion: &badVersion,
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
 func TestService_DeleteHost_InvalidID(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()

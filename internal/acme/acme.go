@@ -343,6 +343,9 @@ func atomicWriteFile(target string, data []byte, perm os.FileMode) error {
 func (m *Manager) RenewIfNeeded(ctx context.Context) (bool, error) {
 	certPEM, err := os.ReadFile(m.tlsCfg.CertPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return true, m.ObtainCertificate(ctx)
+		}
 		return false, oops.Wrapf(err, "reading certificate for renewal check")
 	}
 
