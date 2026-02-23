@@ -1,4 +1,4 @@
-//go:build e2e
+//go:build e2e || docker_e2e
 
 package e2e_test
 
@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -141,8 +142,8 @@ func setupTestEnv(t *testing.T) *testEnv {
 		case <-time.After(5 * time.Second):
 			t.Log("server shutdown timed out")
 		}
-		conn.Close()
-		store.Close()
+		_ = conn.Close()
+		_ = store.Close()
 	})
 
 	return env
@@ -274,7 +275,7 @@ func waitForServer(t *testing.T, addr, caCertPath, clientCertPath, clientKeyPath
 			"tcp", addr, tlsCfg,
 		)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			return
 		}
 		time.Sleep(50 * time.Millisecond)
@@ -302,7 +303,7 @@ func collectListHosts(t *testing.T, stream grpc.ServerStreamingClient[hostsv1.Li
 	var entries []*hostsv1.HostEntry
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err, "recv ListHosts")
@@ -317,7 +318,7 @@ func collectSearchHosts(t *testing.T, stream grpc.ServerStreamingClient[hostsv1.
 	var entries []*hostsv1.HostEntry
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err, "recv SearchHosts")
@@ -332,7 +333,7 @@ func collectListSnapshots(t *testing.T, stream grpc.ServerStreamingClient[hostsv
 	var snapshots []*hostsv1.Snapshot
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err, "recv ListSnapshots")

@@ -12,7 +12,9 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+      - -s -w
+    flags:
+      - -trimpath
   - id: operator
     main: ./cmd/operator
     binary: operator
@@ -20,28 +22,36 @@ builds:
       - CGO_ENABLED=0
     goos:
       - linux
-      - darwin
     goarch:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}}
+      - -s -w
+    flags:
+      - -trimpath
 archives:
   - id: router-hosts
-    builds:
+    ids:
       - router-hosts
-    name_template: "router-hosts_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "router-hosts_{{ .Os }}_{{ .Arch }}"
   - id: operator
-    builds:
+    ids:
       - operator
-    name_template: "operator_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    name_template: "operator_{{ .Os }}_{{ .Arch }}"
+dockers_v2:
+  - images:
+      - "ghcr.io/fzymgc-house/router-hosts"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    ids:
+      - router-hosts
+      - operator
+    dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
 checksum:
-  name_template: "checksums.txt"
+  name_template: checksums.txt
 changelog:
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^ci:"
-      - "^chore:"
+  disable: true

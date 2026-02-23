@@ -1,0 +1,11 @@
+# Dockerfile used by GoReleaser — copies pre-built binaries.
+# For local builds, use `docker build -f Dockerfile .` instead.
+FROM gcr.io/distroless/static:nonroot
+
+COPY router-hosts /usr/local/bin/router-hosts
+COPY operator /usr/local/bin/operator
+
+EXPOSE 50051
+
+ENTRYPOINT ["router-hosts"]
+CMD ["serve", "--config", "/etc/router-hosts/server.toml"]

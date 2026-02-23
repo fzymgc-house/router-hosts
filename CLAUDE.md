@@ -86,13 +86,17 @@ You SHOULD run `task --list` to see all available commands and their purposes.
 | `task lint` | Run golangci-lint + buf lint |
 | `task fmt` | Format with gofumpt + buf format |
 | `task proto:generate` | Regenerate protobuf Go stubs |
+| `task test:e2e` | E2E tests with real mTLS (in-process) |
+| `task test:e2e:docker` | Docker E2E tests (builds image, requires Docker) |
+| `task docker:build` | Build Docker image for local architecture |
+| `task clean` | Remove build artifacts |
 | `task ci` | Full CI pipeline locally |
 
 You MUST NOT run `go test` directly when `task test` is available.
 
 You MUST maintain ≥80% test coverage. PRs that decrease coverage below 80% MUST be rejected.
 
-E2E tests require the `e2e` build tag: `go test -tags e2e ./e2e/`
+E2E tests require build tags: `e2e` for in-process, `docker_e2e` for Docker container tests.
 
 ## Code Quality
 
@@ -173,8 +177,9 @@ For detailed information, see:
 
 | Topic | Location |
 |-------|----------|
-| Go migration design | `docs/plans/2026-02-22-golang-migration-design.md` |
-| Go migration plan | `docs/plans/2026-02-22-golang-migration-plan.md` |
+| Architecture & design | `docs/contributing/architecture.md` |
+| Release process (GoReleaser) | `docs/contributing/releasing.md` |
+| Testing strategy | `docs/contributing/testing.md` |
 | ACME certificate management | `docs/guides/acme.md` |
 | Operations (SIGHUP, hooks) | `docs/guides/operations.md` |
-| Original Rust design | `docs/plans/2025-12-01-router-hosts-v1-design.md` |
+| Go migration design | `docs/plans/2026-02-22-golang-migration-design.md` |

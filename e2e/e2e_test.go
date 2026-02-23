@@ -5,6 +5,7 @@ package e2e_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
 	"testing"
@@ -142,7 +143,7 @@ func TestE2E_ImportExportRoundtrip(t *testing.T) {
 	var finalStats *hostsv1.ImportHostsResponse
 	for {
 		resp, recvErr := importStream.Recv()
-		if recvErr == io.EOF {
+		if errors.Is(recvErr, io.EOF) {
 			break
 		}
 		require.NoError(t, recvErr)
@@ -165,7 +166,7 @@ func TestE2E_ImportExportRoundtrip(t *testing.T) {
 	var exportBuf []byte
 	for {
 		resp, recvErr := exportStream.Recv()
-		if recvErr == io.EOF {
+		if errors.Is(recvErr, io.EOF) {
 			break
 		}
 		require.NoError(t, recvErr)
@@ -348,7 +349,7 @@ func TestE2E_WrongCARejected(t *testing.T) {
 	require.NoError(t, err)
 
 	conn := dialGRPCWithCerts(t, addr, serverCACertPEM, wrongClientCert, wrongClientKey)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := hostsv1.NewHostsServiceClient(conn)
 
@@ -371,7 +372,7 @@ func TestE2E_SelfSignedClientRejected(t *testing.T) {
 	require.NoError(t, err)
 
 	conn := dialGRPCWithCerts(t, addr, serverCACertPEM, selfSignedClientCert, selfSignedClientKey)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	client := hostsv1.NewHostsServiceClient(conn)
 

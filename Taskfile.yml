@@ -18,9 +18,14 @@ tasks:
     cmds:
       - go test ./... -race -count=1
   test:e2e:
-    desc: Run E2E tests with real mTLS
+    desc: Run E2E tests with real mTLS (in-process)
     cmds:
       - go test -tags e2e -count=1 -v ./e2e/
+  test:e2e:docker:
+    desc: Run Docker E2E tests (builds image, requires Docker)
+    deps: ['docker:build']
+    cmds:
+      - go test -tags docker_e2e -count=1 -v -timeout 5m ./e2e/
   test:coverage:
     desc: Run tests with HTML coverage report
     cmds:

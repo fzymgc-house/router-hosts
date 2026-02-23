@@ -1,20 +1,35 @@
 # Release Process
 
-This document describes the automated release process for router-hosts using [release-please](https://github.com/googleapis/release-please).
+This document describes the automated release process for router-hosts using [release-please](https://github.com/googleapis/release-please) and [GoReleaser](https://goreleaser.com/).
 
 ## Overview
-
-The release pipeline is being set up for the Go rewrite. The general flow will be:
 
 1. **Push commits to `main`** using [Conventional Commits](https://www.conventionalcommits.org/) format
 2. **release-please creates a Release PR** with version bumps and changelog updates
 3. **Merge the Release PR** to trigger the release
-4. **Workflows build and publish** binaries and documentation
+4. **GoReleaser builds and publishes** cross-platform binaries and Docker images
+5. **docs.yml deploys** updated documentation
 
-!!! note "Release pipeline not yet configured"
-    The Go release pipeline (binary builds, container images, etc.) is not yet set up.
-    The sections below describe the commit conventions and release-please workflow
-    that are already in place.
+## Release Pipeline
+
+### Workflows
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `release-please.yml` | Push to `main` | Creates/updates release PR, pushes version tag on merge |
+| `release.yml` | Tag push (`v*`) | Runs GoReleaser to build binaries and Docker images |
+| `docs.yml` | After `release.yml` completes | Deploys documentation to Cloudflare Pages |
+
+### What GoReleaser Produces
+
+| Artifact | Platforms | Description |
+|----------|-----------|-------------|
+| `router-hosts` binary | linux/darwin (amd64, arm64) | Server + client CLI |
+| `operator` binary | linux (amd64, arm64) | Kubernetes operator |
+| Docker image | linux (amd64, arm64) | Multi-arch image at `ghcr.io/fzymgc-house/router-hosts` |
+| Checksums | - | SHA256 checksums for all archives |
+
+Docker images are tagged with both the version (`v0.9.0`) and `latest`.
 
 ## Conventional Commits
 
@@ -86,9 +101,13 @@ brew install cocogitto
 
 4. **Merge the Release PR**
    - Merging pushes the version tag (e.g., `v0.9.0`)
-   - Tag push triggers downstream workflows
+   - Tag push triggers `release.yml`
 
-5. **Automated workflows trigger on tag** (to be configured)
+5. **GoReleaser builds artifacts**
+   - Cross-compiles binaries for all platforms
+   - Builds and pushes multi-arch Docker images to GHCR
+   - Creates GitHub Release with binary archives and checksums
+   - `docs.yml` triggers after release completes
 
 ### Version Files
 
@@ -141,8 +160,11 @@ gh release view v0.9.0
 
 # 2. Download and test binary
 gh release download v0.9.0
-./router-hosts --version
 ./router-hosts --help
+
+# 3. Verify Docker image
+docker pull ghcr.io/fzymgc-house/router-hosts:0.9.0
+docker run --rm ghcr.io/fzymgc-house/router-hosts:0.9.0 --help
 ```
 
 ## Release Tag Format
@@ -152,11 +174,38 @@ release-please uses semantic versioning with `v` prefix:
 - `v0.9.0` - Standard release
 - `v0.9.1-rc.1` - Pre-release (marked as prerelease in GitHub)
 
+## GoReleaser Configuration
+
+The `.goreleaser.yml` file defines:
+
+- **Builds**: Cross-platform compilation for `router-hosts` and `operator`
+- **Archives**: tar.gz archives per OS/arch
+- **Docker**: Multi-arch images using `Dockerfile.goreleaser` (copies pre-built binaries)
+- **Changelog**: Disabled (release-please generates changelogs)
+
+To test the GoReleaser configuration locally:
+
+```bash
+# Dry run (no publish)
+goreleaser release --snapshot --clean
+
+# Check config validity
+goreleaser check
+```
+
 ## Workflow Configuration
 
 ### release-please.yml
 
 Creates/updates release PRs and pushes tags when merged. Configuration in `release-please-config.json`.
+
+### release.yml
+
+Triggered by tag push. Runs GoReleaser with Docker Buildx and QEMU for multi-arch builds.
+
+### docs.yml
+
+Triggered after `release.yml` completes. Downloads the release binary and builds documentation.
 
 ## Rollback
 
@@ -190,3 +239,10 @@ If the release PR doesn't trigger downstream workflows:
 1. Verify GitHub App has correct permissions
 2. Check that secrets `RELEASE_PLEASE_APP_ID` and `RELEASE_PLEASE_PRIVATE_KEY` are set
 3. Ensure the App is installed on the repository
+
+### GoReleaser build failures
+
+1. Check that `go.mod` and `go.sum` are up to date
+2. Verify `CGO_ENABLED=0` builds pass locally: `CGO_ENABLED=0 go build ./cmd/router-hosts`
+3. Run `goreleaser check` to validate configuration
+4. Check Docker Buildx is available: `docker buildx version`
