@@ -194,13 +194,17 @@ func newHostExportCmd() *cobra.Command {
 				}
 				if err != nil {
 					if outFile != nil {
-						_ = outFile.Close()
+						if closeErr := outFile.Close(); closeErr != nil {
+							slog.Warn("failed to close output file", "error", closeErr)
+						}
 					}
 					return oops.Wrapf(err, "receiving export chunk")
 				}
 				if _, err := w.Write(resp.GetChunk()); err != nil {
 					if outFile != nil {
-						_ = outFile.Close()
+						if closeErr := outFile.Close(); closeErr != nil {
+							slog.Warn("failed to close output file", "error", closeErr)
+						}
 					}
 					return oops.Wrapf(err, "writing export data")
 				}

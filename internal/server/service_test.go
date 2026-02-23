@@ -858,6 +858,43 @@ func TestService_Health_WithHooks(t *testing.T) {
 	assert.ElementsMatch(t, []string{"on-success", "on-failure"}, resp.GetHooks().GetHookNames())
 }
 
+// TestService_Health_WithVersion verifies that WithVersion properly injects
+// version and build info into the Health RPC response (Finding 133.146).
+func TestService_Health_WithVersion(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	handler := NewCommandHandler(store)
+	svc := NewHostsServiceImpl(handler, store, WithVersion("v1.2.3", "abc1234"))
+
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	hostsv1.RegisterHostsServiceServer(srv, svc)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.Stop() })
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	client := hostsv1.NewHostsServiceClient(conn)
+	resp, err := client.Health(ctx, &hostsv1.HealthRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, resp.GetServer())
+	assert.Equal(t, "v1.2.3", resp.GetServer().GetVersion())
+	assert.Equal(t, "abc1234", resp.GetServer().GetBuildInfo())
+}
+
 func TestService_UpdateHost_AllFields(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()
@@ -991,6 +1028,78 @@ func TestService_ListSnapshots_WithLimit(t *testing.T) {
 		snapshots = append(snapshots, resp.GetSnapshot())
 	}
 	assert.Len(t, snapshots, 2)
+}
+
+// TestService_CreateSnapshot_RetentionEnforced verifies that when
+// WithRetentionConfig is wired into the service, creating snapshots beyond the
+// configured maximum causes the oldest snapshots to be pruned automatically
+// (Finding 133.147).
+func TestService_CreateSnapshot_RetentionEnforced(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	handler := NewCommandHandler(store)
+	hostsGen := NewHostsFileGenerator("/dev/null")
+	maxSnaps := 2
+	svc := NewHostsServiceImpl(handler, store,
+		WithHostsGenerator(hostsGen),
+		WithRetentionConfig(&maxSnaps, nil),
+	)
+
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer()
+	hostsv1.RegisterHostsServiceServer(srv, svc)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(func() { srv.Stop() })
+
+	conn, err := grpc.NewClient(
+		"passthrough:///bufconn",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+			return lis.DialContext(ctx)
+		}),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+
+	client := hostsv1.NewHostsServiceClient(conn)
+
+	// Add a host entry so snapshots are non-trivial.
+	_, err = client.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.1",
+		Hostname:  "retention-test.local",
+	})
+	require.NoError(t, err)
+
+	// Create 3 snapshots; with maxSnaps=2 the oldest should be pruned after
+	// each CreateSnapshot call that exceeds the limit.
+	for i := range 3 {
+		_, err = client.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{
+			Name:    fmt.Sprintf("snap-%d", i),
+			Trigger: "manual",
+		})
+		require.NoError(t, err)
+	}
+
+	// List all remaining snapshots.
+	stream, err := client.ListSnapshots(ctx, &hostsv1.ListSnapshotsRequest{})
+	require.NoError(t, err)
+
+	var snapshots []*hostsv1.Snapshot
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		snapshots = append(snapshots, resp.GetSnapshot())
+	}
+
+	assert.Len(t, snapshots, 2, "retention policy must prune oldest snapshot, leaving only 2")
 }
 
 func TestService_RollbackToSnapshot_NotFound(t *testing.T) {

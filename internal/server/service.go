@@ -674,7 +674,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		Trigger: "pre-rollback",
 	})
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "create pre-rollback backup: %v", err)
+		return nil, mapError(oops.Code(domain.CodeInternal).Wrapf(err, "create pre-rollback backup"))
 	}
 
 	// Load current entries to build delete events.
@@ -689,7 +689,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 	for i := range currentEntries {
 		ag, prepErr := s.handler.PrepareDeleteEvent(ctx, &currentEntries[i])
 		if prepErr != nil {
-			return nil, oops.Wrapf(prepErr, "rollback: prepare delete for %s", currentEntries[i].ID)
+			return nil, mapError(oops.Wrapf(prepErr, "rollback: prepare delete for %s", currentEntries[i].ID))
 		}
 		batch = append(batch, ag)
 	}
@@ -698,7 +698,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 	for _, entry := range target.Entries {
 		ag, _, prepErr := s.handler.PrepareAddEvent(entry.IP, entry.Hostname, entry.Comment, entry.Tags, entry.Aliases)
 		if prepErr != nil {
-			return nil, oops.Wrapf(prepErr, "rollback: prepare add for %s/%s", entry.IP, entry.Hostname)
+			return nil, mapError(oops.Wrapf(prepErr, "rollback: prepare add for %s/%s", entry.IP, entry.Hostname))
 		}
 		batch = append(batch, ag)
 		restoredCount++
@@ -708,7 +708,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 	// persisted and the database remains in its pre-rollback state.
 	if len(batch) > 0 {
 		if err := s.store.AppendEventsBatch(ctx, batch); err != nil {
-			return nil, oops.Wrapf(err, "rollback: atomic batch write")
+			return nil, mapError(oops.Wrapf(err, "rollback: atomic batch write"))
 		}
 	}
 
