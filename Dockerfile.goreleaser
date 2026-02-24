@@ -1,9 +1,11 @@
-# Dockerfile used by GoReleaser — copies pre-built binaries.
+# Dockerfile used by GoReleaser dockers_v2 — copies pre-built binaries.
+# dockers_v2 places binaries under linux/{TARGETARCH}/ in the build context.
 # For local builds, use `docker build -f Dockerfile .` instead.
 FROM gcr.io/distroless/static:nonroot
+ARG TARGETARCH
 
-COPY router-hosts /usr/local/bin/router-hosts
-COPY operator /usr/local/bin/operator
+COPY linux/${TARGETARCH}/router-hosts /usr/local/bin/router-hosts
+COPY linux/${TARGETARCH}/operator /usr/local/bin/operator
 
 EXPOSE 50051
 
