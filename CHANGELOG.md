@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.5](https://github.com/fzymgc-house/router-hosts/compare/v0.9.4...v0.9.5) (2026-02-24)
+
+
+### Bug Fixes
+
+* **ci:** restore docs tasks in Taskfile ([#269](https://github.com/fzymgc-house/router-hosts/issues/269)) ([3764d32](https://github.com/fzymgc-house/router-hosts/commit/3764d3217fb70fed93116b4fe131e8e15c46e4f3))
+
 ## [0.9.4](https://github.com/fzymgc-house/router-hosts/compare/v0.9.3...v0.9.4) (2026-02-24)
 
 
