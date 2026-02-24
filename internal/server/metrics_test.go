@@ -474,6 +474,30 @@ func TestShutdown(t *testing.T) {
 	})
 }
 
+func TestSanitizeGRPCEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"bare host:port", "localhost:4317", "localhost:4317"},
+		{"http scheme", "http://localhost:4317", "localhost:4317"},
+		{"https scheme", "https://otel-collector:4317", "otel-collector:4317"},
+		{"http with IP", "http://127.0.0.1:4317", "127.0.0.1:4317"},
+		{"no port", "http://otel-collector", "otel-collector"},
+		{"empty string", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, sanitizeGRPCEndpoint(tt.input))
+		})
+	}
+}
+
 func TestExtractMethodName(t *testing.T) {
 	t.Parallel()
 

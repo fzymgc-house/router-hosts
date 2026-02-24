@@ -125,8 +125,10 @@ func NewMetricsFromConfig(cfg *config.OTelConfig) (*Metrics, error) {
 
 	ctx := context.Background()
 
+	endpoint := sanitizeGRPCEndpoint(cfg.Endpoint)
+
 	opts := []otlpmetricgrpc.Option{
-		otlpmetricgrpc.WithEndpoint(cfg.Endpoint),
+		otlpmetricgrpc.WithEndpoint(endpoint),
 	}
 
 	if cfg.Insecure {
@@ -268,6 +270,16 @@ func (m *Metrics) Shutdown(ctx context.Context) error {
 		return oops.Wrapf(err, "shutdown meter provider")
 	}
 	return nil
+}
+
+// sanitizeGRPCEndpoint strips http:// or https:// scheme prefixes from an
+// endpoint string. The gRPC exporter's WithEndpoint expects bare host:port,
+// but users and documentation commonly include the scheme (matching the
+// OTEL_EXPORTER_OTLP_ENDPOINT env var format).
+func sanitizeGRPCEndpoint(endpoint string) string {
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+	endpoint = strings.TrimPrefix(endpoint, "https://")
+	return endpoint
 }
 
 // buildOTelTLSConfig creates a TLS config from OTel config fields.
