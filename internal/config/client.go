@@ -14,10 +14,20 @@ import (
 
 // ClientConfig holds the client connection settings.
 type ClientConfig struct {
-	ServerAddress string `toml:"server_address"`
-	CertPath      string `toml:"cert_path"`
-	KeyPath       string `toml:"key_path"`
-	CACertPath    string `toml:"ca_cert_path"`
+	Server ClientServerConfig `toml:"server"`
+	TLS    ClientTLSConfig    `toml:"tls"`
+}
+
+// ClientServerConfig holds the server connection settings.
+type ClientServerConfig struct {
+	Address string `toml:"address"`
+}
+
+// ClientTLSConfig holds the client TLS certificate paths.
+type ClientTLSConfig struct {
+	CertPath   string `toml:"cert_path"`
+	KeyPath    string `toml:"key_path"`
+	CACertPath string `toml:"ca_cert_path"`
 }
 
 // ClientConfigOverrides holds optional CLI arg overrides.
@@ -58,9 +68,9 @@ func LoadClientConfig(overrides *ClientConfigOverrides) (*ClientConfig, error) {
 	}
 
 	// Expand tildes in paths
-	cfg.CertPath = expandTilde(cfg.CertPath)
-	cfg.KeyPath = expandTilde(cfg.KeyPath)
-	cfg.CACertPath = expandTilde(cfg.CACertPath)
+	cfg.TLS.CertPath = expandTilde(cfg.TLS.CertPath)
+	cfg.TLS.KeyPath = expandTilde(cfg.TLS.KeyPath)
+	cfg.TLS.CACertPath = expandTilde(cfg.TLS.CACertPath)
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -71,8 +81,8 @@ func LoadClientConfig(overrides *ClientConfigOverrides) (*ClientConfig, error) {
 
 // validate checks that all required fields are set.
 func (c *ClientConfig) validate() error {
-	if c.ServerAddress == "" {
-		return oops.Code(domain.CodeValidation).Errorf("client config: server_address is required")
+	if c.Server.Address == "" {
+		return oops.Code(domain.CodeValidation).Errorf("client config: server address is required")
 	}
 	return nil
 }
@@ -127,10 +137,12 @@ func clientConfigSearchPaths() []string {
 		}
 	}
 
-	// 2. ~/.config fallback
-	if home, err := os.UserHomeDir(); err == nil {
-		for _, name := range filenames {
-			paths = append(paths, filepath.Join(home, ".config", "router-hosts", name))
+	// 2. ~/.config fallback (only when XDG_CONFIG_HOME is not set)
+	if os.Getenv("XDG_CONFIG_HOME") == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			for _, name := range filenames {
+				paths = append(paths, filepath.Join(home, ".config", "router-hosts", name))
+			}
 		}
 	}
 
@@ -149,32 +161,32 @@ func clientConfigSearchPaths() []string {
 // applyClientEnv overrides config fields with environment variable values when set.
 func applyClientEnv(cfg *ClientConfig) {
 	if v := os.Getenv(EnvServer); v != "" {
-		cfg.ServerAddress = v
+		cfg.Server.Address = v
 	}
 	if v := os.Getenv(EnvCert); v != "" {
-		cfg.CertPath = v
+		cfg.TLS.CertPath = v
 	}
 	if v := os.Getenv(EnvKey); v != "" {
-		cfg.KeyPath = v
+		cfg.TLS.KeyPath = v
 	}
 	if v := os.Getenv(EnvCA); v != "" {
-		cfg.CACertPath = v
+		cfg.TLS.CACertPath = v
 	}
 }
 
 // applyClientOverrides applies CLI arg overrides to config fields.
 func applyClientOverrides(cfg *ClientConfig, o *ClientConfigOverrides) {
 	if o.ServerAddress != nil {
-		cfg.ServerAddress = *o.ServerAddress
+		cfg.Server.Address = *o.ServerAddress
 	}
 	if o.CertPath != nil {
-		cfg.CertPath = *o.CertPath
+		cfg.TLS.CertPath = *o.CertPath
 	}
 	if o.KeyPath != nil {
-		cfg.KeyPath = *o.KeyPath
+		cfg.TLS.KeyPath = *o.KeyPath
 	}
 	if o.CACertPath != nil {
-		cfg.CACertPath = *o.CACertPath
+		cfg.TLS.CACertPath = *o.CACertPath
 	}
 }
 

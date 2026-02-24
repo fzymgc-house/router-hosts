@@ -20,7 +20,7 @@ import (
 
 func TestNewClient_NoTLS_ReturnsError(t *testing.T) {
 	cfg := &config.ClientConfig{
-		ServerAddress: "localhost:50051",
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
 	}
 
 	_, err := NewClient(cfg)
@@ -34,7 +34,7 @@ func TestNewClient_Close_Nil(t *testing.T) {
 }
 
 func TestBuildTransportCredentials_NoTLS_ReturnsError(t *testing.T) {
-	cfg := &config.ClientConfig{ServerAddress: "localhost:50051"}
+	cfg := &config.ClientConfig{Server: config.ClientServerConfig{Address: "localhost:50051"}}
 	_, err := buildTransportCredentials(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "TLS configuration required")
@@ -42,8 +42,8 @@ func TestBuildTransportCredentials_NoTLS_ReturnsError(t *testing.T) {
 
 func TestBuildTransportCredentials_MismatchedCertKey(t *testing.T) {
 	cfg := &config.ClientConfig{
-		ServerAddress: "localhost:50051",
-		CertPath:      "/some/cert.pem",
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CertPath: "/some/cert.pem"},
 	}
 	_, err := buildTransportCredentials(cfg)
 	require.Error(t, err)
@@ -52,8 +52,8 @@ func TestBuildTransportCredentials_MismatchedCertKey(t *testing.T) {
 
 func TestBuildTransportCredentials_MismatchedKeyWithoutCert(t *testing.T) {
 	cfg := &config.ClientConfig{
-		ServerAddress: "localhost:50051",
-		KeyPath:       "/some/key.pem",
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{KeyPath: "/some/key.pem"},
 	}
 	_, err := buildTransportCredentials(cfg)
 	require.Error(t, err)
@@ -65,10 +65,12 @@ func TestBuildTransportCredentials_WithTLS(t *testing.T) {
 	certFile, keyFile, caFile := generateTestCerts(t, dir)
 
 	cfg := &config.ClientConfig{
-		ServerAddress: "localhost:50051",
-		CertPath:      certFile,
-		KeyPath:       keyFile,
-		CACertPath:    caFile,
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS: config.ClientTLSConfig{
+			CertPath:   certFile,
+			KeyPath:    keyFile,
+			CACertPath: caFile,
+		},
 	}
 
 	creds, err := buildTransportCredentials(cfg)
@@ -85,8 +87,8 @@ func TestBuildTransportCredentials_CAOnly(t *testing.T) {
 	_, _, caFile := generateTestCerts(t, dir)
 
 	cfg := &config.ClientConfig{
-		ServerAddress: "localhost:50051",
-		CACertPath:    caFile,
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CACertPath: caFile},
 	}
 
 	creds, err := buildTransportCredentials(cfg)
@@ -100,9 +102,11 @@ func TestBuildTransportCredentials_CAOnly(t *testing.T) {
 
 func TestBuildTransportCredentials_BadCertPath(t *testing.T) {
 	cfg := &config.ClientConfig{
-		ServerAddress: "localhost:50051",
-		CertPath:      "/nonexistent/cert.pem",
-		KeyPath:       "/nonexistent/key.pem",
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS: config.ClientTLSConfig{
+			CertPath: "/nonexistent/cert.pem",
+			KeyPath:  "/nonexistent/key.pem",
+		},
 	}
 
 	_, err := buildTransportCredentials(cfg)
@@ -112,8 +116,8 @@ func TestBuildTransportCredentials_BadCertPath(t *testing.T) {
 
 func TestBuildTransportCredentials_BadCAPath(t *testing.T) {
 	cfg := &config.ClientConfig{
-		ServerAddress: "localhost:50051",
-		CACertPath:    "/nonexistent/ca.pem",
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CACertPath: "/nonexistent/ca.pem"},
 	}
 
 	_, err := buildTransportCredentials(cfg)
@@ -127,8 +131,8 @@ func TestBuildTransportCredentials_InvalidCAPEM(t *testing.T) {
 	require.NoError(t, os.WriteFile(caFile, []byte("not a PEM"), 0o600))
 
 	cfg := &config.ClientConfig{
-		ServerAddress: "localhost:50051",
-		CACertPath:    caFile,
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CACertPath: caFile},
 	}
 
 	_, err := buildTransportCredentials(cfg)

@@ -14,6 +14,12 @@ func TestDefaultNewClientFromFlags_WithServerAddress_NoTLS(t *testing.T) {
 	origFlags := Flags
 	t.Cleanup(func() { Flags = origFlags })
 
+	// Isolate from real config files on the developer's machine.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
 	Flags = GlobalFlags{
 		Server: "localhost:50051",
 	}
