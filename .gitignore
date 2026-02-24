@@ -30,3 +30,7 @@ coverage.html
 # Vault AppRole credentials (sensitive - never commit)
 /examples/vault-approle/
 site/
+
+# Dolt database files (added by bd init)
+.dolt/
+*.db
