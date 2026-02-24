@@ -4,144 +4,94 @@ This document describes the E2E test suite for router-hosts.
 
 ## Overview
 
-E2E tests validate the full stack with real mTLS authentication. Tests run in Docker containers with actual TLS certificates and network communication.
+E2E tests validate the full stack with real mTLS authentication. Tests run in-process using `crypto/x509` for certificate generation and `bufconn` for gRPC transport. No Docker is required.
 
 ## Running E2E Tests
 
 ```bash
 # Run all E2E tests
-task e2e
-
-# Run specific scenario
-task e2e:scenario -- disaster_recovery
-
-# Quick run (skip rebuild)
-task e2e:quick
+task test:e2e
 ```
 
 ## Prerequisites
 
-- Docker running
-- `ROUTER_HOSTS_IMAGE`: Docker image (default: `ghcr.io/fzymgc-house/router-hosts:latest`)
-- `ROUTER_HOSTS_BINARY`: Path to CLI binary (default: `router-hosts` in PATH)
+- Go 1.24+
+- No external dependencies (certificates and gRPC transport are handled in-process)
 
 ## Test Scenarios
 
-The E2E suite includes 10 tests across 4 scenario files:
+The E2E suite includes 10 tests in the `e2e/` directory:
 
-| File | Tests | Description |
+| Area | Tests | Description |
 |------|-------|-------------|
-| `initial_setup.rs` | 1 | First-time deployment workflow |
-| `daily_operations.rs` | 5 | CRUD, import/export, aliases, search |
-| `auth_failures.rs` | 2 | mTLS authentication rejection |
-| `disaster_recovery.rs` | 2 | Snapshot and rollback operations |
+| CRUD | 3 | Create, read, update, delete host entries |
+| Import/Export | 1 | Round-trip import and export of hosts files |
+| Aliases | 1 | Hostname alias operations |
+| Search | 1 | Search by hostname, IP, and alias |
+| Auth: Wrong CA | 1 | Reject client with certificate from wrong CA |
+| Auth: Self-signed | 1 | Reject client with self-signed certificate |
+| Snapshots | 1 | Create and list snapshots |
+| Rollback | 1 | Rollback to previous snapshot |
 
 ## Architecture
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
-│                  Test Host                       │
+│                  Test Process                    │
 │                                                  │
 │  ┌──────────────┐         ┌──────────────────┐  │
-│  │   E2E Test   │         │  Docker Network  │  │
-│  │   Binary     │◀───────▶│                  │  │
-│  │  (client)    │  mTLS   │  ┌────────────┐  │  │
-│  └──────────────┘         │  │   Server   │  │  │
-│                           │  │ Container  │  │  │
-│                           │  └────────────┘  │  │
-│                           └──────────────────┘  │
+│  │   Test Code  │         │   gRPC Server    │  │
+│  │   (client)   │◀───────▶│   (in-process)   │  │
+│  │              │ bufconn  │                  │  │
+│  └──────────────┘         └──────────────────┘  │
+│                                                  │
+│  ┌──────────────┐         ┌──────────────────┐  │
+│  │  crypto/x509 │         │  SQLite :memory: │  │
+│  │  (certs)     │         │  (storage)       │  │
+│  └──────────────┘         └──────────────────┘  │
 └─────────────────────────────────────────────────┘
 ```
 
-## macOS E2E Testing
-
-**Issue:** `task e2e` fails on macOS with "Exec format error" because it uses host binary (macOS) in Linux container.
-
-**Solution:**
-
-```bash
-# 1. Build Docker image with Linux binary (multi-stage Docker build)
-task docker:build
-
-# 2. Run E2E tests
-ROUTER_HOSTS_IMAGE=ghcr.io/fzymgc-house/router-hosts:dev \
-ROUTER_HOSTS_BINARY=$(pwd)/target/release/router-hosts \
-cargo test -p router-hosts-e2e --release
-
-# Or run specific test
-ROUTER_HOSTS_IMAGE=ghcr.io/fzymgc-house/router-hosts:dev \
-ROUTER_HOSTS_BINARY=$(pwd)/target/release/router-hosts \
-cargo test -p router-hosts-e2e --release test_import_export_roundtrip
-```
-
-**Why:**
-- `docker:build` compiles Linux binary inside Docker (works cross-platform)
-- `docker:build-ci` copies host binary (fast on Linux CI, broken on macOS)
-- Tests need `ROUTER_HOSTS_IMAGE=...dev` to use locally built image
-
 ## Writing New E2E Tests
 
-New E2E tests go in `crates/router-hosts-e2e/tests/scenarios/`.
+New E2E tests go in the `e2e/` directory.
 
 ### Test Structure
 
-```rust
-use predicates::prelude::*;
-use router_hosts_e2e::cli::TestCli;
-use router_hosts_e2e::container::TestServer;
+```go
+func TestMyScenario(t *testing.T) {
+    // Setup: start in-process server with mTLS
+    env := setupTestEnv(t)
 
-#[tokio::test]
-async fn test_my_scenario() {
-    // Setup: Start server container
-    let server = TestServer::start().await;
-    let cli = TestCli::new(
-        server.address(),
-        server.cert_paths.clone(),
-        server.temp_dir.path(),
-    );
+    // Act: execute client operations
+    resp, err := env.client.AddHost(env.ctx, &pb.AddHostRequest{
+        IpAddress: "192.168.1.1",
+        Hostname:  "test.local",
+    })
+    require.NoError(t, err)
+    assert.Equal(t, "192.168.1.1", resp.Host.IpAddress)
 
-    // Act: Execute client commands
-    cli.add_host("192.168.1.1", "test.local")
-        .build()
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("192.168.1.1"));
-
-    // Cleanup
-    server.stop().await;
+    // Cleanup is automatic via t.Cleanup()
 }
 ```
 
 ### Best Practices
 
-1. **Isolation**: Each test gets its own container and database
+1. **Isolation**: Each test gets its own server instance and in-memory database
 2. **Determinism**: Don't rely on system time or random values
-3. **Cleanup**: Use RAII (TestContext drops clean up resources)
-4. **Timeouts**: Set reasonable timeouts for network operations
-5. **Logging**: Use `RUST_LOG=debug` to debug failures
+3. **Cleanup**: Use `t.Cleanup()` for resource teardown
+4. **Timeouts**: Use `context.WithTimeout()` for operations
+5. **Assertions**: Use `testify/require` for fatal checks, `testify/assert` for non-fatal
 
 ## Certificate Generation
 
-E2E tests generate self-signed certificates at runtime using `TestCertificates::generate()`.
-Certificates are stored in a temporary directory managed by the test harness and cleaned up automatically.
-
-## Debugging Failed Tests
-
-```bash
-# Run with verbose output
-RUST_LOG=debug task e2e
-
-# Attach to running container
-docker exec -it router-hosts-test-server /bin/sh
-
-# View container logs
-docker logs router-hosts-test-server
-```
+E2E tests generate certificates at runtime using `crypto/x509` and `crypto/ecdsa`. Each test creates its own CA, server certificate, and client certificate. Certificates are created in memory and do not touch the filesystem.
 
 ## CI Integration
 
 E2E tests run in GitHub Actions on:
+
 - Every pull request
 - Every push to `main`
 
-The CI uses Linux runners where `docker:build-ci` works correctly.
+No Docker or special runner configuration is needed.

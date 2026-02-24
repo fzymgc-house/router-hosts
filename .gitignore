@@ -1,12 +1,11 @@
 .worktrees/
 .claude/*local*
 
-# Rust
-target/
-# Note: Cargo.lock IS committed for binary projects (see CLAUDE.md)
+# Go
+bin/
 
-# Proptest failure persistence (auto-generated, not needed in repo)
-**/proptest-regressions/
+# Serena
+.serena/
 
 # IDE
 .idea/
@@ -17,12 +16,11 @@ target/
 # OS
 .DS_Store
 
-# Build artifacts
+# Build/coverage artifacts
 *.pdb
 coverage/
-
-# Temporary binary for CI Docker build
-/router-hosts
+coverage.out
+coverage.html
 
 # Docker Compose local directories (created by users following examples)
 /config/

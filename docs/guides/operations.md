@@ -32,6 +32,7 @@ command = "/usr/local/bin/alert-ops.sh"
 ### Hook Name Requirements
 
 Hook names must follow these rules:
+
 - **Format**: Kebab-case only (lowercase letters, numbers, hyphens)
 - **Length**: Maximum 50 characters
 - **Uniqueness**: No duplicate names within the same hook type
@@ -72,12 +73,14 @@ During the 30-second graceful shutdown period:
 If the timeout expires before all operations complete, remaining connections are forcibly closed. The server logs a warning indicating some requests may have been interrupted.
 
 **What persists across reloads:**
-- Storage backend (DuckDB/SQLite/PostgreSQL connection)
+
+- Storage backend (SQLite connection)
 - CommandHandler (business logic)
 - HookExecutor (post-edit hooks configuration)
 - HostsFileGenerator (output path configuration)
 
 **What is recreated:**
+
 - TLS certificates (the whole point of SIGHUP)
 - gRPC server instance
 - WriteQueue (fresh channel and worker task)
@@ -115,19 +118,21 @@ template {
 ### Certificate Validation
 
 **What gets validated on SIGHUP:**
+
 - Files exist and are readable
 - Valid PEM format
 - Private key can be parsed
 - CA certificate can be parsed
 
 **What doesn't get validated:**
+
 - Certificate expiry (server starts with expired certs)
 - CA chain validity (checked at connection time)
-- Key/cert match (checked by tonic on load)
+- Key/cert match (checked by Go crypto/tls on load)
 
 ## Logging
 
-The server uses `tracing` for structured logging.
+The server uses `slog` for structured logging.
 
 ### Log Levels
 
@@ -141,17 +146,20 @@ The server uses `tracing` for structured logging.
 
 ### Configuration
 
-Set via `RUST_LOG` environment variable:
+Set via `LOG_LEVEL` environment variable or in the TOML configuration:
 
 ```bash
 # All components at info level
-RUST_LOG=info router-hosts server
+LOG_LEVEL=info router-hosts serve
 
-# Debug for storage, info for everything else
-RUST_LOG=info,router_hosts_storage=debug router-hosts server
+# Enable debug logging
+LOG_LEVEL=debug router-hosts serve
+```
 
-# Trace gRPC traffic
-RUST_LOG=info,tonic=trace router-hosts server
+```toml
+# Or configure in server config
+[logging]
+level = "info"  # error, warn, info, debug
 ```
 
 ### Access Logs
@@ -174,7 +182,7 @@ Each request produces a single log line with structured fields:
 
 **Example Output:**
 
-```
+```text
 INFO request method=AddHost id=01JG... hostname=myserver.local ip=192.168.1.10 status=ok duration_ms=5
 INFO request method=GetHost id=01JG... hostname=myserver.local ip=192.168.1.10 status=ok duration_ms=2
 INFO request method=UpdateHost id=01JG... hostname=newname.local ip=10.0.0.5 status=ok duration_ms=3
@@ -320,7 +328,7 @@ The `export_interval_secs` option controls how frequently metrics are pushed to 
 
 ### Available Metrics
 
-All metrics recorded via `counter!()`, `histogram!()`, and `gauge!()` macros are exported to the OTEL collector:
+All metrics recorded via the OpenTelemetry Go SDK are exported to the OTEL collector:
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
@@ -378,7 +386,7 @@ When the OTEL collector becomes unavailable at runtime:
 
 - **Traces:** The batch exporter retries with exponential backoff (5s initial, 30s max). Failed spans are dropped after retry exhaustion to prevent memory growth.
 - **Metrics:** The periodic reader (60s interval) retries on each export cycle. Metrics are aggregated in-memory and the latest values are sent when connectivity resumes.
-- **Logging:** Failed exports log at `warn` level. Enable `RUST_LOG=opentelemetry=debug` for detailed retry diagnostics.
+- **Logging:** Failed exports log at `warn` level. Enable `LOG_LEVEL=debug` for detailed retry diagnostics.
 
 This design ensures the server never blocks on telemetry failures—observability is best-effort.
 
@@ -425,7 +433,7 @@ volumes:
 **Debug logging:**
 
 ```bash
-RUST_LOG=opentelemetry=debug,router_hosts=debug ./router-hosts server
+LOG_LEVEL=debug router-hosts serve
 ```
 
 ## Backup and Recovery
@@ -433,6 +441,7 @@ RUST_LOG=opentelemetry=debug,router_hosts=debug ./router-hosts server
 ### Automatic Snapshots
 
 The server creates snapshots before destructive operations:
+
 - Before import (replaces all hosts)
 - Before rollback (creates backup of current state)
 
@@ -481,13 +490,14 @@ max_age_days = 30       # Delete snapshots older than 30 days
 ### Network Security
 
 - Server binds to configured address only
-- TLS 1.2+ required (rustls defaults)
+- TLS 1.2+ required (Go crypto/tls defaults)
 - Client certificates required for all connections
 - No anonymous or insecure connections allowed
 
 ### Audit Trail
 
 All operations are logged with:
+
 - Client certificate subject (who)
 - Operation type and parameters (what)
 - Timestamp (when)

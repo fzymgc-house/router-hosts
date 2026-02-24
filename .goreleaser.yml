@@ -1,0 +1,57 @@
+version: 2
+builds:
+  - id: router-hosts
+    main: ./cmd/router-hosts
+    binary: router-hosts
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X github.com/fzymgc-house/router-hosts/internal/client/commands.Version={{.Version}}
+    flags:
+      - -trimpath
+  - id: operator
+    main: ./cmd/operator
+    binary: operator
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+    flags:
+      - -trimpath
+archives:
+  - id: router-hosts
+    ids:
+      - router-hosts
+    name_template: "router-hosts_{{ .Os }}_{{ .Arch }}"
+  - id: operator
+    ids:
+      - operator
+    name_template: "operator_{{ .Os }}_{{ .Arch }}"
+dockers_v2:
+  - images:
+      - "ghcr.io/fzymgc-house/router-hosts"
+    tags:
+      - "{{ .Version }}"
+      - latest
+    ids:
+      - router-hosts
+      - operator
+    dockerfile: Dockerfile.goreleaser
+    platforms:
+      - linux/amd64
+      - linux/arm64
+checksum:
+  name_template: checksums.txt
+changelog:
+  disable: true

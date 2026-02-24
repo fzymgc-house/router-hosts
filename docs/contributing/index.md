@@ -5,17 +5,20 @@ Thank you for your interest in contributing to router-hosts!
 ## Development Setup
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/fzymgc-house/router-hosts.git
    cd router-hosts
    ```
 
 2. Install prerequisites:
-   - Rust 1.75+ (`rustup install stable`)
+   - Go 1.24+ ([https://go.dev/dl/](https://go.dev/dl/))
    - buf CLI (`brew install bufbuild/buf/buf`)
-   - pre-commit (`pip install pre-commit && pre-commit install`)
+   - lefthook (`brew install lefthook && lefthook install`)
+   - golangci-lint (`brew install golangci-lint`)
 
 3. Build and test:
+
    ```bash
    task build
    task test

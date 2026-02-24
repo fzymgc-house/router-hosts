@@ -5,28 +5,30 @@
 # Run manually: lefthook run pre-commit --all-files
 #
 # Hooks are ordered by speed (fast checks first) for fail-fast behavior.
-# Expensive checks (clippy) run only on pre-push stage.
-# Tests run in ci.yml workflow, not here (avoids CI duplication).
+# Expensive checks (golangci-lint) run only on pre-push stage.
+# Tests run in ci-go.yml workflow, not here (avoids CI duplication).
 #
 # Prerequisites:
 # - lefthook: brew install lefthook
 # - buf: brew install bufbuild/buf/buf
 # - cocogitto: brew install cocogitto
-# - rumdl: cargo install rumdl OR brew install rumdl
-# - yamlfmt: go install github.com/google/yamlfmt/cmd/yamlfmt@latest OR brew install yamlfmt
+# - gofumpt: go install mvdan.cc/gofumpt@latest
+# - golangci-lint: brew install golangci-lint
+# - rumdl: brew install rumdl
+# - yamlfmt: brew install yamlfmt
 pre-commit:
   parallel: true
   commands:
     check-merge-conflict:
-      glob: "*.{rs,toml,yaml,yml,proto,sh,md}"
+      glob: "*.{go,toml,yaml,yml,proto,sh,md}"
       run: |
         if grep -rql "^<<<<<<<\|^=======\|^>>>>>>>" {staged_files}; then
           echo "ERROR: Merge conflict markers found in staged files"
           exit 1
         fi
-    cargo-fmt:
-      glob: "*.rs"
-      run: cargo fmt -- --check
+    gofumpt:
+      glob: "*.go"
+      run: gofumpt -l -d {staged_files}
     buf-format:
       glob: "*.proto"
       run: buf format --diff --exit-code
@@ -53,6 +55,6 @@ commit-msg:
       run: cog verify --file {1}
 pre-push:
   commands:
-    cargo-clippy:
-      glob: "*.rs"
-      run: cargo clippy --workspace -- -D warnings
+    golangci-lint:
+      glob: "*.go"
+      run: golangci-lint run ./...

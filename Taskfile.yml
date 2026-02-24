@@ -1,268 +1,76 @@
 version: '3'
-
 vars:
   IMAGE_NAME: ghcr.io/fzymgc-house/router-hosts
   IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
-  # Local-only image name (no registry prefix) to prevent testcontainers pull attempts
-  LOCAL_IMAGE: 'router-hosts:e2e-local'
-  # Binary path for docs generation (override in CI with downloaded release binary)
-  BINARY: '{{.BINARY | default "./target/release/router-hosts"}}'
-  # MkDocs command with all required plugins
-  MKDOCS: 'uvx --with mkdocs-material --with mkdocs-git-revision-date-localized-plugin --with mkdocs-exclude mkdocs'
-
 tasks:
-  # ─────────────────────────────────────────────────────────────
-  # Development
-  # ─────────────────────────────────────────────────────────────
   build:
-    desc: Build all crates in debug mode
+    desc: Build all binaries (debug)
     cmds:
-      - cargo build --workspace
-
+      - go build -o bin/router-hosts ./cmd/router-hosts
+      - go build -o bin/operator ./cmd/operator
   build:release:
-    desc: Build all crates in release mode
+    desc: Build all binaries with optimizations
     cmds:
-      - cargo build --workspace --release
-
-  build:router-hosts:
-    desc: Build router-hosts binary only (SQLite + PostgreSQL backends)
-    cmds:
-      - cargo build -p router-hosts
-
-  build:router-hosts:release:
-    desc: Build router-hosts binary only in release mode
-    cmds:
-      - cargo build -p router-hosts --release
-
-  build:duckdb:
-    desc: Build router-hosts-duckdb binary only (all backends including DuckDB)
-    cmds:
-      - cargo build -p router-hosts-duckdb
-
-  build:duckdb:release:
-    desc: Build router-hosts-duckdb binary only in release mode
-    cmds:
-      - cargo build -p router-hosts-duckdb --release
-
-  version:check:
-    desc: Verify version output shows correct backends for each binary
-    deps: ["build:router-hosts", "build:duckdb"]
-    cmds:
-      - echo "=== router-hosts (should NOT have duckdb) ==="
-      - ./target/debug/router-hosts --version
-      - echo ""
-      - echo "=== router-hosts-duckdb (should have duckdb) ==="
-      - ./target/debug/router-hosts-duckdb --version
-
+      - go build -trimpath -ldflags="-s -w" -o bin/router-hosts ./cmd/router-hosts
+      - go build -trimpath -ldflags="-s -w" -o bin/operator ./cmd/operator
   test:
-    desc: Run unit and integration tests with nextest
+    desc: Run all unit and integration tests
     cmds:
-      - cargo nextest run --workspace --exclude router-hosts-e2e
-
-  test:all:
-    desc: Run all tests including doc tests
+      - go test ./... -race -count=1
+  test:e2e:
+    desc: Run E2E tests with real mTLS (in-process)
     cmds:
-      - cargo nextest run --workspace --exclude router-hosts-e2e
-      - cargo test --workspace --exclude router-hosts-e2e --doc
-
-  test:sqlite:
-    desc: Run SQLite backend tests
+      - go test -tags e2e -count=1 -v ./e2e/
+  test:e2e:docker:
+    desc: Run Docker E2E tests (builds image, requires Docker)
+    deps: ['docker:build']
     cmds:
-      - cargo nextest run -p router-hosts-storage --features sqlite -E 'test(sqlite)'
-
-  test:postgres:
-    desc: Run PostgreSQL backend tests (requires Docker for testcontainers)
-    cmds:
-      - cargo nextest run -p router-hosts-storage --features postgres -E 'test(postgres)'
-
+      - go test -tags docker_e2e -count=1 -v -timeout 5m ./e2e/
   test:coverage:
-    desc: Run tests with llvm-cov coverage report (excludes E2E)
+    desc: Run tests with HTML coverage report
     cmds:
-      - cargo llvm-cov nextest --workspace --exclude router-hosts-e2e --html --output-dir coverage
-      - cargo llvm-cov report --json --output-path coverage/coverage.json
-
+      - go test ./internal/... -race -coverprofile=coverage.out -covermode=atomic
+      - go tool cover -html=coverage.out -o coverage.html
+      - go tool cover -func=coverage.out | tail -1
   test:coverage:ci:
     desc: Run tests with coverage (CI mode - enforces 80% threshold)
     cmds:
-      # Excluded from coverage (require network/integration infrastructure, tested by E2E):
-      # - main.rs: entry point (standard exclusion)
-      # - client/grpc.rs: gRPC client wrapper (requires live server)
-      # - server/mod.rs: gRPC server impl (requires network binding)
-      - >-
-        cargo llvm-cov nextest --workspace --exclude router-hosts-e2e
-        --html --output-dir coverage
-        --fail-under-lines 80
-        --ignore-filename-regex "(main\.rs|client/grpc\.rs|server/mod\.rs)"
-      - >-
-        cargo llvm-cov report --json --output-path coverage/coverage.json
-        --ignore-filename-regex "(main\.rs|client/grpc\.rs|server/mod\.rs)"
-
-  test:coverage:report:
-    desc: Show coverage summary in terminal
-    cmds:
-      - cargo llvm-cov nextest --workspace --exclude router-hosts-e2e
-
+      - go test ./internal/... -race -coverprofile=coverage.out -covermode=atomic
+      - |
+        # Exclude test helper packages (storagetest) from coverage calculation
+        grep -v '/storagetest/' coverage.out > coverage_ci.out || true
+        COVERAGE=$(go tool cover -func=coverage_ci.out | tail -1 | awk '{print $3}' | tr -d '%')
+        echo "Coverage: ${COVERAGE}%"
+        if [ "$(echo "${COVERAGE} < 80" | bc)" -eq 1 ]; then
+          echo "FAIL: Coverage ${COVERAGE}% is below 80% threshold"
+          exit 1
+        fi
   lint:
-    desc: Run all linters (clippy, fmt, buf)
+    desc: Run all linters (Go + protobuf)
     cmds:
-      - cargo fmt --check
-      - cargo clippy --workspace -- -D warnings
+      - golangci-lint run ./...
       - buf lint
       - buf format --diff --exit-code
-
   fmt:
-    desc: Format all code
+    desc: Format all code (Go + protobuf)
     cmds:
-      - cargo fmt
+      - gofumpt -w .
       - buf format -w
-
-  # ─────────────────────────────────────────────────────────────
-  # Docker
-  # ─────────────────────────────────────────────────────────────
+  proto:generate:
+    desc: Generate Go code from protobuf definitions
+    cmds:
+      - buf generate
   docker:build:
-    desc: Build server Docker image for local architecture
+    desc: Build Docker image for local architecture
     cmds:
-      - docker build -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} -t {{.LOCAL_IMAGE}} .
-
-  docker:build-ci:
-    desc: Build Docker image using pre-built binary (for CI/E2E)
-    deps: ["build:release"]
+      - docker build -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} .
+  clean:
+    desc: Remove build artifacts and generated files
     cmds:
-      # Copy binary to root to avoid .dockerignore excluding target/
-      - cp target/release/router-hosts router-hosts
-      - docker build -f Dockerfile.ci -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} -t {{.LOCAL_IMAGE}} .
-      - rm router-hosts
-
-  docker:build-e2e:
-    desc: Build Docker image from existing binary (no build step, for CI artifact reuse)
-    preconditions:
-      - test -f target/release/router-hosts
-    cmds:
-      # Copy binary to root to avoid .dockerignore excluding target/
-      - cp target/release/router-hosts router-hosts
-      - docker build -f Dockerfile.ci -t {{.IMAGE_NAME}}:{{.IMAGE_TAG}} -t {{.LOCAL_IMAGE}} .
-      - rm router-hosts
-
-  docker:build-operator-e2e:
-    desc: Build operator Docker image from existing binary (for CI smoke test)
-    preconditions:
-      - test -f target/release/router-hosts-operator
-    cmds:
-      # Copy binary to root to avoid .dockerignore excluding target/
-      - cp target/release/router-hosts-operator router-hosts-operator
-      - docker build -f Dockerfile.ci.operator -t {{.OPERATOR_IMAGE_NAME}}:{{.IMAGE_TAG}} .
-      - rm router-hosts-operator
-    vars:
-      OPERATOR_IMAGE_NAME: '{{.OPERATOR_IMAGE_NAME | default "router-hosts-operator"}}'
-
-  docker:run:
-    desc: Run server container (requires certs in ./dev/certs/)
-    cmds:
-      - |
-        docker run --rm -it \
-          -v {{.USER_WORKING_DIR}}/dev/certs:/certs:ro \
-          -v {{.USER_WORKING_DIR}}/dev/data:/data \
-          -p 50051:50051 \
-          {{.IMAGE_NAME}}:{{.IMAGE_TAG}} \
-          server --config /certs/server.toml
-
-  # ─────────────────────────────────────────────────────────────
-  # E2E Tests
-  # ─────────────────────────────────────────────────────────────
-  e2e:
-    desc: Run E2E acceptance tests
-    deps: ["docker:build", "build:release"]
-    env:
-      # Use local-only image name to prevent testcontainers from trying to pull
-      ROUTER_HOSTS_IMAGE: '{{.LOCAL_IMAGE}}'
-      ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
-    cmds:
-      - cargo test -p router-hosts-e2e --release -- --test-threads=4
-
-  e2e:quick:
-    desc: Run E2E tests (skip rebuild, assumes image exists)
-    env:
-      # Use local-only image name to prevent testcontainers from trying to pull
-      ROUTER_HOSTS_IMAGE: '{{.LOCAL_IMAGE}}'
-      ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
-    cmds:
-      - cargo test -p router-hosts-e2e --release -- --test-threads=4
-
-  e2e:scenario:
-    desc: Run specific E2E scenario (e.g., task e2e:scenario -- daily_operations)
-    env:
-      # Use local-only image name to prevent testcontainers from trying to pull
-      ROUTER_HOSTS_IMAGE: '{{.LOCAL_IMAGE}}'
-      ROUTER_HOSTS_BINARY: '{{.USER_WORKING_DIR}}/target/release/router-hosts'
-    cmds:
-      - cargo test -p router-hosts-e2e --release -- {{.CLI_ARGS}}
-
-  # ─────────────────────────────────────────────────────────────
-  # Release
-  # ─────────────────────────────────────────────────────────────
-  dist:generate:
-    desc: Regenerate cargo-dist release workflow (after updating dist-workspace.toml)
-    cmds:
-      - dist generate
-
-  dist:plan:
-    desc: Preview what cargo-dist would build (dry-run)
-    cmds:
-      - dist plan
-
-  # ─────────────────────────────────────────────────────────────
-  # Documentation
-  # ─────────────────────────────────────────────────────────────
-  docs:build:
-    desc: Build documentation site locally (with strict mode)
-    deps: [docs:generate]
-    cmds:
-      - '{{.MKDOCS}} build --strict'
-
-  docs:serve:
-    desc: Serve documentation locally with live reload
-    deps: [docs:generate]
-    cmds:
-      - '{{.MKDOCS}} serve'
-
-  docs:generate:
-    desc: Generate CLI and API reference docs from source
-    deps: [build:release]
-    cmds:
-      - ./scripts/generate-cli-docs.sh {{.BINARY}}
-      - ./scripts/generate-proto-docs.sh
-
-  docs:generate:cli:
-    desc: Generate CLI reference docs only
-    deps: [build:release]
-    cmds:
-      - ./scripts/generate-cli-docs.sh {{.BINARY}}
-
-  docs:generate:api:
-    desc: Generate API reference docs from protobuf
-    cmds:
-      - ./scripts/generate-proto-docs.sh
-
-  docs:ci:
-    desc: Build docs for CI (uses BINARY var, no cargo build)
-    cmds:
-      - ./scripts/generate-cli-docs.sh {{.BINARY}}
-      - ./scripts/generate-proto-docs.sh
-      - '{{.MKDOCS}} build --strict'
-
-  # ─────────────────────────────────────────────────────────────
-  # CI Shortcuts
-  # ─────────────────────────────────────────────────────────────
+      - rm -rf bin/
+      - rm -f coverage.out coverage.html
   ci:
-    desc: Run full CI pipeline locally
+    desc: Run full CI pipeline locally (lint + test)
     cmds:
-      - task: lint
-      - task: test
-      - task: e2e
-
-  pre-commit:
-    desc: Quick checks before committing
-    cmds:
-      - task: fmt
       - task: lint
       - task: test

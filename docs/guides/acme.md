@@ -24,6 +24,7 @@ jitter_minutes = 60         # Random delay to prevent thundering herd
 ### HTTP-01
 
 Best for publicly accessible servers:
+
 - Requires port 80 accessible from the internet
 - Simpler setup, no DNS API access needed
 - Cannot issue wildcard certificates
@@ -31,6 +32,7 @@ Best for publicly accessible servers:
 ### DNS-01
 
 Best for internal servers and wildcards:
+
 - Works behind firewalls
 - Supports wildcard certificates (`*.example.com`)
 - Requires DNS provider API access
@@ -88,6 +90,7 @@ zone_id = "${CF_ZONE_ID:-auto}"                  # With default
 ```
 
 Supported syntax:
+
 - `${VAR}` - Required variable (fails if unset/empty)
 - `${VAR:-default}` - Use default if unset/empty
 - `$$` - Literal dollar sign
@@ -117,24 +120,22 @@ is Unix-specific. On Windows, you must explicitly set this to a valid path:
 credentials_path = "C:\\ProgramData\\router-hosts\\acme-account.json"
 ```
 
-## Testing with Pebble
+## Testing
 
-ACME integration tests use [Pebble](https://github.com/letsencrypt/pebble) (Let's Encrypt's test server).
-Tests run locally with Docker but are not yet integrated into CI.
+ACME logic is covered by unit tests with mocked ACME server responses.
 
-**Running locally:**
+**Running tests:**
+
 ```bash
-cargo test -p router-hosts acme  # Runs Pebble tests via testcontainers
+go test ./internal/acme/... -v
 ```
-
-**CI integration:** ACME tests run locally only; CI integration pending due to Pebble's self-signed CA
-certificate trust configuration requirements.
 
 ## Troubleshooting
 
 ### HTTP-01 Challenge Issues
 
 **Certificate renewal fails repeatedly:**
+
 1. Verify DNS records point to this server
 2. Ensure port 80 is accessible from the internet
 3. Check Let's Encrypt rate limits: https://letsencrypt.org/docs/rate-limits/
@@ -143,29 +144,34 @@ certificate trust configuration requirements.
 ### DNS-01 Challenge Issues
 
 **"Zone not found" error:**
+
 - Verify the domain matches a zone in your DNS provider account
 - For Cloudflare: check the zone exists in your account dashboard
 - If using subdomains, the parent zone must exist (e.g., `sub.example.com` requires `example.com` zone)
 - Consider explicitly configuring `zone_id` instead of relying on auto-detection
 
 **"API token invalid" or authentication errors:**
+
 - Cloudflare: Verify token has `Zone:DNS:Edit` permission
 - Cloudflare: Ensure token is scoped to the correct zone
 - Check token hasn't expired or been revoked
 - Verify environment variable expansion is working: `echo $CF_API_TOKEN`
 
 **"DNS record creation timed out" error:**
+
 - Check DNS provider API status page for outages
 - Verify network connectivity to DNS provider API
 - For Cloudflare: check you haven't hit API rate limits (1200 requests/5 min)
 - Try increasing `DNS_OPERATION_TIMEOUT` if on slow network
 
 **Challenge validation fails after record creation:**
+
 - Increase propagation delay in config (default: 10s for Cloudflare, 120s for webhook)
 - Use `dig _acme-challenge.yourdomain.com TXT` to verify record is visible
 - Some DNS providers have longer propagation times
 
 **Stale TXT records after failed renewal:**
+
 - If renewal crashes, `_acme-challenge.*` TXT records may remain
 - Manually delete via DNS provider dashboard or API
 - These don't affect functionality but clutter your DNS zone
@@ -173,11 +179,13 @@ certificate trust configuration requirements.
 ### General Issues
 
 **Rate limit errors:**
+
 - Let's Encrypt allows 5 certificates per domain per week
 - Use staging URL for testing: `https://acme-staging-v02.api.letsencrypt.org/directory`
 - Wait 1 week for rate limits to reset
 
 **Account credential backup:**
+
 - The `acme-account.json` file contains your ACME account private key
 - Back up this file to avoid needing to re-register with Let's Encrypt
 - File is written atomically with 0600 permissions

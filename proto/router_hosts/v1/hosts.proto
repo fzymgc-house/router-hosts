@@ -4,6 +4,8 @@ package router_hosts.v1;
 
 import "google/protobuf/timestamp.proto";
 
+option go_package = "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1;hostsv1";
+
 // Host entry messages
 
 // Represents a single host entry in the hosts file
@@ -108,7 +110,26 @@ message UpdateHostRequest {
   // New comment (optional, keeps existing if not provided, empty string to clear)
   optional string comment = 4;
 
-  // Field 5 reserved - was: repeated string tags (breaking change)
+  // MIGRATION NOTE: Field 5 reserved to prevent accidental reuse
+  //
+  // In the Rust implementation of router-hosts, field 5 was:
+  //   repeated string tags = 5;
+  //
+  // This has been moved to field 8 as TagsUpdate wrapper to enable proper
+  // optional semantics (absent = preserve existing, empty array = clear all).
+  // This is a wire-level breaking change.
+  //
+  // Clients migrating from the Rust version MUST:
+  //   1. Recompile protobuf stubs from this proto
+  //   2. Update code to use tags field (field 8) instead of field 5
+  //   3. Wrap tag values in TagsUpdate message for update requests
+  //
+  // Example (Go):
+  //   // Old (Rust): req.Tags = []string{"prod", "api"}
+  //   // New (Go):   req.Tags = &hostsv1.TagsUpdate{Values: []string{"prod", "api"}}
+  //
+  // Field 5 is reserved to prevent wire-protocol collisions if a future
+  // migration path requires accessing old data.
   reserved 5;
 
   // Expected version for optimistic concurrency control
@@ -117,7 +138,9 @@ message UpdateHostRequest {
   // New aliases (wrapper for optional semantics)
   AliasesUpdate aliases = 7;
 
-  // New tags (wrapper for optional semantics - breaking change from field 5)
+  // New tags (wrapper for optional semantics - moved from field 5)
+  // Use this field to update tags. To clear all tags, pass an empty TagsUpdate
+  // with no values. Omit this field to preserve existing tags.
   TagsUpdate tags = 8;
 }
 
@@ -131,6 +154,9 @@ message UpdateHostResponse {
 message DeleteHostRequest {
   // ID of the host entry to delete
   string id = 1;
+  // Expected version for optimistic concurrency (optional).
+  // If omitted, server fetches current version (racy under concurrency).
+  optional string expected_version = 2;
 }
 
 // Response after deleting a host entry
@@ -262,8 +288,8 @@ message CreateSnapshotResponse {
   // Unique identifier for the newly created snapshot
   string snapshot_id = 1;
 
-  // Timestamp when snapshot was created (microseconds since epoch)
-  int64 created_at = 2;
+  // Timestamp when snapshot was created
+  google.protobuf.Timestamp created_at = 2;
 
   // Number of entries in the snapshot
   int32 entry_count = 3;

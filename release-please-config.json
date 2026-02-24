@@ -17,23 +17,6 @@
     {"type": "ci", "section": "CI/CD"},
     {"type": "chore", "section": "Miscellaneous", "hidden": true}
   ],
-  "extra-files": [
-    {
-      "type": "toml",
-      "path": "Cargo.toml",
-      "jsonpath": "$.workspace.package.version"
-    },
-    {
-      "type": "yaml",
-      "path": "charts/router-hosts-operator/Chart.yaml",
-      "jsonpath": "$.version"
-    },
-    {
-      "type": "yaml",
-      "path": "charts/router-hosts-operator/Chart.yaml",
-      "jsonpath": "$.appVersion"
-    }
-  ],
   "packages": {
     ".": {
       "component": "router-hosts"

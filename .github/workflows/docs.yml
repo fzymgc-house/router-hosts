@@ -1,85 +1,67 @@
 name: Deploy Docs
-
 on:
-  # Trigger after v-release.yml completes (builds binaries)
-  # v-release.yml runs on tag pushes, so we don't filter by branch
   workflow_run:
     workflows: ["Release"]
     types: [completed]
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to deploy (e.g., v0.8.0). Defaults to latest release.'
+        description: "Version to deploy (e.g., v0.8.0). Defaults to latest release."
         required: false
         type: string
-
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    # Only run if workflow_run succeeded (or if manually triggered)
+    runs-on: ubuntu-24.04
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
+      github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     steps:
-      - uses: actions/checkout@v6
-
+      - uses: actions/checkout@v4
       - name: Determine version
         id: version
         env:
           GH_TOKEN: ${{ github.token }}
-          EVENT_NAME: ${{ github.event_name }}
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           if [[ -n "$INPUT_VERSION" ]]; then
             VERSION="$INPUT_VERSION"
           else
-            # Get the latest release tag (works for both workflow_run and workflow_dispatch)
             if ! VERSION=$(gh release view --json tagName -q .tagName 2>&1); then
-              echo "::error::Failed to determine version. No releases found or gh CLI error: $VERSION"
-              echo "Hint: Use workflow_dispatch with explicit version input, or create a release first."
+              echo "::error::Failed to determine version: $VERSION"
               exit 1
             fi
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Deploying docs for version: $VERSION"
-
       - name: Download release binary
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           gh release download "$VERSION" \
-            --pattern 'router-hosts-x86_64-unknown-linux-gnu.tar.xz' \
+            --pattern 'router-hosts_linux_amd64.tar.gz' \
             --dir /tmp
-          # Extract with --strip-components=1 to remove the top-level directory
-          tar -xJf /tmp/router-hosts-x86_64-unknown-linux-gnu.tar.xz -C /tmp --strip-components=1
+          tar -xzf /tmp/router-hosts_linux_amd64.tar.gz -C /tmp
           chmod +x /tmp/router-hosts
-          /tmp/router-hosts --version
-
+          /tmp/router-hosts --help
       - name: Install Task
         uses: arduino/setup-task@v2
         with:
           version: 3.x
-
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
-
+          go-version-file: go.mod
+          cache: true
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
-          version: '25.x'
-
+          version: "25.x"
       - name: Install protoc-gen-doc
         run: go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@v1.5.1
-
       - name: Install uv
         uses: astral-sh/setup-uv@v7
-
       - name: Build docs
         run: task docs:ci BINARY=/tmp/router-hosts
-
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3
         with:
