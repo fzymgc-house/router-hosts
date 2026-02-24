@@ -61,6 +61,8 @@ var migrationFiles = []struct {
 }
 
 // Initialize applies database migrations in order, skipping already-applied ones.
+// After SQL migrations, it runs the legacy Rust data migration if a pre-Go
+// database is detected.
 func (s *Storage) Initialize(ctx context.Context) error {
 	return s.withConn(ctx, func(conn *sqlite.Conn) error {
 		for _, m := range migrationFiles {
@@ -70,20 +72,7 @@ func (s *Storage) Initialize(ctx context.Context) error {
 			}
 			// Migration 1 creates schema_version; for later migrations check it.
 			if m.version > 1 {
-				var applied bool
-				checkErr := sqlitex.Execute(conn,
-					`SELECT 1 FROM schema_version WHERE version = ?`,
-					&sqlitex.ExecOptions{
-						Args: []any{m.version},
-						ResultFunc: func(*sqlite.Stmt) error {
-							applied = true
-							return nil
-						},
-					})
-				if checkErr != nil {
-					return oops.Wrapf(checkErr, "check schema_version for migration %d", m.version)
-				}
-				if applied {
+				if isMigrationApplied(conn, m.version) {
 					continue
 				}
 			}
@@ -91,8 +80,41 @@ func (s *Storage) Initialize(ctx context.Context) error {
 				return oops.Wrapf(err, "apply migration %s", m.path)
 			}
 		}
+
+		// Go-based migration: convert Rust-era host_events to Go events table.
+		if !isMigrationApplied(conn, legacyMigrationVersion) {
+			if err := migrateLegacyRustData(conn, s.log); err != nil {
+				return oops.Wrapf(err, "legacy Rust migration")
+			}
+			if err := recordMigrationVersion(conn, legacyMigrationVersion); err != nil {
+				return err
+			}
+		}
+
 		return nil
 	})
+}
+
+// isMigrationApplied checks whether a migration version has been recorded.
+func isMigrationApplied(conn *sqlite.Conn, version int) bool {
+	var applied bool
+	_ = sqlitex.Execute(conn,
+		`SELECT 1 FROM schema_version WHERE version = ?`,
+		&sqlitex.ExecOptions{
+			Args: []any{version},
+			ResultFunc: func(*sqlite.Stmt) error {
+				applied = true
+				return nil
+			},
+		})
+	return applied
+}
+
+// recordMigrationVersion inserts a version into schema_version.
+func recordMigrationVersion(conn *sqlite.Conn, version int) error {
+	return sqlitex.Execute(conn,
+		`INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, datetime('now'))`,
+		&sqlitex.ExecOptions{Args: []any{version}})
 }
 
 // HealthCheck verifies the database connection is alive.
