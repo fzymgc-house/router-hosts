@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.2](https://github.com/fzymgc-house/router-hosts/compare/v0.9.1...v0.9.2) (2026-02-24)
+
+
+### Bug Fixes
+
+* **server:** update OTel semconv to v1.39.0 ([#263](https://github.com/fzymgc-house/router-hosts/issues/263)) ([4b246d0](https://github.com/fzymgc-house/router-hosts/commit/4b246d0652c4071e2ac5e90615f3b204b13da855))
+
 ## [0.9.1](https://github.com/fzymgc-house/router-hosts/compare/v0.9.0...v0.9.1) (2026-02-24)
 
 
