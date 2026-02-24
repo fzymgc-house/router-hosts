@@ -29,17 +29,17 @@ func NewClient(cfg *config.ClientConfig) (*Client, error) {
 	}
 
 	conn, err := grpc.NewClient(
-		cfg.ServerAddress,
+		cfg.Server.Address,
 		grpc.WithTransportCredentials(creds),
 	)
 	if err != nil {
-		return nil, oops.Wrapf(err, "dialing gRPC server %s", cfg.ServerAddress)
+		return nil, oops.Wrapf(err, "dialing gRPC server %s", cfg.Server.Address)
 	}
 
 	return &Client{
 		conn:    conn,
 		Hosts:   hostsv1.NewHostsServiceClient(conn),
-		address: cfg.ServerAddress,
+		address: cfg.Server.Address,
 	}, nil
 }
 
@@ -71,11 +71,11 @@ func (c *Client) Address() string {
 // buildTransportCredentials creates TLS credentials from config paths.
 // All three paths must be provided; insecure connections are not supported.
 func buildTransportCredentials(cfg *config.ClientConfig) (credentials.TransportCredentials, error) {
-	if (cfg.CertPath != "" && cfg.KeyPath == "") || (cfg.CertPath == "" && cfg.KeyPath != "") {
+	if (cfg.TLS.CertPath != "" && cfg.TLS.KeyPath == "") || (cfg.TLS.CertPath == "" && cfg.TLS.KeyPath != "") {
 		return nil, oops.Errorf("cert_path and key_path must both be set or both be empty")
 	}
 
-	if cfg.CertPath == "" && cfg.KeyPath == "" && cfg.CACertPath == "" {
+	if cfg.TLS.CertPath == "" && cfg.TLS.KeyPath == "" && cfg.TLS.CACertPath == "" {
 		return nil, oops.Errorf("TLS configuration required: set cert_path, key_path, and ca_cert_path")
 	}
 
@@ -84,8 +84,8 @@ func buildTransportCredentials(cfg *config.ClientConfig) (credentials.TransportC
 	}
 
 	// Load client certificate for mTLS
-	if cfg.CertPath != "" && cfg.KeyPath != "" {
-		cert, err := tls.LoadX509KeyPair(cfg.CertPath, cfg.KeyPath)
+	if cfg.TLS.CertPath != "" && cfg.TLS.KeyPath != "" {
+		cert, err := tls.LoadX509KeyPair(cfg.TLS.CertPath, cfg.TLS.KeyPath)
 		if err != nil {
 			return nil, oops.Wrapf(err, "loading client certificate")
 		}
@@ -93,14 +93,14 @@ func buildTransportCredentials(cfg *config.ClientConfig) (credentials.TransportC
 	}
 
 	// Load CA certificate for server verification
-	if cfg.CACertPath != "" {
-		caCert, err := os.ReadFile(cfg.CACertPath)
+	if cfg.TLS.CACertPath != "" {
+		caCert, err := os.ReadFile(cfg.TLS.CACertPath)
 		if err != nil {
 			return nil, oops.Wrapf(err, "reading CA certificate")
 		}
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM(caCert) {
-			return nil, oops.Errorf("failed to parse CA certificate from %s", cfg.CACertPath)
+			return nil, oops.Errorf("failed to parse CA certificate from %s", cfg.TLS.CACertPath)
 		}
 		tlsCfg.RootCAs = pool
 	}

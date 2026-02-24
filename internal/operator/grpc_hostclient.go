@@ -19,10 +19,8 @@ type grpcHostClient struct {
 // without mTLS (useful for development).
 func NewGRPCHostClient(serverAddr, certPath, keyPath, caCertPath string) (HostClient, error) {
 	cfg := &config.ClientConfig{
-		ServerAddress: serverAddr,
-		CertPath:      certPath,
-		KeyPath:       keyPath,
-		CACertPath:    caCertPath,
+		Server: config.ClientServerConfig{Address: serverAddr},
+		TLS:    config.ClientTLSConfig{CertPath: certPath, KeyPath: keyPath, CACertPath: caCertPath},
 	}
 
 	c, err := client.NewClient(cfg)

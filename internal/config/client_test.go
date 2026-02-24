@@ -10,7 +10,10 @@ import (
 )
 
 const clientConfigContent = `
-server_address = "localhost:50051"
+[server]
+address = "localhost:50051"
+
+[tls]
 cert_path = "/etc/router-hosts/client.crt"
 key_path = "/etc/router-hosts/client.key"
 ca_cert_path = "/etc/router-hosts/ca.crt"
@@ -38,10 +41,10 @@ func TestLoadClientConfig_FromFile(t *testing.T) {
 	cfg, err := LoadClientConfig(nil)
 	require.NoError(t, err)
 
-	assert.Equal(t, "localhost:50051", cfg.ServerAddress)
-	assert.Equal(t, "/etc/router-hosts/client.crt", cfg.CertPath)
-	assert.Equal(t, "/etc/router-hosts/client.key", cfg.KeyPath)
-	assert.Equal(t, "/etc/router-hosts/ca.crt", cfg.CACertPath)
+	assert.Equal(t, "localhost:50051", cfg.Server.Address)
+	assert.Equal(t, "/etc/router-hosts/client.crt", cfg.TLS.CertPath)
+	assert.Equal(t, "/etc/router-hosts/client.key", cfg.TLS.KeyPath)
+	assert.Equal(t, "/etc/router-hosts/ca.crt", cfg.TLS.CACertPath)
 }
 
 func TestLoadClientConfig_EnvOverridesFile(t *testing.T) {
@@ -57,10 +60,10 @@ func TestLoadClientConfig_EnvOverridesFile(t *testing.T) {
 	cfg, err := LoadClientConfig(nil)
 	require.NoError(t, err)
 
-	assert.Equal(t, "env-server:9090", cfg.ServerAddress)
-	assert.Equal(t, "/env/cert.pem", cfg.CertPath)
-	assert.Equal(t, "/env/key.pem", cfg.KeyPath)
-	assert.Equal(t, "/env/ca.pem", cfg.CACertPath)
+	assert.Equal(t, "env-server:9090", cfg.Server.Address)
+	assert.Equal(t, "/env/cert.pem", cfg.TLS.CertPath)
+	assert.Equal(t, "/env/key.pem", cfg.TLS.KeyPath)
+	assert.Equal(t, "/env/ca.pem", cfg.TLS.CACertPath)
 }
 
 func TestLoadClientConfig_CLIOverridesEnv(t *testing.T) {
@@ -78,8 +81,8 @@ func TestLoadClientConfig_CLIOverridesEnv(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, "cli-server:8080", cfg.ServerAddress)
-	assert.Equal(t, "/cli/cert.pem", cfg.CertPath)
+	assert.Equal(t, "cli-server:8080", cfg.Server.Address)
+	assert.Equal(t, "/cli/cert.pem", cfg.TLS.CertPath)
 }
 
 func TestLoadClientConfig_MissingServerAddress(t *testing.T) {
@@ -91,7 +94,7 @@ func TestLoadClientConfig_MissingServerAddress(t *testing.T) {
 
 	_, err := LoadClientConfig(nil)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "server_address is required")
+	assert.Contains(t, err.Error(), "server address is required")
 }
 
 func TestLoadClientConfig_TildeExpansion(t *testing.T) {
@@ -107,9 +110,9 @@ func TestLoadClientConfig_TildeExpansion(t *testing.T) {
 	home, err := os.UserHomeDir()
 	require.NoError(t, err)
 
-	assert.Equal(t, filepath.Join(home, "certs/client.crt"), cfg.CertPath)
-	assert.Equal(t, filepath.Join(home, "certs/client.key"), cfg.KeyPath)
-	assert.Equal(t, filepath.Join(home, "certs/ca.crt"), cfg.CACertPath)
+	assert.Equal(t, filepath.Join(home, "certs/client.crt"), cfg.TLS.CertPath)
+	assert.Equal(t, filepath.Join(home, "certs/client.key"), cfg.TLS.KeyPath)
+	assert.Equal(t, filepath.Join(home, "certs/ca.crt"), cfg.TLS.CACertPath)
 }
 
 func TestLoadClientConfig_NoTildeNoExpansion(t *testing.T) {
@@ -122,7 +125,7 @@ func TestLoadClientConfig_NoTildeNoExpansion(t *testing.T) {
 	cfg, err := LoadClientConfig(nil)
 	require.NoError(t, err)
 
-	assert.Equal(t, "/absolute/cert.crt", cfg.CertPath)
+	assert.Equal(t, "/absolute/cert.crt", cfg.TLS.CertPath)
 }
 
 func TestClientConfigSearchPaths_XDGFirst(t *testing.T) {
@@ -153,8 +156,8 @@ func TestFindClientConfigFile_PrefersClientTomlOverConfigToml(t *testing.T) {
 	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
 
 	// Create both client.toml and config.toml
-	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "client.toml"), []byte(`server_address = "from-client"`), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte(`server_address = "from-config"`), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "client.toml"), []byte("[server]\naddress = \"from-client\"\n"), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(cfgDir, "config.toml"), []byte("[server]\naddress = \"from-config\"\n"), 0o600))
 
 	t.Setenv("XDG_CONFIG_HOME", dir)
 	path, err := findClientConfigFile()
@@ -181,8 +184,8 @@ func TestFindClientConfigFile_XDGPriority(t *testing.T) {
 	xdgDir := t.TempDir()
 	homeDir := t.TempDir()
 
-	writeClientConfig(t, xdgDir, `server_address = "xdg-server"`)
-	writeClientConfig(t, filepath.Join(homeDir, ".config"), `server_address = "home-server"`)
+	writeClientConfig(t, xdgDir, "[server]\naddress = \"xdg-server\"\n")
+	writeClientConfig(t, filepath.Join(homeDir, ".config"), "[server]\naddress = \"home-server\"\n")
 
 	t.Setenv("XDG_CONFIG_HOME", xdgDir)
 	// We can't override UserHomeDir, but XDG should be checked first
@@ -198,7 +201,7 @@ func TestLoadClientConfigFile_ValidTOML(t *testing.T) {
 
 	cfg, err := loadClientConfigFile(path)
 	require.NoError(t, err)
-	assert.Equal(t, "localhost:50051", cfg.ServerAddress)
+	assert.Equal(t, "localhost:50051", cfg.Server.Address)
 }
 
 func TestLoadClientConfigFile_InvalidTOML(t *testing.T) {
@@ -247,14 +250,14 @@ func TestApplyClientEnv(t *testing.T) {
 	t.Setenv("ROUTER_HOSTS_CA", "/env/ca")
 
 	cfg := &ClientConfig{
-		ServerAddress: "file-server",
+		Server: ClientServerConfig{Address: "file-server"},
 	}
 	applyClientEnv(cfg)
 
-	assert.Equal(t, "env-server", cfg.ServerAddress)
-	assert.Equal(t, "/env/cert", cfg.CertPath)
-	assert.Equal(t, "/env/key", cfg.KeyPath)
-	assert.Equal(t, "/env/ca", cfg.CACertPath)
+	assert.Equal(t, "env-server", cfg.Server.Address)
+	assert.Equal(t, "/env/cert", cfg.TLS.CertPath)
+	assert.Equal(t, "/env/key", cfg.TLS.KeyPath)
+	assert.Equal(t, "/env/ca", cfg.TLS.CACertPath)
 }
 
 func TestApplyClientOverrides(t *testing.T) {
@@ -262,9 +265,8 @@ func TestApplyClientOverrides(t *testing.T) {
 	cert := "/override/cert"
 
 	cfg := &ClientConfig{
-		ServerAddress: "original",
-		CertPath:      "/original/cert",
-		KeyPath:       "/original/key",
+		Server: ClientServerConfig{Address: "original"},
+		TLS:    ClientTLSConfig{CertPath: "/original/cert", KeyPath: "/original/key"},
 	}
 
 	applyClientOverrides(cfg, &ClientConfigOverrides{
@@ -272,7 +274,7 @@ func TestApplyClientOverrides(t *testing.T) {
 		CertPath:      &cert,
 	})
 
-	assert.Equal(t, "override-server", cfg.ServerAddress)
-	assert.Equal(t, "/override/cert", cfg.CertPath)
-	assert.Equal(t, "/original/key", cfg.KeyPath) // unchanged
+	assert.Equal(t, "override-server", cfg.Server.Address)
+	assert.Equal(t, "/override/cert", cfg.TLS.CertPath)
+	assert.Equal(t, "/original/key", cfg.TLS.KeyPath) // unchanged
 }
