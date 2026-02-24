@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7](https://github.com/fzymgc-house/router-hosts/compare/v0.9.6...v0.9.7) (2026-02-24)
+
+
+### Code Refactoring
+
+* **config:** use nested TOML tables for client config ([#273](https://github.com/fzymgc-house/router-hosts/issues/273)) ([d5efd72](https://github.com/fzymgc-house/router-hosts/commit/d5efd72a3a3f79d690c15b20c75bca658cd5d259))
+
 ## [0.9.6](https://github.com/fzymgc-house/router-hosts/compare/v0.9.5...v0.9.6) (2026-02-24)
 
 
