@@ -51,6 +51,24 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
+homebrew_casks:
+  - ids:
+      - router-hosts
+    repository:
+      owner: fzymgc-house
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    name: router-hosts
+    homepage: "https://github.com/fzymgc-house/router-hosts"
+    description: "CLI for managing DNS host entries via gRPC over mTLS"
+    license: MIT
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/router-hosts"]
+          end
+    commit_msg_template: "Cask update for {{ .ProjectName }} version {{ .Tag }}"
 checksum:
   name_template: checksums.txt
 changelog:
