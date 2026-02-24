@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.4](https://github.com/fzymgc-house/router-hosts/compare/v0.9.3...v0.9.4) (2026-02-24)
+
+
+### Bug Fixes
+
+* **server:** strip URL scheme from OTel gRPC endpoint ([#267](https://github.com/fzymgc-house/router-hosts/issues/267)) ([30e528f](https://github.com/fzymgc-house/router-hosts/commit/30e528f44097f8c95878a3962131b4a97a560b6c))
+
 ## [0.9.3](https://github.com/fzymgc-house/router-hosts/compare/v0.9.2...v0.9.3) (2026-02-24)
 
 
