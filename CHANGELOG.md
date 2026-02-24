@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.1](https://github.com/fzymgc-house/router-hosts/compare/v0.9.0...v0.9.1) (2026-02-24)
+
+
+### Bug Fixes
+
+* **ci:** add workflow_dispatch to release workflow ([#260](https://github.com/fzymgc-house/router-hosts/issues/260)) ([640518b](https://github.com/fzymgc-house/router-hosts/commit/640518ba2c8f6b7e2e0a55c57a25ec8790e4e470))
+* **ci:** use TARGETARCH in goreleaser Dockerfile ([#262](https://github.com/fzymgc-house/router-hosts/issues/262)) ([5730bac](https://github.com/fzymgc-house/router-hosts/commit/5730bac50bfd540706ac3e0e828e83e65ac8df67))
+
 ## [0.9.0](https://github.com/fzymgc-house/router-hosts/compare/v0.8.14...v0.9.0) (2026-02-24)
 
 
