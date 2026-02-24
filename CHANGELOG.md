@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0](https://github.com/fzymgc-house/router-hosts/compare/v0.8.14...v0.9.0) (2026-02-24)
+
+
+### Features
+
+* rewrite router-hosts in Go ([#257](https://github.com/fzymgc-house/router-hosts/issues/257)) ([9ef9d06](https://github.com/fzymgc-house/router-hosts/commit/9ef9d06da363d710205176b26536d6b15059d4b5))
+
+
+### Build System
+
+* **deps:** update golang docker tag to v1.26 ([#230](https://github.com/fzymgc-house/router-hosts/issues/230)) ([c9bc0c9](https://github.com/fzymgc-house/router-hosts/commit/c9bc0c94037e3455b1f8f04ed387f6c3e9d85995))
+
+
+### Miscellaneous
+
+* release 0.9.0 ([#259](https://github.com/fzymgc-house/router-hosts/issues/259)) ([f4bfd32](https://github.com/fzymgc-house/router-hosts/commit/f4bfd3207cf971fe98789f6196eee9ef8901fcb9))
+
 ## [0.8.14](https://github.com/fzymgc-house/router-hosts/compare/v0.8.13...v0.8.14) (2026-02-22)
 
 
