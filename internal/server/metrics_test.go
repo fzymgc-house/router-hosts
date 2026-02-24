@@ -317,6 +317,30 @@ func TestStreamMetricsInterceptor_Error(t *testing.T) {
 	assert.Equal(t, "SearchHosts", attrs["method"], "method attribute")
 }
 
+func TestNewMetricsFromConfig_ResourceCreation(t *testing.T) {
+	t.Parallel()
+
+	// This test exercises the full NewMetricsFromConfig happy path including
+	// resource.Merge(resource.Default(), ...) which will fail if the semconv
+	// schema URL doesn't match the SDK's built-in schema URL.
+	cfg := &config.OTelConfig{
+		Endpoint:    "localhost:4317",
+		Insecure:    true,
+		ServiceName: "test-service",
+	}
+
+	m, err := NewMetricsFromConfig(cfg)
+	require.NoError(t, err, "NewMetricsFromConfig should succeed — schema URL mismatch?")
+	require.NotNil(t, m)
+	assert.NotNil(t, m.meterProvider, "expected real meter provider")
+
+	// Clean up — shutdown may fail to flush since no collector is running,
+	// but the resource creation (the real assertion) already succeeded.
+	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_ = m.Shutdown(shutCtx)
+}
+
 func TestNewMetricsFromConfig_Nil(t *testing.T) {
 	t.Parallel()
 
