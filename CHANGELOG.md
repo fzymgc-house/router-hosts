@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.6](https://github.com/fzymgc-house/router-hosts/compare/v0.9.5...v0.9.6) (2026-02-24)
+
+
+### Bug Fixes
+
+* **ci:** rewrite CLI docs script for Cobra help format ([#271](https://github.com/fzymgc-house/router-hosts/issues/271)) ([25e034f](https://github.com/fzymgc-house/router-hosts/commit/25e034f03a1a68f0bbc05a6a7f850b520a3e927f))
+
 ## [0.9.5](https://github.com/fzymgc-house/router-hosts/compare/v0.9.4...v0.9.5) (2026-02-24)
 
 
