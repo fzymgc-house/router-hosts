@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0](https://github.com/fzymgc-house/router-hosts/compare/v0.9.7...v0.10.0) (2026-06-07)
+
+
+### Bug Fixes
+
+* **operator:** migrate Helm chart from Rust to Go operator ([#296](https://github.com/fzymgc-house/router-hosts/issues/296)) ([822b54b](https://github.com/fzymgc-house/router-hosts/commit/822b54bd2a0550becd886f464e6cd08be0fa69ea))
+* **storage:** migrate legacy Rust database on startup ([#275](https://github.com/fzymgc-house/router-hosts/issues/275)) ([000dfc5](https://github.com/fzymgc-house/router-hosts/commit/000dfc5c2af8ed9124749e8faaa4f09a253584f0))
+
+
+### Build System
+
+* **deps:** pin dependencies ([#297](https://github.com/fzymgc-house/router-hosts/issues/297)) ([bd3cdcd](https://github.com/fzymgc-house/router-hosts/commit/bd3cdcd534f8f0cb774539939fc60d7d4d2ec6a0))
+* **deps:** update all deps to latest GA + modernize Renovate ([#295](https://github.com/fzymgc-house/router-hosts/issues/295)) ([f45e062](https://github.com/fzymgc-house/router-hosts/commit/f45e0625cee10fac45e30573189180dbb3a6db73))
+* **deps:** update all non-major dependencies ([#278](https://github.com/fzymgc-house/router-hosts/issues/278)) ([8605689](https://github.com/fzymgc-house/router-hosts/commit/86056895bc6a33df4d9b811d2744b4cffdfe12ef))
+* **deps:** update github action actions/create-github-app-token to v3 ([#298](https://github.com/fzymgc-house/router-hosts/issues/298)) ([a059661](https://github.com/fzymgc-house/router-hosts/commit/a059661dd90b8cb2b79781173c20dfe380c22e74))
+* **deps:** update github action actions/setup-go to v6 ([#280](https://github.com/fzymgc-house/router-hosts/issues/280)) ([6e89970](https://github.com/fzymgc-house/router-hosts/commit/6e89970ce4118813b1d67f2c9c6c1e89b14a473e))
+* **deps:** update github action docker/login-action to v4 ([#282](https://github.com/fzymgc-house/router-hosts/issues/282)) ([bdd794a](https://github.com/fzymgc-house/router-hosts/commit/bdd794a530a3e20602d07c584b6a4e4f9f2eb925))
+* **deps:** update github artifact actions to v7 ([#281](https://github.com/fzymgc-house/router-hosts/issues/281)) ([9c5a504](https://github.com/fzymgc-house/router-hosts/commit/9c5a5047dba16e8aaad1793e76e8527649240867))
+
+
+### CI/CD
+
+* migrate runners to Namespace cloud ([#293](https://github.com/fzymgc-house/router-hosts/issues/293)) ([1e662cb](https://github.com/fzymgc-house/router-hosts/commit/1e662cbcd2f2bacafbe523e6c5f267e47dbb6709))
+
 ## [0.9.7](https://github.com/fzymgc-house/router-hosts/compare/v0.9.6...v0.9.7) (2026-02-24)
 
 
