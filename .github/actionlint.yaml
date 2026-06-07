@@ -1,0 +1,5 @@
+self-hosted-runner:
+  labels:
+    - namespace-profile-linux-amd64-2x4
+    - namespace-profile-linux-amd64-4x8
+    - namespace-profile-linux-amd64-8x16
