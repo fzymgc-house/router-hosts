@@ -11,8 +11,13 @@ metadata:
   labels:
     {{- include "router-hosts-operator.labels" . | nindent 4 }}
 rules:
-  # Lease resources for leader election (coordination.k8s.io/v1)
+  # Lease resources for leader election (coordination.k8s.io/v1).
+  # controller-runtime acquires, renews, and releases the lease.
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
-    verbs: ["get", "create", "update"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Leader-election lifecycle events emitted to the operator's namespace.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
 {{- end }}

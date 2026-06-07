@@ -6,34 +6,24 @@ metadata:
   labels:
     {{- include "router-hosts-operator.labels" . | nindent 4 }}
 rules:
-  # Ingress resources (networking.k8s.io/v1)
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses"]
-    verbs: ["get", "list", "watch"]
-
-  # Traefik IngressRoute resources (traefik.io/v1alpha1)
+  # Traefik IngressRoute resources (traefik.io/v1alpha1).
+  # The IngressRoute controller watches these and writes finalizers plus the
+  # host-id annotation back, so it needs update/patch in addition to read.
   - apiGroups: ["traefik.io"]
     resources: ["ingressroutes", "ingressroutetcps"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "update", "patch"]
 
-  # HostMapping resources (router-hosts.fzymgc.house/v1alpha1)
+  # HostMapping resources (router-hosts.fzymgc.house/v1alpha1).
+  # The controller adds/removes a cleanup finalizer (update/patch) and writes
+  # reconcile state to the status subresource. Verbs mirror the controller's
+  # kubebuilder marker (internal/operator/hostmapping_controller.go).
   - apiGroups: ["router-hosts.fzymgc.house"]
     resources: ["hostmappings"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["router-hosts.fzymgc.house"]
     resources: ["hostmappings/status"]
-    verbs: ["update", "patch"]
-
-  # RouterHostsConfig resources (router-hosts.fzymgc.house/v1alpha1)
+    verbs: ["get", "update", "patch"]
   - apiGroups: ["router-hosts.fzymgc.house"]
-    resources: ["routerhostsconfigs"]
-    verbs: ["get", "list", "watch"]
-
-  # Note: Secret access is handled by a namespaced Role in the tlsSecretRef.namespace
-  # to ensure proper namespace isolation (see role-secret.yaml)
-
-  # Services (for IP resolution and Service controller)
-  - apiGroups: [""]
-    resources: ["services"]
-    verbs: ["get", "list", "watch"]
+    resources: ["hostmappings/finalizers"]
+    verbs: ["update"]
 {{- end }}

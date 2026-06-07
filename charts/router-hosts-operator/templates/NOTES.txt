@@ -8,10 +8,7 @@
 2. Check the logs:
    kubectl logs -l app.kubernetes.io/name={{ include "router-hosts-operator.name" . }} -n {{ .Release.Namespace }} -f
 
-3. Verify the RouterHostsConfig was created:
-   kubectl get routerhostsconfigs
-
-4. Create a HostMapping to test:
+3. Create a HostMapping to test:
    kubectl apply -f - <<EOF
    apiVersion: router-hosts.fzymgc.house/v1alpha1
    kind: HostMapping
@@ -19,10 +16,11 @@
      name: test-mapping
      namespace: default
    spec:
+     ip: "10.0.0.50"
      hostname: test.example.com
    EOF
 
-5. Check the HostMapping status:
+4. Check the HostMapping status:
    kubectl get hostmappings -A
 
 📖 DOCUMENTATION:
@@ -34,17 +32,18 @@ For more information, see:
 🔧 CONFIGURATION:
 
 Current configuration:
-- Router-hosts endpoint: {{ .Values.routerHosts.endpoint }}
-- TLS secret: {{ .Values.routerHosts.tlsSecretRef.namespace }}/{{ .Values.routerHosts.tlsSecretRef.name }}
-- Deletion grace period: {{ .Values.routerHosts.deletion.gracePeriodSeconds }}s
+- Router-hosts server: {{ .Values.routerHosts.serverAddress }}
+- Default ingress IP:   {{ .Values.routerHosts.defaultIngressIP | default "(unset — IngressRoute entries will have no IP)" }}
+- mTLS secret:          {{ .Release.Namespace }}/{{ .Values.routerHosts.tlsSecret.name }}
 
 To update configuration, modify values.yaml and run:
    helm upgrade {{ .Release.Name }} router-hosts-operator -n {{ .Release.Namespace }}
 
 ⚠️  IMPORTANT:
 
-Make sure the mTLS secret exists:
-   kubectl get secret {{ .Values.routerHosts.tlsSecretRef.name }} -n {{ .Values.routerHosts.tlsSecretRef.namespace }}
+The mTLS secret must exist in the operator's own namespace (it is mounted as a
+volume, not read cross-namespace):
+   kubectl get secret {{ .Values.routerHosts.tlsSecret.name }} -n {{ .Release.Namespace }}
 
 The secret must contain:
 - ca.crt: CA certificate

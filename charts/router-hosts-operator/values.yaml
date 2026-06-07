@@ -1,8 +1,11 @@
 # Default values for router-hosts-operator
 
-# Image configuration
+# Image configuration.
+# The operator binary ships inside the combined router-hosts image
+# (alongside the data-plane binary); the chart overrides the image
+# entrypoint to run the operator.
 image:
-  repository: ghcr.io/fzymgc-house/router-hosts-operator
+  repository: ghcr.io/fzymgc-house/router-hosts
   # Overrides the image tag whose default is the chart appVersion
   tag: "@sha256:d9aa2ed57926ac5635919c63deec7cd7778d49953732d7ea7f2476c26dd3500f"
   pullPolicy: IfNotPresent
@@ -11,22 +14,16 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# Number of operator replicas
-# When using multiple replicas, leader election is automatically enabled
+# Number of operator replicas.
+# When using multiple replicas, leader election is automatically enabled.
 replicaCount: 1
 
-# Leader election configuration for running multiple replicas safely.
-# Only one replica actively reconciles at a time; others wait as standby.
-leaderElection:
-  # Enable leader election. If not set, auto-enabled when replicaCount >= 2.
-  # Set to true to explicitly enable, or false to explicitly disable.
-  # enabled:
-  # Lease resource name (default: release fullname + "-leader")
-  leaseName: ""
-  # Lease TTL in seconds - how long before an expired lease can be claimed
-  leaseDurationSeconds: 15
-  # Renewal interval in seconds - how often the leader renews its lease
-  renewIntervalSeconds: 5
+# Leader election (--leader-elect) for running multiple replicas safely.
+# Only one replica reconciles at a time; others stand by. Auto-enabled when
+# replicaCount >= 2. To force a value, set: leaderElection: { enabled: true }.
+# The lease ID is router-hosts-operator.fzymgc.house (managed by
+# controller-runtime; lease timings are not configurable via this chart).
+leaderElection: {}
 
 # ServiceAccount configuration
 serviceAccount:
@@ -78,16 +75,13 @@ tolerations: []
 # Affinity
 affinity: {}
 
-# Logging configuration
-logging:
-  # Log level (trace, debug, info, warn, error)
-  level: info
-  # Format: json or text
-  format: json
+# Metrics endpoint (--metrics-bind-address). Set to "0" to disable.
+metrics:
+  bindAddress: ":8080"
 
-# Health check configuration
+# Health/readiness probe HTTP server (--health-probe-bind-address)
 healthCheck:
-  # Port for health check HTTP server
+  # Port for the health check HTTP server
   port: 8081
   # Liveness probe configuration
   livenessProbe:
@@ -108,41 +102,19 @@ healthCheck:
     timeoutSeconds: 5
     failureThreshold: 30
 
-# RouterHostsConfig CRD instance configuration
-# This creates the cluster-scoped RouterHostsConfig resource
-routerHostsConfig:
-  # Whether to create the RouterHostsConfig instance
-  create: true
-  # Name of the RouterHostsConfig resource
-  name: default
-
 # Router-hosts server connection settings
 routerHosts:
-  # gRPC endpoint (host:port)
-  endpoint: router.lan:50051
+  # gRPC server address (--server-address), host:port
+  serverAddress: router.lan:50051
 
-  # Reference to Secret containing mTLS certificates
-  # Secret must contain: ca.crt, tls.crt, tls.key
-  tlsSecretRef:
+  # Default IP assigned to hosts extracted from IngressRoutes
+  # (--default-ingress-ip). Required for the IngressRoute controller to create
+  # usable entries; leave empty only if you exclusively use HostMappings.
+  defaultIngressIP: ""
+
+  # mTLS client identity for the gRPC connection.
+  # The Secret MUST live in the operator's own namespace — it is mounted as a
+  # volume, not read cross-namespace — and contain keys: ca.crt, tls.crt, tls.key.
+  tlsSecret:
     name: router-hosts-mtls
-    namespace: router-hosts-system
-
-  # IP resolution strategies (tried in order)
-  # Each strategy must have a 'type' field
-  ipResolution:
-    # Example: Discover IP from ingress controller Service
-    - type: ingressController
-      serviceName: traefik
-      serviceNamespace: traefik-system
-    # Example: Fallback to static IP
-    - type: static
-      address: "192.168.1.1"
-
-  # Deletion behavior
-  deletion:
-    # Grace period before deleting entries (seconds)
-    gracePeriodSeconds: 300
-
-  # Default tags added to all managed entries
-  defaultTags:
-    - k8s-operator
+    mountPath: /etc/router-hosts/tls
