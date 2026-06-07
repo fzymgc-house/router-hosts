@@ -11,7 +11,7 @@ on:
         type: string
 jobs:
   deploy:
-    runs-on: ubuntu-24.04
+    runs-on: namespace-profile-linux-amd64-2x4
     if: >-
       github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     steps:
@@ -51,7 +51,11 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-          cache: true
+          cache: false
+      - name: Cache Go modules and build
+        uses: namespacelabs/nscloud-cache-action@v1
+        with:
+          cache: go
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:

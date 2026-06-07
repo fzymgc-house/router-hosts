@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   release-please:
-    runs-on: ubuntu-latest
+    runs-on: namespace-profile-linux-amd64-2x4
     timeout-minutes: 10
 
     steps:
