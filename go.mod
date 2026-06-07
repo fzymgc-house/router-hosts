@@ -23,7 +23,7 @@ require (
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	k8s.io/apimachinery v0.36.1
 	k8s.io/client-go v0.36.1
-	pgregory.net/rapid v1.2.0
+	pgregory.net/rapid v1.3.0
 	sigs.k8s.io/controller-runtime v0.24.1
 	zombiezen.com/go/sqlite v1.4.2
 )
