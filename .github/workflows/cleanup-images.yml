@@ -68,7 +68,7 @@ jobs:
 
     steps:
       - name: Clean up old container images
-        uses: snok/container-retention-policy@v3.0.1
+        uses: snok/container-retention-policy@d3bdcf5ce9b05f685154e4a16c39233b245e3d53 # v3.1.0
         with:
           account: fzymgc-house
           token: ${{ secrets.GITHUB_TOKEN }}
