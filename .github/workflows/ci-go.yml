@@ -22,7 +22,7 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
   vuln:
     name: Vulnerability check
-    runs-on: namespace-profile-linux-amd64-2x4
+    runs-on: namespace-profile-linux-amd64-4x8
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
