@@ -16,6 +16,12 @@
   },
   "packageRules": [
     {
+      "description": "The operator chart's own image is versioned in-repo by release-please (charts/router-hosts-operator/Chart.yaml appVersion, consumed via image.tag default). Renovate must not pin or bump it.",
+      "matchManagers": ["helm-values"],
+      "matchPackageNames": ["ghcr.io/fzymgc-house/router-hosts"],
+      "enabled": false
+    },
+    {
       "description": "Auto-merge non-major updates once the release is at least 24h old",
       "matchUpdateTypes": ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
       "minimumReleaseAge": "24 hours",
