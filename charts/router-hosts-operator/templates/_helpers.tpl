@@ -60,9 +60,14 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
-Image reference
+Image reference. A digest pin (image.digest) takes precedence and is rendered
+as repository@digest; otherwise repository:tag, with tag defaulting to the
+chart appVersion.
 */}}
 {{- define "router-hosts-operator.image" -}}
-{{- $tag := .Values.image.tag | default .Chart.AppVersion }}
-{{- printf "%s:%s" .Values.image.repository $tag }}
+{{- if .Values.image.digest }}
+{{- printf "%s@%s" .Values.image.repository .Values.image.digest }}
+{{- else }}
+{{- printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) }}
+{{- end }}
 {{- end }}
