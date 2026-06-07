@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.1](https://github.com/fzymgc-house/router-hosts/compare/v0.10.0...v0.10.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* **operator:** repair chart image ref broken by digest auto-pin ([#299](https://github.com/fzymgc-house/router-hosts/issues/299)) ([0193fd7](https://github.com/fzymgc-house/router-hosts/commit/0193fd78cf2006b9f93952489b1d18699b37e3b1))
+
 ## [0.10.0](https://github.com/fzymgc-house/router-hosts/compare/v0.9.7...v0.10.0) (2026-06-07)
 
 
