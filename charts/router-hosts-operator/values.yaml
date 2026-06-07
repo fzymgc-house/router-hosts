@@ -4,7 +4,7 @@
 image:
   repository: ghcr.io/fzymgc-house/router-hosts-operator
   # Overrides the image tag whose default is the chart appVersion
-  tag: ""
+  tag: "@sha256:d9aa2ed57926ac5635919c63deec7cd7778d49953732d7ea7f2476c26dd3500f"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
