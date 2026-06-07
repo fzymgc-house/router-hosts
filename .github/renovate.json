@@ -1,70 +1,41 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended",
+    "config:best-practices",
     ":semanticCommits",
     ":semanticCommitTypeAll(build)",
     "group:allNonMajor"
   ],
-  "labels": [
-    "dependencies"
-  ],
+  "labels": ["dependencies"],
   "timezone": "America/New_York",
-  "schedule": [
-    "before 6am on monday"
-  ],
   "prConcurrentLimit": 5,
+  "internalChecksFilter": "strict",
+  "postUpdateOptions": ["gomodTidy"],
   "lockFileMaintenance": {
     "enabled": true
   },
   "packageRules": [
     {
-      "matchManagers": [
-        "cargo"
-      ],
-      "commitMessageTopic": "Rust crate {{depName}}"
+      "description": "Auto-merge non-major updates once the release is at least 24h old",
+      "matchUpdateTypes": ["minor", "patch", "digest", "pin", "lockFileMaintenance"],
+      "minimumReleaseAge": "24 hours",
+      "automerge": true,
+      "platformAutomerge": true
     },
     {
-      "description": "Wait 3 days before updating non-patch Cargo dependencies to avoid bleeding-edge bugs",
-      "matchManagers": [
-        "cargo"
-      ],
-      "matchUpdateTypes": [
-        "minor",
-        "major"
-      ],
-      "minimumReleaseAge": "3 days"
+      "description": "Major updates always require manual review",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "addLabels": ["major-update"]
     },
     {
-      "matchManagers": [
-        "github-actions"
-      ],
-      "commitMessageTopic": "GitHub Action {{depName}}",
-      "automerge": true
-    },
-    {
-      "matchUpdateTypes": [
-        "patch"
-      ],
-      "automerge": true
-    },
-    {
-      "description": "DuckDB minor/major updates require manual review due to potential breaking changes",
-      "matchPackageNames": [
-        "duckdb"
-      ],
-      "matchUpdateTypes": [
-        "minor",
-        "major"
-      ],
-      "groupName": "DuckDB",
-      "automerge": false
+      "description": "Clearer commit topic for GitHub Action bumps",
+      "matchManagers": ["github-actions"],
+      "commitMessageTopic": "GitHub Action {{depName}}"
     }
   ],
   "vulnerabilityAlerts": {
     "enabled": true,
-    "labels": [
-      "security"
-    ]
+    "labels": ["security", "dependencies"]
   }
 }
