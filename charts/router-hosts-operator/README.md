@@ -1,42 +1,27 @@
 # router-hosts-operator Helm Chart
 
-Kubernetes operator for syncing Ingress hostnames to router-hosts server.
+Kubernetes operator that syncs Traefik `IngressRoute` hostnames and explicit
+`HostMapping` resources to a router-hosts server over mTLS.
+
+The operator binary ships inside the combined `router-hosts` image; this chart
+overrides the image entrypoint to run it. Configuration is passed entirely as
+command-line flags (there is no `RouterHostsConfig` CRD).
 
 ## Prerequisites
 
 - Kubernetes 1.31+
 - Helm 3.0+
 - router-hosts server with mTLS enabled
+- Traefik CRDs installed (for `IngressRoute`/`IngressRouteTCP` syncing)
 
 ## Installation
 
-### From OCI Registry (Recommended)
+### 1. Create the mTLS Secret
 
-The chart is published to GitHub Container Registry:
-
-```bash
-# Create namespace and mTLS secret first (see below)
-kubectl create namespace router-hosts-system
-
-# Install from OCI registry (replace VERSION with desired release)
-helm install router-hosts-operator \
-  oci://ghcr.io/fzymgc-house/charts/router-hosts-operator \
-  --namespace router-hosts-system \
-  --version VERSION
-```
-
-### From Source
-
-Alternatively, install directly from the repository:
-
-```bash
-helm install router-hosts-operator charts/router-hosts-operator \
-  --namespace router-hosts-system
-```
-
-### 1. Create mTLS Secret
-
-First, create a Secret containing the mTLS certificates for connecting to the router-hosts server:
+The operator reads its client certificate, key, and CA from files mounted from a
+Secret. **The Secret must live in the operator's own namespace** — it is mounted
+as a volume, not read cross-namespace — and contain the keys `ca.crt`, `tls.crt`,
+and `tls.key`:
 
 ```bash
 kubectl create namespace router-hosts-system
@@ -50,37 +35,44 @@ kubectl create secret generic router-hosts-mtls \
 
 ### 2. Install the Chart
 
+From the OCI registry (recommended):
+
+```bash
+helm install router-hosts-operator \
+  oci://ghcr.io/fzymgc-house/charts/router-hosts-operator \
+  --namespace router-hosts-system \
+  --version VERSION \
+  --set routerHosts.serverAddress=router.example.com:50051 \
+  --set routerHosts.defaultIngressIP=192.168.1.100
+```
+
+Or from a source checkout:
+
 ```bash
 helm install router-hosts-operator charts/router-hosts-operator \
-  --namespace router-hosts-system \
-  --create-namespace
+  --namespace router-hosts-system
 ```
 
 ### 3. Customize Values
 
-Create a `values.yaml` file:
+Create a `values.yaml`:
 
 ```yaml
 routerHosts:
-  endpoint: "router.example.com:50051"
+  # gRPC server address (--server-address)
+  serverAddress: "router.example.com:50051"
 
-  tlsSecretRef:
+  # IP assigned to hosts extracted from IngressRoutes (--default-ingress-ip).
+  # Required for the IngressRoute controller to create usable entries.
+  defaultIngressIP: "192.168.1.100"
+
+  # mTLS Secret, mounted from this release's namespace.
+  tlsSecret:
     name: router-hosts-mtls
-    namespace: router-hosts-system
+    mountPath: /etc/router-hosts/tls
 
-  ipResolution:
-    - type: ingressController
-      serviceName: traefik
-      serviceNamespace: traefik-system
-    - type: static
-      address: "192.168.1.100"
-
-  deletion:
-    gracePeriodSeconds: 600
-
-  defaultTags:
-    - k8s-operator
-    - cluster:production
+# Two or more replicas auto-enable leader election.
+replicaCount: 2
 
 resources:
   limits:
@@ -105,169 +97,98 @@ helm install router-hosts-operator charts/router-hosts-operator \
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `image.repository` | Image repository | `ghcr.io/fzymgc-house/router-hosts-operator` |
+| `image.repository` | Image repository (combined router-hosts image) | `ghcr.io/fzymgc-house/router-hosts` |
 | `image.tag` | Image tag | Chart appVersion |
 | `image.pullPolicy` | Image pull policy | `IfNotPresent` |
 | `replicaCount` | Number of replicas | `1` |
-| `leaderElection.enabled` | Enable leader election | `false` (auto-enabled if replicas >= 2) |
-| `leaderElection.leaseName` | Lease resource name | `<fullname>-leader` |
-| `leaderElection.leaseDurationSeconds` | Lease TTL in seconds | `15` |
-| `leaderElection.renewIntervalSeconds` | Lease renewal interval | `5` |
-| `routerHosts.endpoint` | gRPC endpoint (host:port) | `router.lan:50051` |
-| `routerHosts.tlsSecretRef.name` | mTLS Secret name | `router-hosts-mtls` |
-| `routerHosts.tlsSecretRef.namespace` | mTLS Secret namespace | `router-hosts-system` |
-| `routerHosts.ipResolution` | IP resolution strategies | See values.yaml |
-| `routerHosts.deletion.gracePeriodSeconds` | Grace period before deletion | `300` |
-| `routerHosts.defaultTags` | Tags added to all entries | `["k8s-operator"]` |
-| `serviceAccount.create` | Create ServiceAccount | `true` |
-| `rbac.create` | Create RBAC resources | `true` |
-| `logging.level` | Log level (trace/debug/info/warn/error) | `info` |
-| `healthCheck.port` | Port for health check HTTP server | `8081` |
+| `leaderElection.enabled` | Enable leader election (`--leader-elect`) | unset (auto-enabled when replicas >= 2) |
+| `routerHosts.serverAddress` | gRPC server address (`--server-address`) | `router.lan:50051` |
+| `routerHosts.defaultIngressIP` | IP for IngressRoute-derived hosts (`--default-ingress-ip`) | `""` |
+| `routerHosts.tlsSecret.name` | mTLS Secret name (mounted from the release namespace) | `router-hosts-mtls` |
+| `routerHosts.tlsSecret.mountPath` | Mount path for the mTLS Secret | `/etc/router-hosts/tls` |
+| `metrics.bindAddress` | Metrics endpoint (`--metrics-bind-address`); `"0"` disables | `":8080"` |
+| `healthCheck.port` | Health probe HTTP port (`--health-probe-bind-address`) | `8081` |
 | `healthCheck.livenessProbe.*` | Liveness probe timing settings | See values.yaml |
 | `healthCheck.readinessProbe.*` | Readiness probe timing settings | See values.yaml |
 | `healthCheck.startupProbe.*` | Startup probe timing settings | See values.yaml |
+| `serviceAccount.create` | Create ServiceAccount | `true` |
+| `rbac.create` | Create RBAC resources | `true` |
 
-### IP Resolution Strategies
-
-The operator tries each strategy in order until it finds a valid IP:
-
-#### IngressController
-
-Discovers IP from a Kubernetes Service (typically an ingress controller):
-
-```yaml
-ipResolution:
-  - type: ingressController
-    serviceName: traefik
-    serviceNamespace: traefik-system
-```
-
-#### Static
-
-Uses a fixed IP address:
-
-```yaml
-ipResolution:
-  - type: static
-    address: "192.168.1.100"
-```
+> Tagging is fixed in the binary and not configurable via this chart:
+> IngressRoute-derived hosts get `kubernetes`, `traefik`, and `ingress`;
+> `HostMapping` entries get only the `tags` from their spec. The log level
+> (`info`, JSON) is also fixed.
 
 ### Health Check Endpoints
 
-The operator exposes HTTP health check endpoints for Kubernetes probes:
+The operator serves HTTP probe endpoints on `healthCheck.port`:
 
 | Endpoint | Purpose | Behavior |
 |----------|---------|----------|
-| `/healthz` | Liveness | Returns 200 OK if process is alive |
-| `/readyz` | Readiness + Startup | Returns 200 OK if startup complete AND router-hosts server reachable |
-
-#### Probe Configuration
-
-| Probe | Endpoint | Purpose |
-|-------|----------|---------|
-| **Startup** | `/readyz` | Verifies server connectivity before pod is considered started (allows 150s) |
-| **Liveness** | `/healthz` | Checks process is alive; restarts pod if unresponsive |
-| **Readiness** | `/readyz` | Checks server connectivity; removes pod from service if unreachable |
-
-The readiness probe performs a gRPC call to verify connectivity to the router-hosts server. If the server becomes unreachable (network partition, server restart, certificate expiration), the pod transitions to NotReady state, preventing new work while allowing in-flight operations to complete.
-
-Configure the health check port if needed:
-
-```yaml
-healthCheck:
-  port: 8081  # Default port
-```
+| `/healthz` | Liveness | 200 OK while the process is alive (ping check) |
+| `/readyz` | Readiness + Startup | 200 OK once the manager is serving (ping check) |
 
 ### RBAC Permissions
 
-The operator requires these cluster-level permissions:
+With `rbac.create: true`, the chart grants the cluster permissions the
+controllers actually use:
 
-- **Ingresses** (`networking.k8s.io/v1`): get, list, watch
-- **IngressRoutes/IngressRouteTCP** (`traefik.io/v1alpha1`): get, list, watch
-- **HostMappings** (`router-hosts.fzymgc.house/v1alpha1`): get, list, watch, update status
-- **RouterHostsConfigs** (`router-hosts.fzymgc.house/v1alpha1`): get, list, watch
-- **Secrets**: get (for reading mTLS certificates)
-- **Services**: get, list (for IP resolution)
+- **IngressRoutes / IngressRouteTCP** (`traefik.io/v1alpha1`): get, list, watch,
+  update, patch — the controller writes a finalizer and the host-id annotation
+  back to the object.
+- **HostMappings** (`router-hosts.fzymgc.house/v1alpha1`): get, list, watch,
+  update, patch, plus the `status` and `finalizers` subresources.
 
-When leader election is enabled (including auto-enabled for `replicaCount >= 2`):
-- **Leases** (`coordination.k8s.io/v1`): get, create, update (in release namespace)
+When leader election is enabled (including auto-enabled for `replicaCount >= 2`),
+a namespaced Role additionally grants:
+
+- **Leases** (`coordination.k8s.io/v1`): get, list, watch, create, update, patch, delete
+- **Events** (`""`): create, patch
+
+The mTLS Secret is consumed via a volume mount and requires no RBAC.
 
 ## High Availability
 
-### Leader Election
-
-The operator supports running multiple replicas for high availability using Kubernetes Lease-based leader election. Only one replica (the leader) actively reconciles resources at a time; other replicas wait as standby.
-
-**Features:**
-- Automatic failover: If the leader crashes, a standby acquires leadership
-- Zero-downtime upgrades: Standby pods can take over during rolling updates
-- Acquire-or-exit pattern: Pods exit on leadership loss, letting Kubernetes restart them
-
-**Smart defaults:**
-- Leader election is automatically enabled when `replicaCount >= 2`
-- Can be explicitly enabled/disabled via `leaderElection.enabled`
-
-**To run with HA:**
+The operator supports multiple replicas using Kubernetes Lease-based leader
+election (controller-runtime). Only the leader reconciles; others stand by and
+take over on failover. Leader election is auto-enabled when `replicaCount >= 2`,
+or set `leaderElection.enabled` explicitly. The lease ID is
+`router-hosts-operator.fzymgc.house`; lease timings are managed by
+controller-runtime and are not tunable through this chart.
 
 ```yaml
 replicaCount: 2
-
-# Optional: customize leader election (defaults work for most cases)
-leaderElection:
-  enabled: true                  # Auto-enabled when replicas >= 2
-  leaseDurationSeconds: 15       # Lease TTL
-  renewIntervalSeconds: 5        # Renewal interval
+# leaderElection:
+#   enabled: true   # override the replicaCount>=2 default
 ```
-
-**How it works:**
-1. On startup, each pod attempts to acquire the Kubernetes Lease
-2. The first pod to acquire becomes leader and starts controllers
-3. Other pods block waiting for leadership
-4. Leader renews the lease every 5 seconds
-5. If leadership is lost, the pod exits and Kubernetes restarts it
-6. The restarted pod re-enters the acquire-or-wait cycle
-
-### Upgrading to HA Mode
-
-To upgrade an existing single-replica deployment to HA:
-
-1. Update `replicaCount: 2` in your values
-2. Leader election auto-enables (or set `leaderElection.enabled: true` explicitly)
-3. Run `helm upgrade` - new RBAC resources for Lease access are created automatically
-4. No data migration needed (operator is stateless)
-
-The existing pod continues running as leader while the second replica starts in standby mode.
 
 ## Usage
 
-### Enable Ingress Sync
+### Sync Traefik IngressRoutes
 
-Add annotation to Ingress resources:
+The operator watches `IngressRoute` and `IngressRouteTCP` resources and creates a
+host entry (at `routerHosts.defaultIngressIP`) for each hostname it finds in the
+``Host(`...`)`` / ``HostSNI(`...`)`` match rules. No annotation is required.
 
 ```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
 metadata:
   name: myapp
-  annotations:
-    router-hosts.fzymgc.house/enabled: "true"
+  namespace: default
 spec:
-  rules:
-    - host: myapp.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: myapp
-                port:
-                  number: 80
+  entryPoints: [websecure]
+  routes:
+    - match: Host(`myapp.example.com`)
+      kind: Rule
+      services:
+        - name: myapp
+          port: 80
 ```
 
 ### Create Explicit Host Mappings
 
-For hosts not managed by Ingress:
+For hosts not backed by an IngressRoute:
 
 ```yaml
 apiVersion: router-hosts.fzymgc.house/v1alpha1
@@ -276,25 +197,12 @@ metadata:
   name: legacy-app
   namespace: default
 spec:
-  hostname: legacy.example.com
-  ipAddress: "10.0.0.50"  # Optional: uses IP resolution if omitted
-  aliases:
+  ip: "10.0.0.50"            # required
+  hostname: legacy.example.com # required
+  aliases:                    # optional
     - legacy.local
-  tags:
+  tags:                       # optional
     - external
-```
-
-### Advanced Annotations
-
-Override behavior per Ingress:
-
-```yaml
-annotations:
-  router-hosts.fzymgc.house/enabled: "true"
-  router-hosts.fzymgc.house/ip-address: "192.168.1.200"  # Override IP
-  router-hosts.fzymgc.house/tags: "production,public"    # Additional tags
-  router-hosts.fzymgc.house/aliases: "app.local,app.lan" # Hostname aliases
-  router-hosts.fzymgc.house/grace-period: "600"          # Override grace period (seconds)
 ```
 
 ## Upgrading
@@ -311,10 +219,9 @@ helm upgrade router-hosts-operator charts/router-hosts-operator \
 helm uninstall router-hosts-operator --namespace router-hosts-system
 ```
 
-Note: CRDs are not automatically deleted. To remove them:
+CRDs are not removed automatically. To delete the `HostMapping` CRD:
 
 ```bash
-kubectl delete crd routerhostsconfigs.router-hosts.fzymgc.house
 kubectl delete crd hostmappings.router-hosts.fzymgc.house
 ```
 
@@ -326,12 +233,6 @@ kubectl delete crd hostmappings.router-hosts.fzymgc.house
 kubectl logs -n router-hosts-system -l app.kubernetes.io/name=router-hosts-operator -f
 ```
 
-### Verify Configuration
-
-```bash
-kubectl get routerhostsconfig -o yaml
-```
-
 ### Check HostMapping Status
 
 ```bash
@@ -341,15 +242,14 @@ kubectl describe hostmapping <name> -n <namespace>
 
 ### Common Issues
 
-**Operator fails to start**: Check mTLS Secret exists and contains required keys (`ca.crt`, `tls.crt`, `tls.key`)
-
-**Ingresses not syncing**: Verify annotation `router-hosts.fzymgc.house/enabled: "true"` is present
-
-**IP resolution failing**: Check Service exists and has LoadBalancer or ExternalIP
+- **Operator fails to start / TLS errors**: confirm the mTLS Secret exists in the
+  operator's namespace and contains `ca.crt`, `tls.crt`, `tls.key`, and that the
+  client certificate is trusted by the server's CA.
+- **IngressRoute hosts created with no IP**: set `routerHosts.defaultIngressIP`.
+- **`forbidden` errors in logs**: ensure `rbac.create: true` (or that equivalent
+  RBAC exists) so the controllers can write finalizers/annotations.
 
 ## Development
-
-### Testing Chart Locally
 
 ```bash
 # Lint the chart
