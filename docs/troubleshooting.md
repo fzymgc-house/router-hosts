@@ -133,119 +133,50 @@ See [ACME documentation](guides/acme.md#troubleshooting) for certificate-specifi
 
 The router-hosts operator watches Kubernetes resources and creates DNS entries automatically.
 
-### Service not being processed
+> **Note:** The Go operator reconciles two resource types — `HostMapping` and Traefik `IngressRoute`/`IngressRouteTCP`. There is no Kubernetes `Service` controller and no `enabled`/`hostname`/`ip-address` annotation API. See the [Kubernetes Operator guide](guides/kubernetes.md).
 
-**Symptoms:** Service exists but no DNS entry created
+### HostMapping not syncing
 
-**Causes and solutions:**
-
-1. Missing `router-hosts.fzymgc.house/enabled: "true"` annotation
-2. Missing `router-hosts.fzymgc.house/hostname` annotation - required for Services
-3. Invalid service type - only `LoadBalancer` and `NodePort` are supported
-
-```bash
-# Check annotations on Service
-kubectl get svc <name> -o jsonpath='{.metadata.annotations}'
-
-# Verify operator is running
-kubectl get pods -n router-hosts -l app=router-hosts-operator
-```
-
-### "InvalidServiceType" warning event
-
-**Symptoms:** Kubernetes event shows invalid service type
-
-**Cause:** `ClusterIP` and `ExternalName` Services are not supported
-
-**Solution:** Use `LoadBalancer` or `NodePort` service type, or remove the `enabled` annotation if DNS registration isn't needed.
-
-### "MissingHostname" warning event
-
-**Symptoms:** Service annotated but no hostname configured
-
-**Cause:** `router-hosts.fzymgc.house/hostname` annotation is required for Services (unlike Ingress which has `spec.rules[].host`)
-
-**Solution:** Add the hostname annotation:
-
-```yaml
-annotations:
-  router-hosts.fzymgc.house/enabled: "true"
-  router-hosts.fzymgc.house/hostname: "myservice.example.com"
-```
-
-### "InvalidHostname" warning event
-
-**Symptoms:** Hostname annotation present but rejected
-
-**Cause:** Hostname doesn't conform to RFC 1123 format
-
-**Common issues:**
-
-- Contains underscores (use hyphens instead)
-- Starts or ends with hyphen
-- Contains consecutive dots
-- Label exceeds 63 characters
-
-**Solution:** Fix the hostname format:
-
-```yaml
-# Wrong
-router-hosts.fzymgc.house/hostname: "my_service.example.com"
-router-hosts.fzymgc.house/hostname: "-service.example.com"
-
-# Correct
-router-hosts.fzymgc.house/hostname: "my-service.example.com"
-```
-
-### "MissingIPAddress" warning event (NodePort)
-
-**Symptoms:** NodePort Service not creating DNS entry
-
-**Cause:** NodePort Services require explicit IP address annotation because they expose on all nodes
-
-**Solution:** Add the IP annotation:
-
-```yaml
-annotations:
-  router-hosts.fzymgc.house/enabled: "true"
-  router-hosts.fzymgc.house/hostname: "myservice.example.com"
-  router-hosts.fzymgc.house/ip-address: "192.168.1.100"  # Required for NodePort
-```
-
-### "PendingLoadBalancer" normal event
-
-**Symptoms:** LoadBalancer Service waiting for IP
-
-**Cause:** Cloud provider hasn't assigned an external IP yet
-
-**Solutions:**
-
-1. Wait for cloud provider to provision load balancer
-2. Check cloud provider quotas and limits
-3. For bare-metal clusters, ensure MetalLB or similar is configured
-
-```bash
-# Check LoadBalancer status
-kubectl get svc <name> -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
-```
-
-### DNS entry not updated after Service change
-
-**Symptoms:** Changed Service but DNS doesn't reflect updates
+**Symptoms:** `HostMapping` exists but no DNS entry is created; `status.phase` is `Error`.
 
 **Causes and solutions:**
 
-1. Check operator logs for errors
-2. Verify router-hosts server is reachable
-3. Check retry backoff - transient errors use exponential backoff
+1. `spec.ip` is missing or invalid — it is **required** and must be a valid IPv4/IPv6 address. (The field is `spec.ip`; the pre-0.10.2 CRD used `spec.ipAddress`.)
+2. Read the failure reason from status:
 
 ```bash
-# Check operator logs
-kubectl logs -n router-hosts -l app=router-hosts-operator --tail=100
-
-# Force reconciliation by touching annotation
-kubectl annotate svc <name> router-hosts.fzymgc.house/timestamp="$(date +%s)" --overwrite
+kubectl get hostmapping <name> -n <namespace> \
+  -o jsonpath='{.status.phase}{" "}{.status.message}'
 ```
+
+### IngressRoute hostnames not registered
+
+**Symptoms:** A Traefik `IngressRoute`/`IngressRouteTCP` exists but its hosts are missing from router-hosts.
+
+**Causes and solutions:**
+
+1. Only `` Host(`…`) `` (IngressRoute) and `` HostSNI(`…`) `` (IngressRouteTCP) patterns in `spec.routes[].match` are extracted. Other match expressions yield no hostnames.
+2. Hostnames that fail RFC 1123 validation are logged and skipped — check the operator logs.
+3. Entries are created with the operator's `--default-ingress-ip`. If that flag is empty, hosts are created with no IP; set `routerHosts.defaultIngressIP` in the chart.
+
+```bash
+# Operator logs (extraction warnings, gRPC errors)
+kubectl logs -n router-hosts-system -l app.kubernetes.io/name=router-hosts-operator --tail=100
+
+# Inspect the operator-managed host-id map on the resource
+kubectl get ingressroute <name> -n <namespace> \
+  -o jsonpath='{.metadata.annotations.router-hosts\.fzymgc\.house/host-ids}'
+```
+
+### DNS entry not updated after a resource change
+
+**Symptoms:** Changed a `HostMapping`/`IngressRoute` but router-hosts doesn't reflect it.
+
+**Causes and solutions:**
+
+1. Check operator logs for reconcile errors.
+2. Verify the router-hosts server is reachable.
+3. Transient failures are retried with a requeue backoff — give it a moment.
 
 ### Operator not connecting to router-hosts server
 
@@ -253,16 +184,17 @@ kubectl annotate svc <name> router-hosts.fzymgc.house/timestamp="$(date +%s)" --
 
 **Causes and solutions:**
 
-1. Verify server address in RouterHostsConfig
+1. Verify the server address passed via `--server-address` (Helm `routerHosts.serverAddress`)
 2. Check mTLS certificates are valid and mounted
 3. Verify network connectivity between operator and server
 
 ```bash
-# Check operator configuration
-kubectl get routerhostsconfig -A -o yaml
+# Check operator configuration (flags are on the Deployment, not a CRD)
+kubectl get deployment -n router-hosts-system router-hosts-operator \
+  -o jsonpath='{.spec.template.spec.containers[0].args}'
 
 # Check certificate secrets exist
-kubectl get secrets -n router-hosts | grep tls
+kubectl get secrets -n router-hosts-system | grep tls
 ```
 
 ## Logging and Debugging
