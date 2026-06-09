@@ -105,10 +105,38 @@ jobs:
         run: go install github.com/go-task/task/v3/cmd/task@latest
       - name: Verify CRDs and deepcopy match Go types
         run: task manifests:verify
+  docs:
+    name: Docs build (strict)
+    runs-on: namespace-profile-linux-amd64-2x4
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cache Go modules and build
+        uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1
+        with:
+          cache: go
+      - name: Install task runner
+        run: go install github.com/go-task/task/v3/cmd/task@latest
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "25.x"
+      - name: Install protoc-gen-doc
+        run: go install github.com/pseudomuto/protoc-gen-doc/cmd/protoc-gen-doc@v1.5.1
+      - name: Install uv
+        uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      - name: Build router-hosts binary (for CLI docs)
+        run: go build -o /tmp/router-hosts ./cmd/router-hosts
+      - name: Build docs (strict)
+        run: task docs:ci BINARY=/tmp/router-hosts
   ci-go-complete:
     name: CI (Go) Complete
     if: always()
-    needs: [lint, vuln, test, build, buf-check, manifests]
+    needs: [lint, vuln, test, build, buf-check, manifests, docs]
     runs-on: namespace-profile-linux-amd64-2x4
     timeout-minutes: 5
     steps:
@@ -120,13 +148,15 @@ jobs:
           BUILD_RESULT: ${{ needs.build.result }}
           BUF_RESULT: ${{ needs.buf-check.result }}
           MANIFESTS_RESULT: ${{ needs.manifests.result }}
+          DOCS_RESULT: ${{ needs.docs.result }}
         run: |
           if [[ "$LINT_RESULT" != "success" ]] ||
              [[ "$VULN_RESULT" != "success" ]] ||
              [[ "$TEST_RESULT" != "success" ]] ||
              [[ "$BUILD_RESULT" != "success" ]] ||
              [[ "$BUF_RESULT" != "success" ]] ||
-             [[ "$MANIFESTS_RESULT" != "success" ]]; then
+             [[ "$MANIFESTS_RESULT" != "success" ]] ||
+             [[ "$DOCS_RESULT" != "success" ]]; then
             echo "One or more CI jobs failed"
             exit 1
           fi
