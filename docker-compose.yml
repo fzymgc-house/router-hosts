@@ -27,7 +27,7 @@
 
 services:
   router-hosts:
-    image: ghcr.io/fzymgc-house/router-hosts:latest@sha256:6a35916dbf38a64236496be8255488196a0d46da3981944ff8444ab3b7557b37
+    image: ghcr.io/fzymgc-house/router-hosts:latest@sha256:2913d1e54847e08ca4beece7b6b4f3bfabccf30ad01f81614ead1145fc230c3b
     container_name: router-hosts-server
     restart: unless-stopped
     # Run as non-root user (customize via DOCKER_UID/DOCKER_GID env vars)
