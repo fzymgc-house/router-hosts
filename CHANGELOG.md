@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.3](https://github.com/fzymgc-house/router-hosts/compare/v0.10.2...v0.10.3) (2026-06-09)
+
+
+### Bug Fixes
+
+* **docs:** repair dangling proto-doc anchor & gate docs build on PRs ([#314](https://github.com/fzymgc-house/router-hosts/issues/314)) ([#315](https://github.com/fzymgc-house/router-hosts/issues/315)) ([5ea0e6b](https://github.com/fzymgc-house/router-hosts/commit/5ea0e6b5ff70cd44513ae965d10f3565becfcb38))
+* **operator:** remove orphaned CRD & correct Rust-era docs ([#310](https://github.com/fzymgc-house/router-hosts/issues/310)) ([#311](https://github.com/fzymgc-house/router-hosts/issues/311)) ([7ff421d](https://github.com/fzymgc-house/router-hosts/commit/7ff421d61e0f7d2f5f61905011d0716bb57daf1c))
+
+
+### Build System
+
+* **deps:** update github action actions/checkout to v6 ([#279](https://github.com/fzymgc-house/router-hosts/issues/279)) ([eab6320](https://github.com/fzymgc-house/router-hosts/commit/eab63208c6bfa34a203c1b4a53a18acaea27a38e))
+* **deps:** update github action astral-sh/setup-uv to v8 ([#305](https://github.com/fzymgc-house/router-hosts/issues/305)) ([caf3fa1](https://github.com/fzymgc-house/router-hosts/commit/caf3fa1c6209e68ecc7034ff68b288ff2662a6d1))
+
 ## [0.10.2](https://github.com/fzymgc-house/router-hosts/compare/v0.10.1...v0.10.2) (2026-06-09)
 
 
