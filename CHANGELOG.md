@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.2](https://github.com/fzymgc-house/router-hosts/compare/v0.10.1...v0.10.2) (2026-06-09)
+
+
+### Bug Fixes
+
+* **operator:** regenerate HostMapping CRD to match Go types ([#308](https://github.com/fzymgc-house/router-hosts/issues/308)) ([#309](https://github.com/fzymgc-house/router-hosts/issues/309)) ([2c71278](https://github.com/fzymgc-house/router-hosts/commit/2c71278ced16bb44c4ef555f90a35f0260c36fd3))
+
+
+### Documentation
+
+* **operator:** Kubernetes Gateway API support design + plan ([#301](https://github.com/fzymgc-house/router-hosts/issues/301)) ([b5ba259](https://github.com/fzymgc-house/router-hosts/commit/b5ba2597832d6d154a2673a232c5f10023ac58d1))
+
+
+### Build System
+
+* **deps:** update ghcr.io/fzymgc-house/router-hosts:latest docker digest to 10a6dd6 ([#304](https://github.com/fzymgc-house/router-hosts/issues/304)) ([619c95a](https://github.com/fzymgc-house/router-hosts/commit/619c95ab3a569c7db1e479024ca5a4eb1c9e174c))
+
 ## [0.10.1](https://github.com/fzymgc-house/router-hosts/compare/v0.10.0...v0.10.1) (2026-06-07)
 
 
