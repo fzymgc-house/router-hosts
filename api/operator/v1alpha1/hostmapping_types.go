@@ -78,6 +78,7 @@ const (
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
+// +kubebuilder:resource:shortName=hm
 // +kubebuilder:printcolumn:name="IP",type=string,JSONPath=`.spec.ip`
 // +kubebuilder:printcolumn:name="Hostname",type=string,JSONPath=`.spec.hostname`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
