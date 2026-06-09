@@ -70,6 +70,13 @@ HEADER
 cat "$OUTPUT_FILE" >> "$TEMP_FILE"
 mv "$TEMP_FILE" "$OUTPUT_FILE"
 
+# protoc-gen-doc cross-links well-known types (e.g. google.protobuf.Timestamp)
+# to in-page anchors like #google-protobuf-Timestamp, but never renders a
+# section for them — they are imported, not defined in our proto. The dangling
+# anchors fail `mkdocs build --strict`. Redirect them to the official protobuf
+# reference so the links stay useful instead of broken.
+perl -pi -e 's{\(#google-protobuf-(\w+)\)}{"(https://protobuf.dev/reference/protobuf/google.protobuf/#".lc($1).")"}ge' "$OUTPUT_FILE"
+
 # Verify output has content
 line_count=$(wc -l < "$OUTPUT_FILE" | tr -d ' ')
 if [[ "$line_count" -lt 20 ]]; then
