@@ -1,17 +1,18 @@
 # Kubernetes Operator
 
-The router-hosts Kubernetes operator automates DNS registration for Kubernetes workloads. It watches Kubernetes Services, Traefik IngressRoutes, and custom HostMapping resources, automatically creating and maintaining corresponding host entries in the router-hosts server.
+The router-hosts Kubernetes operator automates DNS registration for Kubernetes workloads. It watches Traefik `IngressRoute`/`IngressRouteTCP` resources and custom `HostMapping` resources, creating and maintaining the corresponding host entries in the router-hosts server over gRPC/mTLS.
 
 ## Overview
 
-**Key features:**
-- Watches Kubernetes `Service` resources (LoadBalancer, NodePort)
-- Watches Traefik `IngressRoute` and `IngressRouteTCP` resources
-- Supports explicit `HostMapping` CRD for non-Ingress workloads
-- Automatic IP resolution from ingress controllers or static addresses
-- Graceful deletion with configurable grace periods
-- Leader election for high availability deployments
-- Health endpoints for Kubernetes probes
+**What the operator does:**
+
+- Watches Traefik `IngressRoute` and `IngressRouteTCP` resources and registers the hostnames in their routing rules.
+- Reconciles the `HostMapping` CRD for explicit, non-Ingress host entries.
+- Talks to the router-hosts server over gRPC with mutual TLS.
+- Cleans up host entries when the source resource is deleted, using finalizers.
+- Exposes Prometheus metrics and Kubernetes health probes, and supports leader election for HA.
+
+**What it does not do** (despite earlier Rust-operator documentation): there is **no** `RouterHostsConfig` CRD, **no** Kubernetes `Service` controller, and **no** per-resource annotation API. Configuration is entirely via command-line flags set by the Helm chart, and IngressRoutes are watched cluster-wide without an opt-in annotation. See [Configuration](#configuration).
 
 ## Installation
 
@@ -20,7 +21,7 @@ The operator is deployed via Helm chart. See the [Helm Chart README](https://git
 **Quick start:**
 
 ```bash
-# Create mTLS secret
+# Create the mTLS client secret in the operator's namespace
 kubectl create namespace router-hosts-system
 kubectl create secret generic router-hosts-mtls \
   -n router-hosts-system \
@@ -28,52 +29,35 @@ kubectl create secret generic router-hosts-mtls \
   --from-file=tls.crt=/path/to/client.crt \
   --from-file=tls.key=/path/to/client.key
 
-# Install operator
+# Install the operator
 helm install router-hosts-operator charts/router-hosts-operator \
-  --namespace router-hosts-system
+  --namespace router-hosts-system \
+  --set routerHosts.serverAddress=router.lan:50051 \
+  --set routerHosts.defaultIngressIP=192.168.1.100
 ```
 
-## Custom Resource Definitions
+## Configuration
 
-### RouterHostsConfig
+The operator has no configuration CRD. It is configured by command-line flags, which the Helm chart renders from `values.yaml`. The most relevant values:
 
-Cluster-scoped configuration for the operator. Only one instance should exist.
+| Helm value | Operator flag | Purpose |
+|------------|---------------|---------|
+| `routerHosts.serverAddress` | `--server-address` | gRPC address (`host:port`) of the router-hosts server |
+| `routerHosts.defaultIngressIP` | `--default-ingress-ip` | IP assigned to every host extracted from IngressRoutes |
+| `routerHosts.tlsSecret` | `--tls-ca` / `--tls-cert` / `--tls-key` | mTLS client identity (Secret mounted into the pod) |
+| `replicaCount` (≥ 2) | `--leader-elect` | Enables leader election automatically |
+| `metrics.bindAddress` | `--metrics-bind-address` | Prometheus metrics listen address (`"0"` disables) |
+| `healthCheck.port` | `--health-probe-bind-address` | Health/readiness probe HTTP port |
 
-```yaml
-apiVersion: router-hosts.fzymgc.house/v1alpha1
-kind: RouterHostsConfig
-metadata:
-  name: default
-spec:
-  # gRPC endpoint of router-hosts server
-  endpoint: "router.lan:50051"
+> **`defaultIngressIP` is required for IngressRoutes.** If it is empty, the IngressRoute controller logs a warning and creates host entries with no IP. Leave it empty only if you exclusively use `HostMapping` resources (which carry their own IP).
 
-  # Reference to mTLS credentials Secret
-  tlsSecretRef:
-    name: router-hosts-mtls
-    namespace: router-hosts-system
+The mTLS Secret **must** live in the operator's own namespace; it is mounted into the pod rather than referenced cross-namespace.
 
-  # IP resolution strategies (tried in order)
-  ipResolution:
-    - type: ingressController
-      serviceName: traefik
-      serviceNamespace: traefik-system
-    - type: static
-      address: "192.168.1.100"
-
-  # Grace period before deletion (seconds)
-  deletion:
-    gracePeriodSeconds: 300
-
-  # Tags added to all entries
-  defaultTags:
-    - k8s-operator
-    - cluster:production
-```
+## Custom Resources
 
 ### HostMapping
 
-Namespace-scoped resource for explicit host mappings. Use this for workloads not exposed via Ingress.
+Namespace-scoped resource for explicit host mappings. Use it for workloads not exposed via a Traefik IngressRoute.
 
 ```yaml
 apiVersion: router-hosts.fzymgc.house/v1alpha1
@@ -85,10 +69,10 @@ spec:
   # Required: hostname to register
   hostname: legacy.example.com
 
-  # Optional: explicit IP (uses IP resolution if omitted)
-  ipAddress: "10.0.0.50"
+  # Required: IPv4 or IPv6 address for the entry
+  ip: "10.0.0.50"
 
-  # Optional: hostname aliases
+  # Optional: hostname aliases (additional names for the same IP)
   aliases:
     - legacy.local
     - legacy.lan
@@ -103,33 +87,35 @@ spec:
 
 | Field | Description |
 |-------|-------------|
-| `synced` | Whether entry is synced to router-hosts |
-| `routerHostsId` | The router-hosts entry ID (if synced) |
-| `lastSyncTime` | Last successful sync timestamp |
-| `error` | Error message if sync failed |
-| `conditions` | Kubernetes-style conditions (`Synced`, `Ready`) |
+| `phase` | Sync state: `Pending`, `Synced`, or `Error` |
+| `message` | Human-readable detail about the current phase |
+| `hostId` | The router-hosts server-assigned entry ID |
+| `hostVersion` | Server version string (optimistic concurrency) |
+| `lastSyncTime` | Timestamp of the last successful sync |
+| `conditions` | Standard Kubernetes conditions (`Synced`) |
 
-**kubectl output:**
+**kubectl output** (short name `hm`):
 
 ```bash
 $ kubectl get hostmapping -A
-NAMESPACE   NAME         HOSTNAME              IP           SYNCED
-default     legacy-app   legacy.example.com    10.0.0.50    True
+NAMESPACE   NAME         IP          HOSTNAME             PHASE    AGE
+default     legacy-app   10.0.0.50   legacy.example.com   Synced   2m
 ```
 
-### Traefik Resources
+### Traefik IngressRoute / IngressRouteTCP
 
-The operator watches Traefik CRDs when annotated with `router-hosts.fzymgc.house/enabled: "true"`.
+The operator watches **all** `IngressRoute` and `IngressRouteTCP` resources cluster-wide — there is no opt-in annotation. For each resource it extracts hostnames from the routing rules and registers them:
 
-**IngressRoute:**
+- `IngressRoute`: hostnames inside `` Host(`…`) `` in `spec.routes[].match`.
+- `IngressRouteTCP`: hostnames inside `` HostSNI(`…`) `` in `spec.routes[].match`.
+
+Every extracted hostname is registered with the configured `--default-ingress-ip` and tagged `kubernetes`, `traefik`, `ingress`. Hostnames that fail validation are logged and skipped.
 
 ```yaml
 apiVersion: traefik.io/v1alpha1
 kind: IngressRoute
 metadata:
   name: myapp
-  annotations:
-    router-hosts.fzymgc.house/enabled: "true"
 spec:
   routes:
     - match: Host(`myapp.example.com`)
@@ -139,15 +125,11 @@ spec:
           port: 80
 ```
 
-**IngressRouteTCP:**
-
 ```yaml
 apiVersion: traefik.io/v1alpha1
 kind: IngressRouteTCP
 metadata:
   name: postgres
-  annotations:
-    router-hosts.fzymgc.house/enabled: "true"
 spec:
   routes:
     - match: HostSNI(`postgres.example.com`)
@@ -156,167 +138,43 @@ spec:
           port: 5432
 ```
 
-### Kubernetes Services
+The operator records the hostname → server-entry-ID map it created in an internal `router-hosts.fzymgc.house/host-ids` annotation on the resource. This annotation is managed by the operator; do not edit it.
 
-The operator watches Kubernetes Service resources when annotated with `router-hosts.fzymgc.house/enabled: "true"`. This enables DNS registration for Services without requiring an IngressRoute.
+## IP Assignment
 
-**Supported Service Types:**
+There is no IP-resolution strategy chain. IP comes from exactly one place per resource type:
 
-| Type | IP Discovery | Requirements |
-|------|--------------|--------------|
-| `LoadBalancer` | Automatic from `.status.loadBalancer.ingress[0].ip` | None - IP auto-discovered when assigned |
-| `NodePort` | Manual via annotation | Requires `ip-address` annotation |
+- **HostMapping**: the required `spec.ip` field.
+- **IngressRoute / IngressRouteTCP**: the operator-wide `--default-ingress-ip` flag (Helm `routerHosts.defaultIngressIP`). The same IP is used for every IngressRoute-derived host.
 
-**Unsupported Types:**
+If you need different IPs for different IngressRoute hosts, register those hosts with `HostMapping` resources instead.
 
-| Type | Reason |
-|------|--------|
-| `ClusterIP` | No external IP available; cluster-internal only |
-| `ExternalName` | Maps to external hostname, not an IP address |
+## Deletion
 
-**LoadBalancer Example:**
+The operator attaches a finalizer to every resource it manages (`router-hosts.fzymgc.house/host-cleanup` for HostMappings, `router-hosts.fzymgc.house/ingressroute-cleanup` for IngressRoutes). When the resource is deleted, the operator deletes the corresponding host entries from the router-hosts server **immediately**, then removes the finalizer.
 
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-app
-  annotations:
-    router-hosts.fzymgc.house/enabled: "true"
-    router-hosts.fzymgc.house/hostname: "app.example.com"
-spec:
-  type: LoadBalancer
-  ports:
-    - port: 443
-      targetPort: 8443
-  selector:
-    app: my-app
-```
-
-For LoadBalancer Services, the operator waits for the cloud provider to assign an external IP and then creates the DNS entry automatically.
-
-> **Note:** Some cloud providers (e.g., AWS ELB) expose a hostname instead of an IP address in `.status.loadBalancer.ingress[].hostname`. The operator only accepts IP addresses, not hostnames. If your LoadBalancer receives a hostname instead of an IP, you can manually override it using the `ip-address` annotation.
-
-**NodePort Example:**
-
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: my-nodeport
-  annotations:
-    router-hosts.fzymgc.house/enabled: "true"
-    router-hosts.fzymgc.house/hostname: "nodeport.example.com"
-    router-hosts.fzymgc.house/ip-address: "192.168.1.100"
-spec:
-  type: NodePort
-  ports:
-    - port: 80
-      nodePort: 30080
-  selector:
-    app: my-app
-```
-
-NodePort Services expose a port on every cluster node, but the operator cannot automatically determine which node IP to use. You must specify the IP address explicitly via the `ip-address` annotation. This is typically the IP of a load balancer in front of your nodes, or a specific node's IP.
-
-**Service-Specific Annotations:**
-
-| Annotation | Required | Description |
-|------------|----------|-------------|
-| `router-hosts.fzymgc.house/enabled` | Yes | Must be `"true"` to enable DNS sync |
-| `router-hosts.fzymgc.house/hostname` | Yes | The hostname to register |
-| `router-hosts.fzymgc.house/ip-address` | NodePort only | IP address for NodePort Services |
-| `router-hosts.fzymgc.house/aliases` | No | Additional hostnames (comma-separated) |
-| `router-hosts.fzymgc.house/tags` | No | Custom tags (comma-separated) |
-| `router-hosts.fzymgc.house/grace-period` | No | Deletion grace period in seconds |
-
-## Annotations
-
-Control operator behavior per-resource using annotations:
-
-| Annotation | Description | Example |
-|------------|-------------|---------|
-| `router-hosts.fzymgc.house/enabled` | Enable sync for this resource | `"true"` |
-| `router-hosts.fzymgc.house/ip-address` | Override resolved IP | `"192.168.1.200"` |
-| `router-hosts.fzymgc.house/tags` | Additional tags (comma-separated) | `"production,public"` |
-| `router-hosts.fzymgc.house/aliases` | Hostname aliases (comma-separated) | `"app.local,app.lan"` |
-| `router-hosts.fzymgc.house/grace-period` | Override deletion grace period (seconds) | `"600"` |
-
-## IP Resolution
-
-The operator resolves IP addresses using a fallback chain:
-
-1. **Annotation override**: `router-hosts.fzymgc.house/ip-address` annotation
-2. **HostMapping spec**: `ipAddress` field (for HostMapping resources only)
-3. **Ingress controller**: LoadBalancer IP from configured Service
-4. **Static fallback**: Configured static address
-
-### Resolution Strategies
-
-**IngressController**: Discovers IP from a Kubernetes Service (typically the ingress controller):
-
-```yaml
-ipResolution:
-  - type: ingressController
-    serviceName: traefik
-    serviceNamespace: traefik-system
-```
-
-The operator checks:
-1. Service LoadBalancer `.status.loadBalancer.ingress[*].ip`
-2. Service ClusterIP (fallback)
-
-**Static**: Fixed IP address:
-
-```yaml
-ipResolution:
-  - type: static
-    address: "192.168.1.100"
-```
-
-## Deletion Handling
-
-When a watched resource is deleted, the operator:
-
-1. Marks the host entry with a `pending-deletion:<timestamp>` tag
-2. Waits for the grace period (default: 300 seconds)
-3. Deletes the entry from router-hosts after grace period expires
-
-This prevents DNS disruptions during rolling updates or brief resource deletions.
-
-**Override per-resource:**
-
-```yaml
-annotations:
-  router-hosts.fzymgc.house/grace-period: "600"  # 10 minutes
-```
+There is no deletion grace period and no `pending-deletion` tagging. If the server is unreachable during cleanup, the finalizer is retained and the delete is retried on the next reconcile, so the Kubernetes object remains until cleanup succeeds.
 
 ## Observability
 
 ### Health Endpoints
 
-The operator exposes HTTP health endpoints:
+The operator exposes two HTTP endpoints on `--health-probe-bind-address` (Helm `healthCheck.port`, default `8081`):
 
-| Endpoint | Purpose | Behavior |
-|----------|---------|----------|
-| `/healthz` | Liveness | Returns 200 if process is alive |
-| `/readyz` | Readiness | Returns 200 if startup complete AND router-hosts server reachable |
+| Endpoint | Probe | Behavior |
+|----------|-------|----------|
+| `/healthz` | Liveness | Returns 200 while the process is alive |
+| `/readyz` | Readiness / startup | Returns 200 once the manager has started |
 
-Kubernetes probes:
-- **Startup**: `/readyz` - verifies server connectivity (allows 150s for initial connection)
-- **Liveness**: `/healthz` - checks process health
-- **Readiness**: `/readyz` - removes from service if router-hosts unreachable
+Both endpoints are process-health pings; they do **not** test gRPC connectivity to the router-hosts server. The chart's startup probe allows roughly 150s (`startupProbe.periodSeconds` × `failureThreshold`) before liveness/readiness apply.
+
+### Metrics
+
+Prometheus metrics are served on `--metrics-bind-address` (Helm `metrics.bindAddress`, default `:8080`). Set `metrics.bindAddress: "0"` to disable.
 
 ### Logging
 
-Configure log level via Helm values:
-
-```yaml
-logging:
-  level: info  # trace, debug, info, warn, error
-```
-
-View logs:
+The operator logs structured JSON to stdout at info level. (Log level is not currently configurable via the chart.)
 
 ```bash
 kubectl logs -n router-hosts-system -l app.kubernetes.io/name=router-hosts-operator -f
@@ -324,143 +182,100 @@ kubectl logs -n router-hosts-system -l app.kubernetes.io/name=router-hosts-opera
 
 ## High Availability
 
-### Leader Election
-
-For high availability, run multiple replicas with leader election. Only one replica actively reconciles; others wait as standby.
-
-**Enable HA:**
+Run multiple replicas with leader election so only one replica reconciles at a time; the others stand by.
 
 ```yaml
-replicaCount: 2
-
-# Auto-enabled when replicas >= 2, or explicitly:
-leaderElection:
-  enabled: true
-  leaseDurationSeconds: 15  # Lease TTL
-  renewIntervalSeconds: 5   # Renewal interval
+replicaCount: 2   # leader election is auto-enabled when replicaCount >= 2
 ```
 
-**How it works:**
-
-1. On startup, each pod attempts to acquire the Kubernetes Lease
-2. First pod to acquire becomes leader, starts controllers
-3. Other pods block waiting for leadership
-4. Leader renews the lease every 5 seconds
-5. If leadership is lost, pod exits and Kubernetes restarts it
-6. Restarted pod re-enters the acquire-or-wait cycle
-
-**Features:**
-- Automatic failover if leader crashes
-- Zero-downtime rolling updates
-- Acquire-or-exit pattern ensures clean state
-
-### RBAC for Leader Election
-
-When leader election is enabled, additional RBAC permissions are required:
-
-```yaml
-# Automatically added by Helm chart when leaderElection.enabled or replicaCount >= 2
-- apiGroups: ["coordination.k8s.io"]
-  resources: ["leases"]
-  verbs: ["get", "create", "update"]
-```
+Leader election uses a Kubernetes Lease with ID `router-hosts-operator.fzymgc.house`, managed by controller-runtime. Lease timings are not configurable via the chart. When leader election is enabled, the chart adds RBAC for `coordination.k8s.io/leases`. On loss of leadership the pod exits and is restarted by Kubernetes, re-entering the acquire-or-wait cycle.
 
 ## Troubleshooting
 
-### Check Operator Status
+### Check operator status
 
 ```bash
 # Pod status
 kubectl get pods -n router-hosts-system
 
-# Operator logs
+# Operator logs (reconcile errors, gRPC failures, startup warnings)
 kubectl logs -n router-hosts-system -l app.kubernetes.io/name=router-hosts-operator
-
-# Config status
-kubectl get routerhostsconfig -o yaml
 ```
 
-### Check HostMapping Status
+Configuration lives in the Deployment's args and the mounted mTLS Secret, not in a CRD:
 
 ```bash
-# List all HostMappings
-kubectl get hostmapping -A
+kubectl get deployment -n router-hosts-system router-hosts-operator -o jsonpath='{.spec.template.spec.containers[0].args}'
+```
 
-# Detailed status
+### Check HostMapping status
+
+```bash
+kubectl get hostmapping -A
 kubectl describe hostmapping <name> -n <namespace>
 ```
 
-### Common Issues
+The `Synced` condition and `status.message` carry the reason for any failure.
+
+### Common issues
 
 **Operator fails to start:**
-- Verify mTLS Secret exists with keys: `ca.crt`, `tls.crt`, `tls.key`
-- Check Secret namespace matches `tlsSecretRef.namespace`
 
-**Resources not syncing:**
-- Verify annotation `router-hosts.fzymgc.house/enabled: "true"` is present
-- Check HostMapping status for error messages
-- Ensure RouterHostsConfig exists and is valid
+- Verify the mTLS Secret exists in the operator namespace with keys `ca.crt`, `tls.crt`, `tls.key`.
+- Confirm `routerHosts.serverAddress` points at a reachable gRPC endpoint.
 
-**IP resolution failing:**
-- Verify ingress controller Service exists
-- Check Service has LoadBalancer IP or ClusterIP
-- Try adding static fallback strategy
+**HostMapping stuck in `Error` / `invalid IP address`:**
 
-**Service not syncing:**
-- Verify `router-hosts.fzymgc.house/enabled: "true"` annotation is present
-- Verify `router-hosts.fzymgc.house/hostname` annotation is set
-- For LoadBalancer: Check `.status.loadBalancer.ingress[0].ip` is assigned
-- For NodePort: Ensure `router-hosts.fzymgc.house/ip-address` annotation is set
-- ClusterIP and ExternalName Services are not supported
+- `spec.ip` is required and must be a valid IPv4/IPv6 address. (Older docs and the pre-0.10.2 CRD used `spec.ipAddress`; the field is `spec.ip`.)
+- Inspect `status.message` for the server's rejection reason.
+
+**IngressRoute hosts created with an empty IP:**
+
+- Set `routerHosts.defaultIngressIP`. With it empty, the IngressRoute controller logs a warning and creates entries with no IP.
+
+**Hostnames from an IngressRoute are missing:**
+
+- Only `` Host(`…`) `` (IngressRoute) and `` HostSNI(`…`) `` (IngressRouteTCP) patterns are extracted. Invalid hostnames are skipped — check the operator logs.
 
 **Connectivity issues:**
-- Check `/readyz` endpoint returns 200
-- Verify router-hosts server is reachable from cluster
-- Confirm TLS certificates are valid and not expired
+
+- Confirm the router-hosts server is reachable from the cluster and the mTLS certificates are valid and unexpired. gRPC errors surface in the operator logs on each reconcile.
 
 ## Architecture
 
-```
-┌───────────────────────────────────────────────────────────────────────┐
-│                         Kubernetes Cluster                            │
-│  ┌─────────────┐ ┌─────────────┐ ┌─────────────┐ ┌─────────────────┐  │
-│  │   Service   │ │ IngressRoute│ │IngressRoute │ │   HostMapping   │  │
-│  │ (LB/NodePt) │ │   (Traefik) │ │    TCP      │ │      (CRD)      │  │
-│  └──────┬──────┘ └──────┬──────┘ └──────┬──────┘ └────────┬────────┘  │
-│         │               │               │                  │          │
-│         └───────────────┴───────────────┴──────────────────┘          │
-│                                   │                                   │
-│                                   ▼                                   │
-│                   ┌───────────────────────────┐                       │
-│                   │   router-hosts-operator   │                       │
-│                   │  ┌─────────────────────┐  │                       │
-│                   │  │   Leader Election   │  │ (if HA enabled)      │
-│                   │  └──────────┬──────────┘  │                       │
-│                   │             ▼             │                       │
-│                   │  ┌─────────────────────┐  │                       │
-│                   │  │     Controllers     │  │                       │
-│                   │  │ • Service           │  │                       │
-│                   │  │ • IngressRoute      │  │                       │
-│                   │  │ • IngressTCP        │  │                       │
-│                   │  │ • HostMapping       │  │                       │
-│                   │  └──────────┬──────────┘  │                       │
-│                   │             │             │                       │
-│                   │  ┌──────────▼──────────┐  │                       │
-│                   │  │    IP Resolution    │  │                       │
-│                   │  └──────────┬──────────┘  │                       │
-│                   └─────────────┼─────────────┘                       │
-│                                 │                                     │
-└─────────────────────────────────┼─────────────────────────────────────┘
-                                  │ gRPC/mTLS
-                                  ▼
-                      ┌─────────────────────┐
-                      │  router-hosts server │
-                      │    (/etc/hosts)      │
-                      └─────────────────────┘
+```text
+┌───────────────────────────────────────────────────────────────────┐
+│                         Kubernetes Cluster                        │
+│   ┌──────────────┐   ┌─────────────────┐   ┌──────────────────┐   │
+│   │ IngressRoute │   │ IngressRouteTCP │   │   HostMapping    │   │
+│   │   (Traefik)  │   │    (Traefik)    │   │      (CRD)       │   │
+│   └──────┬───────┘   └────────┬────────┘   └────────┬─────────┘   │
+│          └────────────────────┴─────────────────────┘             │
+│                                │                                  │
+│                                ▼                                  │
+│                 ┌───────────────────────────┐                     │
+│                 │   router-hosts-operator   │                     │
+│                 │  ┌─────────────────────┐  │                     │
+│                 │  │  Leader Election    │  │ (if replicaCount≥2) │
+│                 │  └──────────┬──────────┘  │                     │
+│                 │             ▼             │                     │
+│                 │  ┌─────────────────────┐  │                     │
+│                 │  │     Controllers     │  │                     │
+│                 │  │ • IngressRoute(TCP) │  │                     │
+│                 │  │ • HostMapping       │  │                     │
+│                 │  └──────────┬──────────┘  │                     │
+│                 └─────────────┼─────────────┘                     │
+└───────────────────────────────┼───────────────────────────────────┘
+                                │ gRPC / mTLS
+                                ▼
+                    ┌──────────────────────┐
+                    │  router-hosts server │
+                    │      (/etc/hosts)    │
+                    └──────────────────────┘
 ```
 
 ## See Also
 
-- [Helm Chart README](https://github.com/fzymgc-house/router-hosts/blob/main/charts/router-hosts-operator/README.md) - Installation and configuration
-- [Architecture](../contributing/architecture.md) - Overall system design
-- [Operations](operations.md) - Server operations and monitoring
+- [Helm Chart README](https://github.com/fzymgc-house/router-hosts/blob/main/charts/router-hosts-operator/README.md) — installation and configuration
+- [Architecture](../contributing/architecture.md) — overall system design
+- [Operations](operations.md) — server operations and monitoring
