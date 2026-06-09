@@ -87,10 +87,28 @@ jobs:
         run: buf lint
       - name: Check protobuf formatting
         run: buf format --diff --exit-code
+  manifests:
+    name: Manifests up to date
+    runs-on: namespace-profile-linux-amd64-2x4
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cache Go modules and build
+        uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1
+        with:
+          cache: go
+      - name: Install task runner
+        run: go install github.com/go-task/task/v3/cmd/task@latest
+      - name: Verify CRDs and deepcopy match Go types
+        run: task manifests:verify
   ci-go-complete:
     name: CI (Go) Complete
     if: always()
-    needs: [lint, vuln, test, build, buf-check]
+    needs: [lint, vuln, test, build, buf-check, manifests]
     runs-on: namespace-profile-linux-amd64-2x4
     timeout-minutes: 5
     steps:
@@ -101,12 +119,14 @@ jobs:
           TEST_RESULT: ${{ needs.test.result }}
           BUILD_RESULT: ${{ needs.build.result }}
           BUF_RESULT: ${{ needs.buf-check.result }}
+          MANIFESTS_RESULT: ${{ needs.manifests.result }}
         run: |
           if [[ "$LINT_RESULT" != "success" ]] ||
              [[ "$VULN_RESULT" != "success" ]] ||
              [[ "$TEST_RESULT" != "success" ]] ||
              [[ "$BUILD_RESULT" != "success" ]] ||
-             [[ "$BUF_RESULT" != "success" ]]; then
+             [[ "$BUF_RESULT" != "success" ]] ||
+             [[ "$MANIFESTS_RESULT" != "success" ]]; then
             echo "One or more CI jobs failed"
             exit 1
           fi

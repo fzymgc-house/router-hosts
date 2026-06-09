@@ -4,6 +4,9 @@ vars:
   IMAGE_TAG: '{{.IMAGE_TAG | default "dev"}}'
   BINARY: '{{.BINARY | default "./bin/router-hosts"}}'
   MKDOCS: 'uvx --with mkdocs-material --with mkdocs-git-revision-date-localized-plugin --with mkdocs-exclude mkdocs'
+  # Pinned to match sigs.k8s.io/controller-runtime in go.mod (both target k8s 0.34).
+  CONTROLLER_GEN: 'go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0'
+  CRD_DIR: 'charts/router-hosts-operator/crds'
 tasks:
   build:
     desc: Build all binaries (debug)
@@ -48,11 +51,12 @@ tasks:
           exit 1
         fi
   lint:
-    desc: Run all linters (Go + protobuf)
+    desc: Run all linters (Go + protobuf) and verify generated manifests
     cmds:
       - golangci-lint run ./...
       - buf lint
       - buf format --diff --exit-code
+      - task: manifests:verify
   fmt:
     desc: Format all code (Go + protobuf)
     cmds:
@@ -62,6 +66,23 @@ tasks:
     desc: Generate Go code from protobuf definitions
     cmds:
       - buf generate
+  manifests:
+    desc: Generate operator CRDs and deepcopy code from Go types (controller-gen)
+    cmds:
+      - '{{.CONTROLLER_GEN}} crd paths=./api/operator/... output:crd:dir={{.CRD_DIR}}'
+      - '{{.CONTROLLER_GEN}} object paths=./api/operator/...'
+  manifests:verify:
+    desc: Verify committed CRDs/deepcopy match Go types (fails on drift)
+    cmds:
+      - task: manifests
+      - |
+        if [ -n "$(git status --porcelain {{.CRD_DIR}} api/operator)" ]; then
+          echo "ERROR: generated manifests are out of date." >&2
+          echo "Run 'task manifests' and commit the result." >&2
+          git --no-pager diff -- {{.CRD_DIR}} api/operator
+          exit 1
+        fi
+        echo "Manifests are up to date."
   docker:build:
     desc: Build Docker image for local architecture
     cmds:
