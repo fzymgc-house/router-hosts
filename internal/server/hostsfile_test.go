@@ -181,9 +181,8 @@ func TestFormatHostsFile_SortedByIPThenHostname(t *testing.T) {
 func TestAtomicWrite_NewFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hosts")
-	gen := NewHostsFileGenerator(path)
 
-	err := gen.atomicWrite("test content\n")
+	err := atomicWriteFile(path, "test content\n")
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
@@ -198,11 +197,10 @@ func TestAtomicWrite_NewFile(t *testing.T) {
 func TestAtomicWrite_OverwritesExisting(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hosts")
-	gen := NewHostsFileGenerator(path)
 
 	require.NoError(t, os.WriteFile(path, []byte("old content"), 0o644))
 
-	err := gen.atomicWrite("new content\n")
+	err := atomicWriteFile(path, "new content\n")
 	require.NoError(t, err)
 
 	data, err := os.ReadFile(path)
@@ -213,9 +211,8 @@ func TestAtomicWrite_OverwritesExisting(t *testing.T) {
 func TestAtomicWrite_CleansUpTmp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hosts")
-	gen := NewHostsFileGenerator(path)
 
-	err := gen.atomicWrite("content\n")
+	err := atomicWriteFile(path, "content\n")
 	require.NoError(t, err)
 
 	// No temp files should remain after successful write
@@ -224,10 +221,9 @@ func TestAtomicWrite_CleansUpTmp(t *testing.T) {
 }
 
 func TestAtomicWrite_InvalidPath(t *testing.T) {
-	gen := NewHostsFileGenerator("/nonexistent/dir/hosts")
-	err := gen.atomicWrite("content\n")
+	err := atomicWriteFile("/nonexistent/dir/hosts", "content\n")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "create temp hosts file")
+	assert.Contains(t, err.Error(), "create temp file")
 }
 
 func TestRegenerate(t *testing.T) {

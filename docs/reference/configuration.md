@@ -9,7 +9,30 @@ Complete reference for all configuration options.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `bind_address` | string | `"0.0.0.0:50051"` | gRPC server listen address |
-| `hosts_file_path` | path | `/etc/hosts.d/router-hosts` | Output hosts file path |
+| `hosts_file_path` | path | `/etc/hosts.d/router-hosts` | Output hosts(5) file path |
+| `dnsmasq_conf_path` | path | - | Output dnsmasq conf-dir file of `local=`/`address=` directives (additive) |
+
+At least one of `hosts_file_path` or `dnsmasq_conf_path` must be set.
+
+When `dnsmasq_conf_path` is configured, router-hosts also writes a file for
+consumption via dnsmasq `conf-dir`, emitting a directive pair per name and
+alias:
+
+```text
+local=/<fqdn>/
+address=/<fqdn>/<ip>
+```
+
+The `address=` line answers the matching record type (`A` for an IPv4 address,
+`AAAA` for an IPv6 address). The companion `local=` line makes dnsmasq
+authoritative for that exact name, so a query for the *other* record type
+returns `NODATA` instead of being forwarded upstream. This prevents
+public-AAAA leaks in split-horizon setups (GH #325).
+
+The `local=` line is required because dnsmasq 2.86+ forwards non-matching
+record types upstream when only `address=` is present. Both directives are
+scoped per-name, not zone-wide like `local=/<domain>/` (which would return
+`NXDOMAIN` for unmanaged names in the zone).
 
 ### `[database]`
 

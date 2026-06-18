@@ -85,6 +85,12 @@ func runServe(ctx context.Context, configPath string) error {
 		svcOpts = append(svcOpts, server.WithHostsGenerator(hostsGen))
 	}
 
+	// dnsmasq conf-dir generator (optional, additive)
+	if cfg.Server.DnsmasqConfPath != "" {
+		dnsmasqGen := server.NewDnsmasqConfGenerator(cfg.Server.DnsmasqConfPath)
+		svcOpts = append(svcOpts, server.WithDnsmasqGenerator(dnsmasqGen))
+	}
+
 	// Hook executor (optional)
 	if len(cfg.Hooks.OnSuccess) > 0 || len(cfg.Hooks.OnFailure) > 0 {
 		hookExec := server.NewHookExecutor(
@@ -148,6 +154,7 @@ func runServe(ctx context.Context, configPath string) error {
 		"bind_address", cfg.Server.BindAddress,
 		"database", dbPath,
 		"hosts_file", cfg.Server.HostsFilePath,
+		"dnsmasq_conf", cfg.Server.DnsmasqConfPath,
 	)
 
 	return srv.Run(ctx)

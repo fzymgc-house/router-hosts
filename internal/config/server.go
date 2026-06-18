@@ -54,6 +54,11 @@ type Config struct {
 type ServerConfig struct {
 	BindAddress   string `toml:"bind_address"`
 	HostsFilePath string `toml:"hosts_file_path"`
+	// DnsmasqConfPath, when set, emits authoritative dnsmasq local=/address=
+	// directive pairs to a conf-dir file so queries for a name's missing
+	// record type return NODATA instead of leaking upstream. Additive to
+	// HostsFilePath; at least one of the two must be configured. See GH #325.
+	DnsmasqConfPath string `toml:"dnsmasq_conf_path"`
 }
 
 // DatabaseConfig holds the database connection settings.
@@ -273,8 +278,8 @@ func (c *Config) validate() error {
 	if c.Server.BindAddress == "" {
 		return oops.Code(domain.CodeValidation).Errorf("config: bind_address is required")
 	}
-	if c.Server.HostsFilePath == "" {
-		return oops.Code(domain.CodeValidation).Errorf("config: hosts_file_path is required")
+	if c.Server.HostsFilePath == "" && c.Server.DnsmasqConfPath == "" {
+		return oops.Code(domain.CodeValidation).Errorf("config: at least one of hosts_file_path or dnsmasq_conf_path is required")
 	}
 
 	if err := c.Hooks.validate(); err != nil {
