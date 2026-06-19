@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.4](https://github.com/fzymgc-house/router-hosts/compare/v0.10.3...v0.10.4) (2026-06-19)
+
+
+### Features
+
+* **server:** add dnsmasq address= output format ([#326](https://github.com/fzymgc-house/router-hosts/issues/326)) ([4d0fcec](https://github.com/fzymgc-house/router-hosts/commit/4d0fcec4debd6bc5459afe89b059c00be5b993dd))
+
+
+### Build System
+
+* **deps:** update ghcr.io/fzymgc-house/router-hosts:latest docker digest to 2913d1e ([#319](https://github.com/fzymgc-house/router-hosts/issues/319)) ([3739d23](https://github.com/fzymgc-house/router-hosts/commit/3739d230f51132a3f750a0b4985aee86e0538023))
+* **deps:** update ghcr.io/fzymgc-house/router-hosts:latest docker digest to 6a35916 ([#316](https://github.com/fzymgc-house/router-hosts/issues/316)) ([771bc23](https://github.com/fzymgc-house/router-hosts/commit/771bc237a3b38b0041c3f4f5cfc10a757deccce1))
+* **deps:** update github action taiki-e/install-action to 0631aa6 ([#320](https://github.com/fzymgc-house/router-hosts/issues/320)) ([e5997c5](https://github.com/fzymgc-house/router-hosts/commit/e5997c58dd4487ab7150ac69b221825f0a326530))
+
 ## [0.10.3](https://github.com/fzymgc-house/router-hosts/compare/v0.10.2...v0.10.3) (2026-06-09)
 
 
