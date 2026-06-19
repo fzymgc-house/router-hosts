@@ -82,7 +82,7 @@ ca_cert_path = "/ca.pem"
 	assert.Contains(t, err.Error(), "bind_address is required")
 }
 
-func TestLoadServerConfig_MissingHostsFilePath(t *testing.T) {
+func TestLoadServerConfig_MissingOutputPaths(t *testing.T) {
 	content := `
 [server]
 bind_address = "0.0.0.0:50051"
@@ -96,7 +96,26 @@ ca_cert_path = "/ca.pem"
 	path := writeConfigFile(t, content)
 	_, err := LoadServerConfig(path)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "hosts_file_path is required")
+	assert.Contains(t, err.Error(), "at least one of hosts_file_path or dnsmasq_conf_path is required")
+}
+
+func TestLoadServerConfig_DnsmasqConfPathOnly(t *testing.T) {
+	content := `
+[server]
+bind_address = "0.0.0.0:50051"
+hosts_file_path = ""
+dnsmasq_conf_path = "/etc/dnsmasq.d/router-hosts.conf"
+
+[tls]
+cert_path = "/cert.pem"
+key_path = "/key.pem"
+ca_cert_path = "/ca.pem"
+`
+	path := writeConfigFile(t, content)
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Server.HostsFilePath)
+	assert.Equal(t, "/etc/dnsmasq.d/router-hosts.conf", cfg.Server.DnsmasqConfPath)
 }
 
 func TestLoadServerConfig_DatabasePath(t *testing.T) {

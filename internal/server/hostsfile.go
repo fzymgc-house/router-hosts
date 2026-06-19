@@ -34,7 +34,7 @@ func (g *HostsFileGenerator) Regenerate(ctx context.Context, store storage.Stora
 	}
 
 	content := g.FormatHostsFile(entries)
-	if err := g.atomicWrite(content); err != nil {
+	if err := atomicWriteFile(g.path, content); err != nil {
 		return 0, err
 	}
 	return len(entries), nil
@@ -108,11 +108,12 @@ func formatSuffix(comment *string, tags []string) string {
 	return "# " + strings.Join(parts, " ")
 }
 
-// atomicWrite writes content to a temp file, fsyncs, then renames into place.
-func (g *HostsFileGenerator) atomicWrite(content string) error {
-	f, err := os.CreateTemp(filepath.Dir(g.path), filepath.Base(g.path)+".tmp.*")
+// atomicWriteFile writes content to a temp file in the target directory,
+// fsyncs, then renames into place. Shared by all output-file generators.
+func atomicWriteFile(path, content string) error {
+	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp.*")
 	if err != nil {
-		return oops.Wrapf(err, "create temp hosts file")
+		return oops.Wrapf(err, "create temp file")
 	}
 	tmpPath := f.Name()
 
@@ -120,23 +121,23 @@ func (g *HostsFileGenerator) atomicWrite(content string) error {
 	if writeErr != nil {
 		_ = f.Close()
 		_ = os.Remove(tmpPath)
-		return oops.Wrapf(writeErr, "write hosts file")
+		return oops.Wrapf(writeErr, "write file")
 	}
 
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
 		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "fsync hosts file")
+		return oops.Wrapf(err, "fsync file")
 	}
 
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "close hosts file")
+		return oops.Wrapf(err, "close file")
 	}
 
-	if err := os.Rename(tmpPath, g.path); err != nil {
+	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "rename hosts file")
+		return oops.Wrapf(err, "rename file")
 	}
 
 	return nil

@@ -20,6 +20,7 @@ bin/
 *.pdb
 coverage/
 coverage.out
+coverage_ci.out
 coverage.html
 
 # Docker Compose local directories (created by users following examples)

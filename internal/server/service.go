@@ -33,6 +33,7 @@ type HostsServiceImpl struct {
 	handler           *CommandHandler
 	store             storage.Storage
 	hostsGen          *HostsFileGenerator
+	dnsmasqGen        *DnsmasqConfGenerator
 	hooks             *HookExecutor
 	startTime         time.Time
 	retentionMaxSnaps *int
@@ -47,6 +48,11 @@ type ServiceOption func(*HostsServiceImpl)
 // WithHostsGenerator sets the hosts file generator.
 func WithHostsGenerator(gen *HostsFileGenerator) ServiceOption {
 	return func(s *HostsServiceImpl) { s.hostsGen = gen }
+}
+
+// WithDnsmasqGenerator sets the dnsmasq conf-dir generator.
+func WithDnsmasqGenerator(gen *DnsmasqConfGenerator) ServiceOption {
+	return func(s *HostsServiceImpl) { s.dnsmasqGen = gen }
 }
 
 // WithHookExecutor sets the hook executor.
@@ -84,6 +90,24 @@ func NewHostsServiceImpl(handler *CommandHandler, store storage.Storage, opts ..
 		opt(svc)
 	}
 	return svc
+}
+
+// regenerateOutputs regenerates every configured output file (hosts file and/or
+// dnsmasq conf) from current store state. Regeneration errors are logged rather
+// than returned: the mutation has already been committed, so a failed file
+// write must not fail the RPC. The op argument names the triggering operation
+// for log context.
+func (s *HostsServiceImpl) regenerateOutputs(ctx context.Context, op string) {
+	if s.hostsGen != nil {
+		if _, err := s.hostsGen.Regenerate(ctx, s.store); err != nil {
+			slog.Error("hosts file regeneration failed", "op", op, "error", err)
+		}
+	}
+	if s.dnsmasqGen != nil {
+		if _, err := s.dnsmasqGen.Regenerate(ctx, s.store); err != nil {
+			slog.Error("dnsmasq conf regeneration failed", "op", op, "error", err)
+		}
+	}
 }
 
 // mapError converts oops-coded domain errors to gRPC status errors.
@@ -125,11 +149,7 @@ func (s *HostsServiceImpl) AddHost(ctx context.Context, req *hostsv1.AddHostRequ
 	if err != nil {
 		return nil, mapError(err)
 	}
-	if s.hostsGen != nil {
-		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
-			slog.Error("hosts file regeneration failed after AddHost", "error", regenErr)
-		}
-	}
+	s.regenerateOutputs(ctx, "AddHost")
 	return &hostsv1.AddHostResponse{
 		Id:    entry.ID.String(),
 		Entry: domainToProto(entry),
@@ -203,11 +223,7 @@ func (s *HostsServiceImpl) UpdateHost(ctx context.Context, req *hostsv1.UpdateHo
 	if err != nil {
 		return nil, mapError(err)
 	}
-	if s.hostsGen != nil {
-		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
-			slog.Error("hosts file regeneration failed after UpdateHost", "error", regenErr)
-		}
-	}
+	s.regenerateOutputs(ctx, "UpdateHost")
 	return &hostsv1.UpdateHostResponse{
 		Entry: domainToProto(entry),
 	}, nil
@@ -236,11 +252,7 @@ func (s *HostsServiceImpl) DeleteHost(ctx context.Context, req *hostsv1.DeleteHo
 	if err := s.handler.DeleteHost(ctx, id, expectedVersion); err != nil {
 		return nil, mapError(err)
 	}
-	if s.hostsGen != nil {
-		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
-			slog.Error("hosts file regeneration failed after DeleteHost", "error", regenErr)
-		}
-	}
+	s.regenerateOutputs(ctx, "DeleteHost")
 	return &hostsv1.DeleteHostResponse{Success: true}, nil
 }
 
@@ -517,10 +529,8 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 		)
 	}
 
-	if s.hostsGen != nil && (stats.Created > 0 || stats.Updated > 0) {
-		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
-			slog.Error("hosts file regeneration failed after ImportHosts", "error", regenErr)
-		}
+	if stats.Created > 0 || stats.Updated > 0 {
+		s.regenerateOutputs(ctx, "ImportHosts")
 	}
 
 	// Send final stats
@@ -776,11 +786,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 	if writeErr != nil {
 		return nil, mapError(writeErr)
 	}
-	if s.hostsGen != nil {
-		if _, regenErr := s.hostsGen.Regenerate(ctx, s.store); regenErr != nil {
-			slog.Error("hosts file regeneration failed after RollbackToSnapshot", "error", regenErr)
-		}
-	}
+	s.regenerateOutputs(ctx, "RollbackToSnapshot")
 	return resp, nil
 }
 

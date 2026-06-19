@@ -10,6 +10,8 @@ Create `server.toml`:
 [server]
 bind_address = "0.0.0.0:50051"
 hosts_file_path = "/etc/hosts.d/router-hosts"
+# Optional: also emit dnsmasq address= directives (see Configuration Reference)
+# dnsmasq_conf_path = "/etc/dnsmasq.d/router-hosts.conf"
 
 [database]
 # SQLite (default) - just specify path

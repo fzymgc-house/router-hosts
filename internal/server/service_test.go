@@ -9,6 +9,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -1140,7 +1142,8 @@ func TestService_CreateSnapshot_RetentionEnforced(t *testing.T) {
 	handler := NewCommandHandler(store)
 	hostsGen := NewHostsFileGenerator("/dev/null")
 	maxSnaps := 2
-	svc := NewHostsServiceImpl(handler, store,
+	svc := NewHostsServiceImpl(
+		handler, store,
 		WithHostsGenerator(hostsGen),
 		WithRetentionConfig(&maxSnaps, nil),
 	)
@@ -1889,4 +1892,38 @@ func TestMapError_SanitizesInternalErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestService_RegeneratesBothOutputs(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	dir := t.TempDir()
+	hostsPath := filepath.Join(dir, "hosts")
+	confPath := filepath.Join(dir, "router-hosts.conf")
+
+	handler := NewCommandHandler(store)
+	svc := NewHostsServiceImpl(
+		handler, store,
+		WithHostsGenerator(NewHostsFileGenerator(hostsPath)),
+		WithDnsmasqGenerator(NewDnsmasqConfGenerator(confPath)),
+	)
+
+	_, err = svc.AddHost(ctx, &hostsv1.AddHostRequest{
+		IpAddress: "192.168.1.10",
+		Hostname:  "server.local",
+	})
+	require.NoError(t, err)
+
+	hostsData, err := os.ReadFile(hostsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(hostsData), "192.168.1.10\tserver.local")
+
+	confData, err := os.ReadFile(confPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(confData), "local=/server.local/\naddress=/server.local/192.168.1.10")
 }

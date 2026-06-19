@@ -11,6 +11,14 @@ bind_address = "0.0.0.0:50051"
 # The server will atomically update this file when entries change
 hosts_file_path = "/data/hosts"
 
+# Optional: also emit a dnsmasq conf-dir file of authoritative local=/address=
+# directive pairs (one per name/alias). The local= line makes dnsmasq
+# authoritative per-name so a query for a record type the name does not have
+# (e.g. AAAA for an IPv4-only name) returns NODATA instead of leaking a public
+# record upstream, even on dnsmasq 2.86+. Additive to hosts_file_path; at least
+# one of the two is required. See GH #325.
+# dnsmasq_conf_path = "/etc/dnsmasq.d/router-hosts.conf"
+
 [database]
 # DuckDB database file for event-sourced storage
 # All changes are stored as immutable events for audit trail
