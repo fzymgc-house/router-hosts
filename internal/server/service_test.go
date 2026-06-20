@@ -1927,3 +1927,50 @@ func TestService_RegeneratesBothOutputs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(confData), "local=/server.local/\naddress=/server.local/192.168.1.10")
 }
+
+// TestService_RegenerateOutputs_MaterializesWithoutMutation is the regression
+// test for GH #327: a fresh server start must write outputs from the persisted
+// DB even when no host has changed since the last write. It populates the store
+// first (simulating a prior process's data), then builds a new service with
+// fresh output paths (simulating a restart) and calls RegenerateOutputs without
+// any mutation RPC.
+func TestService_RegenerateOutputs_MaterializesWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	// Persisted data from a prior process — added directly to the store, not
+	// via the service under test, so no regeneration has occurred.
+	handler := NewCommandHandler(store)
+	_, err = handler.AddHost(ctx, "192.168.20.145", "auth.fzymgc.house", nil, nil, []string{"sso.fzymgc.house"})
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	hostsPath := filepath.Join(dir, "hosts")
+	confPath := filepath.Join(dir, "router-hosts.conf")
+
+	// Fresh service + generators, as on a restart. The output files do not
+	// exist yet.
+	require.NoFileExists(t, hostsPath)
+	require.NoFileExists(t, confPath)
+
+	svc := NewHostsServiceImpl(handler, store,
+		WithHostsGenerator(NewHostsFileGenerator(hostsPath)),
+		WithDnsmasqGenerator(NewDnsmasqConfGenerator(confPath)),
+	)
+
+	// Startup regeneration — no AddHost/UpdateHost/DeleteHost involved.
+	svc.RegenerateOutputs(ctx)
+
+	hostsData, err := os.ReadFile(hostsPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(hostsData), "192.168.20.145\tauth.fzymgc.house")
+
+	confData, err := os.ReadFile(confPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(confData), "local=/auth.fzymgc.house/\naddress=/auth.fzymgc.house/192.168.20.145")
+	assert.Contains(t, string(confData), "local=/sso.fzymgc.house/\naddress=/sso.fzymgc.house/192.168.20.145")
+}

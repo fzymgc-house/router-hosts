@@ -157,5 +157,11 @@ func runServe(ctx context.Context, configPath string) error {
 		"dnsmasq_conf", cfg.Server.DnsmasqConfPath,
 	)
 
+	// Materialize outputs from the persisted DB on startup so a fresh deploy or
+	// restart writes hosts_file_path and dnsmasq_conf_path even when no host has
+	// changed since the last write (GH #327).
+	logger.Info("regenerating outputs on startup")
+	svc.RegenerateOutputs(ctx)
+
 	return srv.Run(ctx)
 }
