@@ -92,6 +92,16 @@ func NewHostsServiceImpl(handler *CommandHandler, store storage.Storage, opts ..
 	return svc
 }
 
+// RegenerateOutputs writes all configured output files (hosts file and/or
+// dnsmasq conf) from current store state, independent of any host mutation.
+// The server calls this once on startup so a fresh deploy or restart
+// materializes outputs from the persisted database even when no host has
+// changed since the last write (GH #327). Idempotent; errors are logged, not
+// returned.
+func (s *HostsServiceImpl) RegenerateOutputs(ctx context.Context) {
+	s.regenerateOutputs(ctx, "startup")
+}
+
 // regenerateOutputs regenerates every configured output file (hosts file and/or
 // dnsmasq conf) from current store state. Regeneration errors are logged rather
 // than returned: the mutation has already been committed, so a failed file
