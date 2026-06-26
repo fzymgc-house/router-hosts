@@ -50,6 +50,12 @@ func New(dbPath string, logger *slog.Logger) (*Storage, error) {
 // BackendName returns the storage backend identifier.
 func (s *Storage) BackendName() string { return "sqlite" }
 
+// snapshotTriggerRepairVersion is the schema version recorded after the
+// idempotent repair that adds trigger_type to any snapshots table that
+// was created without it (GH #331). Version 3 is taken by the legacy
+// Rust migration; this uses 4.
+const snapshotTriggerRepairVersion = 4
+
 // migrationFiles lists migration SQL files in order. Each file is applied
 // only when the schema_version table does not yet contain that version number.
 var migrationFiles = []struct {
@@ -91,7 +97,19 @@ func (s *Storage) Initialize(ctx context.Context) error {
 			}
 		}
 
-		return nil
+		// Repair: add trigger_type to snapshots if it was created without it
+		// (GH #331). Runs after the legacy migration so the two paths do not
+		// conflict. The columnExists guard makes this fully idempotent.
+		if !isMigrationApplied(conn, snapshotTriggerRepairVersion) {
+			if err := repairSnapshotTriggerType(conn, s.log); err != nil {
+				return oops.Wrapf(err, "repair snapshots trigger_type column")
+			}
+			if err := recordMigrationVersion(conn, snapshotTriggerRepairVersion); err != nil {
+				return err
+			}
+		}
+
+		return assertSnapshotsSchema(conn)
 	})
 }
 
@@ -115,6 +133,47 @@ func recordMigrationVersion(conn *sqlite.Conn, version int) error {
 	return sqlitex.Execute(conn,
 		`INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?, datetime('now'))`,
 		&sqlitex.ExecOptions{Args: []any{version}})
+}
+
+// repairSnapshotTriggerType adds trigger_type to the snapshots table when the
+// table exists but lacks the column AND also lacks the Rust-era 'trigger'
+// column (the legacy migration path handles that case). Fully idempotent.
+func repairSnapshotTriggerType(conn *sqlite.Conn, log *slog.Logger) error {
+	if !tableExists(conn, "snapshots") {
+		return nil
+	}
+	if columnExists(conn, "snapshots", "trigger_type") {
+		return nil // already correct
+	}
+	if columnExists(conn, "snapshots", "trigger") {
+		// Unreachable in a valid migration state: the legacy migration (run
+		// earlier in Initialize) rebuilds the table whenever a Rust-era
+		// 'trigger' column is present. If we still see it here, the DB is in
+		// an unexpected hand-modified state; warn so the assertSnapshotsSchema
+		// failure that follows is not mistaken for a code bug.
+		log.Warn("snapshots has legacy 'trigger' column but no 'trigger_type' after legacy migration; leaving repair to legacy path")
+		return nil
+	}
+	return addSnapshotTriggerTypeColumn(conn)
+}
+
+// assertSnapshotsSchema verifies the snapshots table has all required Go columns.
+// Returns a descriptive error if the table is absent or any column is missing,
+// so the server refuses to start rather than failing per-request at runtime.
+func assertSnapshotsSchema(conn *sqlite.Conn) error {
+	if !tableExists(conn, "snapshots") {
+		return oops.Errorf("startup schema assertion failed: snapshots table does not exist")
+	}
+	required := []string{
+		"snapshot_id", "created_at", "hosts_content", "entry_count",
+		"trigger_type", "name", "event_log_position", "entries_json",
+	}
+	for _, col := range required {
+		if !columnExists(conn, "snapshots", col) {
+			return oops.Errorf("startup schema assertion failed: snapshots table missing required column %q", col)
+		}
+	}
+	return nil
 }
 
 // HealthCheck verifies the database connection is alive.
