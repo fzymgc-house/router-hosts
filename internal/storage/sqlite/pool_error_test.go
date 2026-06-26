@@ -236,6 +236,131 @@ func TestApplyRetentionPolicy_TakeError(t *testing.T) {
 	require.ErrorContains(t, err, "take connection")
 }
 
+// ---------- EventStore: context cancelled mid-flight (#330) ----------
+//
+// noInterruptPool wraps a real ConnPool and, on each successful Take:
+//  1. Strips the SQLite interrupt from the connection (SetInterrupt(nil)).
+//  2. Calls onTake (if non-nil), which the test uses to cancel the context.
+//
+// This reproduces the production failure window: zombiezen's pool wires the
+// context's Done channel to sqlite3_interrupt, so the interrupt only fires on
+// the *next* SQLite call. If the context deadline expires in the tiny gap
+// between the last successful INSERT and the `return nil`, no new SQLite call
+// is made, so the interrupt never fires and the deferred endFn commits with
+// err==nil. By stripping the interrupt first we make that window observable
+// and deterministic: all SQL succeeds, then we cancel the context, then the
+// pre-commit guard is the only thing that can catch it.
+type noInterruptPool struct {
+	inner  ConnPool
+	onTake func() // called after stripping interrupt, e.g. to cancel testCtx
+}
+
+func (p *noInterruptPool) Take(ctx context.Context) (*sqlib.Conn, error) {
+	conn, err := p.inner.Take(ctx)
+	if err != nil {
+		return nil, err
+	}
+	conn.SetInterrupt(nil) // strip interrupt so ctx cancellation won't abort SQL
+	if p.onTake != nil {
+		p.onTake() // simulate deadline expiry in the last-write→return nil window
+	}
+	return conn, nil
+}
+
+func (p *noInterruptPool) Put(conn *sqlib.Conn) { p.inner.Put(conn) }
+func (p *noInterruptPool) Close() error         { return p.inner.Close() }
+
+// newNoInterruptStore builds a Storage that strips the connection interrupt and
+// runs onTake after each successful Take, plus a read-only Storage on the same
+// pool for count assertions.
+func newNoInterruptStore(t *testing.T, onTake func()) (write *Storage, read *Storage) {
+	t.Helper()
+	real, err := New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, real.Initialize(context.Background()))
+	t.Cleanup(func() { _ = real.pool.Close() })
+
+	write = &Storage{pool: &noInterruptPool{inner: real.pool, onTake: onTake}, log: slog.Default()}
+	read = real
+	return write, read
+}
+
+// TestAppendEvent_ContextExpiredBeforeCommit verifies that AppendEvent rolls
+// back and returns an error when the request context expires in the window
+// between the final INSERT and the deferred commit (pre-commit guard — #330).
+//
+// Without the guard, the deferred endFn sees err==nil and commits; the data
+// is persisted even though the caller already received a deadline/cancel error.
+func TestAppendEvent_ContextExpiredBeforeCommit(t *testing.T) {
+	testCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, real := newNoInterruptStore(t, cancel)
+
+	aggID := ulid.Make()
+	now := time.Now().UTC()
+	env := makeEnvelope(aggID, domain.HostCreated{
+		IPAddress: "10.0.0.1", Hostname: "precommit-single.local",
+		Aliases: []string{}, Tags: []string{}, CreatedAt: now,
+	}, 1, now)
+
+	err := s.AppendEvent(testCtx, aggID, env, 0)
+	require.Error(t, err, "AppendEvent must return error when ctx expires before commit (#330)")
+
+	count, countErr := real.CountEvents(context.Background(), aggID)
+	require.NoError(t, countErr)
+	require.Equal(t, int64(0), count, "AppendEvent must not commit data when ctx expires before commit (#330)")
+}
+
+// TestAppendEvents_ContextExpiredBeforeCommit is the multi-event variant of
+// TestAppendEvent_ContextExpiredBeforeCommit.
+func TestAppendEvents_ContextExpiredBeforeCommit(t *testing.T) {
+	testCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, real := newNoInterruptStore(t, cancel)
+
+	aggID := ulid.Make()
+	now := time.Now().UTC()
+	env1 := makeEnvelope(aggID, domain.HostCreated{
+		IPAddress: "10.0.0.1", Hostname: "precommit-multi-a.local",
+		Aliases: []string{}, Tags: []string{}, CreatedAt: now,
+	}, 1, now)
+	env2 := makeEnvelope(aggID, domain.IPAddressChanged{
+		OldIP: "10.0.0.1", NewIP: "10.0.0.2", ChangedAt: now.Add(time.Second),
+	}, 2, now.Add(time.Second))
+
+	err := s.AppendEvents(testCtx, aggID, []domain.EventEnvelope{env1, env2}, 0)
+	require.Error(t, err, "AppendEvents must return error when ctx expires before commit (#330)")
+
+	count, countErr := real.CountEvents(context.Background(), aggID)
+	require.NoError(t, countErr)
+	require.Equal(t, int64(0), count, "AppendEvents must not commit data when ctx expires before commit (#330)")
+}
+
+// TestAppendEventsBatch_ContextExpiredBeforeCommit is the batch variant of
+// TestAppendEvent_ContextExpiredBeforeCommit.
+func TestAppendEventsBatch_ContextExpiredBeforeCommit(t *testing.T) {
+	testCtx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	s, real := newNoInterruptStore(t, cancel)
+
+	aggID := ulid.Make()
+	now := time.Now().UTC()
+	env := makeEnvelope(aggID, domain.HostCreated{
+		IPAddress: "10.0.0.1", Hostname: "precommit-batch.local",
+		Aliases: []string{}, Tags: []string{}, CreatedAt: now,
+	}, 1, now)
+	batch := []storage.AggregateEvents{
+		{AggregateID: aggID, Events: []domain.EventEnvelope{env}, ExpectedVersion: 0},
+	}
+
+	err := s.AppendEventsBatch(testCtx, batch)
+	require.Error(t, err, "AppendEventsBatch must return error when ctx expires before commit (#330)")
+
+	count, countErr := real.CountEvents(context.Background(), aggID)
+	require.NoError(t, countErr)
+	require.Equal(t, int64(0), count, "AppendEventsBatch must not commit data when ctx expires before commit (#330)")
+}
+
 // ---------- SnapshotStore: ImmediateTransaction error branch ----------
 
 func TestApplyRetentionPolicy_TransactionError(t *testing.T) {
