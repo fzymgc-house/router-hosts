@@ -233,6 +233,20 @@ func replayEvents(aggregateID ulid.ULID, events []domain.EventEnvelope) (*domain
 				Version:   env.Version,
 			}
 
+		case domain.HostCompacted:
+			entry = &domain.HostEntry{
+				ID:        aggregateID,
+				IP:        ev.IPAddress,
+				Hostname:  ev.Hostname,
+				Aliases:   ev.Aliases,
+				Comment:   ev.Comment,
+				Tags:      ev.Tags,
+				CreatedAt: ev.CreatedAt,
+				UpdatedAt: ev.UpdatedAt,
+				Version:   env.Version,
+				Deleted:   ev.Deleted,
+			}
+
 		case domain.SnapshotCreated, domain.SnapshotRolledBack, domain.SnapshotDeleted:
 			// Snapshot events are valid but not relevant to host projection.
 			continue

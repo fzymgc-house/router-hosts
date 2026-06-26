@@ -24,6 +24,7 @@ func (t EventType) Valid() bool {
 		EventTypeAliasesModified,
 		EventTypeHostDeleted,
 		EventTypeHostImported,
+		EventTypeHostCompacted,
 		EventTypeSnapshotCreated,
 		EventTypeSnapshotRolledBack,
 		EventTypeSnapshotDeleted:
@@ -61,6 +62,7 @@ const (
 	EventTypeAliasesModified    EventType = "AliasesModified"
 	EventTypeHostDeleted        EventType = "HostDeleted"
 	EventTypeHostImported       EventType = "HostImported"
+	EventTypeHostCompacted      EventType = "HostCompacted"
 	EventTypeSnapshotCreated    EventType = "SnapshotCreated"
 	EventTypeSnapshotRolledBack EventType = "SnapshotRolledBack"
 	EventTypeSnapshotDeleted    EventType = "SnapshotDeleted"
@@ -162,6 +164,12 @@ func (e *HostEvent) Decode() (any, error) {
 			return nil, err
 		}
 		return v, nil
+	case EventTypeHostCompacted:
+		var v HostCompacted
+		if err := json.Unmarshal(e.Payload, &v); err != nil {
+			return nil, err
+		}
+		return v, nil
 	case EventTypeSnapshotCreated:
 		var v SnapshotCreated
 		if err := json.Unmarshal(e.Payload, &v); err != nil {
@@ -217,6 +225,8 @@ func (e *HostEvent) OccurredAt() (time.Time, error) {
 		return ev.DeletedAt, nil
 	case HostImported:
 		return ev.OccurredAt, nil
+	case HostCompacted:
+		return ev.CompactedAt, nil
 	case SnapshotCreated:
 		return ev.OccurredAt, nil
 	case SnapshotRolledBack:
@@ -274,6 +284,10 @@ func NewHostEvent(v any) (HostEvent, error) {
 			return HostEvent{}, ErrValidation(err.Error())
 		}
 		eventType = EventTypeHostImported
+	case HostCompacted:
+		// No re-validation: state is reconstructed from already-committed,
+		// already-valid events.
+		eventType = EventTypeHostCompacted
 	case SnapshotCreated:
 		eventType = EventTypeSnapshotCreated
 	case SnapshotRolledBack:
@@ -356,6 +370,23 @@ type HostImported struct {
 	Tags       []string  `json:"tags"`
 	Aliases    []string  `json:"aliases"`
 	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// HostCompacted is a synthetic seed event written by compaction. It replaces an
+// aggregate's entire event log with a single event carrying the full folded
+// state (including Deleted), so the post-compaction fold is byte-identical to
+// the pre-compaction HostEntry. CompactedAt/FoldedEventCount are audit metadata.
+type HostCompacted struct {
+	IPAddress        string    `json:"ip_address"`
+	Hostname         string    `json:"hostname"`
+	Aliases          []string  `json:"aliases"`
+	Comment          *string   `json:"comment,omitempty"`
+	Tags             []string  `json:"tags"`
+	Deleted          bool      `json:"deleted"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	CompactedAt      time.Time `json:"compacted_at"`
+	FoldedEventCount int64     `json:"folded_event_count"`
 }
 
 // SnapshotCreated is emitted when a new snapshot is created.
