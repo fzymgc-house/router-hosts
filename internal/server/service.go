@@ -514,7 +514,8 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 				stats.Failed++
 				stats.ValidationErrors = append(stats.ValidationErrors,
 					fmt.Sprintf("Entry %d (%s -> %s): %v", i+1, entry.IP, entry.Hostname, addErr))
-				slog.Error("import entry failed due to storage or infrastructure error",
+				slog.Error(
+					"import entry failed due to storage or infrastructure error",
 					"entry_index", i+1,
 					"ip", entry.IP,
 					"hostname", entry.Hostname,
@@ -532,7 +533,8 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 	}
 
 	if stats.Failed > 0 {
-		slog.Warn("import completed with failures",
+		slog.Warn(
+			"import completed with failures",
 			"processed", stats.Processed,
 			"failed", stats.Failed,
 			"created", stats.Created,
@@ -896,6 +898,10 @@ func (s *HostsServiceImpl) CompactAggregates(ctx context.Context, req *hostsv1.C
 			results = []storage.CompactResult{res}
 		}
 	case *hostsv1.CompactAggregatesRequest_OverThreshold:
+		if t.OverThreshold <= 0 {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"over_threshold must be > 0, got %d (a non-positive threshold would compact every aggregate)", t.OverThreshold)
+		}
 		if req.GetDryRun() {
 			res, derr := s.dryRunOver(ctx, t.OverThreshold)
 			if derr != nil {
@@ -928,7 +934,20 @@ func (s *HostsServiceImpl) CompactAggregates(ctx context.Context, req *hostsv1.C
 	return resp, nil
 }
 
-// dryRunOne reports counts without mutating (events_after = events_before).
+// projectedCompactedCount returns the event count an aggregate would have AFTER
+// compaction: a single seed event when it currently has more than one event,
+// otherwise unchanged (compaction is a no-op for <=1 event). Used by the
+// dry-run paths so a preview reports the savings the real compaction would make.
+func projectedCompactedCount(count int64) int64 {
+	if count > 1 {
+		return 1
+	}
+	return count
+}
+
+// dryRunOne previews compacting one aggregate without mutating: events_after is
+// the projected post-compaction count (1 for an aggregate with >1 event), so
+// TotalEventsReclaimed reflects the savings the real compaction would make.
 func (s *HostsServiceImpl) dryRunOne(ctx context.Context, id ulid.ULID) (storage.CompactResult, error) {
 	count, err := s.store.CountEvents(ctx, id)
 	if err != nil {
@@ -938,7 +957,7 @@ func (s *HostsServiceImpl) dryRunOne(ctx context.Context, id ulid.ULID) (storage
 	if err != nil {
 		return storage.CompactResult{}, err
 	}
-	return storage.CompactResult{AggregateID: id, EventsBefore: count, EventsAfter: count, Version: v}, nil
+	return storage.CompactResult{AggregateID: id, EventsBefore: count, EventsAfter: projectedCompactedCount(count), Version: v}, nil
 }
 
 // dryRunOver reports which aggregates exceed threshold without mutating.
@@ -958,7 +977,7 @@ func (s *HostsServiceImpl) dryRunOver(ctx context.Context, threshold int64) ([]s
 			if verr != nil {
 				return nil, verr
 			}
-			out = append(out, storage.CompactResult{AggregateID: id, EventsBefore: count, EventsAfter: count, Version: v})
+			out = append(out, storage.CompactResult{AggregateID: id, EventsBefore: count, EventsAfter: projectedCompactedCount(count), Version: v})
 		}
 	}
 	return out, nil

@@ -1957,7 +1957,8 @@ func TestService_RegenerateOutputs_MaterializesWithoutMutation(t *testing.T) {
 	require.NoFileExists(t, hostsPath)
 	require.NoFileExists(t, confPath)
 
-	svc := NewHostsServiceImpl(handler, store,
+	svc := NewHostsServiceImpl(
+		handler, store,
 		WithHostsGenerator(NewHostsFileGenerator(hostsPath)),
 		WithDnsmasqGenerator(NewDnsmasqConfGenerator(confPath)),
 	)
@@ -2011,8 +2012,8 @@ func TestService_CompactAggregates_DryRunSingle(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resp.GetCompacted(), 1)
 	require.Equal(t, int64(8), resp.GetCompacted()[0].GetEventsBefore())
-	require.Equal(t, int64(8), resp.GetCompacted()[0].GetEventsAfter())
-	require.Equal(t, int64(0), resp.GetTotalEventsReclaimed())
+	require.Equal(t, int64(1), resp.GetCompacted()[0].GetEventsAfter()) // projected post-compaction count
+	require.Equal(t, int64(7), resp.GetTotalEventsReclaimed())          // 8 -> 1 would reclaim 7
 
 	// dry-run must not mutate the event store
 	cnt, err := env.store.CountEvents(ctx, id)
@@ -2053,9 +2054,9 @@ func TestService_CompactAggregates_DryRunOver(t *testing.T) {
 	require.Len(t, resp.GetCompacted(), 1)
 	require.Equal(t, big.String(), resp.GetCompacted()[0].GetAggregateId())
 	require.Equal(t, int64(12), resp.GetCompacted()[0].GetEventsBefore())
-	require.Equal(t, int64(12), resp.GetCompacted()[0].GetEventsAfter()) // dry-run: no reduction
-	require.Equal(t, int64(12), resp.GetCompacted()[0].GetVersion())     // high-water version reported, not 0
-	require.Equal(t, int64(0), resp.GetTotalEventsReclaimed())
+	require.Equal(t, int64(1), resp.GetCompacted()[0].GetEventsAfter()) // projected: 12 -> 1
+	require.Equal(t, int64(12), resp.GetCompacted()[0].GetVersion())    // high-water version reported, not 0
+	require.Equal(t, int64(11), resp.GetTotalEventsReclaimed())         // 12 -> 1 would reclaim 11
 
 	// dry-run must not mutate either aggregate
 	cntBig, err := env.store.CountEvents(ctx, big)
@@ -2071,4 +2072,22 @@ func TestService_CompactAggregates_NoTarget(t *testing.T) {
 	_, err := env.client.CompactAggregates(context.Background(), &hostsv1.CompactAggregatesRequest{})
 	require.Error(t, err)
 	require.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestService_CompactAggregates_OverThresholdZero(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+	id := seedBloated(t, ctx, env.store, 3)
+
+	// over_threshold <= 0 must be rejected, not silently compact every aggregate.
+	_, err := env.client.CompactAggregates(ctx, &hostsv1.CompactAggregatesRequest{
+		Target: &hostsv1.CompactAggregatesRequest_OverThreshold{OverThreshold: 0},
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	// the aggregate must remain untouched
+	cnt, err := env.store.CountEvents(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(3), cnt)
 }
