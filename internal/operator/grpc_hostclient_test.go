@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"testing"
@@ -11,7 +12,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
@@ -199,12 +199,34 @@ func TestGRPCHostClient_AddHost_Duplicate(t *testing.T) {
 	_, err = gc.AddHost(ctx, "192.168.1.1", "dup.local", "", nil, nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "adding host")
+	// The sentinel must be detectable so reconcileCreate can adopt without hot-looping.
+	assert.True(t, errors.Is(err, ErrHostAlreadyExists), "must wrap ErrHostAlreadyExists for reconciler adoption")
+}
 
-	// Verify it wraps a gRPC AlreadyExists error
-	st, ok := status.FromError(err)
-	// oops wraps the error so the gRPC status may not be directly extractable
-	_ = ok
-	_ = st
+func TestGRPCHostClient_FindHost(t *testing.T) {
+	gc, cleanup := newBufconnEnv(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Add two hosts: exact target and a hostname-prefix collision with a different IP.
+	_, err := gc.AddHost(ctx, "10.0.0.1", "find.local", "", nil, nil)
+	require.NoError(t, err)
+	_, err = gc.AddHost(ctx, "10.0.0.99", "find.local", "", nil, nil) // same hostname, different IP
+	require.NoError(t, err)
+
+	// FindHost must return the entry with the exact IP.
+	found, err := gc.FindHost(ctx, "10.0.0.1", "find.local")
+	require.NoError(t, err)
+	require.NotNil(t, found, "should find the exact match")
+	assert.Equal(t, "10.0.0.1", found.IP)
+	assert.Equal(t, "find.local", found.Hostname)
+	assert.NotEmpty(t, found.ID)
+	assert.NotEmpty(t, found.Version)
+
+	// Non-existent combination returns nil, nil.
+	notFound, err := gc.FindHost(ctx, "10.0.0.1", "no-such-host.local")
+	require.NoError(t, err)
+	assert.Nil(t, notFound, "non-existent host must return nil")
 }
 
 func TestNewGRPCHostClient_InvalidAddress(t *testing.T) {
