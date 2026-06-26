@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/samber/oops"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/storage"
 	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
 )
 
@@ -511,4 +513,77 @@ func TestNextVersion(t *testing.T) {
 	assert.Equal(t, int64(2), nextVersion(1))
 	assert.Equal(t, int64(10), nextVersion(9))
 	assert.Equal(t, int64(100), nextVersion(99))
+}
+
+// seedBloated appends 1 HostCreated + (n-1) IPAddressChanged events to a fresh
+// aggregate and returns its id. Shared by commands_test.go and service_test.go.
+func seedBloated(t *testing.T, ctx context.Context, store storage.Storage, n int) ulid.ULID {
+	t.Helper()
+	id := ulid.Make()
+	created, err := domain.NewHostEvent(domain.HostCreated{
+		IPAddress: "10.0.0.1", Hostname: fmt.Sprintf("h-%s.local", id.String()[:8]),
+		Aliases: []string{}, Tags: []string{}, CreatedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.AppendEvent(ctx, id, domain.EventEnvelope{
+		EventID: ulid.Make(), AggregateID: id, Event: created, Version: 1, CreatedAt: time.Now().UTC(),
+	}, 0))
+	for i := 1; i < n; i++ {
+		ch, err := domain.NewHostEvent(domain.IPAddressChanged{
+			NewIP: fmt.Sprintf("10.0.0.%d", i+1), ChangedAt: time.Now().UTC(),
+		})
+		require.NoError(t, err)
+		require.NoError(t, store.AppendEvent(ctx, id, domain.EventEnvelope{
+			EventID: ulid.Make(), AggregateID: id, Event: ch, Version: int64(i + 1), CreatedAt: time.Now().UTC(),
+		}, int64(i)))
+	}
+	return id
+}
+
+func newCompactTestStore(t *testing.T) (storage.Storage, context.Context) {
+	t.Helper()
+	ctx := context.Background()
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+	return store, ctx
+}
+
+func TestCommandHandlerCompactAggregate(t *testing.T) {
+	store, ctx := newCompactTestStore(t)
+	h := NewCommandHandler(store)
+	id := seedBloated(t, ctx, store, 15)
+
+	res, err := h.CompactAggregate(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(15), res.EventsBefore)
+	require.Equal(t, int64(1), res.EventsAfter)
+
+	cnt, err := store.CountEvents(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), cnt)
+}
+
+func TestCommandHandlerCompactAggregatesOver(t *testing.T) {
+	store, ctx := newCompactTestStore(t)
+	h := NewCommandHandler(store)
+	big := seedBloated(t, ctx, store, 12)
+	small := seedBloated(t, ctx, store, 2)
+	atThreshold := seedBloated(t, ctx, store, 5)
+
+	results, err := h.CompactAggregatesOver(ctx, 5)
+	require.NoError(t, err)
+	require.Len(t, results, 1) // only the >5-event aggregate
+	require.Equal(t, big.String(), results[0].AggregateID.String())
+
+	cntSmall, err := store.CountEvents(ctx, small)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), cntSmall) // untouched
+
+	// Boundary: an aggregate with exactly `threshold` events is NOT compacted,
+	// since selection skips count <= threshold. Guards the off-by-one.
+	cntAt, err := store.CountEvents(ctx, atThreshold)
+	require.NoError(t, err)
+	require.Equal(t, int64(5), cntAt) // untouched
 }
