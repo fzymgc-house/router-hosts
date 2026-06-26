@@ -49,6 +49,9 @@ type EventStore interface {
 	LoadEvents(ctx context.Context, aggregateID ulid.ULID) ([]domain.EventEnvelope, error)
 	GetCurrentVersion(ctx context.Context, aggregateID ulid.ULID) (int64, error)
 	CountEvents(ctx context.Context, aggregateID ulid.ULID) (int64, error)
+	// ListAggregateIDs returns every distinct aggregate ID in the event log,
+	// INCLUDING deleted aggregates (reads distinct aggregate_id from events).
+	ListAggregateIDs(ctx context.Context) ([]ulid.ULID, error)
 }
 
 // SnapshotStore manages point-in-time snapshots.

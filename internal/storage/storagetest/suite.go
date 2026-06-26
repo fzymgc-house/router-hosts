@@ -44,6 +44,13 @@ func hostCreatedEnvelope(aggID ulid.ULID, ip, hostname string, t time.Time) doma
 
 func ptr[T any](v T) *T { return &v }
 
+func mustAppendCreated(t *testing.T, store storage.EventStore, id ulid.ULID, ip, hostname string) {
+	t.Helper()
+	ctx := context.Background()
+	env := hostCreatedEnvelope(id, ip, hostname, time.Now().UTC().Truncate(time.Millisecond))
+	require.NoError(t, store.AppendEvent(ctx, id, env, 0))
+}
+
 // ---------- EventStore compliance ----------
 
 // TestEventStoreAppendAndLoad verifies that a single event can be written and
@@ -233,6 +240,43 @@ func TestEventStoreBatchAppendRollback(t *testing.T, store storage.EventStore) {
 	events2, loadErr := store.LoadEvents(ctx, agg2)
 	require.NoError(t, loadErr)
 	require.Len(t, events2, 1, "agg2 must retain only its pre-existing event")
+}
+
+// TestEventStoreListAggregateIDs verifies all aggregate IDs (incl. deleted) are returned.
+func TestEventStoreListAggregateIDs(t *testing.T, store storage.EventStore) {
+	t.Helper()
+	ctx := context.Background()
+	id1, id2 := ulid.Make(), ulid.Make()
+	mustAppendCreated(t, store, id1, "10.0.0.1", "a.example.com")
+	mustAppendCreated(t, store, id2, "10.0.0.2", "b.example.com")
+
+	ids, err := store.ListAggregateIDs(ctx)
+	require.NoError(t, err)
+	got := map[string]bool{}
+	for _, id := range ids {
+		got[id.String()] = true
+	}
+	require.True(t, got[id1.String()])
+	require.True(t, got[id2.String()])
+
+	// Deleting an aggregate must NOT remove it from ListAggregateIDs: the method
+	// reads the raw event log (distinct aggregate_id), not the projection, so a
+	// deleted aggregate's ID remains visible. This is the defining contract.
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	del := makeEnvelope(id1, domain.HostDeleted{
+		IPAddress: "10.0.0.1",
+		Hostname:  "a.example.com",
+		DeletedAt: now,
+	}, 2, now)
+	require.NoError(t, store.AppendEvent(ctx, id1, del, 1))
+
+	ids2, err := store.ListAggregateIDs(ctx)
+	require.NoError(t, err)
+	got2 := map[string]bool{}
+	for _, id := range ids2 {
+		got2[id.String()] = true
+	}
+	require.True(t, got2[id1.String()], "deleted aggregate ID must still appear in ListAggregateIDs")
 }
 
 // ---------- HostProjection compliance ----------
@@ -543,6 +587,9 @@ func RunAll(t *testing.T, factory func(t *testing.T) storage.Storage) {
 	})
 	t.Run("EventStoreBatchAppendRollback", func(t *testing.T) {
 		TestEventStoreBatchAppendRollback(t, factory(t))
+	})
+	t.Run("EventStoreListAggregateIDs", func(t *testing.T) {
+		TestEventStoreListAggregateIDs(t, factory(t))
 	})
 
 	// HostProjection

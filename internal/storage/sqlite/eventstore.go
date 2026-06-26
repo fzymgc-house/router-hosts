@@ -191,6 +191,20 @@ func (s *Storage) CountEvents(ctx context.Context, aggregateID ulid.ULID) (int64
 	return count, nil
 }
 
+// ListAggregateIDs returns every distinct aggregate ID in the event log.
+func (s *Storage) ListAggregateIDs(ctx context.Context) ([]ulid.ULID, error) {
+	var ids []ulid.ULID
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		var innerErr error
+		ids, innerErr = getDistinctAggregateIDs(conn)
+		return innerErr
+	})
+	if err != nil {
+		return nil, oops.Wrapf(err, "list aggregate ids")
+	}
+	return ids, nil
+}
+
 // checkVersion verifies optimistic concurrency by comparing expected vs actual version.
 // Pass expectedVersion = -1 to skip the version check entirely (unconditional write).
 func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion int64) error {
