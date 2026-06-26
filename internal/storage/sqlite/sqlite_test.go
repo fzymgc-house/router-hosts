@@ -1141,6 +1141,77 @@ func (s *StorageSuite) TestListAllUnknownEventTypeInDBReturnsError() {
 	s.Require().Error(err, "GetByID must return an error for an unknown event type in the DB")
 }
 
+// ---------- Regression tests: context cancellation must not commit (#330) ----------
+
+// TestAppendEventCancelledContextDoesNotPersist verifies that AppendEvent
+// returns an error and does not persist data when the context is already
+// cancelled before the call (start-of-function guard — #330).
+func (s *StorageSuite) TestAppendEventCancelledContextDoesNotPersist() {
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately before calling
+
+	env := s.createHostEvents(aggID, "10.0.0.1", "cancelled-append.local", now)
+	err := s.store.AppendEvent(ctx, aggID, env, 0)
+	s.Require().Error(err)
+
+	count, countErr := s.store.CountEvents(context.Background(), aggID)
+	s.Require().NoError(countErr)
+	s.Require().Equal(int64(0), count)
+}
+
+// TestAppendEventsCancelledContextDoesNotPersist verifies that AppendEvents
+// returns an error and does not persist data when the context is already
+// cancelled before the call (start-of-function guard — #330).
+func (s *StorageSuite) TestAppendEventsCancelledContextDoesNotPersist() {
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately before calling
+
+	env1 := s.createHostEvents(aggID, "10.0.0.1", "cancelled-appends-a.local", now)
+	env2 := makeEnvelope(aggID, domain.IPAddressChanged{
+		OldIP:     "10.0.0.1",
+		NewIP:     "10.0.0.2",
+		ChangedAt: now.Add(time.Second),
+	}, 2, now.Add(time.Second))
+	err := s.store.AppendEvents(ctx, aggID, []domain.EventEnvelope{env1, env2}, 0)
+	s.Require().Error(err)
+
+	count, countErr := s.store.CountEvents(context.Background(), aggID)
+	s.Require().NoError(countErr)
+	s.Require().Equal(int64(0), count)
+}
+
+// TestAppendEventsBatchCancelledContextDoesNotPersist verifies that
+// AppendEventsBatch returns an error and does not persist data when the
+// context is already cancelled before the call (start-of-function guard — #330).
+func (s *StorageSuite) TestAppendEventsBatchCancelledContextDoesNotPersist() {
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately before calling
+
+	env := s.createHostEvents(aggID, "10.0.0.1", "cancelled-batch.local", now)
+	batch := []storage.AggregateEvents{
+		{
+			AggregateID:     aggID,
+			Events:          []domain.EventEnvelope{env},
+			ExpectedVersion: 0,
+		},
+	}
+	err := s.store.AppendEventsBatch(ctx, batch)
+	s.Require().Error(err)
+
+	count, countErr := s.store.CountEvents(context.Background(), aggID)
+	s.Require().NoError(countErr)
+	s.Require().Equal(int64(0), count)
+}
+
 // containsStr is a helper that avoids a testify import in standalone test
 // functions.
 func containsStr(s, substr string) bool {

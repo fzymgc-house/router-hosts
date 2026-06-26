@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -72,12 +73,17 @@ func (r *HostMappingReconciler) reconcileUpsert(ctx context.Context, log *slog.L
 }
 
 // reconcileCreate creates a new host entry on the router-hosts server.
+// When the server returns AlreadyExists, it delegates to adoptExistingHost
+// to find and adopt the pre-existing entry, breaking the hot-loop.
 func (r *HostMappingReconciler) reconcileCreate(ctx context.Context, log *slog.Logger, hm *operatorv1alpha1.HostMapping) (ctrl.Result, error) {
 	log.Info("creating host entry")
 
 	comment := fmt.Sprintf("k8s:%s/%s", hm.Namespace, hm.Name)
 	id, err := r.HostClient.AddHost(ctx, hm.Spec.IP, hm.Spec.Hostname, comment, hm.Spec.Aliases, hm.Spec.Tags)
 	if err != nil {
+		if errors.Is(err, ErrHostAlreadyExists) {
+			return r.adoptExistingHost(ctx, log, hm)
+		}
 		log.Error("failed to create host entry", "error", err)
 		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, err.Error(), "")
 		r.setSyncedCondition(hm, metav1.ConditionFalse, "CreateFailed", err.Error())
@@ -108,6 +114,45 @@ func (r *HostMappingReconciler) reconcileCreate(ctx context.Context, log *slog.L
 
 	log.Info("host entry created", "hostId", id)
 	return ctrl.Result{}, nil
+}
+
+// adoptExistingHost handles the AlreadyExists case: it looks up the existing
+// host entry by exact IP+hostname, records the ID and version on the status,
+// then delegates to reconcileUpdate so the entry converges to the desired spec
+// in the same reconcile pass. If the lookup fails or finds nothing (e.g. a
+// race where the host was deleted between AddHost and FindHost), it falls back
+// to the standard error/requeue path.
+func (r *HostMappingReconciler) adoptExistingHost(ctx context.Context, log *slog.Logger, hm *operatorv1alpha1.HostMapping) (ctrl.Result, error) {
+	log.Info("host already exists, attempting adoption", "ip", hm.Spec.IP, "hostname", hm.Spec.Hostname)
+
+	existing, err := r.HostClient.FindHost(ctx, hm.Spec.IP, hm.Spec.Hostname)
+	if err != nil {
+		log.Error("failed to find existing host for adoption", "error", err)
+		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, err.Error(), "")
+		r.setSyncedCondition(hm, metav1.ConditionFalse, "AdoptionFailed", err.Error())
+		if statusErr := r.Status().Update(ctx, hm); statusErr != nil {
+			log.Error("failed to update status", "error", statusErr)
+		}
+		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
+	}
+	if existing == nil {
+		// Race: deleted between AddHost and FindHost — requeue to try again.
+		msg := "host entry not found during adoption (possible race); will retry"
+		log.Warn(msg, "ip", hm.Spec.IP, "hostname", hm.Spec.Hostname)
+		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, msg, "")
+		r.setSyncedCondition(hm, metav1.ConditionFalse, "AdoptionFailed", msg)
+		if statusErr := r.Status().Update(ctx, hm); statusErr != nil {
+			log.Error("failed to update status", "error", statusErr)
+		}
+		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
+	}
+
+	log.Info("adopting existing host entry", "existingID", existing.ID, "ip", hm.Spec.IP, "hostname", hm.Spec.Hostname)
+	hm.Status.HostID = existing.ID
+	hm.Status.HostVersion = existing.Version
+
+	// Delegate to reconcileUpdate to converge the entry to the desired spec.
+	return r.reconcileUpdate(ctx, log, hm)
 }
 
 // reconcileUpdate updates the host entry when the spec has changed.

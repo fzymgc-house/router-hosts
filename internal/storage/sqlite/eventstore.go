@@ -19,6 +19,9 @@ const timeFormat = "2006-01-02T15:04:05.000Z"
 
 // AppendEvent appends a single event with optimistic concurrency control.
 func (s *Storage) AppendEvent(ctx context.Context, aggregateID ulid.ULID, event domain.EventEnvelope, expectedVersion int64) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return oops.Wrapf(cerr, "append aborted: context already done")
+	}
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return oops.Wrapf(err, "take connection")
@@ -39,11 +42,20 @@ func (s *Storage) AppendEvent(ctx context.Context, aggregateID ulid.ULID, event 
 		return oops.Wrapf(err, "append event to aggregate %s", aggregateID)
 	}
 
+	// The deferred endFn(&err) commits only when err == nil. If the request
+	// deadline passed while we were working, force a rollback so a timed-out
+	// request does not silently persist (which would defeat OCC on retry — #330).
+	if err = ctx.Err(); err != nil {
+		return oops.Wrapf(err, "append aborted: context done before commit")
+	}
 	return nil
 }
 
 // AppendEvents appends multiple events atomically with optimistic concurrency control.
 func (s *Storage) AppendEvents(ctx context.Context, aggregateID ulid.ULID, events []domain.EventEnvelope, expectedVersion int64) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return oops.Wrapf(cerr, "append aborted: context already done")
+	}
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return oops.Wrapf(err, "take connection")
@@ -66,6 +78,12 @@ func (s *Storage) AppendEvents(ctx context.Context, aggregateID ulid.ULID, event
 		}
 	}
 
+	// The deferred endFn(&err) commits only when err == nil. If the request
+	// deadline passed while we were working, force a rollback so a timed-out
+	// request does not silently persist (which would defeat OCC on retry — #330).
+	if err = ctx.Err(); err != nil {
+		return oops.Wrapf(err, "append aborted: context done before commit")
+	}
 	return nil
 }
 
@@ -73,6 +91,9 @@ func (s *Storage) AppendEvents(ctx context.Context, aggregateID ulid.ULID, event
 // single SQLite transaction. If any individual write fails (including a
 // version conflict), the entire transaction is rolled back.
 func (s *Storage) AppendEventsBatch(ctx context.Context, batch []storage.AggregateEvents) error {
+	if cerr := ctx.Err(); cerr != nil {
+		return oops.Wrapf(cerr, "batch append aborted: context already done")
+	}
 	conn, err := s.pool.Take(ctx)
 	if err != nil {
 		return oops.Wrapf(err, "take connection")
@@ -96,6 +117,12 @@ func (s *Storage) AppendEventsBatch(ctx context.Context, batch []storage.Aggrega
 		}
 	}
 
+	// The deferred endFn(&err) commits only when err == nil. If the request
+	// deadline passed while we were working, force a rollback so a timed-out
+	// request does not silently persist (which would defeat OCC on retry — #330).
+	if err = ctx.Err(); err != nil {
+		return oops.Wrapf(err, "batch append aborted: context done before commit")
+	}
 	return nil
 }
 

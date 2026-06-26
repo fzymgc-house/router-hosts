@@ -271,12 +271,33 @@ func buildGoEventData(e rawLegacyEvent, meta *rustEventMetadata) (string, error)
 	return string(data), nil
 }
 
+// addSnapshotTriggerTypeColumn issues the ALTER TABLE to add trigger_type to
+// the snapshots table. SQLite requires a DEFAULT for NOT NULL on an added
+// column; existing rows backfill to "manual".
+// Callers MUST guard with columnExists before calling — this function does not
+// check for the column's existence.
+func addSnapshotTriggerTypeColumn(conn *sqlite.Conn) error {
+	return sqlitex.Execute(conn,
+		`ALTER TABLE snapshots ADD COLUMN trigger_type TEXT NOT NULL DEFAULT 'manual'`,
+		nil)
+}
+
 // migrateSnapshots rebuilds the snapshots table with the Go schema.
 // The Rust table has column "trigger" (TEXT) and created_at as INTEGER (epoch
 // micros), while Go expects "trigger_type" (TEXT) and created_at as TEXT (RFC3339).
 func migrateSnapshots(conn *sqlite.Conn, log *slog.Logger) (int, error) {
 	if !columnExists(conn, "snapshots", "trigger") {
-		log.Info("snapshots table already has Go schema, skipping snapshot migration")
+		// No Rust 'trigger' column. Check whether 'trigger_type' is also absent:
+		// this happens when a Go-era DB was created with an already-existing
+		// snapshots table that predated the trigger_type column (GH #331).
+		if !columnExists(conn, "snapshots", "trigger_type") {
+			log.Info("snapshots table missing trigger_type, adding column")
+			if err := addSnapshotTriggerTypeColumn(conn); err != nil {
+				return 0, oops.Wrapf(err, "add trigger_type column to snapshots")
+			}
+		} else {
+			log.Info("snapshots table already has Go schema, skipping snapshot migration")
+		}
 		return 0, nil
 	}
 

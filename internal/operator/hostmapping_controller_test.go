@@ -25,6 +25,7 @@ type mockHostClient struct {
 	updateHostFn func(ctx context.Context, id, ip, hostname, comment string, aliases, tags []string, version string) error
 	deleteHostFn func(ctx context.Context, id string) error
 	getHostFn    func(ctx context.Context, id string) (*HostEntry, error)
+	findHostFn   func(ctx context.Context, ip, hostname string) (*HostEntry, error)
 }
 
 func (m *mockHostClient) AddHost(ctx context.Context, ip, hostname, comment string, aliases, tags []string) (string, error) {
@@ -58,6 +59,13 @@ func (m *mockHostClient) GetHost(ctx context.Context, id string) (*HostEntry, er
 		Hostname: "test.local",
 		Version:  "v1",
 	}, nil
+}
+
+func (m *mockHostClient) FindHost(ctx context.Context, ip, hostname string) (*HostEntry, error) {
+	if m.findHostFn != nil {
+		return m.findHostFn(ctx, ip, hostname)
+	}
+	return nil, nil
 }
 
 func (m *mockHostClient) Close() error { return nil }
@@ -580,4 +588,245 @@ func TestReconcile_DeleteFailure_Requeues(t *testing.T) {
 	var updated operatorv1alpha1.HostMapping
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
 	assert.Contains(t, updated.Finalizers, hostCleanupFinalizer)
+}
+
+// ---------------------------------------------------------------------------
+// AlreadyExists / adoption tests (GH #313)
+// ---------------------------------------------------------------------------
+
+// TestReconcile_AlreadyExists_AdoptsExistingHost verifies that when AddHost
+// returns ErrHostAlreadyExists the reconciler adopts the existing entry via
+// FindHost and converges state, instead of hot-looping with repeated errors.
+func TestReconcile_AlreadyExists_AdoptsExistingHost(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.10", "my-host.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	addCalls := 0
+	updateCalled := false
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			addCalls++
+			return "", fmt.Errorf("adding host 192.168.1.10/my-host.local: %w", ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			assert.Equal(t, "192.168.1.10", ip)
+			assert.Equal(t, "my-host.local", hostname)
+			return &HostEntry{
+				ID:       "existing-id-42",
+				IP:       ip,
+				Hostname: hostname,
+				Version:  "v3",
+			}, nil
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, version string) error {
+			updateCalled = true
+			assert.Equal(t, "existing-id-42", id)
+			assert.Equal(t, "v3", version)
+			return nil
+		},
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{ID: id, Version: "v4"}, nil
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	// Must not request the long error-requeue (no hot-loop).
+	assert.Equal(t, ctrl.Result{}, result, "adoption should succeed without requeue")
+	assert.Equal(t, 1, addCalls, "AddHost called exactly once")
+	assert.True(t, updateCalled, "reconcileUpdate must run to converge spec")
+
+	// Verify status: HostID adopted, Synced=True, no error phase.
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, "existing-id-42", updated.Status.HostID)
+	assert.Equal(t, "v4", updated.Status.HostVersion, "version refreshed by GetHost after UpdateHost")
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
+
+	require.Len(t, updated.Status.Conditions, 1)
+	assert.Equal(t, operatorv1alpha1.ConditionSynced, updated.Status.Conditions[0].Type)
+	assert.Equal(t, metav1.ConditionTrue, updated.Status.Conditions[0].Status)
+}
+
+// TestReconcile_AlreadyExists_Idempotent verifies that after adoption the next
+// Reconcile goes through reconcileUpdate (not another AddHost call).
+func TestReconcile_AlreadyExists_Idempotent(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.10", "my-host.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	addCalls := 0
+	updateCalls := 0
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			addCalls++
+			return "", fmt.Errorf("adding host: %w", ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			return &HostEntry{ID: "existing-id-42", IP: ip, Hostname: hostname, Version: "v1"}, nil
+		},
+		updateHostFn: func(_ context.Context, _ string, _, _, _ string, _, _ []string, _ string) error {
+			updateCalls++
+			return nil
+		},
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{ID: id, Version: "v2"}, nil
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	// First reconcile: AlreadyExists → adoption → reconcileUpdate.
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, 1, addCalls)
+	assert.Equal(t, 1, updateCalls)
+
+	// Second reconcile: HostID is now set, so reconcileUpdate runs directly.
+	result, err = r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, 1, addCalls, "AddHost must NOT be called again")
+	assert.Equal(t, 2, updateCalls)
+}
+
+// TestReconcile_FindHost_ExactMatch verifies that FindHost performs exact
+// IP+hostname matching — a candidate that shares a hostname prefix but has a
+// different IP must not be adopted.
+func TestReconcile_FindHost_ExactMatch(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "10.0.0.1", "host.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "", fmt.Errorf("adding host: %w", ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			// Simulate the server returning a prefix-collision candidate first,
+			// then the actual match. FindHost must return the exact match only.
+			candidates := []*HostEntry{
+				{ID: "wrong-id", IP: "10.0.0.99", Hostname: "host.local"},    // wrong IP
+				{ID: "right-id", IP: "10.0.0.1", Hostname: "host.local"},     // exact match
+				{ID: "also-wrong", IP: "10.0.0.1", Hostname: "host.local.x"}, // wrong hostname
+			}
+			for _, c := range candidates {
+				if c.IP == ip && c.Hostname == hostname {
+					c.Version = "v1"
+					return c, nil
+				}
+			}
+			return nil, nil
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			assert.Equal(t, "right-id", id, "must adopt exact match, not prefix collision")
+			return nil
+		},
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{ID: id, Version: "v2"}, nil
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, "right-id", updated.Status.HostID)
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
+}
+
+// TestReconcile_AlreadyExists_FindHostReturnsNil_Fallback verifies that when
+// FindHost finds nothing after AlreadyExists (race: host deleted between calls)
+// the reconciler falls back to error/requeue without panicking or adopting a
+// wrong ID.
+func TestReconcile_AlreadyExists_FindHostReturnsNil_Fallback(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.10", "my-host.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "", fmt.Errorf("adding host: %w", ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, _, _ string) (*HostEntry, error) {
+			return nil, nil // race: host disappeared
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayLong, result.RequeueAfter, "must requeue on adoption fallback")
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseError, updated.Status.Phase)
+	assert.Equal(t, "", updated.Status.HostID, "must not set HostID when adoption failed")
+
+	require.Len(t, updated.Status.Conditions, 1)
+	assert.Equal(t, metav1.ConditionFalse, updated.Status.Conditions[0].Status)
+	assert.Equal(t, "AdoptionFailed", updated.Status.Conditions[0].Reason)
 }

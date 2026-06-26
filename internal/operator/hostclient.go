@@ -18,6 +18,8 @@ type HostEntry struct {
 // a mock.
 type HostClient interface {
 	// AddHost creates a new host entry and returns the server-assigned ID.
+	// Returns an error wrapping ErrHostAlreadyExists when the server reports
+	// that a host with the same IP and hostname already exists.
 	AddHost(ctx context.Context, ip, hostname, comment string, aliases, tags []string) (string, error)
 
 	// UpdateHost modifies an existing host entry identified by id.
@@ -30,6 +32,10 @@ type HostClient interface {
 
 	// GetHost retrieves a single host entry by ID.
 	GetHost(ctx context.Context, id string) (*HostEntry, error)
+
+	// FindHost searches for a host entry with an exact match on both IP and
+	// hostname. Returns nil, nil if no matching entry exists.
+	FindHost(ctx context.Context, ip, hostname string) (*HostEntry, error)
 
 	// Close releases any resources held by the client.
 	Close() error
