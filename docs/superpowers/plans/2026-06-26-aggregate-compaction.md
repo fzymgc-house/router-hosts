@@ -1193,3 +1193,4 @@ Then: `jj commit -m "feat(server): add aggregate event-count gauges"`
 | `CompactAggregates` RPC | 5, 6 |
 | Cardinality-safe observable-gauge metrics | 8 |
 | Regression for #330/#323 (compact→update-at-version) | 3 |
+<!-- adr-capture: sha256=5d480f58a68c787e; session=cli; ts=2026-06-26T17:15:52Z; adrs=router-hosts-v5b,router-hosts-vl8,router-hosts-4w2 -->
