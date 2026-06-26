@@ -20,6 +20,7 @@ import (
 	grpccreds "google.golang.org/grpc/credentials"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
+	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
 // histogramBuckets defines bucket boundaries suitable for subsecond RPC and
@@ -258,6 +259,64 @@ func (m *Metrics) RecordHookExecution(ctx context.Context, name, hookType, statu
 // SetHostEntriesCount records the current host entry count as an absolute value.
 func (m *Metrics) SetHostEntriesCount(ctx context.Context, count int64) {
 	m.hostEntriesGauge.Record(ctx, count)
+}
+
+// DefaultAggregateEventsWarnThreshold is the default per-aggregate event count
+// above which an aggregate is counted by router_hosts_aggregates_over_threshold.
+const DefaultAggregateEventsWarnThreshold int64 = 1000
+
+// RegisterAggregateEventGauges registers two observable gauges that report
+// per-aggregate event growth, pulled at scrape time. No-op when metrics are
+// disabled (nil meter provider). The callback iterates ListAggregateIDs +
+// CountEvents; acceptable at this deployment's scale.
+func (m *Metrics) RegisterAggregateEventGauges(store storage.EventStore, warnThreshold int64) error {
+	if m.meterProvider == nil || store == nil {
+		return nil
+	}
+	meter := m.meterProvider.Meter("router-hosts")
+
+	maxGauge, err := meter.Int64ObservableGauge("router_hosts_aggregate_events_max",
+		otelmetric.WithDescription("Maximum event count across all aggregates"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create aggregate_events_max gauge")
+	}
+	overGauge, err := meter.Int64ObservableGauge("router_hosts_aggregates_over_threshold",
+		otelmetric.WithDescription("Number of aggregates whose event count exceeds the warn threshold"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create aggregates_over_threshold gauge")
+	}
+
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, o otelmetric.Observer) error {
+			ids, listErr := store.ListAggregateIDs(ctx)
+			if listErr != nil {
+				return listErr
+			}
+			var maxCount, over int64
+			for _, id := range ids {
+				c, cErr := store.CountEvents(ctx, id)
+				if cErr != nil {
+					return cErr
+				}
+				if c > maxCount {
+					maxCount = c
+				}
+				if c > warnThreshold {
+					over++
+				}
+			}
+			o.ObserveInt64(maxGauge, maxCount)
+			o.ObserveInt64(overGauge, over)
+			return nil
+		},
+		maxGauge, overGauge,
+	)
+	if err != nil {
+		return oops.Wrapf(err, "register aggregate-event gauge callback")
+	}
+	return nil
 }
 
 // Shutdown gracefully shuts down the meter provider, flushing any pending

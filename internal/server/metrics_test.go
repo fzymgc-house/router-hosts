@@ -3,11 +3,14 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel/sdk/metric"
@@ -15,6 +18,8 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
+	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
 )
 
 // newTestMetrics creates a Metrics backed by a ManualReader for assertions.
@@ -545,4 +550,112 @@ func TestExtractMethodName(t *testing.T) {
 			assert.Equal(t, tt.want, got)
 		})
 	}
+}
+
+func TestRegisterAggregateEventGaugesNoopWhenDisabled(t *testing.T) {
+	t.Parallel()
+
+	m := DisabledMetrics()
+	// Must not panic / error when there is no meter provider.
+	err := m.RegisterAggregateEventGauges(nil, 1000)
+	require.NoError(t, err)
+}
+
+// newTestStore creates an in-memory SQLite store initialised and ready for use.
+func newTestStore(t *testing.T) *sqlite.Storage {
+	t.Helper()
+	// Unique per-test DB name: the unnamed shared-cache in-memory URI is
+	// process-global, so parallel tests sharing it would see each other's
+	// aggregates. t.Name() isolates each test's store.
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	store, err := sqlite.New(dsn, slog.Default())
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = store.Close() })
+	require.NoError(t, store.Initialize(context.Background()))
+	return store
+}
+
+// appendEvents seeds n events for the given aggregate starting at version 1.
+func appendEvents(t *testing.T, store *sqlite.Storage, aggID ulid.ULID, n int) {
+	t.Helper()
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	for i := range n {
+		he, err := domain.NewHostEvent(domain.HostCreated{
+			IPAddress: "10.0.0.1",
+			Hostname:  "test.local",
+			Aliases:   []string{},
+			Tags:      []string{},
+			CreatedAt: now,
+		})
+		require.NoError(t, err)
+		env := domain.EventEnvelope{
+			EventID:     ulid.Make(),
+			AggregateID: aggID,
+			Event:       he,
+			Version:     int64(i + 1),
+			CreatedAt:   now,
+		}
+		require.NoError(t, store.AppendEvent(ctx, aggID, env, int64(i)))
+	}
+}
+
+func TestRegisterAggregateEventGaugesEnabled(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+
+	// Seed two aggregates: agg1 has 3 events, agg2 has 1 event.
+	// With warnThreshold=2: agg1 (3>2) is over-threshold, agg2 (1<=2) is not.
+	agg1 := ulid.Make()
+	agg2 := ulid.Make()
+	appendEvents(t, store, agg1, 3)
+	appendEvents(t, store, agg2, 1)
+
+	m, reader := newTestMetrics(t)
+	require.NoError(t, m.RegisterAggregateEventGauges(store, 2))
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+
+	maxMetric := findMetric(rm, "router_hosts_aggregate_events_max")
+	require.NotNil(t, maxMetric, "router_hosts_aggregate_events_max not found")
+	maxData, ok := maxMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64] for aggregate_events_max, got %T", maxMetric.Data)
+	require.Len(t, maxData.DataPoints, 1)
+	assert.Equal(t, int64(3), maxData.DataPoints[0].Value, "max event count should be 3")
+
+	overMetric := findMetric(rm, "router_hosts_aggregates_over_threshold")
+	require.NotNil(t, overMetric, "router_hosts_aggregates_over_threshold not found")
+	overData, ok := overMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64] for aggregates_over_threshold, got %T", overMetric.Data)
+	require.Len(t, overData.DataPoints, 1)
+	assert.Equal(t, int64(1), overData.DataPoints[0].Value, "only agg1 exceeds threshold of 2")
+}
+
+func TestRegisterAggregateEventGaugesEmptyStore(t *testing.T) {
+	t.Parallel()
+
+	store := newTestStore(t)
+	m, reader := newTestMetrics(t)
+	require.NoError(t, m.RegisterAggregateEventGauges(store, 2))
+
+	var rm metricdata.ResourceMetrics
+	require.NoError(t, reader.Collect(context.Background(), &rm))
+
+	// An empty store still observes both gauges (guards against a
+	// return-before-Observe regression in the callback).
+	maxMetric := findMetric(rm, "router_hosts_aggregate_events_max")
+	require.NotNil(t, maxMetric, "router_hosts_aggregate_events_max not found")
+	maxData, ok := maxMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64] for aggregate_events_max, got %T", maxMetric.Data)
+	require.Len(t, maxData.DataPoints, 1)
+	assert.Equal(t, int64(0), maxData.DataPoints[0].Value, "empty store: max should be 0")
+
+	overMetric := findMetric(rm, "router_hosts_aggregates_over_threshold")
+	require.NotNil(t, overMetric, "router_hosts_aggregates_over_threshold not found")
+	overData, ok := overMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64] for aggregates_over_threshold, got %T", overMetric.Data)
+	require.Len(t, overData.DataPoints, 1)
+	assert.Equal(t, int64(0), overData.DataPoints[0].Value, "empty store: over should be 0")
 }
