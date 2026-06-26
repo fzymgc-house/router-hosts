@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.7](https://github.com/fzymgc-house/router-hosts/compare/v0.10.6...v0.10.7) (2026-06-26)
+
+
+### Features
+
+* aggregate compaction + event-count metrics (eda.2) ([#336](https://github.com/fzymgc-house/router-hosts/issues/336)) ([b7bc6b4](https://github.com/fzymgc-house/router-hosts/commit/b7bc6b4a890c951fa976ecfcf9877e530fdda81e))
+
+
+### Bug Fixes
+
+* **server:** compact dry-run preview + over-threshold guard ([#337](https://github.com/fzymgc-house/router-hosts/issues/337)) ([0575a1e](https://github.com/fzymgc-house/router-hosts/commit/0575a1e14e6f9f88eda8f2af261556bac4d1795e))
+
+
+### Documentation
+
+* aggregate compaction design + plan + ADRs (eda.2) ([#334](https://github.com/fzymgc-house/router-hosts/issues/334)) ([5237d6b](https://github.com/fzymgc-house/router-hosts/commit/5237d6b33cae71937cb9b40390c27b71774ca724))
+
 ## [0.10.6](https://github.com/fzymgc-house/router-hosts/compare/v0.10.5...v0.10.6) (2026-06-26)
 
 
