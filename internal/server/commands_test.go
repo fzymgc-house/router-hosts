@@ -543,7 +543,11 @@ func seedBloated(t *testing.T, ctx context.Context, store storage.Storage, n int
 func newCompactTestStore(t *testing.T) (storage.Storage, context.Context) {
 	t.Helper()
 	ctx := context.Background()
-	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
+	// Per-test-unique in-memory DB name: the unnamed shared-cache URI is
+	// process-global, so parallel tests sharing it would see each other's
+	// aggregates. t.Name() isolates each test's store.
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name())
+	store, err := sqlite.New(dsn, slog.Default())
 	require.NoError(t, err)
 	require.NoError(t, store.Initialize(ctx))
 	t.Cleanup(func() { _ = store.Close() })
