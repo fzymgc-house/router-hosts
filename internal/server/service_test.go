@@ -1974,3 +1974,101 @@ func TestService_RegenerateOutputs_MaterializesWithoutMutation(t *testing.T) {
 	assert.Contains(t, string(confData), "local=/auth.fzymgc.house/\naddress=/auth.fzymgc.house/192.168.20.145")
 	assert.Contains(t, string(confData), "local=/sso.fzymgc.house/\naddress=/sso.fzymgc.house/192.168.20.145")
 }
+
+func TestService_CompactAggregates_Single(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+	id := seedBloated(t, ctx, env.store, 10)
+
+	resp, err := env.client.CompactAggregates(ctx, &hostsv1.CompactAggregatesRequest{
+		Target: &hostsv1.CompactAggregatesRequest_AggregateId{AggregateId: id.String()},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetCompacted(), 1)
+	require.Equal(t, int64(10), resp.GetCompacted()[0].GetEventsBefore())
+	require.Equal(t, int64(1), resp.GetCompacted()[0].GetEventsAfter())
+	require.Equal(t, int64(9), resp.GetTotalEventsReclaimed())
+}
+
+func TestService_CompactAggregates_InvalidID(t *testing.T) {
+	env := newServiceTestEnv(t)
+	_, err := env.client.CompactAggregates(context.Background(), &hostsv1.CompactAggregatesRequest{
+		Target: &hostsv1.CompactAggregatesRequest_AggregateId{AggregateId: "not-a-ulid"},
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestService_CompactAggregates_DryRunSingle(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+	id := seedBloated(t, ctx, env.store, 8)
+
+	resp, err := env.client.CompactAggregates(ctx, &hostsv1.CompactAggregatesRequest{
+		Target: &hostsv1.CompactAggregatesRequest_AggregateId{AggregateId: id.String()},
+		DryRun: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetCompacted(), 1)
+	require.Equal(t, int64(8), resp.GetCompacted()[0].GetEventsBefore())
+	require.Equal(t, int64(8), resp.GetCompacted()[0].GetEventsAfter())
+	require.Equal(t, int64(0), resp.GetTotalEventsReclaimed())
+
+	// dry-run must not mutate the event store
+	cnt, err := env.store.CountEvents(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(8), cnt)
+}
+
+func TestService_CompactAggregates_OverThreshold(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+	big := seedBloated(t, ctx, env.store, 12)
+	small := seedBloated(t, ctx, env.store, 2)
+
+	resp, err := env.client.CompactAggregates(ctx, &hostsv1.CompactAggregatesRequest{
+		Target: &hostsv1.CompactAggregatesRequest_OverThreshold{OverThreshold: 5},
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetCompacted(), 1)
+	require.Equal(t, big.String(), resp.GetCompacted()[0].GetAggregateId())
+
+	// small aggregate must be untouched
+	cntSmall, err := env.store.CountEvents(ctx, small)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), cntSmall)
+}
+
+func TestService_CompactAggregates_DryRunOver(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+	big := seedBloated(t, ctx, env.store, 12)
+	small := seedBloated(t, ctx, env.store, 2)
+
+	resp, err := env.client.CompactAggregates(ctx, &hostsv1.CompactAggregatesRequest{
+		Target: &hostsv1.CompactAggregatesRequest_OverThreshold{OverThreshold: 5},
+		DryRun: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, resp.GetCompacted(), 1)
+	require.Equal(t, big.String(), resp.GetCompacted()[0].GetAggregateId())
+	require.Equal(t, int64(12), resp.GetCompacted()[0].GetEventsBefore())
+	require.Equal(t, int64(12), resp.GetCompacted()[0].GetEventsAfter()) // dry-run: no reduction
+	require.Equal(t, int64(12), resp.GetCompacted()[0].GetVersion())     // high-water version reported, not 0
+	require.Equal(t, int64(0), resp.GetTotalEventsReclaimed())
+
+	// dry-run must not mutate either aggregate
+	cntBig, err := env.store.CountEvents(ctx, big)
+	require.NoError(t, err)
+	require.Equal(t, int64(12), cntBig)
+	cntSmall, err := env.store.CountEvents(ctx, small)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), cntSmall)
+}
+
+func TestService_CompactAggregates_NoTarget(t *testing.T) {
+	env := newServiceTestEnv(t)
+	_, err := env.client.CompactAggregates(context.Background(), &hostsv1.CompactAggregatesRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+}

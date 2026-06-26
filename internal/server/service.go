@@ -871,3 +871,95 @@ func (s *HostsServiceImpl) Health(ctx context.Context, _ *hostsv1.HealthRequest)
 		Hooks: hooksHealth,
 	}, nil
 }
+
+// CompactAggregates compacts one aggregate or all aggregates over a threshold.
+func (s *HostsServiceImpl) CompactAggregates(ctx context.Context, req *hostsv1.CompactAggregatesRequest) (*hostsv1.CompactAggregatesResponse, error) {
+	var results []storage.CompactResult
+
+	switch t := req.GetTarget().(type) {
+	case *hostsv1.CompactAggregatesRequest_AggregateId:
+		id, err := ulid.Parse(t.AggregateId)
+		if err != nil {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid aggregate_id %q: %v", t.AggregateId, err)
+		}
+		if req.GetDryRun() {
+			res, derr := s.dryRunOne(ctx, id)
+			if derr != nil {
+				return nil, mapError(derr)
+			}
+			results = []storage.CompactResult{res}
+		} else {
+			res, cerr := s.handler.CompactAggregate(ctx, id)
+			if cerr != nil {
+				return nil, mapError(cerr)
+			}
+			results = []storage.CompactResult{res}
+		}
+	case *hostsv1.CompactAggregatesRequest_OverThreshold:
+		if req.GetDryRun() {
+			res, derr := s.dryRunOver(ctx, t.OverThreshold)
+			if derr != nil {
+				return nil, mapError(derr)
+			}
+			results = res
+		} else {
+			res, cerr := s.handler.CompactAggregatesOver(ctx, t.OverThreshold)
+			if cerr != nil {
+				return nil, mapError(cerr)
+			}
+			results = res
+		}
+	default:
+		return nil, status.Error(codes.InvalidArgument, "target (aggregate_id or over_threshold) is required")
+	}
+
+	resp := &hostsv1.CompactAggregatesResponse{}
+	var reclaimed int64
+	for _, r := range results {
+		resp.Compacted = append(resp.Compacted, &hostsv1.CompactedAggregate{
+			AggregateId:  r.AggregateID.String(),
+			EventsBefore: r.EventsBefore,
+			EventsAfter:  r.EventsAfter,
+			Version:      r.Version,
+		})
+		reclaimed += r.EventsBefore - r.EventsAfter
+	}
+	resp.TotalEventsReclaimed = reclaimed
+	return resp, nil
+}
+
+// dryRunOne reports counts without mutating (events_after = events_before).
+func (s *HostsServiceImpl) dryRunOne(ctx context.Context, id ulid.ULID) (storage.CompactResult, error) {
+	count, err := s.store.CountEvents(ctx, id)
+	if err != nil {
+		return storage.CompactResult{}, err
+	}
+	v, err := s.store.GetCurrentVersion(ctx, id)
+	if err != nil {
+		return storage.CompactResult{}, err
+	}
+	return storage.CompactResult{AggregateID: id, EventsBefore: count, EventsAfter: count, Version: v}, nil
+}
+
+// dryRunOver reports which aggregates exceed threshold without mutating.
+func (s *HostsServiceImpl) dryRunOver(ctx context.Context, threshold int64) ([]storage.CompactResult, error) {
+	ids, err := s.store.ListAggregateIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []storage.CompactResult
+	for _, id := range ids {
+		count, cerr := s.store.CountEvents(ctx, id)
+		if cerr != nil {
+			return nil, cerr
+		}
+		if count > threshold {
+			v, verr := s.store.GetCurrentVersion(ctx, id)
+			if verr != nil {
+				return nil, verr
+			}
+			out = append(out, storage.CompactResult{AggregateID: id, EventsBefore: count, EventsAfter: count, Version: v})
+		}
+	}
+	return out, nil
+}
