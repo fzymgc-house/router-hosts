@@ -17,6 +17,14 @@ type AggregateEvents struct {
 	ExpectedVersion int64
 }
 
+// CompactResult summarizes a CompactAggregate operation.
+type CompactResult struct {
+	AggregateID  ulid.ULID
+	EventsBefore int64
+	EventsAfter  int64
+	Version      int64 // preserved high-water version
+}
+
 // EventStore is the write side of the CQRS pattern.
 //
 // Design Spec Divergences (intentional improvements):
@@ -49,6 +57,14 @@ type EventStore interface {
 	LoadEvents(ctx context.Context, aggregateID ulid.ULID) ([]domain.EventEnvelope, error)
 	GetCurrentVersion(ctx context.Context, aggregateID ulid.ULID) (int64, error)
 	CountEvents(ctx context.Context, aggregateID ulid.ULID) (int64, error)
+	// ListAggregateIDs returns every distinct aggregate ID in the event log,
+	// INCLUDING deleted aggregates (reads distinct aggregate_id from events).
+	ListAggregateIDs(ctx context.Context) ([]ulid.ULID, error)
+	// CompactAggregate folds the aggregate's event log and atomically replaces
+	// it with a single HostCompacted seed event at the preserved high-water
+	// version. No-op if the aggregate has <= 1 event. The whole operation is one
+	// transaction; any failure rolls back and leaves the log intact.
+	CompactAggregate(ctx context.Context, aggregateID ulid.ULID) (CompactResult, error)
 }
 
 // SnapshotStore manages point-in-time snapshots.

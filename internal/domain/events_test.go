@@ -130,6 +130,22 @@ func TestNewHostEvent_AllTypes(t *testing.T) {
 			wantType: EventTypeHostImported,
 		},
 		{
+			name: "HostCompacted",
+			event: HostCompacted{
+				IPAddress:        "10.0.0.9",
+				Hostname:         "compacted.local",
+				Aliases:          []string{"c"},
+				Comment:          ptr("folded"),
+				Tags:             []string{"k8s"},
+				Deleted:          false,
+				CreatedAt:        now,
+				UpdatedAt:        now,
+				CompactedAt:      now,
+				FoldedEventCount: 7,
+			},
+			wantType: EventTypeHostCompacted,
+		},
+		{
 			name: "SnapshotCreated",
 			event: SnapshotCreated{
 				SnapshotID: ulid.Make(),
@@ -356,6 +372,7 @@ func TestHostEvent_OccurredAt(t *testing.T) {
 		{"AliasesModified", AliasesModified{OldAliases: []string{}, NewAliases: []string{}, ModifiedAt: now}},
 		{"HostDeleted", HostDeleted{IPAddress: "1.1.1.1", Hostname: "h", DeletedAt: now}},
 		{"HostImported", HostImported{IPAddress: "1.1.1.1", Hostname: "h", Tags: []string{}, Aliases: []string{}, OccurredAt: now}},
+		{"HostCompacted", HostCompacted{IPAddress: "1.1.1.1", Hostname: "h", Aliases: []string{}, Tags: []string{}, CreatedAt: now, UpdatedAt: now, CompactedAt: now}},
 		{"SnapshotCreated", SnapshotCreated{SnapshotID: ulid.Make(), Name: "n", Trigger: "manual", EntryCount: 1, OccurredAt: now}},
 		{"SnapshotRolledBack", SnapshotRolledBack{SnapshotID: ulid.Make(), RestoredEntries: 1, OccurredAt: now}},
 		{"SnapshotDeleted", SnapshotDeleted{SnapshotID: ulid.Make(), OccurredAt: now}},
@@ -580,6 +597,7 @@ func TestHostEvent_Decode_InvalidPayload(t *testing.T) {
 		{"AliasesModified", EventTypeAliasesModified},
 		{"HostDeleted", EventTypeHostDeleted},
 		{"HostImported", EventTypeHostImported},
+		{"HostCompacted", EventTypeHostCompacted},
 		{"SnapshotCreated", EventTypeSnapshotCreated},
 		{"SnapshotRolledBack", EventTypeSnapshotRolledBack},
 		{"SnapshotDeleted", EventTypeSnapshotDeleted},
@@ -595,4 +613,34 @@ func TestHostEvent_Decode_InvalidPayload(t *testing.T) {
 			require.Error(t, err)
 		})
 	}
+}
+
+func TestHostCompactedRoundTrip(t *testing.T) {
+	comment := "svc"
+	orig := HostCompacted{
+		IPAddress:        "192.168.1.10",
+		Hostname:         "llm-gw.fzymgc.house",
+		Aliases:          []string{"mcp-gw.fzymgc.house"},
+		Comment:          &comment,
+		Tags:             []string{"k8s"},
+		Deleted:          false,
+		CreatedAt:        time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:        time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		CompactedAt:      time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC),
+		FoldedEventCount: 91178,
+	}
+
+	he, err := NewHostEvent(orig)
+	require.NoError(t, err)
+	require.Equal(t, EventTypeHostCompacted, he.Type)
+
+	decoded, err := he.Decode()
+	require.NoError(t, err)
+	got, ok := decoded.(HostCompacted)
+	require.True(t, ok)
+	require.Equal(t, orig, got)
+
+	occ, err := he.OccurredAt()
+	require.NoError(t, err)
+	require.Equal(t, orig.CompactedAt, occ)
 }

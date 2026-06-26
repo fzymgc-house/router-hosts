@@ -191,6 +191,99 @@ func (s *Storage) CountEvents(ctx context.Context, aggregateID ulid.ULID) (int64
 	return count, nil
 }
 
+// ListAggregateIDs returns every distinct aggregate ID in the event log.
+func (s *Storage) ListAggregateIDs(ctx context.Context) ([]ulid.ULID, error) {
+	var ids []ulid.ULID
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		var innerErr error
+		ids, innerErr = getDistinctAggregateIDs(conn)
+		return innerErr
+	})
+	if err != nil {
+		return nil, oops.Wrapf(err, "list aggregate ids")
+	}
+	return ids, nil
+}
+
+// CompactAggregate collapses an aggregate's event log to a single HostCompacted
+// seed event at the preserved high-water version, atomically.
+func (s *Storage) CompactAggregate(ctx context.Context, aggregateID ulid.ULID) (storage.CompactResult, error) {
+	result := storage.CompactResult{AggregateID: aggregateID}
+	err := s.withConn(ctx, func(conn *sqlite.Conn) (err error) {
+		endFn, txErr := sqlitex.ImmediateTransaction(conn)
+		if txErr != nil {
+			return oops.Wrapf(txErr, "begin transaction")
+		}
+		defer endFn(&err)
+
+		events, loadErr := loadEventsForAggregate(conn, aggregateID)
+		if loadErr != nil {
+			return loadErr
+		}
+		result.EventsBefore = int64(len(events))
+		if len(events) <= 1 {
+			result.EventsAfter = result.EventsBefore
+			if len(events) == 1 {
+				result.Version = events[0].Version
+			}
+			return nil // no-op
+		}
+
+		entry, replayErr := replayEvents(aggregateID, events)
+		if replayErr != nil {
+			return replayErr
+		}
+		if entry == nil {
+			return oops.Errorf("compact: aggregate %s folded to nil", aggregateID)
+		}
+
+		highWater := events[len(events)-1].Version // events are ORDER BY version ASC
+		seedEvent := domain.HostCompacted{
+			IPAddress:        entry.IP,
+			Hostname:         entry.Hostname,
+			Aliases:          entry.Aliases,
+			Comment:          entry.Comment,
+			Tags:             entry.Tags,
+			Deleted:          entry.Deleted,
+			CreatedAt:        entry.CreatedAt,
+			UpdatedAt:        entry.UpdatedAt,
+			CompactedAt:      time.Now().UTC(),
+			FoldedEventCount: int64(len(events)),
+		}
+		he, evErr := domain.NewHostEvent(seedEvent)
+		if evErr != nil {
+			return oops.Wrapf(evErr, "build compacted seed")
+		}
+		seed := domain.EventEnvelope{
+			EventID:     ulid.Make(),
+			AggregateID: aggregateID,
+			Event:       he,
+			Version:     highWater,
+			CreatedAt:   time.Now().UTC(),
+		}
+
+		if delErr := deleteEventsForAggregate(conn, aggregateID); delErr != nil {
+			return oops.Wrapf(delErr, "delete events for %s", aggregateID)
+		}
+		if insErr := insertEvent(conn, seed); insErr != nil {
+			return oops.Wrapf(insErr, "insert compacted seed for %s", aggregateID)
+		}
+		result.EventsAfter = 1
+		result.Version = highWater
+
+		// deadline passed while we were working, force a rollback so a timed-out
+		// request does not silently persist (which would defeat OCC on retry — #330).
+		if err = ctx.Err(); err != nil {
+			return oops.Wrapf(err, "compact aborted: context done before commit")
+		}
+		return nil
+	})
+	if err != nil {
+		return storage.CompactResult{}, oops.Wrapf(err, "compact aggregate %s", aggregateID)
+	}
+	return result, nil
+}
+
 // checkVersion verifies optimistic concurrency by comparing expected vs actual version.
 // Pass expectedVersion = -1 to skip the version check entirely (unconditional write).
 func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion int64) error {
@@ -240,6 +333,14 @@ func insertEvent(conn *sqlite.Conn, env domain.EventEnvelope) error {
 		return oops.Wrapf(err, "insert event %s for aggregate %s", env.EventID, env.AggregateID)
 	}
 	return nil
+}
+
+// deleteEventsForAggregate removes all events for an aggregate. Caller must be
+// inside a transaction.
+func deleteEventsForAggregate(conn *sqlite.Conn, aggregateID ulid.ULID) error {
+	return sqlitex.Execute(conn,
+		`DELETE FROM events WHERE aggregate_id = ?`,
+		&sqlitex.ExecOptions{Args: []any{aggregateID.String()}})
 }
 
 // scanEventEnvelope reads an EventEnvelope from a query result row.

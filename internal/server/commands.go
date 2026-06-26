@@ -466,3 +466,54 @@ func (h *CommandHandler) SearchHosts(ctx context.Context, filter domain.SearchFi
 	}
 	return entries, nil
 }
+
+// CompactAggregate compacts a single aggregate, serialized through the write queue.
+func (h *CommandHandler) CompactAggregate(ctx context.Context, id ulid.ULID) (storage.CompactResult, error) {
+	var res storage.CompactResult
+	err := h.submitWrite(ctx, func() error {
+		var compErr error
+		res, compErr = h.store.CompactAggregate(ctx, id)
+		return compErr
+	})
+	if err != nil {
+		return storage.CompactResult{}, err
+	}
+	return res, nil
+}
+
+// CompactAggregatesOver compacts every aggregate whose current event count
+// exceeds threshold. Selection (ListAggregateIDs + CountEvents) and each
+// compaction run through the write queue as a single serialized sweep.
+// Aggregates with event count <= threshold are not compacted.
+//
+// On a mid-sweep error the call returns (nil, err); any aggregates already
+// compacted before the failure remain durably compacted (compaction is
+// idempotent, so re-running the sweep is safe).
+func (h *CommandHandler) CompactAggregatesOver(ctx context.Context, threshold int64) ([]storage.CompactResult, error) {
+	var results []storage.CompactResult
+	err := h.submitWrite(ctx, func() error {
+		ids, listErr := h.store.ListAggregateIDs(ctx)
+		if listErr != nil {
+			return listErr
+		}
+		for _, id := range ids {
+			count, cErr := h.store.CountEvents(ctx, id)
+			if cErr != nil {
+				return cErr
+			}
+			if count <= threshold {
+				continue
+			}
+			res, compErr := h.store.CompactAggregate(ctx, id)
+			if compErr != nil {
+				return compErr
+			}
+			results = append(results, res)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}

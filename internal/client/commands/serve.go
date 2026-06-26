@@ -140,6 +140,10 @@ func runServe(ctx context.Context, configPath string) error {
 			grpc.ChainUnaryInterceptor(server.UnaryMetricsInterceptor(metrics)),
 			grpc.ChainStreamInterceptor(server.StreamMetricsInterceptor(metrics)),
 		))
+
+		if rerr := metrics.RegisterAggregateEventGauges(store, server.DefaultAggregateEventsWarnThreshold); rerr != nil {
+			return oops.Wrapf(rerr, "register aggregate-event gauges")
+		}
 	}
 
 	// Create and configure gRPC server

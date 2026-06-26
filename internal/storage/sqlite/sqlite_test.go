@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/oklog/ulid/v2"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	sqlib "zombiezen.com/go/sqlite"
 	"zombiezen.com/go/sqlite/sqlitex"
@@ -1224,4 +1225,49 @@ func containsStr(s, substr string) bool {
 			}
 			return false
 		}())
+}
+
+func TestReplayEventsHostCompactedSeedsFullState(t *testing.T) {
+	aggID := ulid.Make()
+	comment := "svc"
+	ev := domain.HostCompacted{
+		IPAddress: "192.168.1.10", Hostname: "llm-gw.fzymgc.house",
+		Aliases: []string{"a.fzymgc.house"}, Comment: &comment, Tags: []string{"k8s"},
+		Deleted:     false,
+		CreatedAt:   time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
+		CompactedAt: time.Date(2026, 6, 26, 0, 0, 0, 0, time.UTC), FoldedEventCount: 5,
+	}
+	he, err := domain.NewHostEvent(ev)
+	require.NoError(t, err)
+	env := domain.EventEnvelope{
+		EventID: ulid.Make(), AggregateID: aggID, Event: he, Version: 42,
+		CreatedAt: time.Date(2026, 6, 26, 1, 0, 0, 0, time.UTC),
+	}
+
+	entry, err := replayEvents(aggID, []domain.EventEnvelope{env})
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.Equal(t, "192.168.1.10", entry.IP)
+	require.Equal(t, "llm-gw.fzymgc.house", entry.Hostname)
+	require.Equal(t, ev.CreatedAt, entry.CreatedAt)
+	require.Equal(t, ev.UpdatedAt, entry.UpdatedAt) // original UpdatedAt, NOT env.CreatedAt
+	require.Equal(t, int64(42), entry.Version)      // preserved high-water version
+	require.False(t, entry.Deleted)
+}
+
+func TestReplayEventsHostCompactedDeleted(t *testing.T) {
+	aggID := ulid.Make()
+	ev := domain.HostCompacted{
+		IPAddress: "192.168.1.10", Hostname: "gone.fzymgc.house",
+		Deleted: true, CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC(),
+		CompactedAt: time.Now().UTC(), FoldedEventCount: 3,
+	}
+	he, err := domain.NewHostEvent(ev)
+	require.NoError(t, err)
+	env := domain.EventEnvelope{EventID: ulid.Make(), AggregateID: aggID, Event: he, Version: 7, CreatedAt: time.Now().UTC()}
+	entry, err := replayEvents(aggID, []domain.EventEnvelope{env})
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+	require.True(t, entry.Deleted)
 }

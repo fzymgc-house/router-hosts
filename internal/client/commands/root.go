@@ -65,6 +65,7 @@ func NewRootCmd() *cobra.Command {
 	// Subcommand groups
 	root.AddCommand(newHostCmd())
 	root.AddCommand(newSnapshotCmd())
+	root.AddCommand(newCompactCmd())
 	root.AddCommand(newServerCmd())
 	root.AddCommand(newServeCmd())
 

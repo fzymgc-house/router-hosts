@@ -358,6 +358,39 @@ message DeleteSnapshotResponse {
   bool success = 1;
 }
 
+// Request to compact one aggregate or all aggregates over an event-count threshold
+message CompactAggregatesRequest {
+  // Target selects which aggregate(s) to compact: a single aggregate by ID or all over a threshold
+  oneof target {
+    // Compact exactly this aggregate (ULID)
+    string aggregate_id = 1;
+    // Compact every aggregate whose event count exceeds this threshold
+    int64 over_threshold = 2;
+  }
+  // If true, report what would be compacted without modifying anything
+  bool dry_run = 3;
+}
+
+// Per-aggregate compaction result
+message CompactedAggregate {
+  // Aggregate identifier (ULID)
+  string aggregate_id = 1;
+  // Event count before compaction
+  int64 events_before = 2;
+  // Event count after compaction
+  int64 events_after = 3;
+  // Preserved high-water (OCC) version — for audit/confirmation, not a write token
+  int64 version = 4;
+}
+
+// Response after compaction
+message CompactAggregatesResponse {
+  // Per-aggregate compaction results
+  repeated CompactedAggregate compacted = 1;
+  // Total number of events reclaimed across all compacted aggregates
+  int64 total_events_reclaimed = 2;
+}
+
 // Health check messages
 
 // Request for liveness check (is the process alive?)
@@ -482,6 +515,9 @@ service HostsService {
 
   // Delete a snapshot by its ID
   rpc DeleteSnapshot(DeleteSnapshotRequest) returns (DeleteSnapshotResponse);
+
+  // Compact bloated aggregates by folding their event log to a single event
+  rpc CompactAggregates(CompactAggregatesRequest) returns (CompactAggregatesResponse);
 
   // Health checks
 
