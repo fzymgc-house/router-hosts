@@ -279,6 +279,99 @@ func TestEventStoreListAggregateIDs(t *testing.T, store storage.EventStore) {
 	require.True(t, got2[id1.String()], "deleted aggregate ID must still appear in ListAggregateIDs")
 }
 
+// TestEventStoreCompactAggregate is the #330/#323 regression: a bloated aggregate
+// compacts to one event with its version and folded state preserved.
+func TestEventStoreCompactAggregate(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+	id := ulid.Make()
+
+	// Bloat: 1 create + 20 IP changes => 21 events, version 21.
+	mustAppendCreated(t, store, id, "10.0.0.1", "h.example.com")
+	for i := 0; i < 20; i++ {
+		ip := fmt.Sprintf("10.0.0.%d", i+2)
+		ev, _ := domain.NewHostEvent(domain.IPAddressChanged{NewIP: ip, ChangedAt: time.Now().UTC()})
+		env := domain.EventEnvelope{EventID: ulid.Make(), AggregateID: id, Event: ev, Version: int64(i + 2), CreatedAt: time.Now().UTC()}
+		require.NoError(t, store.AppendEvent(ctx, id, env, int64(i+1)))
+	}
+	before, err := store.GetByID(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(21), before.Version)
+
+	res, err := store.CompactAggregate(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(21), res.EventsBefore)
+	require.Equal(t, int64(1), res.EventsAfter)
+	require.Equal(t, int64(21), res.Version)
+
+	// Event count is now 1; current version preserved.
+	cnt, err := store.CountEvents(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), cnt)
+	v, err := store.GetCurrentVersion(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(21), v)
+
+	// Folded state is byte-identical (same Version means OCC unbroken).
+	after, err := store.GetByID(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+}
+
+// TestEventStoreCompactAggregateNoop verifies that compacting an aggregate with
+// <=1 event is a no-op that leaves the log untouched.
+func TestEventStoreCompactAggregateNoop(t *testing.T, store storage.EventStore) {
+	t.Helper()
+	ctx := context.Background()
+	id := ulid.Make()
+	mustAppendCreated(t, store, id, "10.0.0.1", "h.example.com")
+	res, err := store.CompactAggregate(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), res.EventsBefore)
+	require.Equal(t, int64(1), res.EventsAfter)
+	cnt, _ := store.CountEvents(ctx, id)
+	require.Equal(t, int64(1), cnt)
+}
+
+// TestEventStoreCompactAggregateDeleted verifies a deleted aggregate compacts to
+// a single HostCompacted{Deleted:true} seed: live and deleted aggregates compact
+// uniformly, and the seed preserves the high-water version.
+func TestEventStoreCompactAggregateDeleted(t *testing.T, store storage.EventStore) {
+	t.Helper()
+	ctx := context.Background()
+	id := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	mustAppendCreated(t, store, id, "10.0.0.1", "gone.example.com")
+	del := makeEnvelope(id, domain.HostDeleted{
+		IPAddress: "10.0.0.1",
+		Hostname:  "gone.example.com",
+		DeletedAt: now,
+	}, 2, now)
+	require.NoError(t, store.AppendEvent(ctx, id, del, 1))
+
+	res, err := store.CompactAggregate(ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, int64(2), res.EventsBefore)
+	require.Equal(t, int64(1), res.EventsAfter)
+	require.Equal(t, int64(2), res.Version)
+
+	// The single remaining event is a HostCompacted seed carrying Deleted=true at
+	// the preserved high-water version.
+	events, err := store.LoadEvents(ctx, id)
+	require.NoError(t, err)
+	require.Len(t, events, 1)
+	require.Equal(t, int64(2), events[0].Version)
+	decoded, err := events[0].Event.Decode()
+	require.NoError(t, err)
+	seed, ok := decoded.(domain.HostCompacted)
+	require.True(t, ok, "compacted seed must be HostCompacted")
+	require.True(t, seed.Deleted, "deleted aggregate must compact to a Deleted=true seed")
+	require.Equal(t, "10.0.0.1", seed.IPAddress)
+	require.Equal(t, "gone.example.com", seed.Hostname)
+	require.Equal(t, int64(2), seed.FoldedEventCount)
+}
+
 // ---------- HostProjection compliance ----------
 
 // TestHostProjectionListAll verifies that creating hosts via events causes them
@@ -590,6 +683,15 @@ func RunAll(t *testing.T, factory func(t *testing.T) storage.Storage) {
 	})
 	t.Run("EventStoreListAggregateIDs", func(t *testing.T) {
 		TestEventStoreListAggregateIDs(t, factory(t))
+	})
+	t.Run("EventStoreCompactAggregate", func(t *testing.T) {
+		TestEventStoreCompactAggregate(t, factory(t))
+	})
+	t.Run("EventStoreCompactAggregateNoop", func(t *testing.T) {
+		TestEventStoreCompactAggregateNoop(t, factory(t))
+	})
+	t.Run("EventStoreCompactAggregateDeleted", func(t *testing.T) {
+		TestEventStoreCompactAggregateDeleted(t, factory(t))
 	})
 
 	// HostProjection
