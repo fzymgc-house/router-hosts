@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.6](https://github.com/fzymgc-house/router-hosts/compare/v0.10.5...v0.10.6) (2026-06-26)
+
+
+### Bug Fixes
+
+* remediate aggregate-bloat runaway (commit-on-timeout, snapshot schema, idempotent reconcile) ([#332](https://github.com/fzymgc-house/router-hosts/issues/332)) ([b80d900](https://github.com/fzymgc-house/router-hosts/commit/b80d9005bcf8cb394c1750b3ef92939c97c1b64a))
+
 ## [0.10.5](https://github.com/fzymgc-house/router-hosts/compare/v0.10.4...v0.10.5) (2026-06-20)
 
 
