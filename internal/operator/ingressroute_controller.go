@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -140,13 +141,32 @@ func (r *IngressRouteReconciler) reconcileUpsert(ctx context.Context, log *slog.
 	for _, hostname := range hosts {
 		if id, ok := existingIDs[hostname]; ok {
 			// Update existing entry.
-			if err := r.HostClient.UpdateHost(ctx, id, r.DefaultIP, hostname, comment, nil, tags, ""); err != nil {
+			switch err := r.HostClient.UpdateHost(ctx, id, r.DefaultIP, hostname, comment, nil, tags, ""); {
+			case err == nil:
+				newIDs[hostname] = id
+			case errors.Is(err, ErrHostNotFound):
+				// Host was deleted out-of-band. Mirror the HostMapping self-heal:
+				// recreate it in-pass rather than retaining the stale ID and
+				// looping forever on a missing entry. The IngressRoute spec is the
+				// source of truth (follow-up #342).
+				log.Warn("host entry not found on server; recreating", "hostname", hostname, "staleHostId", id)
+				if newID, addErr := r.HostClient.AddHost(ctx, r.DefaultIP, hostname, comment, nil, tags); addErr != nil {
+					// Retain the (now-dead) ID so the stale-cleanup loop below does
+					// not mistake an in-spec host for a removed one and issue a
+					// spurious DeleteHost. The host is still in the spec; the next
+					// pass re-detects NotFound and retries the recreate.
+					log.Error("failed to recreate host entry", "hostname", hostname, "error", addErr)
+					newIDs[hostname] = id
+					hadError = true
+				} else {
+					newIDs[hostname] = newID
+					log.Info("host entry recreated from IngressRoute", "hostname", hostname, "hostId", newID)
+				}
+			default:
 				log.Error("failed to update host entry", "hostname", hostname, "error", err)
 				newIDs[hostname] = id // retain existing ID so it's not lost
 				hadError = true
-				continue
 			}
-			newIDs[hostname] = id
 		} else {
 			// Create new entry.
 			id, err := r.HostClient.AddHost(ctx, r.DefaultIP, hostname, comment, nil, tags)

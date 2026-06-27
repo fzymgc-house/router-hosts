@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1518,7 +1519,8 @@ func TestReconcile_Update_GetHostNotFound_RecreateAdoptsOnAlreadyExists(t *testi
 		},
 	}
 
-	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default()}
+	rec := events.NewFakeRecorder(10)
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default(), Recorder: rec}
 
 	result, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
@@ -1530,4 +1532,149 @@ func TestReconcile_Update_GetHostNotFound_RecreateAdoptsOnAlreadyExists(t *testi
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
 	assert.Equal(t, "adopted-id", updated.Status.HostID, "must adopt the existing entry")
 	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
+
+	// The previously-missing host was restored (via adoption of a concurrently
+	// recreated entry), so the Recreated event still fires — pins the documented
+	// adopt-path behavior of recreateMissingHost.
+	events := drainEvents(rec)
+	require.Len(t, events, 1, "adopt-after-missing is a recovery; one Recreated event expected")
+	assert.Contains(t, events[0], "Recreated")
+}
+
+// drainEvents collects all events currently buffered on a FakeRecorder without
+// blocking once the channel is empty.
+func drainEvents(rec *events.FakeRecorder) []string {
+	var events []string
+	for {
+		select {
+		case e := <-rec.Events:
+			events = append(events, e)
+		default:
+			return events
+		}
+	}
+}
+
+// TestReconcile_Update_GetHostNotFound_EmitsRecreatedEvent verifies that when a
+// host deleted out-of-band is recreated (pre-update GetHost returns
+// ErrHostNotFound), the controller emits a Normal "Recreated" Kubernetes Event
+// so the corrective action is visible in kubectl, distinct from a first-time
+// create (follow-up #342).
+func TestReconcile_Update_GetHostNotFound_EmitsRecreatedEvent(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "stale-deleted-id"
+	hm.Status.HostVersion = "v1"
+	hm.Status.Phase = operatorv1alpha1.HostMappingPhaseSynced
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			if id == "stale-deleted-id" {
+				return nil, fmt.Errorf("getting host %s: %w", id, ErrHostNotFound)
+			}
+			return &HostEntry{ID: id, Version: "v1"}, nil
+		},
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "recreated-id", nil
+		},
+	}
+
+	rec := events.NewFakeRecorder(10)
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default(), Recorder: rec}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	events := drainEvents(rec)
+	require.Len(t, events, 1, "exactly one event expected")
+	assert.Contains(t, events[0], "Normal")
+	assert.Contains(t, events[0], "Recreated")
+}
+
+// TestReconcile_Update_UpdateHostNotFound_EmitsRecreatedEvent verifies the
+// Recreated event also fires on the second recreate path: the host vanishes
+// between the pre-update read and the write (UpdateHost returns ErrHostNotFound).
+func TestReconcile_Update_UpdateHostNotFound_EmitsRecreatedEvent(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "vanishing-id"
+	hm.Status.HostVersion = "v1"
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			if id == "vanishing-id" {
+				return &HostEntry{ID: id, IP: "192.168.1.20", Hostname: "updated.local", Version: "v1"}, nil
+			}
+			return &HostEntry{ID: id, Version: "v9"}, nil
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			return fmt.Errorf("updating host %s: %w", id, ErrHostNotFound)
+		},
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "recreated-id", nil
+		},
+	}
+
+	rec := events.NewFakeRecorder(10)
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default(), Recorder: rec}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	events := drainEvents(rec)
+	require.Len(t, events, 1, "exactly one event expected")
+	assert.Contains(t, events[0], "Recreated")
+}
+
+// TestReconcile_Create_NoRecreatedEvent verifies a genuine first-time create
+// does NOT emit a Recreated event — the event is reserved for corrective
+// recreation of an out-of-band-deleted host.
+func TestReconcile_Create_NoRecreatedEvent(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "new.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "new-id", nil
+		},
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{ID: id, Version: "v1"}, nil
+		},
+	}
+
+	rec := events.NewFakeRecorder(10)
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default(), Recorder: rec}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+
+	events := drainEvents(rec)
+	assert.Empty(t, events, "first-time create must not emit a Recreated event")
 }

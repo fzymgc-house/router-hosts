@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/samber/oops"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,6 +36,11 @@ type HostMappingReconciler struct {
 	Scheme     *runtime.Scheme
 	HostClient HostClient
 	Log        *slog.Logger
+
+	// Recorder emits Kubernetes Events for corrective actions (e.g. recreating
+	// a host deleted out-of-band). It may be nil in tests that do not assert on
+	// events; event emission is best-effort telemetry, never control flow.
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=router-hosts.fzymgc.house,resources=hostmappings,verbs=get;list;watch;create;update;patch;delete
@@ -197,8 +204,7 @@ func (r *HostMappingReconciler) reconcileUpdate(ctx context.Context, log *slog.L
 		// results a consistent server never returns on consecutive RPCs, so the
 		// chain terminates in one or two hops.
 		log.Warn("host entry not found on server; recreating", "staleHostId", hm.Status.HostID)
-		hm.Status.HostID = ""
-		return r.reconcileCreate(ctx, log, hm)
+		return r.recreateMissingHost(ctx, log, hm)
 	}
 	if getErr != nil || current == nil {
 		// Fail closed: without current state we cannot uphold idempotency or
@@ -242,8 +248,7 @@ func (r *HostMappingReconciler) reconcileUpdate(ctx context.Context, log *slog.L
 			// from the desired spec (see the GetHost branch above for why this
 			// recursion is bounded).
 			log.Warn("host entry vanished before update; recreating", "staleHostId", hm.Status.HostID)
-			hm.Status.HostID = ""
-			return r.reconcileCreate(ctx, log, hm)
+			return r.recreateMissingHost(ctx, log, hm)
 		}
 		log.Error("failed to update host entry", "error", err)
 		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, err.Error(), hm.Status.HostID)
@@ -274,6 +279,28 @@ func (r *HostMappingReconciler) reconcileUpdate(ctx context.Context, log *slog.L
 
 	log.Info("host entry updated", "hostId", hm.Status.HostID)
 	return ctrl.Result{}, nil
+}
+
+// recreateMissingHost clears the stale Status.HostID and recreates the entry
+// from the desired spec after the server reported it missing (out-of-band
+// deletion). When the recreate converges (Phase=Synced) it emits a Normal
+// "Recreated" Event so an operator can see the controller reverted the deletion
+// — the resulting status (Message="Created") is otherwise indistinguishable in
+// kubectl from a first-time create. "Converged" also covers the case where
+// reconcileCreate hits AddHost->AlreadyExists and adopts a concurrently
+// recreated entry: the previously-missing host is restored either way, so the
+// Event still fires. It fires only on a successful recovery and only here, so a
+// genuine first-time create never emits it.
+func (r *HostMappingReconciler) recreateMissingHost(ctx context.Context, log *slog.Logger, hm *operatorv1alpha1.HostMapping) (ctrl.Result, error) {
+	staleID := hm.Status.HostID
+	hm.Status.HostID = ""
+
+	res, err := r.reconcileCreate(ctx, log, hm)
+	if err == nil && hm.Status.Phase == operatorv1alpha1.HostMappingPhaseSynced && hm.Status.HostID != "" && r.Recorder != nil {
+		r.Recorder.Eventf(hm, nil, corev1.EventTypeNormal, "Recreated", "Recreate",
+			"Recreated host entry %s after out-of-band deletion (previous id %q)", hm.Status.HostID, staleID)
+	}
+	return res, err
 }
 
 // reconcileDelete handles CR deletion by cleaning up the server-side host entry.

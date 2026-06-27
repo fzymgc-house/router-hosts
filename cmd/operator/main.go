@@ -98,6 +98,7 @@ func run() error {
 		Scheme:     mgr.GetScheme(),
 		HostClient: hostClient,
 		Log:        logger.With("controller", "hostmapping"),
+		Recorder:   mgr.GetEventRecorder("hostmapping-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		logger.Error("unable to create HostMapping controller", "error", err)
 		return err
