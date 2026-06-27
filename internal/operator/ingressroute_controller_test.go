@@ -15,7 +15,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
 func TestExtractHosts_HostRule(t *testing.T) {
@@ -913,4 +915,546 @@ func newIngressRouteTCP(name, namespace string, routes []map[string]interface{})
 		},
 	}
 	return obj
+}
+
+// TestReconcile_IngressRoute_InSync_SkipsUpdateAndWrite verifies idempotency: when
+// the server entry already matches the desired IP/hostname/tags, the controller
+// issues neither an UpdateHost (which would append a spurious event and re-bloat
+// the aggregate, GH #338) nor an annotation r.Update (the ID map is unchanged).
+func TestReconcile_IngressRoute_InSync_SkipsUpdateAndWrite(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{"app.example.com": "host-1"}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{hostIDsAnnotation: string(idsJSON)})
+
+	var updateCalls int
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(obj).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
+				updateCalls++
+				return c.Update(ctx, o, opts...)
+			},
+		}).
+		Build()
+
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			// Matches the desired state: DefaultIP, the spec hostname, and the
+			// derived tags (order-insensitive).
+			return &HostEntry{
+				ID:       id,
+				IP:       "10.0.0.1",
+				Hostname: "app.example.com",
+				Tags:     []string{"ingress", "traefik", "kubernetes"},
+				Version:  "9",
+			}, nil
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			t.Errorf("UpdateHost must not be called when the entry is already in sync (id %q)", id)
+			return nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "in-sync reconcile must not requeue")
+	assert.Zero(t, updateCalls, "no annotation r.Update when the ID map is unchanged")
+}
+
+// TestReconcile_IngressRoute_VersionSelfHeal verifies the version-wedge fix: the
+// controller reads the current entry first and uses its authoritative version as
+// the optimistic-concurrency token, rather than passing an empty string that the
+// server interprets as "expected 0" (GH #341).
+func TestReconcile_IngressRoute_VersionSelfHeal(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{"app.example.com": "host-1"}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{hostIDsAnnotation: string(idsJSON)})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	var sawVersion string
+	var updateCalled bool
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{
+				ID:       id,
+				IP:       "10.0.0.1",
+				Hostname: "app.example.com",
+				Tags:     []string{"stale-tag"}, // drift forces an UpdateHost
+				Version:  "7",
+			}, nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, version string) error {
+			updateCalled = true
+			sawVersion = version
+			return nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.True(t, updateCalled, "drift must trigger UpdateHost")
+	assert.Equal(t, "7", sawVersion, "UpdateHost must use the fetched OCC version, not an empty string")
+}
+
+// TestReconcile_IngressRoute_AddHostAlreadyExists_Adopts verifies the create-only
+// fix: when AddHost reports AlreadyExists, the controller adopts the pre-existing
+// entry via FindHost and records its ID, breaking the "host already exists" loop
+// (GH #341, relates #313).
+func TestReconcile_IngressRoute_AddHostAlreadyExists_Adopts(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	// No host-ids annotation: the host is untracked, so reconcile takes the
+	// create path and must adopt the pre-existing server entry.
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	var findCalled bool
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, _ string, _, _ []string) (string, error) {
+			return "", fmt.Errorf("adding host %s/%s: %w", ip, hostname, ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			findCalled = true
+			assert.Equal(t, "10.0.0.1", ip)
+			assert.Equal(t, "app.example.com", hostname)
+			return &HostEntry{ID: "adopted-id", IP: ip, Hostname: hostname, Version: "3"}, nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "adoption resolves the conflict; no requeue")
+	assert.True(t, findCalled, "must look up the pre-existing host via FindHost")
+
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "adopted-id", ids["app.example.com"], "adopted entry's ID is tracked in the annotation")
+}
+
+// TestReconcile_IngressRoute_GetHostFails_FailsClosed verifies that when the
+// pre-update read fails with a non-NotFound error, the controller does NOT issue
+// a blind UpdateHost (which would re-append events). It retains the tracked ID
+// and requeues so a later pass can retry.
+func TestReconcile_IngressRoute_GetHostFails_FailsClosed(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{"app.example.com": "host-1"}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{hostIDsAnnotation: string(idsJSON)})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, _ string) (*HostEntry, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			t.Errorf("UpdateHost must not be called when the pre-update read failed (id %q)", id)
+			return nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayLong, result.RequeueAfter, "fail closed: requeue without a blind write")
+
+	// The tracked ID must be retained so the next pass can retry.
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "host-1", ids["app.example.com"], "ID retained on read failure")
+}
+
+// TestReconcile_IngressRoute_GetHostNotFound_Recreates verifies the out-of-band
+// delete self-heal now detected at the GetHost preflight (the read runs before
+// UpdateHost): a tracked host the server no longer has is recreated in-pass and
+// the annotation is repointed at the new ID (#341, follow-up #342).
+func TestReconcile_IngressRoute_GetHostNotFound_Recreates(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{"app.example.com": "stale-id"}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{hostIDsAnnotation: string(idsJSON)})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	var addCalled bool
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return nil, fmt.Errorf("getting host %s: %w", id, ErrHostNotFound)
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			t.Errorf("UpdateHost must not be called when GetHost reports NotFound (id %q)", id)
+			return nil
+		},
+		addHostFn: func(_ context.Context, _, hostname, _ string, _, _ []string) (string, error) {
+			addCalled = true
+			assert.Equal(t, "app.example.com", hostname)
+			return "recreated-id", nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "in-pass recreate succeeds; no requeue")
+	assert.True(t, addCalled, "must recreate via AddHost after GetHost NotFound")
+
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "recreated-id", ids["app.example.com"], "annotation points at the recreated ID")
+}
+
+// TestReconcile_IngressRoute_AdoptRace_FindHostNil_Requeues verifies that when
+// AddHost reports AlreadyExists but FindHost then finds nothing (the entry raced
+// away), the controller surfaces an error and requeues rather than recording an
+// empty ID.
+func TestReconcile_IngressRoute_AdoptRace_FindHostNil_Requeues(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, _ string, _, _ []string) (string, error) {
+			return "", fmt.Errorf("adding host %s/%s: %w", ip, hostname, ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, _, _ string) (*HostEntry, error) {
+			return nil, nil // raced away between AddHost and FindHost
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayLong, result.RequeueAfter, "unresolved adoption requeues for retry")
+
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Empty(t, ids["app.example.com"], "no ID recorded when adoption cannot resolve")
+}
+
+// TestReconcile_IngressRoute_AdoptFindHostError_Requeues verifies that a FindHost
+// RPC failure during adoption requeues rather than silently dropping the host.
+func TestReconcile_IngressRoute_AdoptFindHostError_Requeues(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, _ string, _, _ []string) (string, error) {
+			return "", fmt.Errorf("adding host %s/%s: %w", ip, hostname, ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, _, _ string) (*HostEntry, error) {
+			return nil, fmt.Errorf("search stream error")
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayLong, result.RequeueAfter, "FindHost failure during adoption requeues")
+}
+
+// TestReconcile_IngressRoute_UpdateHostNotFound_AfterRead_Recreates verifies the
+// TOCTOU path: GetHost succeeds and reports drift (forcing an UpdateHost), but the
+// entry then vanishes between the read and the write so UpdateHost returns
+// ErrHostNotFound. The controller must recreate in-pass. Unlike the default-mock
+// variant, this test pins getHostFn to a drifted entry so the GetHost-success ->
+// UpdateHost-NotFound -> recreate path is exercised explicitly, and asserts the
+// fetched OCC version reached UpdateHost before it vanished.
+func TestReconcile_IngressRoute_UpdateHostNotFound_AfterRead_Recreates(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{"app.example.com": "stale-id"}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{hostIDsAnnotation: string(idsJSON)})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	var sawVersion string
+	var addCalled bool
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{
+				ID:       id,
+				IP:       "10.0.0.1",
+				Hostname: "app.example.com",
+				Tags:     []string{"drifted"}, // forces the UpdateHost attempt
+				Version:  "4",
+			}, nil
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, version string) error {
+			sawVersion = version
+			return fmt.Errorf("updating host %s: %w", id, ErrHostNotFound)
+		},
+		addHostFn: func(_ context.Context, _, hostname, _ string, _, _ []string) (string, error) {
+			addCalled = true
+			assert.Equal(t, "app.example.com", hostname)
+			return "recreated-id", nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "in-pass recreate succeeds; no requeue")
+	assert.Equal(t, "4", sawVersion, "UpdateHost used the fetched OCC version before the entry vanished")
+	assert.True(t, addCalled, "must recreate via AddHost after UpdateHost NotFound")
+
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "recreated-id", ids["app.example.com"], "annotation points at the recreated ID")
+}
+
+// TestReconcile_IngressRoute_GetHostNilEntry_FailsClosed verifies the defensive
+// branch where GetHost returns neither an entry nor an error: the controller must
+// fail closed (no blind UpdateHost) and retain the ID rather than treating the
+// nil entry as a delete-and-recreate.
+func TestReconcile_IngressRoute_GetHostNilEntry_FailsClosed(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{"app.example.com": "host-1"}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{hostIDsAnnotation: string(idsJSON)})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, _ string) (*HostEntry, error) {
+			return nil, nil // neither entry nor error
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			t.Errorf("UpdateHost must not be called on a nil-entry read (id %q)", id)
+			return nil
+		},
+		addHostFn: func(_ context.Context, _, hostname, _ string, _, _ []string) (string, error) {
+			t.Errorf("AddHost must not be called: nil entry is not a delete (hostname %q)", hostname)
+			return "", nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayLong, result.RequeueAfter, "fail closed: requeue without a blind write")
+
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(ingressRouteGVK)
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "host-1", ids["app.example.com"], "ID retained on nil-entry read")
+}
+
+// TestReconcile_IngressRoute_MultiHost_AllInSync_NoWrites verifies idempotency
+// across the multi-host loop: when every tracked host already matches, no host
+// triggers an UpdateHost and the unchanged ID map issues no annotation r.Update.
+func TestReconcile_IngressRoute_MultiHost_AllInSync_NoWrites(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	existingIDs := map[string]string{
+		"a.example.com": "id-a",
+		"b.example.com": "id-b",
+	}
+	idsJSON, _ := json.Marshal(existingIDs)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`a.example.com`) || Host(`b.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+	obj.SetAnnotations(map[string]string{hostIDsAnnotation: string(idsJSON)})
+
+	hostnameByID := map[string]string{"id-a": "a.example.com", "id-b": "b.example.com"}
+
+	var updateCalls int
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(obj).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
+				updateCalls++
+				return c.Update(ctx, o, opts...)
+			},
+		}).
+		Build()
+
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{
+				ID:       id,
+				IP:       "10.0.0.1",
+				Hostname: hostnameByID[id],
+				Tags:     []string{"kubernetes", "traefik", "ingress"},
+				Version:  "1",
+			}, nil
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			t.Errorf("UpdateHost must not be called when all hosts are in sync (id %q)", id)
+			return nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "all in sync; no requeue")
+	assert.Zero(t, updateCalls, "no annotation r.Update when the ID map is unchanged across multiple hosts")
 }
