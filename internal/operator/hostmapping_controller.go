@@ -5,14 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"time"
 
 	"github.com/samber/oops"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	operatorv1alpha1 "github.com/fzymgc-house/router-hosts/api/operator/v1alpha1"
 )
@@ -155,12 +159,66 @@ func (r *HostMappingReconciler) adoptExistingHost(ctx context.Context, log *slog
 	return r.reconcileUpdate(ctx, log, hm)
 }
 
-// reconcileUpdate updates the host entry when the spec has changed.
+// reconcileUpdate converges the server-side host entry to the desired spec.
+//
+// It fetches the current server state first, which serves two purposes:
+//   - Idempotency: when the server already matches the desired spec, it skips
+//     UpdateHost entirely. The server appends an event for any comment/tags/
+//     aliases field that is *presented* on the request, without comparing its
+//     value (only IP and hostname are diffed server-side; an update presenting
+//     no fields appends nothing). The operator always sends a comment
+//     ("k8s:ns/name") and sends aliases/tags whenever the spec has them, so a
+//     redundant reconcile would append spurious events — skipping the call when
+//     already in sync is what prevents the hot-loop from re-bloating the
+//     aggregate (GH #338, relates #330).
+//   - Version self-heal: it uses the authoritative current version as the
+//     optimistic-concurrency token, so a stale or empty Status.HostVersion can
+//     no longer wedge the CR on "version conflict: expected 0, got N" (#338).
+//
+// If the pre-update read fails, the reconcile requeues rather than issuing a
+// blind UpdateHost: without current state it can neither guarantee the no-op
+// skip nor pick a safe version, and a blind write would re-append events,
+// silently re-introducing the Bug 1 hot-loop.
 func (r *HostMappingReconciler) reconcileUpdate(ctx context.Context, log *slog.Logger, hm *operatorv1alpha1.HostMapping) (ctrl.Result, error) {
+	comment := fmt.Sprintf("k8s:%s/%s", hm.Namespace, hm.Name)
+
+	current, getErr := r.HostClient.GetHost(ctx, hm.Status.HostID)
+	if getErr != nil || current == nil {
+		// Fail closed: without current state we cannot uphold idempotency or
+		// pick a safe version, so requeue instead of a blind, event-appending
+		// update. GetHost and UpdateHost hit the same server, so if reads are
+		// failing a write would most likely fail too. Surface the degraded
+		// state on the CR so the stall is observable — a silent requeue would
+		// otherwise keep reporting Synced while never converging.
+		msg := "could not fetch current host state"
+		if getErr != nil {
+			msg = getErr.Error()
+		}
+		log.Error("could not fetch current host before update; requeuing", "error", getErr)
+		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, msg, hm.Status.HostID)
+		r.setSyncedCondition(hm, metav1.ConditionFalse, "PreflightReadFailed", msg)
+		if statusErr := r.Status().Update(ctx, hm); statusErr != nil {
+			log.Error("failed to update status", "error", statusErr)
+		}
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
+	}
+
+	if hostEntryMatchesSpec(current, hm.Spec) {
+		// Already in sync — do not call UpdateHost, so no event is appended.
+		hm.Status.HostVersion = current.Version
+		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseSynced, "Already in sync", hm.Status.HostID)
+		r.setSyncedCondition(hm, metav1.ConditionTrue, "AlreadyInSync", "Host entry already matches desired state")
+		// Intentionally do NOT bump LastSyncTime: nothing changed.
+		if err := r.Status().Update(ctx, hm); err != nil {
+			return ctrl.Result{}, oops.Wrapf(err, "updating status after no-op sync")
+		}
+		log.Info("host entry already in sync", "hostId", hm.Status.HostID)
+		return ctrl.Result{}, nil
+	}
+
 	log.Info("updating host entry", "hostId", hm.Status.HostID)
 
-	comment := fmt.Sprintf("k8s:%s/%s", hm.Namespace, hm.Name)
-	err := r.HostClient.UpdateHost(ctx, hm.Status.HostID, hm.Spec.IP, hm.Spec.Hostname, comment, hm.Spec.Aliases, hm.Spec.Tags, hm.Status.HostVersion)
+	err := r.HostClient.UpdateHost(ctx, hm.Status.HostID, hm.Spec.IP, hm.Spec.Hostname, comment, hm.Spec.Aliases, hm.Spec.Tags, current.Version)
 	if err != nil {
 		log.Error("failed to update host entry", "error", err)
 		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, err.Error(), hm.Status.HostID)
@@ -256,10 +314,75 @@ func (r *HostMappingReconciler) setSyncedCondition(hm *operatorv1alpha1.HostMapp
 	hm.Status.Conditions = append(hm.Status.Conditions, condition)
 }
 
+// hostEntryMatchesSpec reports whether a server-side host entry already equals
+// the desired HostMapping spec. Aliases and tags are compared order-insensitively
+// because the server does not guarantee element order. The comment is
+// intentionally excluded: it is operator-derived ("k8s:ns/name"), not part of
+// the spec, and HostEntry does not carry it.
+func hostEntryMatchesSpec(entry *HostEntry, spec operatorv1alpha1.HostMappingSpec) bool {
+	return entry.IP == spec.IP &&
+		entry.Hostname == spec.Hostname &&
+		equalStringSetsIgnoreOrder(entry.Aliases, spec.Aliases) &&
+		equalStringSetsIgnoreOrder(entry.Tags, spec.Tags)
+}
+
+// equalStringSetsIgnoreOrder reports whether two string slices contain the same
+// elements regardless of order, treating nil and empty as equal. Comparison is
+// multiset-correct (duplicates count).
+func equalStringSetsIgnoreOrder(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	if len(a) == 0 {
+		return true
+	}
+	ac := append([]string(nil), a...)
+	bc := append([]string(nil), b...)
+	sort.Strings(ac)
+	sort.Strings(bc)
+	for i := range ac {
+		if ac[i] != bc[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// statusWriteFilter drops pure status-subresource writes so the operator's own
+// status updates do not re-trigger reconcile and hot-loop (GH #338). Events that
+// must still be reconciled all pass: spec changes (generation bump), finalizer
+// changes (bootstrap add / cleanup remove), deletion requests (deletionTimestamp),
+// and periodic informer resyncs (identical ResourceVersion). Plain
+// GenerationChangedPredicate is unsafe here: it would also drop deletion events
+// (which leave generation unchanged), stranding finalizer cleanup.
+func statusWriteFilter() predicate.Predicate {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return true
+			}
+			// Resync re-delivers the same object — allow drift correction.
+			if e.ObjectOld.GetResourceVersion() == e.ObjectNew.GetResourceVersion() {
+				return true
+			}
+			if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
+				return true
+			}
+			if !e.ObjectOld.GetDeletionTimestamp().Equal(e.ObjectNew.GetDeletionTimestamp()) {
+				return true
+			}
+			if !equalStringSetsIgnoreOrder(e.ObjectOld.GetFinalizers(), e.ObjectNew.GetFinalizers()) {
+				return true
+			}
+			return false
+		},
+	}
+}
+
 // SetupWithManager registers the HostMapping reconciler with the controller manager.
 func (r *HostMappingReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&operatorv1alpha1.HostMapping{}).
+		For(&operatorv1alpha1.HostMapping{}, builder.WithPredicates(statusWriteFilter())).
 		Named("hostmapping").
 		Complete(r)
 }
