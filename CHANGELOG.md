@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.11](https://github.com/fzymgc-house/router-hosts/compare/v0.10.10...v0.10.11) (2026-06-27)
+
+
+### Bug Fixes
+
+* **operator:** make IngressRoute upsert idempotent + version self-heal ([#346](https://github.com/fzymgc-house/router-hosts/issues/346)) ([d7825d6](https://github.com/fzymgc-house/router-hosts/commit/d7825d639321f710a3c6c2c68c3dcf7d28a6e667))
+
 ## [0.10.10](https://github.com/fzymgc-house/router-hosts/compare/v0.10.9...v0.10.10) (2026-06-27)
 
 
