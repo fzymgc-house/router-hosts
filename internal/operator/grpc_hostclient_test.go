@@ -105,6 +105,7 @@ func TestGRPCHostClient_GetHost_NotFound(t *testing.T) {
 	_, err := gc.GetHost(ctx, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "getting host")
+	assert.True(t, errors.Is(err, ErrHostNotFound), "must wrap ErrHostNotFound so the reconciler can recreate")
 }
 
 func TestGRPCHostClient_UpdateHost(t *testing.T) {
@@ -151,6 +152,7 @@ func TestGRPCHostClient_UpdateHost_NotFound(t *testing.T) {
 	err := gc.UpdateHost(ctx, "01ARZ3NDEKTSV4RRFFQ69G5FAV", "10.0.0.1", "h.local", "", nil, nil, "1")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "updating host")
+	assert.True(t, errors.Is(err, ErrHostNotFound), "must wrap ErrHostNotFound so the reconciler can recreate")
 }
 
 func TestGRPCHostClient_DeleteHost(t *testing.T) {
@@ -177,6 +179,7 @@ func TestGRPCHostClient_DeleteHost_NotFound(t *testing.T) {
 	err := gc.DeleteHost(ctx, "01ARZ3NDEKTSV4RRFFQ69G5FAV")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "deleting host")
+	assert.True(t, errors.Is(err, ErrHostNotFound), "must wrap ErrHostNotFound so reconcileDelete can treat it as already-deleted")
 }
 
 func TestGRPCHostClient_Close(t *testing.T) {

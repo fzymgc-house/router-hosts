@@ -1325,3 +1325,209 @@ func TestHostEntryMatchesSpec_NilVsEmpty(t *testing.T) {
 	entry := &HostEntry{IP: "10.0.0.1", Hostname: "host.local", Aliases: []string{}, Tags: []string{}}
 	assert.True(t, hostEntryMatchesSpec(entry, spec))
 }
+
+// ---------------------------------------------------------------------------
+// NotFound -> recreate / delete tests (follow-up from #338)
+// ---------------------------------------------------------------------------
+
+// TestReconcile_Update_GetHostNotFound_Recreates verifies that when the
+// server-side host was deleted out-of-band (pre-update GetHost returns
+// ErrHostNotFound), the operator clears the stale HostID and recreates the
+// entry instead of looping on a missing ID.
+func TestReconcile_Update_GetHostNotFound_Recreates(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "stale-deleted-id"
+	hm.Status.HostVersion = "v1"
+	hm.Status.Phase = operatorv1alpha1.HostMappingPhaseSynced
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	addCalled := false
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			if id == "stale-deleted-id" {
+				return nil, fmt.Errorf("getting host %s: %w", id, ErrHostNotFound)
+			}
+			// Post-recreate version fetch.
+			return &HostEntry{ID: id, Version: "v1"}, nil
+		},
+		addHostFn: func(_ context.Context, ip, hostname, _ string, _, _ []string) (string, error) {
+			addCalled = true
+			assert.Equal(t, "192.168.1.20", ip)
+			assert.Equal(t, "updated.local", hostname)
+			return "recreated-id", nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			t.Error("UpdateHost must not be called when the host was deleted out-of-band")
+			return nil
+		},
+	}
+
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default()}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "recreate must succeed without an error requeue")
+	assert.True(t, addCalled, "must recreate the host via AddHost")
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, "recreated-id", updated.Status.HostID, "stale HostID replaced with the recreated entry")
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
+}
+
+// TestReconcile_Update_UpdateHostNotFound_Recreates verifies that when the host
+// vanishes between the successful pre-update read and the write (UpdateHost
+// returns ErrHostNotFound), the operator recreates it rather than erroring.
+func TestReconcile_Update_UpdateHostNotFound_Recreates(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "vanishing-id"
+	hm.Status.HostVersion = "v1"
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	addCalled := false
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			if id == "vanishing-id" {
+				// Pre-update fetch succeeds but diverges (no aliases) → update runs.
+				return &HostEntry{ID: id, IP: "192.168.1.20", Hostname: "updated.local", Version: "v1"}, nil
+			}
+			return &HostEntry{ID: id, Version: "v9"}, nil
+		},
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			assert.Equal(t, "vanishing-id", id)
+			return fmt.Errorf("updating host %s: %w", id, ErrHostNotFound)
+		},
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			addCalled = true
+			return "recreated-id", nil
+		},
+	}
+
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default()}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.True(t, addCalled, "must recreate when UpdateHost returns NotFound")
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, "recreated-id", updated.Status.HostID)
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
+}
+
+// TestReconcile_Delete_HostNotFound_RemovesFinalizer verifies that when the
+// host was already deleted out-of-band, DeleteHost returning NotFound is treated
+// as a completed delete — the finalizer is removed instead of the CR wedging in
+// Terminating on a perpetual NotFound.
+func TestReconcile_Delete_HostNotFound_RemovesFinalizer(t *testing.T) {
+	s := testScheme(t)
+	now := metav1.Now()
+	hm := newTestHostMapping("my-host", "default", "192.168.1.10", "my-host.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.DeletionTimestamp = &now
+	hm.Status.HostID = "already-gone-id"
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	mock := &mockHostClient{
+		deleteHostFn: func(_ context.Context, id string) error {
+			return fmt.Errorf("deleting host %s: %w", id, ErrHostNotFound)
+		},
+	}
+
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default()}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "must not requeue — deletion goal already satisfied")
+
+	// Finalizer removed → object is gone (fake client deletes once last
+	// finalizer is removed under a deletion timestamp).
+	var updated operatorv1alpha1.HostMapping
+	getErr := k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated)
+	assert.True(t, client.IgnoreNotFound(getErr) == nil, "finalizer must be removed (CR not wedged in Terminating)")
+}
+
+// TestReconcile_Update_GetHostNotFound_RecreateAdoptsOnAlreadyExists exercises
+// the bounded recreate cycle: GetHost NotFound -> reconcileCreate -> AddHost
+// AlreadyExists -> adoptExistingHost -> reconcileUpdate. It must converge to
+// Synced in a single pass without looping.
+func TestReconcile_Update_GetHostNotFound_RecreateAdoptsOnAlreadyExists(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "stale-deleted-id"
+	hm.Status.HostVersion = "v1"
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	getCalls := 0
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			getCalls++
+			if id == "stale-deleted-id" {
+				// First read: the stale entry is gone.
+				return nil, fmt.Errorf("getting host %s: %w", id, ErrHostNotFound)
+			}
+			// Post-adoption read of the existing entry already matches the spec,
+			// so the bounce converges with no further UpdateHost.
+			return &HostEntry{
+				ID:       id,
+				IP:       "192.168.1.20",
+				Hostname: "updated.local",
+				Aliases:  []string{"alias1"},
+				Tags:     []string{"kubernetes"},
+				Version:  "v9",
+			}, nil
+		},
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			// Recreate races a concurrent create → AlreadyExists triggers adopt.
+			return "", fmt.Errorf("adding host: %w", ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			return &HostEntry{ID: "adopted-id", IP: ip, Hostname: hostname, Aliases: []string{"alias1"}, Tags: []string{"kubernetes"}, Version: "v9"}, nil
+		},
+	}
+
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default()}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "recreate->adopt must converge without an error requeue")
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, "adopted-id", updated.Status.HostID, "must adopt the existing entry")
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
+}
