@@ -15,6 +15,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	operatorv1alpha1 "github.com/fzymgc-house/router-hosts/api/operator/v1alpha1"
 )
@@ -169,16 +170,25 @@ func TestReconcile_Update(t *testing.T) {
 		Build()
 
 	updateCalled := false
+	getCalls := 0
 	mock := &mockHostClient{
 		updateHostFn: func(_ context.Context, id, ip, hostname, comment string, aliases, tags []string, version string) error {
 			updateCalled = true
 			assert.Equal(t, "existing-id", id)
 			assert.Equal(t, "192.168.1.20", ip)
 			assert.Equal(t, "updated.local", hostname)
+			// Version comes from the pre-update GetHost (authoritative), not the
+			// stale Status.HostVersion.
 			assert.Equal(t, "v1", version)
 			return nil
 		},
 		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			getCalls++
+			if getCalls == 1 {
+				// Pre-update fetch: IP/hostname match but aliases/tags absent,
+				// so the spec diverges and an update is required.
+				return &HostEntry{ID: id, IP: "192.168.1.20", Hostname: "updated.local", Version: "v1"}, nil
+			}
 			return &HostEntry{ID: id, Version: "v2"}, nil
 		},
 	}
@@ -395,7 +405,11 @@ func TestReconcile_Update_Failure(t *testing.T) {
 	assert.Equal(t, "UpdateFailed", updated.Status.Conditions[0].Reason)
 }
 
-func TestReconcile_Update_GetHostFailure(t *testing.T) {
+// TestReconcile_Update_PostUpdateGetHostFailure verifies that when the
+// post-update version refresh fails, the version is cleared (avoiding a stale
+// concurrency token). The pre-update fetch succeeds and diverges, so the update
+// runs.
+func TestReconcile_Update_PostUpdateGetHostFailure(t *testing.T) {
 	s := testScheme(t)
 	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
 	hm.Finalizers = []string{hostCleanupFinalizer}
@@ -408,11 +422,19 @@ func TestReconcile_Update_GetHostFailure(t *testing.T) {
 		WithStatusSubresource(hm).
 		Build()
 
+	getCalls := 0
 	mock := &mockHostClient{
 		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
 			return nil
 		},
-		getHostFn: func(_ context.Context, _ string) (*HostEntry, error) {
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			getCalls++
+			if getCalls == 1 {
+				// Pre-update fetch succeeds but diverges (no aliases), so the
+				// update proceeds.
+				return &HostEntry{ID: id, IP: "192.168.1.20", Hostname: "updated.local", Version: "v1"}, nil
+			}
+			// Post-update refresh fails.
 			return nil, fmt.Errorf("transient GetHost error")
 		},
 	}
@@ -433,8 +455,126 @@ func TestReconcile_Update_GetHostFailure(t *testing.T) {
 	var updated operatorv1alpha1.HostMapping
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
 	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
-	// Version should be cleared when GetHost fails after update
+	// Version should be cleared when the post-update GetHost fails.
 	assert.Equal(t, "", updated.Status.HostVersion)
+}
+
+// TestReconcile_Update_PreflightGetHostFailure_Requeues verifies the fail-closed
+// behavior: when the pre-update GetHost read fails, the reconciler requeues
+// instead of issuing a blind UpdateHost that would re-append events and silently
+// re-introduce the Bug 1 hot-loop.
+func TestReconcile_Update_PreflightGetHostFailure_Requeues(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "existing-id"
+	hm.Status.HostVersion = "v1"
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	updateCalled := false
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			updateCalled = true
+			return nil
+		},
+		getHostFn: func(_ context.Context, _ string) (*HostEntry, error) {
+			return nil, fmt.Errorf("transient GetHost error")
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, requeueDelayShort, result.RequeueAfter, "must requeue when current state is unreadable")
+	assert.False(t, updateCalled, "must NOT issue a blind UpdateHost when GetHost failed (would re-bloat)")
+
+	// The degraded state must be observable on the CR, not a silent loop.
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseError, updated.Status.Phase)
+	require.Len(t, updated.Status.Conditions, 1)
+	assert.Equal(t, metav1.ConditionFalse, updated.Status.Conditions[0].Status)
+	assert.Equal(t, "PreflightReadFailed", updated.Status.Conditions[0].Reason)
+}
+
+// TestReconcile_Update_NoOpFixedPoint composes the two halves of the fix: after
+// convergence, a second reconcile must remain a fixed point — no UpdateHost, and
+// the status it writes must be one statusWriteFilter drops (so the real manager
+// would not re-enqueue). This directly guards the #338 hot-loop regression.
+func TestReconcile_Update_NoOpFixedPoint(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "existing-id"
+	hm.Status.HostVersion = "v7"
+	hm.Status.Phase = operatorv1alpha1.HostMappingPhaseSynced
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	updateCalls := 0
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			updateCalls++
+			return nil
+		},
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{
+				ID:       id,
+				IP:       "192.168.1.20",
+				Hostname: "updated.local",
+				Aliases:  []string{"alias1"},
+				Tags:     []string{"kubernetes"},
+				Version:  "v7",
+			}, nil
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"}}
+
+	_, err := r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var first operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), req.NamespacedName, &first))
+
+	_, err = r.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	var second operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), req.NamespacedName, &second))
+
+	assert.Equal(t, 0, updateCalls, "in-sync host must never call UpdateHost across repeated reconciles")
+	assert.Nil(t, second.Status.LastSyncTime, "no-op reconcile must not bump LastSyncTime")
+	// Generation unchanged + same condition transition time → statusWriteFilter
+	// drops the status write, so the real manager would not re-enqueue.
+	assert.Equal(t, first.Generation, second.Generation)
+	require.Len(t, second.Status.Conditions, 1)
+	assert.Equal(t,
+		first.Status.Conditions[0].LastTransitionTime,
+		second.Status.Conditions[0].LastTransitionTime,
+		"Synced condition transition time must be stable across no-op reconciles")
 }
 
 func TestReconcile_Delete_NoHostID(t *testing.T) {
@@ -610,6 +750,7 @@ func TestReconcile_AlreadyExists_AdoptsExistingHost(t *testing.T) {
 
 	addCalls := 0
 	updateCalled := false
+	getCalls := 0
 	mock := &mockHostClient{
 		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
 			addCalls++
@@ -632,6 +773,12 @@ func TestReconcile_AlreadyExists_AdoptsExistingHost(t *testing.T) {
 			return nil
 		},
 		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			getCalls++
+			if getCalls == 1 {
+				// Pre-update fetch: existing host shares IP/hostname but lacks
+				// the spec's aliases/tags, so adoption must still converge it.
+				return &HostEntry{ID: id, IP: "192.168.1.10", Hostname: "my-host.local", Version: "v3"}, nil
+			}
 			return &HostEntry{ID: id, Version: "v4"}, nil
 		},
 	}
@@ -829,4 +976,352 @@ func TestReconcile_AlreadyExists_FindHostReturnsNil_Fallback(t *testing.T) {
 	require.Len(t, updated.Status.Conditions, 1)
 	assert.Equal(t, metav1.ConditionFalse, updated.Status.Conditions[0].Status)
 	assert.Equal(t, "AdoptionFailed", updated.Status.Conditions[0].Reason)
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency + version self-heal tests (GH #338)
+// ---------------------------------------------------------------------------
+
+// TestReconcile_Update_NoOpWhenInSync verifies that when the server already
+// matches the desired spec, reconcileUpdate does NOT call UpdateHost — so the
+// event-sourced server appends no event and the aggregate cannot bloat. This
+// is the core fix for the reconcile hot-loop (Bug 1).
+func TestReconcile_Update_NoOpWhenInSync(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	// Multi-element aliases/tags so the no-op decision genuinely exercises the
+	// order-insensitive comparison (a regression to order-sensitive compare
+	// would re-trigger UpdateHost every reconcile — the #338 failure mode).
+	hm.Spec.Aliases = []string{"a1", "a2"}
+	hm.Spec.Tags = []string{"t1", "t2"}
+	hm.Status.HostID = "existing-id"
+	hm.Status.HostVersion = "v1"
+	hm.Status.Phase = operatorv1alpha1.HostMappingPhaseSynced
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	updateCalled := false
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			updateCalled = true
+			return nil
+		},
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			// Server state equals the desired spec but returns aliases/tags in
+			// a DIFFERENT order — must still be treated as in sync.
+			return &HostEntry{
+				ID:       id,
+				IP:       "192.168.1.20",
+				Hostname: "updated.local",
+				Aliases:  []string{"a2", "a1"},
+				Tags:     []string{"t2", "t1"},
+				Version:  "v7",
+			}, nil
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.False(t, updateCalled, "UpdateHost must not be called when server already matches spec (no event appended)")
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
+	assert.Equal(t, "v7", updated.Status.HostVersion, "version refreshed from server even on no-op")
+	assert.Nil(t, updated.Status.LastSyncTime, "LastSyncTime must not be bumped on a no-op sync")
+}
+
+// TestReconcile_Update_EmptyVersion_SelfHeals reproduces Bug 2: a HostMapping
+// with HostID set but HostVersion empty must self-heal instead of wedging on
+// "version conflict: expected 0, got N". The operator re-derives the current
+// version from the server rather than sending an empty expected version.
+func TestReconcile_Update_EmptyVersion_SelfHeals(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "01KTW2TC"
+	hm.Status.HostVersion = "" // wedged: empty version → server reads expected 0
+	hm.Status.Phase = operatorv1alpha1.HostMappingPhaseSynced
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	updateCalled := false
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			updateCalled = true
+			return nil
+		},
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{
+				ID:       id,
+				IP:       "192.168.1.20",
+				Hostname: "updated.local",
+				Aliases:  []string{"alias1"},
+				Tags:     []string{"kubernetes"},
+				Version:  "91178",
+			}, nil
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "must not error-requeue — wedge resolved")
+	assert.False(t, updateCalled, "in-sync host needs no update; empty version must not cause a version conflict")
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, operatorv1alpha1.HostMappingPhaseSynced, updated.Status.Phase)
+	assert.Equal(t, "91178", updated.Status.HostVersion, "empty version self-healed from server")
+}
+
+// TestReconcile_Update_StaleVersion_UsesFreshServerVersion verifies that when
+// the spec genuinely diverges, UpdateHost is sent with the freshly-fetched
+// server version — not the stale Status.HostVersion that would conflict.
+func TestReconcile_Update_StaleVersion_UsesFreshServerVersion(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.20", "updated.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+	hm.Status.HostID = "existing-id"
+	hm.Status.HostVersion = "stale-0" // stale token the operator must not trust
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	getCalls := 0
+	var sentVersion string
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			getCalls++
+			if getCalls == 1 {
+				// Pre-update fetch: IP/hostname match but aliases differ, so
+				// the spec genuinely diverges and an update is required.
+				return &HostEntry{ID: id, IP: "192.168.1.20", Hostname: "updated.local", Version: "91178"}, nil
+			}
+			return &HostEntry{ID: id, Version: "91179"}, nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, version string) error {
+			sentVersion = version
+			return nil
+		},
+	}
+
+	r := &HostMappingReconciler{
+		Client:     k8sClient,
+		Scheme:     s,
+		HostClient: mock,
+		Log:        slog.Default(),
+	}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, "91178", sentVersion, "UpdateHost must use the freshly-fetched server version, not the stale token")
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Equal(t, "91179", updated.Status.HostVersion)
+}
+
+// ---------------------------------------------------------------------------
+// statusWriteFilter predicate tests (GH #338)
+// ---------------------------------------------------------------------------
+
+// TestStatusWriteFilter verifies the predicate drops pure status-subresource
+// writes (which would hot-loop) while still passing spec changes, finalizer
+// changes, deletions, and informer resyncs.
+func TestStatusWriteFilter(t *testing.T) {
+	base := func(rv string, gen int64) *operatorv1alpha1.HostMapping {
+		return &operatorv1alpha1.HostMapping{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            "my-host",
+				Namespace:       "default",
+				ResourceVersion: rv,
+				Generation:      gen,
+				Finalizers:      []string{hostCleanupFinalizer},
+			},
+		}
+	}
+
+	withDeletion := func(hm *operatorv1alpha1.HostMapping) *operatorv1alpha1.HostMapping {
+		now := metav1.Now()
+		hm.DeletionTimestamp = &now
+		return hm
+	}
+	withoutFinalizers := func(hm *operatorv1alpha1.HostMapping) *operatorv1alpha1.HostMapping {
+		hm.Finalizers = nil
+		return hm
+	}
+
+	pred := statusWriteFilter()
+
+	tests := []struct {
+		name string
+		old  *operatorv1alpha1.HostMapping
+		new  *operatorv1alpha1.HostMapping
+		want bool
+	}{
+		{
+			name: "spec change (generation bump) passes",
+			old:  base("1", 1),
+			new:  base("2", 2),
+			want: true,
+		},
+		{
+			name: "status-only write (generation unchanged) is dropped",
+			old:  base("1", 1),
+			new:  base("2", 1),
+			want: false,
+		},
+		{
+			name: "finalizer bootstrap passes",
+			old:  withoutFinalizers(base("1", 1)),
+			new:  base("2", 1),
+			want: true,
+		},
+		{
+			name: "finalizer removal (cleanup) passes",
+			old:  base("1", 1),
+			new:  withoutFinalizers(base("2", 1)),
+			want: true,
+		},
+		{
+			name: "deletion request passes",
+			old:  base("1", 1),
+			new:  withDeletion(base("2", 1)),
+			want: true,
+		},
+		{
+			name: "informer resync (identical ResourceVersion) passes",
+			old:  base("1", 1),
+			new:  base("1", 1),
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := pred.Update(event.UpdateEvent{ObjectOld: tc.old, ObjectNew: tc.new})
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestEqualStringSetsIgnoreOrder locks in the comparator properties the no-op
+// skip depends on. A regression here (e.g. switching to an order-sensitive
+// compare) would make every reconcile see a false diff and re-bloat the
+// aggregate — the #338 failure mode.
+func TestEqualStringSetsIgnoreOrder(t *testing.T) {
+	tests := []struct {
+		name string
+		a    []string
+		b    []string
+		want bool
+	}{
+		{name: "both nil", a: nil, b: nil, want: true},
+		{name: "nil vs empty", a: nil, b: []string{}, want: true},
+		{name: "empty vs nil", a: []string{}, b: nil, want: true},
+		{name: "same order", a: []string{"a", "b"}, b: []string{"a", "b"}, want: true},
+		{name: "different order", a: []string{"a", "b"}, b: []string{"b", "a"}, want: true},
+		{name: "different length", a: []string{"a"}, b: []string{"a", "b"}, want: false},
+		{name: "disjoint same length", a: []string{"a", "b"}, b: []string{"a", "c"}, want: false},
+		{name: "multiset distinguishes duplicates", a: []string{"a", "a", "b"}, b: []string{"a", "b", "b"}, want: false},
+		{name: "multiset equal duplicates", a: []string{"a", "a", "b"}, b: []string{"b", "a", "a"}, want: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, equalStringSetsIgnoreOrder(tc.a, tc.b))
+		})
+	}
+}
+
+// TestHostEntryMatchesSpec verifies the spec-equality check used to skip no-op
+// updates, including order-insensitive aliases/tags and nil-vs-empty.
+func TestHostEntryMatchesSpec(t *testing.T) {
+	spec := operatorv1alpha1.HostMappingSpec{
+		IP:       "10.0.0.1",
+		Hostname: "host.local",
+		Aliases:  []string{"a1", "a2"},
+		Tags:     []string{"t1", "t2"},
+	}
+
+	tests := []struct {
+		name  string
+		entry *HostEntry
+		want  bool
+	}{
+		{
+			name:  "exact match",
+			entry: &HostEntry{IP: "10.0.0.1", Hostname: "host.local", Aliases: []string{"a1", "a2"}, Tags: []string{"t1", "t2"}},
+			want:  true,
+		},
+		{
+			name:  "aliases/tags reordered still match",
+			entry: &HostEntry{IP: "10.0.0.1", Hostname: "host.local", Aliases: []string{"a2", "a1"}, Tags: []string{"t2", "t1"}},
+			want:  true,
+		},
+		{
+			name:  "different IP",
+			entry: &HostEntry{IP: "10.0.0.2", Hostname: "host.local", Aliases: []string{"a1", "a2"}, Tags: []string{"t1", "t2"}},
+			want:  false,
+		},
+		{
+			name:  "different hostname",
+			entry: &HostEntry{IP: "10.0.0.1", Hostname: "other.local", Aliases: []string{"a1", "a2"}, Tags: []string{"t1", "t2"}},
+			want:  false,
+		},
+		{
+			name:  "missing alias",
+			entry: &HostEntry{IP: "10.0.0.1", Hostname: "host.local", Aliases: []string{"a1"}, Tags: []string{"t1", "t2"}},
+			want:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, hostEntryMatchesSpec(tc.entry, spec))
+		})
+	}
+}
+
+// TestHostEntryMatchesSpec_NilVsEmpty verifies a nil spec slice matches an empty
+// server slice — gRPC commonly returns []string{} where a K8s spec field is nil;
+// treating them as different would mark an in-sync host as perpetually diverged.
+func TestHostEntryMatchesSpec_NilVsEmpty(t *testing.T) {
+	spec := operatorv1alpha1.HostMappingSpec{IP: "10.0.0.1", Hostname: "host.local"} // Aliases/Tags nil
+	entry := &HostEntry{IP: "10.0.0.1", Hostname: "host.local", Aliases: []string{}, Tags: []string{}}
+	assert.True(t, hostEntryMatchesSpec(entry, spec))
 }
