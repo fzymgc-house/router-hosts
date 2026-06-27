@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.9](https://github.com/fzymgc-house/router-hosts/compare/v0.10.8...v0.10.9) (2026-06-27)
+
+
+### Bug Fixes
+
+* **operator:** recreate hosts deleted out-of-band ([#342](https://github.com/fzymgc-house/router-hosts/issues/342)) ([1d89662](https://github.com/fzymgc-house/router-hosts/commit/1d89662b6e709333a5ca8d9f66cf78405ec86807))
+
 ## [0.10.8](https://github.com/fzymgc-house/router-hosts/compare/v0.10.7...v0.10.8) (2026-06-27)
 
 
