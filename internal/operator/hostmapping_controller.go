@@ -183,6 +183,23 @@ func (r *HostMappingReconciler) reconcileUpdate(ctx context.Context, log *slog.L
 	comment := fmt.Sprintf("k8s:%s/%s", hm.Namespace, hm.Name)
 
 	current, getErr := r.HostClient.GetHost(ctx, hm.Status.HostID)
+	if errors.Is(getErr, ErrHostNotFound) {
+		// The host was deleted out-of-band. The CR is the source of truth, so
+		// clear the stale ID and recreate it rather than looping on a missing
+		// entry (follow-up from #338). Logged at Warn because this reverses an
+		// out-of-band change and should be visible to operators.
+		//
+		// Bounded recursion: reconcileCreate, on AddHost AlreadyExists, delegates
+		// to adoptExistingHost -> reconcileUpdate. These are direct in-pass calls,
+		// so the bound comes from server consistency rather than requeue backoff:
+		// re-entering this branch requires GetHost to report the ID absent while
+		// AddHost then reports it present and FindHost finds it — contradictory
+		// results a consistent server never returns on consecutive RPCs, so the
+		// chain terminates in one or two hops.
+		log.Warn("host entry not found on server; recreating", "staleHostId", hm.Status.HostID)
+		hm.Status.HostID = ""
+		return r.reconcileCreate(ctx, log, hm)
+	}
 	if getErr != nil || current == nil {
 		// Fail closed: without current state we cannot uphold idempotency or
 		// pick a safe version, so requeue instead of a blind, event-appending
@@ -220,6 +237,14 @@ func (r *HostMappingReconciler) reconcileUpdate(ctx context.Context, log *slog.L
 
 	err := r.HostClient.UpdateHost(ctx, hm.Status.HostID, hm.Spec.IP, hm.Spec.Hostname, comment, hm.Spec.Aliases, hm.Spec.Tags, current.Version)
 	if err != nil {
+		if errors.Is(err, ErrHostNotFound) {
+			// Host vanished between the pre-update read and the write — recreate
+			// from the desired spec (see the GetHost branch above for why this
+			// recursion is bounded).
+			log.Warn("host entry vanished before update; recreating", "staleHostId", hm.Status.HostID)
+			hm.Status.HostID = ""
+			return r.reconcileCreate(ctx, log, hm)
+		}
 		log.Error("failed to update host entry", "error", err)
 		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, err.Error(), hm.Status.HostID)
 		r.setSyncedCondition(hm, metav1.ConditionFalse, "UpdateFailed", err.Error())
@@ -259,7 +284,15 @@ func (r *HostMappingReconciler) reconcileDelete(ctx context.Context, log *slog.L
 
 	if hm.Status.HostID != "" {
 		log.Info("deleting host entry", "hostId", hm.Status.HostID)
-		if err := r.HostClient.DeleteHost(ctx, hm.Status.HostID); err != nil {
+		switch err := r.HostClient.DeleteHost(ctx, hm.Status.HostID); {
+		case err == nil:
+			log.Info("host entry deleted", "hostId", hm.Status.HostID)
+		case errors.Is(err, ErrHostNotFound):
+			// Host already gone (e.g. deleted out-of-band): the deletion goal is
+			// already satisfied, so fall through to remove the finalizer rather
+			// than wedging the CR in Terminating on a perpetual NotFound.
+			log.Info("host entry already absent on server; delete is a no-op", "hostId", hm.Status.HostID)
+		default:
 			log.Error("failed to delete host entry", "error", err)
 			r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, err.Error(), hm.Status.HostID)
 			r.setSyncedCondition(hm, metav1.ConditionFalse, "DeleteFailed", err.Error())
@@ -268,7 +301,6 @@ func (r *HostMappingReconciler) reconcileDelete(ctx context.Context, log *slog.L
 			}
 			return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
 		}
-		log.Info("host entry deleted", "hostId", hm.Status.HostID)
 	}
 
 	controllerutil.RemoveFinalizer(hm, hostCleanupFinalizer)

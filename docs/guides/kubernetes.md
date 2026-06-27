@@ -149,6 +149,14 @@ There is no IP-resolution strategy chain. IP comes from exactly one place per re
 
 If you need different IPs for different IngressRoute hosts, register those hosts with `HostMapping` resources instead.
 
+## Reconciliation
+
+The operator reconciles a resource when its spec changes, when it is created or deleted, and on the controller-runtime periodic resync. Its own status writes are deliberately **not** reconciled, so a converged resource stays quiescent instead of hot-looping.
+
+**Drift correction.** Because status-only writes are filtered, a host edited **directly on the router-hosts server** (out-of-band, not through Kubernetes) is reconverged on the next spec change, an operator restart (a fresh informer LIST re-runs every resource), or the periodic resync. The resync interval is the controller-runtime `SyncPeriod` (default ~10h); the operator uses that default and does not currently expose a flag to change it, so absent a spec change or restart, out-of-band drift persists until the next resync.
+
+If a host entry is **deleted** out-of-band while its `HostMapping` still exists, the next reconcile recreates it from the desired spec — the Kubernetes resource is the source of truth.
+
 ## Deletion
 
 The operator attaches a finalizer to every resource it manages (`router-hosts.fzymgc.house/host-cleanup` for HostMappings, `router-hosts.fzymgc.house/ingressroute-cleanup` for IngressRoutes). When the resource is deleted, the operator deletes the corresponding host entries from the router-hosts server **immediately**, then removes the finalizer.

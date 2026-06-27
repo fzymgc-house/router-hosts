@@ -19,6 +19,12 @@ import (
 // adopt the existing entry rather than retrying the create indefinitely.
 var ErrHostAlreadyExists = errors.New("host already exists")
 
+// ErrHostNotFound is a sentinel returned by GetHost and UpdateHost when the
+// server reports that the host ID does not exist (gRPC NotFound). Callers use
+// errors.Is to detect that a host was deleted out-of-band and recreate it
+// rather than looping on a stale ID.
+var ErrHostNotFound = errors.New("host not found")
+
 // grpcHostClient adapts the project's gRPC client to the HostClient interface.
 type grpcHostClient struct {
 	c *client.Client
@@ -130,6 +136,9 @@ func (g *grpcHostClient) UpdateHost(ctx context.Context, id, ip, hostname, comme
 
 	_, err := g.c.Hosts.UpdateHost(ctx, req)
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return oops.Wrapf(ErrHostNotFound, "updating host %s", id)
+		}
 		return oops.Wrapf(err, "updating host %s", id)
 	}
 	return nil
@@ -139,6 +148,9 @@ func (g *grpcHostClient) UpdateHost(ctx context.Context, id, ip, hostname, comme
 func (g *grpcHostClient) DeleteHost(ctx context.Context, id string) error {
 	_, err := g.c.Hosts.DeleteHost(ctx, &hostsv1.DeleteHostRequest{Id: id})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return oops.Wrapf(ErrHostNotFound, "deleting host %s", id)
+		}
 		return oops.Wrapf(err, "deleting host %s", id)
 	}
 	return nil
@@ -148,6 +160,9 @@ func (g *grpcHostClient) DeleteHost(ctx context.Context, id string) error {
 func (g *grpcHostClient) GetHost(ctx context.Context, id string) (*HostEntry, error) {
 	resp, err := g.c.Hosts.GetHost(ctx, &hostsv1.GetHostRequest{Id: id})
 	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil, oops.Wrapf(ErrHostNotFound, "getting host %s", id)
+		}
 		return nil, oops.Wrapf(err, "getting host %s", id)
 	}
 	entry := resp.GetEntry()
