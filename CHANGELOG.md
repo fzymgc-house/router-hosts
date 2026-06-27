@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.8](https://github.com/fzymgc-house/router-hosts/compare/v0.10.7...v0.10.8) (2026-06-27)
+
+
+### Bug Fixes
+
+* **operator:** idempotent host reconcile ([#338](https://github.com/fzymgc-house/router-hosts/issues/338)) ([#339](https://github.com/fzymgc-house/router-hosts/issues/339)) ([171cd50](https://github.com/fzymgc-house/router-hosts/commit/171cd503fc3af892ffe192751d869dbe646b12da))
+
 ## [0.10.7](https://github.com/fzymgc-house/router-hosts/compare/v0.10.6...v0.10.7) (2026-06-26)
 
 
