@@ -193,3 +193,26 @@ func TestUnboundRegenerate_InvalidPath(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "create temp file")
 }
+
+func TestRegenerateOutputs_WritesUnbound(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name()), slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	handler := NewCommandHandler(store)
+	_, err = handler.AddHost(ctx, "10.0.0.5", "api.fzymgc.house", nil, nil, nil)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "router-hosts.conf")
+	svc := NewHostsServiceImpl(handler, store, WithUnboundGenerator(NewUnboundConfGenerator(path, 0)))
+
+	svc.RegenerateOutputs(ctx)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(data), "local-zone: \"api.fzymgc.house.\" static\n")
+}
