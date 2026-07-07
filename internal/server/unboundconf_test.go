@@ -1,13 +1,20 @@
 package server
 
 import (
+	"context"
+	"fmt"
+	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
 )
 
 func TestUnboundFormatConf_Empty(t *testing.T) {
@@ -143,4 +150,46 @@ func TestUnboundFormatConf_SortedByFQDN(t *testing.T) {
 	assert.Less(t,
 		strings.Index(content, "alpha.fzymgc.house."),
 		strings.Index(content, "zeta.fzymgc.house."))
+}
+
+func TestUnboundRegenerate(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name()), slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	handler := NewCommandHandler(store)
+	_, err = handler.AddHost(ctx, "10.0.0.5", "api.fzymgc.house", nil, []string{"web"}, []string{"sso.fzymgc.house"})
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "router-hosts.conf")
+	gen := NewUnboundConfGenerator(path, 0)
+
+	count, err := gen.Regenerate(ctx, store)
+	require.NoError(t, err)
+	assert.Equal(t, 1, count)
+
+	data, err := os.ReadFile(path)
+	require.NoError(t, err)
+	content := string(data)
+	assert.Contains(t, content, "local-zone: \"api.fzymgc.house.\" static\n")
+	assert.Contains(t, content, "local-data: \"api.fzymgc.house. 300 IN A 10.0.0.5\"\n")
+	assert.Contains(t, content, "local-zone: \"sso.fzymgc.house.\" static\n")
+}
+
+func TestUnboundRegenerate_InvalidPath(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.New(fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name()), slog.Default())
+	require.NoError(t, err)
+	require.NoError(t, store.Initialize(ctx))
+	t.Cleanup(func() { _ = store.Close() })
+
+	gen := NewUnboundConfGenerator("/nonexistent/dir/router-hosts.conf", 0)
+	_, err = gen.Regenerate(ctx, store)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "create temp file")
 }
