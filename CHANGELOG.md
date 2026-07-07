@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.12](https://github.com/fzymgc-house/router-hosts/compare/v0.10.11...v0.10.12) (2026-07-07)
+
+
+### Features
+
+* **server:** add unbound_conf_path authoritative output ([#352](https://github.com/fzymgc-house/router-hosts/issues/352)) ([92ea8fb](https://github.com/fzymgc-house/router-hosts/commit/92ea8fb619dc9b5ee6fda79f1059f8d09d429127))
+
+
+### Documentation
+
+* **server:** unbound_conf_path spec + plan + ADR ([#350](https://github.com/fzymgc-house/router-hosts/issues/350)) ([1a463b2](https://github.com/fzymgc-house/router-hosts/commit/1a463b27596e8c90de14b5e64d0a37be6d9fd5cf))
+
 ## [0.10.11](https://github.com/fzymgc-house/router-hosts/compare/v0.10.10...v0.10.11) (2026-06-27)
 
 
