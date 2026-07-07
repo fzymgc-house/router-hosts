@@ -54,8 +54,7 @@ Hooks receive these environment variables:
 
 Beyond the hosts file, the server can emit authoritative DNS config — one
 generator per configured `[server]` path, all rewritten atomically on startup
-and after every successful mutation, and observed by `on_success`/`on_failure`
-hooks:
+and after every successful mutation:
 
 - `hosts_file_path` — hosts(5) file.
 - `dnsmasq_conf_path` — dnsmasq `local=`/`address=` pairs.

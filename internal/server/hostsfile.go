@@ -88,7 +88,11 @@ func (g *HostsFileGenerator) FormatHostsFile(entries []domain.HostEntry) string 
 	return b.String()
 }
 
-// formatSuffix builds the inline "# comment [tags]" string.
+// formatSuffix builds the inline "# comment [tags]" string. Line breaks in the
+// comment or any tag are collapsed to spaces (sanitizeCommentField) so a crafted
+// Comment/Tag cannot break out of the single-line "# ..." comment and inject
+// active directives into the generated config (hosts, dnsmasq, unbound). See
+// GH #349 review finding router-hosts-00b.2.
 func formatSuffix(comment *string, tags []string) string {
 	hasComment := comment != nil && *comment != ""
 	hasTags := len(tags) > 0
@@ -99,13 +103,29 @@ func formatSuffix(comment *string, tags []string) string {
 
 	var parts []string
 	if hasComment {
-		parts = append(parts, *comment)
+		parts = append(parts, sanitizeCommentField(*comment))
 	}
 	if hasTags {
-		parts = append(parts, "["+strings.Join(tags, ", ")+"]")
+		sanitized := make([]string, len(tags))
+		for i, t := range tags {
+			sanitized[i] = sanitizeCommentField(t)
+		}
+		parts = append(parts, "["+strings.Join(sanitized, ", ")+"]")
 	}
 
 	return "# " + strings.Join(parts, " ")
+}
+
+// commentLineBreakReplacer collapses CR and LF to spaces so user-supplied
+// comment/tag text stays on a single line in generated config files.
+var commentLineBreakReplacer = strings.NewReplacer("\n", " ", "\r", " ")
+
+// sanitizeCommentField strips line breaks from comment/tag text emitted as a
+// "# ..." comment. Without it, a Comment or Tag containing a newline would break
+// out of the comment line and inject active directives into the generated
+// hosts/dnsmasq/unbound output. See GH #349 review finding router-hosts-00b.2.
+func sanitizeCommentField(s string) string {
+	return commentLineBreakReplacer.Replace(s)
 }
 
 // atomicWriteFile writes content to a temp file in the target directory,

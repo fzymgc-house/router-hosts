@@ -152,6 +152,56 @@ func TestUnboundFormatConf_SortedByFQDN(t *testing.T) {
 		strings.Index(content, "zeta.fzymgc.house."))
 }
 
+// Two entries contributing the SAME comment to one name emit it once (dedup).
+func TestUnboundFormatConf_CommentDedup(t *testing.T) {
+	gen := NewUnboundConfGenerator("/tmp/unbound.conf", 0)
+	c := "role=api"
+	entries := []domain.HostEntry{
+		{ID: ulid.Make(), IP: "10.0.0.5", Hostname: "api.fzymgc.house", Comment: &c},
+		{ID: ulid.Make(), IP: "fd00::5", Hostname: "api.fzymgc.house", Comment: &c},
+	}
+	content := gen.FormatConf(entries)
+	assert.Equal(t, 1, strings.Count(content, "local-zone: \"api.fzymgc.house.\" static"))
+	assert.Equal(t, 1, strings.Count(content, "# role=api\n"))
+}
+
+// An entry with Tags but no Comment exercises the tags-only formatSuffix branch.
+func TestUnboundFormatConf_TagsOnlyComment(t *testing.T) {
+	gen := NewUnboundConfGenerator("/tmp/unbound.conf", 0)
+	entries := []domain.HostEntry{
+		{ID: ulid.Make(), IP: "10.0.0.5", Hostname: "api.fzymgc.house", Tags: []string{"prod", "edge"}},
+	}
+	content := gen.FormatConf(entries)
+	assert.Contains(t, content, "# [prod, edge]\nlocal-zone: \"api.fzymgc.house.\" static\n")
+}
+
+// A newline in a Comment must not break out of the "# ..." line and inject an
+// active directive. Regression for GH #349 finding router-hosts-00b.2.
+func TestUnboundFormatConf_CommentNewlineSanitized(t *testing.T) {
+	gen := NewUnboundConfGenerator("/tmp/unbound.conf", 0)
+	evil := "ok\nlocal-zone: \"evil.example.\" static"
+	entries := []domain.HostEntry{
+		{ID: ulid.Make(), IP: "10.0.0.5", Hostname: "api.fzymgc.house", Comment: &evil},
+	}
+	content := gen.FormatConf(entries)
+	// No injected directive as an active (non-comment) line.
+	assert.NotContains(t, content, "\nlocal-zone: \"evil.example.\" static")
+	// The comment is collapsed onto a single line.
+	assert.Contains(t, content, "# ok local-zone: \"evil.example.\" static\n")
+}
+
+// An IPv4-mapped IPv6 literal is emitted in dotted-quad form for its A record.
+// Regression for GH #349 finding router-hosts-00b.4.
+func TestUnboundFormatConf_IPv4MappedIPv6Canonicalized(t *testing.T) {
+	gen := NewUnboundConfGenerator("/tmp/unbound.conf", 0)
+	entries := []domain.HostEntry{
+		{ID: ulid.Make(), IP: "::ffff:10.0.0.5", Hostname: "api.fzymgc.house"},
+	}
+	content := gen.FormatConf(entries)
+	assert.Contains(t, content, "local-data: \"api.fzymgc.house. 300 IN A 10.0.0.5\"\n")
+	assert.NotContains(t, content, "::ffff:")
+}
+
 func TestUnboundRegenerate(t *testing.T) {
 	ctx := context.Background()
 

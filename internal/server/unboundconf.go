@@ -85,6 +85,14 @@ func (g *UnboundConfGenerator) FormatConf(entries []domain.HostEntry) string {
 	var order []string
 	add := func(rawName, ip, suffix string) {
 		key := normalizeFQDN(rawName)
+		// Canonicalize the address so an IPv4-mapped IPv6 literal (e.g.
+		// "::ffff:10.0.0.5") is emitted in the dotted-quad form its A record
+		// requires — rrType classifies it as A, and an un-normalized literal
+		// would produce a malformed local-data line unbound rejects. Also
+		// dedupes equivalent spellings. See GH #349 finding router-hosts-00b.4.
+		if parsed := net.ParseIP(ip); parsed != nil {
+			ip = parsed.String()
+		}
 		agg, ok := names[key]
 		if !ok {
 			agg = &unboundName{seenIP: map[string]bool{}, seenCmt: map[string]bool{}}
