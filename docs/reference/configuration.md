@@ -11,8 +11,10 @@ Complete reference for all configuration options.
 | `bind_address` | string | `"0.0.0.0:50051"` | gRPC server listen address |
 | `hosts_file_path` | path | `/etc/hosts.d/router-hosts` | Output hosts(5) file path |
 | `dnsmasq_conf_path` | path | - | Output dnsmasq conf-dir file of `local=`/`address=` directives (additive) |
+| `unbound_conf_path` | path | - | Output unbound conf-dir file of `local-zone`/`local-data` directives (additive) |
+| `unbound_ttl` | int | `300` | TTL (seconds) for `unbound_conf_path` `local-data` records |
 
-At least one of `hosts_file_path` or `dnsmasq_conf_path` must be set.
+At least one of `hosts_file_path`, `dnsmasq_conf_path`, or `unbound_conf_path` must be set.
 
 When `dnsmasq_conf_path` is configured, router-hosts also writes a file for
 consumption via dnsmasq `conf-dir`, emitting a directive pair per name and
@@ -33,6 +35,23 @@ The `local=` line is required because dnsmasq 2.86+ forwards non-matching
 record types upstream when only `address=` is present. Both directives are
 scoped per-name, not zone-wide like `local=/<domain>/` (which would return
 `NXDOMAIN` for unmanaged names in the zone).
+
+When `unbound_conf_path` is configured, router-hosts writes, per managed name,
+one `local-zone: "<fqdn>." static` plus its `local-data` records:
+
+```text
+local-zone: "api.fzymgc.house." static
+local-data: "api.fzymgc.house. 300 IN A 10.0.0.5"
+local-data: "api.fzymgc.house. 300 IN AAAA fd00::5"
+```
+
+`static` answers the listed record types and returns NODATA for any other type
+at that name, so a name's missing types (e.g. AAAA, HTTPS/type-65) are never
+forwarded upstream. Names are emitted **verbatim** (trailing-dot normalized): a
+bare, non-FQDN alias (e.g. `api`) becomes `local-zone: "api." static`, making
+unbound authoritative for that entire pseudo-TLD — inventories MUST carry FQDNs.
+Reload is out of scope: point a host-side systemd path unit at the conf
+directory to reload unbound on write.
 
 ### `[database]`
 

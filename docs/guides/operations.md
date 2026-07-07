@@ -50,6 +50,41 @@ Hooks receive these environment variables:
 | `ROUTER_HOSTS_ENTRY_COUNT` | Number of host entries |
 | `ROUTER_HOSTS_ERROR` | Error message (failure hooks only) |
 
+## DNS Output Files
+
+Beyond the hosts file, the server can emit authoritative DNS config — one
+generator per configured `[server]` path, all rewritten atomically on startup
+and after every successful mutation, and observed by `on_success`/`on_failure`
+hooks:
+
+- `hosts_file_path` — hosts(5) file.
+- `dnsmasq_conf_path` — dnsmasq `local=`/`address=` pairs.
+- `unbound_conf_path` — unbound `local-zone: "<fqdn>." static` + `local-data`.
+
+### unbound reload
+
+router-hosts writes `unbound_conf_path` atomically but does **not** reload
+unbound. Point a host-side systemd path unit at the conf directory so unbound
+reloads on write:
+
+```ini
+# /etc/systemd/system/unbound-reload.path
+[Path]
+PathModified=/etc/unbound/unbound.conf.d
+[Install]
+WantedBy=multi-user.target
+```
+
+with a companion `unbound-reload.service` that runs `unbound-control reload`.
+
+### FQDN footgun
+
+`unbound_conf_path` emits every hostname and alias **verbatim** (trailing-dot
+normalized). A bare, non-FQDN alias such as `api` becomes
+`local-zone: "api." static`, making unbound authoritative for that entire
+pseudo-TLD and returning NXDOMAIN for everything under it. Inventories MUST carry
+FQDNs.
+
 ## Certificate Reload via SIGHUP
 
 The server supports dynamic TLS certificate reload via SIGHUP signal (Unix only).

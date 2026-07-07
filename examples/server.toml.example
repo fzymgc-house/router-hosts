@@ -19,6 +19,16 @@ hosts_file_path = "/data/hosts"
 # one of the two is required. See GH #325.
 # dnsmasq_conf_path = "/etc/dnsmasq.d/router-hosts.conf"
 
+# Optional: also emit an unbound conf-dir file of authoritative local-zone/
+# local-data directives (one `local-zone: "<fqdn>." static` plus A/AAAA
+# local-data per name). `static` answers listed types and returns NODATA for the
+# rest, so a name's missing types (AAAA, HTTPS/type-65 ECH) never leak upstream —
+# even where dnsmasq cannot suppress unknown RR types. Names are emitted
+# verbatim, so inventories must carry FQDNs. Additive; at least one output is
+# required. unbound_ttl defaults to 300. See GH #349.
+# unbound_conf_path = "/etc/unbound/unbound.conf.d/router-hosts.conf"
+# unbound_ttl = 300
+
 [database]
 # DuckDB database file for event-sourced storage
 # All changes are stored as immutable events for audit trail
