@@ -59,6 +59,19 @@ type ServerConfig struct {
 	// record type return NODATA instead of leaking upstream. Additive to
 	// HostsFilePath; at least one of the two must be configured. See GH #325.
 	DnsmasqConfPath string `toml:"dnsmasq_conf_path"`
+	// UnboundConfPath, when set, emits authoritative unbound local-zone/local-data
+	// directives to a conf-dir file: one `local-zone: "<fqdn>." static` per name plus
+	// its A/AAAA `local-data`. `static` answers listed types and returns NODATA for
+	// the rest, so a name's missing record types never leak upstream (closes the
+	// HTTPS/type-65 ECH + AAAA leak class dnsmasq v2.82 cannot). Additive to
+	// HostsFilePath/DnsmasqConfPath; at least one of the three must be configured.
+	// Names are emitted verbatim (trailing-dot normalized) — a bare, non-FQDN alias
+	// makes unbound authoritative for that pseudo-TLD, so inventories MUST carry
+	// FQDNs. See GH #349.
+	UnboundConfPath string `toml:"unbound_conf_path"`
+	// UnboundTTL is the TTL (seconds) emitted in every local-data line. 0/unset
+	// defaults to 300; only consulted when UnboundConfPath is set.
+	UnboundTTL int `toml:"unbound_ttl"`
 }
 
 // DatabaseConfig holds the database connection settings.
@@ -278,8 +291,11 @@ func (c *Config) validate() error {
 	if c.Server.BindAddress == "" {
 		return oops.Code(domain.CodeValidation).Errorf("config: bind_address is required")
 	}
-	if c.Server.HostsFilePath == "" && c.Server.DnsmasqConfPath == "" {
-		return oops.Code(domain.CodeValidation).Errorf("config: at least one of hosts_file_path or dnsmasq_conf_path is required")
+	if c.Server.HostsFilePath == "" && c.Server.DnsmasqConfPath == "" && c.Server.UnboundConfPath == "" {
+		return oops.Code(domain.CodeValidation).Errorf("config: at least one of hosts_file_path, dnsmasq_conf_path, or unbound_conf_path is required")
+	}
+	if c.Server.UnboundTTL < 0 {
+		return oops.Code(domain.CodeValidation).Errorf("config: unbound_ttl must not be negative")
 	}
 
 	if err := c.Hooks.validate(); err != nil {

@@ -96,7 +96,7 @@ ca_cert_path = "/ca.pem"
 	path := writeConfigFile(t, content)
 	_, err := LoadServerConfig(path)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "at least one of hosts_file_path or dnsmasq_conf_path is required")
+	assert.Contains(t, err.Error(), "at least one of hosts_file_path, dnsmasq_conf_path, or unbound_conf_path is required")
 }
 
 func TestLoadServerConfig_DnsmasqConfPathOnly(t *testing.T) {
@@ -116,6 +116,63 @@ ca_cert_path = "/ca.pem"
 	require.NoError(t, err)
 	assert.Empty(t, cfg.Server.HostsFilePath)
 	assert.Equal(t, "/etc/dnsmasq.d/router-hosts.conf", cfg.Server.DnsmasqConfPath)
+}
+
+func TestLoadServerConfig_UnboundConfPathOnly(t *testing.T) {
+	content := `
+[server]
+bind_address = "0.0.0.0:50051"
+hosts_file_path = ""
+unbound_conf_path = "/etc/unbound/unbound.conf.d/router-hosts.conf"
+
+[tls]
+cert_path = "/cert.pem"
+key_path = "/key.pem"
+ca_cert_path = "/ca.pem"
+`
+	path := writeConfigFile(t, content)
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Server.HostsFilePath)
+	assert.Equal(t, "/etc/unbound/unbound.conf.d/router-hosts.conf", cfg.Server.UnboundConfPath)
+	// Unset TTL stays 0 at load; NewUnboundConfGenerator normalizes 0 -> 300.
+	assert.Equal(t, 0, cfg.Server.UnboundTTL)
+}
+
+func TestLoadServerConfig_UnboundTTL(t *testing.T) {
+	content := `
+[server]
+bind_address = "0.0.0.0:50051"
+unbound_conf_path = "/etc/unbound/router-hosts.conf"
+unbound_ttl = 600
+
+[tls]
+cert_path = "/cert.pem"
+key_path = "/key.pem"
+ca_cert_path = "/ca.pem"
+`
+	path := writeConfigFile(t, content)
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+	assert.Equal(t, 600, cfg.Server.UnboundTTL)
+}
+
+func TestLoadServerConfig_NegativeUnboundTTL(t *testing.T) {
+	content := `
+[server]
+bind_address = "0.0.0.0:50051"
+unbound_conf_path = "/etc/unbound/router-hosts.conf"
+unbound_ttl = -5
+
+[tls]
+cert_path = "/cert.pem"
+key_path = "/key.pem"
+ca_cert_path = "/ca.pem"
+`
+	path := writeConfigFile(t, content)
+	_, err := LoadServerConfig(path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unbound_ttl must not be negative")
 }
 
 func TestLoadServerConfig_DatabasePath(t *testing.T) {
