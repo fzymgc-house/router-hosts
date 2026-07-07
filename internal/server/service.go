@@ -34,6 +34,7 @@ type HostsServiceImpl struct {
 	store             storage.Storage
 	hostsGen          *HostsFileGenerator
 	dnsmasqGen        *DnsmasqConfGenerator
+	unboundGen        *UnboundConfGenerator
 	hooks             *HookExecutor
 	startTime         time.Time
 	retentionMaxSnaps *int
@@ -53,6 +54,11 @@ func WithHostsGenerator(gen *HostsFileGenerator) ServiceOption {
 // WithDnsmasqGenerator sets the dnsmasq conf-dir generator.
 func WithDnsmasqGenerator(gen *DnsmasqConfGenerator) ServiceOption {
 	return func(s *HostsServiceImpl) { s.dnsmasqGen = gen }
+}
+
+// WithUnboundGenerator sets the unbound conf-dir generator.
+func WithUnboundGenerator(gen *UnboundConfGenerator) ServiceOption {
+	return func(s *HostsServiceImpl) { s.unboundGen = gen }
 }
 
 // WithHookExecutor sets the hook executor.
@@ -92,8 +98,8 @@ func NewHostsServiceImpl(handler *CommandHandler, store storage.Storage, opts ..
 	return svc
 }
 
-// RegenerateOutputs writes all configured output files (hosts file and/or
-// dnsmasq conf) from current store state, independent of any host mutation.
+// RegenerateOutputs writes all configured output files (hosts file, dnsmasq conf, and/or
+// unbound conf) from current store state, independent of any host mutation.
 // The server calls this once on startup so a fresh deploy or restart
 // materializes outputs from the persisted database even when no host has
 // changed since the last write (GH #327). Idempotent; errors are logged, not
@@ -102,8 +108,8 @@ func (s *HostsServiceImpl) RegenerateOutputs(ctx context.Context) {
 	s.regenerateOutputs(ctx, "startup")
 }
 
-// regenerateOutputs regenerates every configured output file (hosts file and/or
-// dnsmasq conf) from current store state. Regeneration errors are logged rather
+// regenerateOutputs regenerates every configured output file (hosts file, dnsmasq conf, and/or
+// unbound conf) from current store state. Regeneration errors are logged rather
 // than returned: the mutation has already been committed, so a failed file
 // write must not fail the RPC. The op argument names the triggering operation
 // for log context.
@@ -116,6 +122,11 @@ func (s *HostsServiceImpl) regenerateOutputs(ctx context.Context, op string) {
 	if s.dnsmasqGen != nil {
 		if _, err := s.dnsmasqGen.Regenerate(ctx, s.store); err != nil {
 			slog.Error("dnsmasq conf regeneration failed", "op", op, "error", err)
+		}
+	}
+	if s.unboundGen != nil {
+		if _, err := s.unboundGen.Regenerate(ctx, s.store); err != nil {
+			slog.Error("unbound conf regeneration failed", "op", op, "error", err)
 		}
 	}
 }

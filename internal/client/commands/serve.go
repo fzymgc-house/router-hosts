@@ -91,6 +91,12 @@ func runServe(ctx context.Context, configPath string) error {
 		svcOpts = append(svcOpts, server.WithDnsmasqGenerator(dnsmasqGen))
 	}
 
+	// unbound conf-dir generator (optional, additive)
+	if cfg.Server.UnboundConfPath != "" {
+		unboundGen := server.NewUnboundConfGenerator(cfg.Server.UnboundConfPath, cfg.Server.UnboundTTL)
+		svcOpts = append(svcOpts, server.WithUnboundGenerator(unboundGen))
+	}
+
 	// Hook executor (optional)
 	if len(cfg.Hooks.OnSuccess) > 0 || len(cfg.Hooks.OnFailure) > 0 {
 		hookExec := server.NewHookExecutor(
