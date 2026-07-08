@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.14](https://github.com/fzymgc-house/router-hosts/compare/v0.10.13...v0.10.14) (2026-07-08)
+
+
+### Documentation
+
+* align CLAUDE.md with GSD workflow ([#360](https://github.com/fzymgc-house/router-hosts/issues/360)) ([1ff2f16](https://github.com/fzymgc-house/router-hosts/commit/1ff2f1673ba26f230f13f20500185135e0507c9d))
+* bootstrap .planning/ from ingested docs ([#357](https://github.com/fzymgc-house/router-hosts/issues/357)) ([672cdab](https://github.com/fzymgc-house/router-hosts/commit/672cdab80d75b85b19546b060cebdcc9b4ca05ad))
+
 ## [0.10.13](https://github.com/fzymgc-house/router-hosts/compare/v0.10.12...v0.10.13) (2026-07-08)
 
 
