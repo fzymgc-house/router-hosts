@@ -109,25 +109,63 @@ func (s *HostsServiceImpl) RegenerateOutputs(ctx context.Context) {
 }
 
 // regenerateOutputs regenerates every configured output file (hosts file, dnsmasq conf, and/or
-// unbound conf) from current store state. Regeneration errors are logged rather
-// than returned: the mutation has already been committed, so a failed file
-// write must not fail the RPC. The op argument names the triggering operation
-// for log context.
+// unbound conf) from current store state, then fires post-edit hooks. Regeneration
+// errors are logged rather than returned: the mutation has already been committed,
+// so a failed file write must not fail the RPC. The op argument names the
+// triggering operation for log context.
+//
+// After the generators run, on_success hooks fire when every configured generator
+// succeeded and on_failure hooks fire when any generator errored. Hooks react to
+// output writes, so when no generator is configured they are skipped entirely
+// (there is nothing to react to). This runs on every regeneration — startup and
+// after each host mutation — so downstream reloads (e.g. dnsmasq) stay in sync.
 func (s *HostsServiceImpl) regenerateOutputs(ctx context.Context, op string) {
+	var (
+		ran     bool
+		errMsgs []string
+	)
+
 	if s.hostsGen != nil {
+		ran = true
 		if _, err := s.hostsGen.Regenerate(ctx, s.store); err != nil {
 			slog.Error("hosts file regeneration failed", "op", op, "error", err)
+			errMsgs = append(errMsgs, fmt.Sprintf("hosts file: %v", err))
 		}
 	}
 	if s.dnsmasqGen != nil {
+		ran = true
 		if _, err := s.dnsmasqGen.Regenerate(ctx, s.store); err != nil {
 			slog.Error("dnsmasq conf regeneration failed", "op", op, "error", err)
+			errMsgs = append(errMsgs, fmt.Sprintf("dnsmasq conf: %v", err))
 		}
 	}
 	if s.unboundGen != nil {
+		ran = true
 		if _, err := s.unboundGen.Regenerate(ctx, s.store); err != nil {
 			slog.Error("unbound conf regeneration failed", "op", op, "error", err)
+			errMsgs = append(errMsgs, fmt.Sprintf("unbound conf: %v", err))
 		}
+	}
+
+	if s.hooks == nil || !ran {
+		return
+	}
+
+	// The entry count reported to hooks is a property of the store, not of
+	// generator success — on a total regeneration failure no generator can
+	// report it, so read it directly. Best-effort: on a read error the hook
+	// still fires with a zero count rather than being skipped.
+	entryCount := 0
+	if entries, err := s.store.ListAll(ctx); err != nil {
+		slog.Error("hook entry count unavailable", "op", op, "error", err)
+	} else {
+		entryCount = len(entries)
+	}
+
+	if len(errMsgs) == 0 {
+		s.hooks.RunSuccess(ctx, entryCount)
+	} else {
+		s.hooks.RunFailure(ctx, entryCount, strings.Join(errMsgs, "; "))
 	}
 }
 
