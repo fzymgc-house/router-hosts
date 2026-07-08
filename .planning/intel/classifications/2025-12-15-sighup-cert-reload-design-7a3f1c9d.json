@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-15-sighup-cert-reload-design.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "SIGHUP Certificate Reload Design",
+  "summary": "Design for dynamic TLS certificate reload via SIGHUP with validation and graceful restart of the server loop.",
+  "scope": ["SIGHUP signal handling", "TLS certificate reload", "server run loop", "graceful shutdown", "Vault Agent cert rotation"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Design doc with Goals/Non-Goals (PRD-like) but content is implementation architecture, signal handling, and code contracts, so SPEC dominates. Status: Approved is not an ADR Accepted marker and no Decision/Consequences sections present."
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2026-02-22-golang-migration-design.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "router-hosts Go Migration Design",
+  "summary": "Design plan for migrating router-hosts from Rust to Go, preserving event sourcing, gRPC/mTLS, and K8s operator while simplifying storage to SQLite.",
+  "scope": ["Go migration", "event sourcing", "gRPC/mTLS", "SQLite storage", "K8s operator", "ACME DNS-01", "project layout", "CLI/TUI"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Path (docs/plans/) and prose-heavy design/rationale structure indicate DOC. Contains a 'Key Decisions' table with ADR-like architectural choices, but Status: Draft and broad multi-decision planning scope rule out a single locked ADR. Resolved DOC over ADR because it is a migration plan, not a single accepted decision record."
+}

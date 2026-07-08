@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2026-06-07-gateway-api-support-plan.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Kubernetes Gateway API Support Implementation Plan",
+  "summary": "Task-by-task implementation plan for adding a Gateway API controller to the router-hosts operator that registers route hostnames as DNS host entries.",
+  "scope": ["operator", "Gateway API controller", "HTTPRoute", "GRPCRoute", "TLSRoute", "IngressRoute controller", "Helm chart", "gateway-api dependency"],
+  "cross_refs": ["docs/plans/2026-06-07-gateway-api-support-design.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Implementation plan with checklist steps and file-structure guidance; prose/task-oriented, no locked decision or acceptance criteria. Points to a separate design spec for authoritative decisions."
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/adr/router-hosts-4w2-sacrifice-getattime-time-travel-across-compaction.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Sacrifice GetAtTime time-travel across compaction",
+  "summary": "Accepts that compaction destroys pre-compaction event history, permanently breaking GetAtTime point-in-time replay for compacted aggregates.",
+  "scope": ["GetAtTime", "HostProjection", "compaction", "event log", "snapshots"],
+  "cross_refs": ["projection.go:111"],
+  "locked": true,
+  "precedence": null,
+  "notes": ""
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/adr/router-hosts-v5b-compact-aggregates-via-hostcompacted-seed-event.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Compact aggregates via HostCompacted seed event",
+  "summary": "Decision to compact host aggregates by replacing all events with a single HostCompacted seed event at the preserved OCC version.",
+  "scope": ["host aggregate", "compaction", "HostCompacted event", "EventStore interface", "storage layer", "OCC versioning", "rehydration"],
+  "cross_refs": [],
+  "locked": true,
+  "precedence": null,
+  "notes": ""
+}

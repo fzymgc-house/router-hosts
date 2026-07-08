@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-24-sqlite-default-storage-design.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "SQLite Default Storage Design",
+  "summary": "Design rationale for making SQLite the default storage backend and moving DuckDB to a separate binary.",
+  "scope": ["storage backend", "SQLite", "DuckDB", "binary structure", "feature flags", "Docker images"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Design/plan doc with a 'Design Decisions' table and rationale (ADR-like signals), but lacks ADR formal structure (no Context/Decision/Consequences, Status is 'IMPLEMENTED' not 'Accepted'). Prose+tables describing implementation approach; classified DOC over ADR/SPEC given plan-document format and historical/implemented status."
+}
