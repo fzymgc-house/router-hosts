@@ -19,7 +19,16 @@
     "plan_bounce_passes": 2,
     "cross_ai_execution": false,
     "cross_ai_command": "",
-    "cross_ai_timeout": 300
+    "cross_ai_timeout": 300,
+    "ui_phase": false,
+    "ui_safety_gate": false,
+    "ui_review": false,
+    "ai_integration_phase": false,
+    "tdd_mode": true,
+    "pattern_mapper": true,
+    "code_review": true,
+    "use_worktrees": true,
+    "code_review_depth": "standard"
   },
   "ship": {
     "pr_body_sections": []
@@ -30,7 +39,8 @@
     "sub_repos": []
   },
   "git": {
-    "create_tag": true
+    "create_tag": true,
+    "branching_strategy": "milestone"
   },
   "parallelization": {
     "enabled": true,
@@ -59,5 +69,16 @@
   },
   "project_code": null,
   "agent_skills": {},
-  "claude_md_path": "./CLAUDE.md"
+  "claude_md_path": "./CLAUDE.md",
+  "intel": {
+    "enabled": false
+  },
+  "graphify": {
+    "enabled": false,
+    "auto_update": false
+  },
+  "model_profile": "adaptive",
+  "plan_review": {
+    "source_grounding": true
+  }
 }
