@@ -4,10 +4,13 @@ This document covers operational aspects of running router-hosts in production.
 
 ## Post-Edit Hooks
 
-Server executes shell commands after /etc/hosts updates:
+Server executes shell commands after it regenerates output files (hosts file,
+dnsmasq conf, and/or unbound conf). Regeneration runs on startup and after every
+host mutation, so hooks fire in both cases:
 
-- `on_success` hooks - after successful regeneration (e.g., reload dnsmasq)
-- `on_failure` hooks - after failed regeneration (e.g., alerting)
+- `on_success` hooks - after every configured generator succeeds (e.g., reload dnsmasq)
+- `on_failure` hooks - after any generator fails (e.g., alerting)
+- Hooks fire only when at least one output path is configured (they react to writes)
 - Hooks run with 30s timeout, failures logged but don't fail operation
 - Environment variables provide context (event type, entry count, error message)
 
