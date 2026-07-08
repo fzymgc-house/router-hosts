@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-16-hosts-aliases-design.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "hosts(5) Alias Support Design",
+  "summary": "Technical design adding hostname alias support to router-hosts import/export, including protobuf update-wrapper API changes and data model changes.",
+  "scope": ["hosts file aliases", "canonical hostname", "UpdateHostRequest protobuf", "TagsUpdate/AliasesUpdate wrappers", "HostEntry data model", "import/export"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Design doc (Status: Approved) with API contracts, data models, and breaking-change semantics -> SPEC. Competes with DOC (prose design rationale) but implementation contracts dominate. Not an ADR: multi-decision design plan, not a single locked decision record."
+}

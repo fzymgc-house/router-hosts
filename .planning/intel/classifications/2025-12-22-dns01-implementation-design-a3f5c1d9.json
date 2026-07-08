@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-22-dns01-implementation-design.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "DNS-01 Challenge Implementation Design",
+  "summary": "Technical design for DNS-01 ACME challenge support with a DNS provider trait, Cloudflare and generic webhook providers.",
+  "scope": ["DNS-01 challenge", "ACME certificate management", "DnsProvider trait", "Cloudflare DNS provider", "webhook DNS provider", "TXT record propagation", "renewal loop"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Located under docs/plans/ but content is implementation contracts (trait interfaces, API structs, provider schemas), classifying as SPEC over DOC."
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2026-02-22-golang-migration-plan.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Go Migration Implementation Plan",
+  "summary": "Task-by-task implementation plan for migrating router-hosts from Rust to Go, preserving event sourcing, gRPC/mTLS, and core functionality.",
+  "scope": ["router-hosts", "Go migration", "SQLite storage", "gRPC/mTLS", "cmd/operator", "ACME", "CLI/TUI"],
+  "cross_refs": ["docs/plans/2026-02-22-golang-migration-design.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

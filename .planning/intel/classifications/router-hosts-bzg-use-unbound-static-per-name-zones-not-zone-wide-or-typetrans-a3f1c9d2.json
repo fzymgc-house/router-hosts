@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/adr/router-hosts-bzg-use-unbound-static-per-name-zones-not-zone-wide-or-typetrans.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Use unbound static per-name zones, not zone-wide or typetransparent",
+  "summary": "Decision to emit one unbound static local-zone per managed name to close ECH/AAAA DNS leaks with bounded blast radius.",
+  "scope": ["unbound", "local-zone config", "split-horizon DNS", "unbound_conf_path output", "fzymgc.house domain"],
+  "cross_refs": ["GH #349"],
+  "locked": true,
+  "precedence": null,
+  "notes": ""
+}

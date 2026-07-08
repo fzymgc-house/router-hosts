@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-24-router-hosts-operator-design.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "router-hosts-operator Design",
+  "summary": "Technical design for a Kubernetes operator that syncs Ingress/IngressRoute hostnames to a router-hosts server via gRPC/mTLS.",
+  "scope": ["router-hosts-operator", "Kubernetes controller", "Custom Resource Definitions", "RouterHostsConfig", "IngressRoute", "gRPC/mTLS API", "IP resolution", "deletion scheduler"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Path is docs/plans (design plan) but content is implementation contracts: CRD schemas, gRPC API integration, architecture. Classified SPEC over DOC due to concrete data models and contracts. Status: Draft, so not locked."
+}

@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-24-router-hosts-operator-impl.md",
+  "type": "DOC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "router-hosts-operator Implementation Plan",
+  "summary": "Task-by-task implementation plan for a Kubernetes operator that syncs Ingress and IngressRoute hostnames to router-hosts for internal DNS.",
+  "scope": ["router-hosts-operator", "Kubernetes operator", "Ingress", "IngressRoute", "HostMapping CRD", "kube-rs", "gRPC/mTLS", "leader election"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": ""
+}

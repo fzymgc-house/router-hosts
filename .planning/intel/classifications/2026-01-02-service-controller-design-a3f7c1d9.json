@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2026-01-02-service-controller-design.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Service Controller Design",
+  "summary": "Design for an operator controller that watches Kubernetes Services and creates DNS entries for LoadBalancer and NodePort types.",
+  "scope": ["router-hosts operator", "Service controller", "LoadBalancer Services", "NodePort Services", "DNS entries", "annotations"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Technical design doc with annotation schemas, IP-resolution tables, and validation contracts (SPEC). Status: Approved, but not ADR-formatted (no Decision/Consequences). Path under docs/plans/ and goals-oriented framing gave weaker PRD signal; SPEC chosen on dominant implementation-contract content."
+}

@@ -1,0 +1,33 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/superpowers/specs/2026-07-07-unbound-conf-path-design.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "`unbound_conf_path` Output — per-name `local-zone static` + `local-data` — Design",
+  "summary": "Technical design for a new optional router-hosts server output that emits authoritative unbound local-zone/local-data directives per managed name.",
+  "scope": [
+    "unbound_conf_path config option",
+    "unbound_ttl config option",
+    "UnboundConfGenerator",
+    "internal/server/unboundconf.go",
+    "internal/config/server.go",
+    "internal/server/service.go",
+    "internal/client/commands/serve.go",
+    "DNS output generation"
+  ],
+  "cross_refs": [
+    "docs/engineering/specs/2026-07-07-authoritative-house-resolver-design.md",
+    "internal/server/dnsmasqconf.go",
+    "internal/domain/host.go",
+    "internal/server/service.go",
+    "internal/client/commands/serve.go",
+    "docs/reference/configuration.md",
+    "examples/server.toml.example",
+    "docs/guides/operations.md",
+    "internal/server/unboundconf_test.go",
+    "internal/config/server_test.go"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": "Path under /specs/ and content is implementation contract (config schema, generator signatures, output format, test plan). Has a Decisions section (ADR-like) but Status is Draft and it is a build spec, not a single locked architectural decision; resolved in favor of SPEC (SPEC > PRD)."
+}

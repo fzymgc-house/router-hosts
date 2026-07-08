@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-24-sqlite-default-implementation.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "SQLite Default Storage Implementation Plan",
+  "summary": "Task-by-task implementation plan to make SQLite the default storage backend and move DuckDB into a separate wrapper binary.",
+  "scope": ["SQLite storage backend", "DuckDB variant binary", "router-hosts library crate", "Cargo feature flags", "XDG paths"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Implementation/execution plan (prose + code steps), not a decision, requirement, or contract. Classified DOC; note the doc references a Rust/Cargo stack that conflicts with the current Go codebase, suggesting it is historical/superseded."
+}

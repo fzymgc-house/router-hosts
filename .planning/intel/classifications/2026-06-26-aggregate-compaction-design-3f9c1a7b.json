@@ -1,0 +1,19 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/superpowers/specs/2026-06-26-aggregate-compaction-design.md",
+  "type": "SPEC",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Aggregate Compaction (gc) + Event-Count Observability — Design",
+  "summary": "Technical design for an operator-driven aggregate compaction operation and a cardinality-safe per-aggregate event-count metric.",
+  "scope": ["aggregate compaction", "event store", "HostProjection", "compaction event type", "event-count metric", "WriteQueue", "SQLite eventstore"],
+  "cross_refs": [
+    "internal/storage/sqlite/eventstore.go",
+    "internal/storage/storage.go",
+    "internal/server/writequeue.go",
+    "projection.go",
+    "metrics.go"
+  ],
+  "locked": false,
+  "precedence": null,
+  "notes": "Located in specs/ path with technical implementation contracts (event types, storage atomicity, metrics collection). Status is Draft, not a locked ADR. Contains a Decision-adjacent design but primary content is build-level technical constraints, so SPEC over ADR."
+}

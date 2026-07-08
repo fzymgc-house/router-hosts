@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-21-acme-pebble-testing-design.md",
+  "type": "DOC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "ACME Pebble Testing Design",
+  "summary": "Design and implementation notes for restoring live ACME protocol tests using Pebble with a custom root CA via instant-acme 0.8.4.",
+  "scope": ["ACME module", "AcmeClient", "Pebble test server", "instant-acme", "test infrastructure", "custom root CA"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Design/implementation doc (Status: IMPLEMENTED) with prose plus code snippets and API changes; no Decision/Consequences structure (not ADR) and no user stories (not PRD). Contains some contract-like API definitions but reads as implementation rationale, so classified DOC over SPEC."
+}

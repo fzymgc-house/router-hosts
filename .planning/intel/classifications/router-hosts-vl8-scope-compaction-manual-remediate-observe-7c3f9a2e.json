@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/adr/router-hosts-vl8-scope-compaction-manual-remediate-observe.md",
+  "type": "ADR",
+  "confidence": "high",
+  "manifest_override": false,
+  "title": "Scope compaction to manual remediate+observe",
+  "summary": "Decision to deliver only a manual CompactAggregates RPC/CLI and two observability gauges, deferring snapshot and auto-compaction machinery as YAGNI.",
+  "scope": ["CompactAggregates gRPC RPC", "aggregate compaction", "event log", "observability gauges", "router_hosts_aggregate_events_max", "router_hosts_aggregates_over_threshold"],
+  "cross_refs": [],
+  "locked": true,
+  "precedence": null,
+  "notes": ""
+}

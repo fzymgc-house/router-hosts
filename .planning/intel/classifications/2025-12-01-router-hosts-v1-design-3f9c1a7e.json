@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-01-router-hosts-v1-design.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "router-hosts v0.5.0 Design Document",
+  "summary": "Technical design for router-hosts: event-sourced DNS host management via a gRPC/mTLS client-server architecture with data models and validation rules.",
+  "scope": ["router-hosts", "gRPC API", "mTLS", "event store", "hosts file", "host entry data model", "domain events", "CLI"],
+  "cross_refs": ["2025-11-28-router-hosts-design.md", "2025-11-30-server-completion-design.md", "2025-11-30-server-implementation.md"],
+  "locked": false,
+  "precedence": null,
+  "notes": "Design doc with strong SPEC signals (data models, gRPC API, schemas, validation contracts). Contains a Key Design Decisions table (ADR-like), but not a numbered/accepted ADR; Status: Active. SPEC chosen over PRD/DOC by dominant implementation-contract content."
+}

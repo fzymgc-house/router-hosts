@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2025-12-19-acme-support-design.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "ACME Support Design Document",
+  "summary": "Technical design for automatic TLS certificate management via ACME (HTTP-01/DNS-01) for the router-hosts server.",
+  "scope": ["ACME certificate management", "server TLS", "HTTP-01 challenge", "DNS-01 challenge", "Cloudflare DNS provider", "config env expansion", "SIGHUP reload"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Design doc with per-decision rationale and config schemas; competes between ADR (design decisions with rationale) and SPEC (config contracts, challenge tables). Resolved to SPEC since it defines implementation contracts across many decisions rather than a single locked decision in ADR format."
+}

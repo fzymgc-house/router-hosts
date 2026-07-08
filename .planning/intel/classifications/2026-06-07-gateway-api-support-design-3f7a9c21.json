@@ -1,0 +1,13 @@
+{
+  "source_path": "/Volumes/Code/github.com/fzymgc-house/router-hosts/docs/plans/2026-06-07-gateway-api-support-design.md",
+  "type": "SPEC",
+  "confidence": "medium",
+  "manifest_override": false,
+  "title": "Kubernetes Gateway API Support Design",
+  "summary": "Design for a new operator controller that watches Kubernetes Gateway API route resources and syncs route hostnames to the router-hosts gRPC server.",
+  "scope": ["cmd/operator", "GatewayRouteReconciler", "HTTPRoute", "GRPCRoute", "TLSRoute", "Gateway status.addresses", "sigs.k8s.io/gateway-api", "RBAC ClusterRole", "Helm chart"],
+  "cross_refs": [],
+  "locked": false,
+  "precedence": null,
+  "notes": "Draft design doc with technical implementation contracts (controllers, typed client, RBAC, schema) — classified SPEC. Competes with DOC (design rationale prose) and ADR (has 'Design Decisions' with trade-off analysis), but implementation-contract content dominates. Status is Draft, so not locked."
+}
