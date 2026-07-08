@@ -6,25 +6,49 @@ Instructions for Claude Code when working in this repository.
 
 The key words "MUST", "MUST NOT", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in RFC 2119.
 
-## Required Skills
+## GSD Workflow
 
-You MUST use these skills at the specified trigger points:
+This project is managed with **GSD** (Get Shit Done). Phases, requirements, and
+status live in `.planning/` (`ROADMAP.md`, `STATE.md`, `PROJECT.md`,
+`REQUIREMENTS.md`). Those files — not any description in this CLAUDE.md — are the
+authoritative source for the current phase and what to build next. Run
+`/gsd-progress` whenever you need situational awareness; it reports status and
+routes you to the correct next step.
 
-| Trigger | Skill | Rationale |
-|---------|-------|-----------|
-| Before any feature/creative work | `superpowers:brainstorming` | Explore requirements before implementation |
-| When encountering bugs or failures | `superpowers:systematic-debugging` | Structured root cause analysis |
-| Before claiming work is complete | `superpowers:verification-before-completion` | Verify with evidence, not assumptions |
-| When asked to review code/PR | `pr-review-toolkit:review-pr` | Comprehensive multi-agent review |
-| After creating or updating a PR | `pr-review-toolkit:review-pr` | Catch issues before human review |
+### Phase loop
 
-You SHOULD use these skills when applicable:
+Work advances one phase at a time. Each `{n}` is a phase number from
+`.planning/ROADMAP.md`.
 
-| Trigger | Skill | Rationale |
-|---------|-------|-----------|
-| Starting isolated feature work | `superpowers:using-git-worktrees` | Avoid polluting main workspace |
-| Planning multi-step implementation | `superpowers:writing-plans` | Create structured implementation plans |
-| Creating commits | `commit-commands:commit` | Consistent conventional commits |
+| Step | Command | Purpose |
+|------|---------|---------|
+| Orient | `/gsd-progress` | Status report + smart routing to the next action |
+| Clarify (optional) | `/gsd-spec-phase {n}` | Pin down WHAT a fuzzy phase delivers |
+| Discuss | `/gsd-discuss-phase {n}` | Gather context and approach before planning |
+| Plan | `/gsd-plan-phase {n}` | Produce an executable `PLAN.md` |
+| Execute | `/gsd-execute-phase {n}` | Implement plans with atomic commits |
+| Verify | `/gsd-verify-work {n}` | UAT the built behavior before calling it done |
+| Ship | `/gsd-ship` | Open the PR and run review |
+
+### Required practices
+
+You MUST take the matching action at each trigger:
+
+| Trigger | Action | Rationale |
+|---------|--------|-----------|
+| Before starting feature work | `/gsd-discuss-phase {n}` (or `/gsd-explore` for pre-roadmap ideas) | Explore requirements before implementation |
+| When encountering bugs or failures | `/gsd-debug` | Systematic, state-persistent root-cause analysis |
+| Before claiming work is complete | `/gsd-verify-work {n}` + the `verify` skill | Verify with evidence, not assumptions |
+| After changing source in a phase | `/gsd-code-review` | Catch bugs and quality issues before human review |
+| After creating or updating a PR | `/gsd-code-review` | Review the branch before requesting human eyes |
+
+You SHOULD use these when applicable:
+
+| Trigger | Action | Rationale |
+|---------|--------|-----------|
+| Starting isolated feature work | native `git worktree add` (see Git Workflow) | Keep the main working tree clean |
+| Capturing ideas or follow-up tasks | `/gsd-capture` | Route ideas, todos, and seeds without derailing |
+| Recording durable project facts | engram memory (search-before-store) | Persist decisions/gotchas across sessions |
 
 ## Development Workflow
 
@@ -34,6 +58,15 @@ You SHOULD use these skills when applicable:
 - You MUST use branch naming: `feat/`, `fix/`, `refactor/`, `docs/`
 - You SHOULD keep PRs under 400 lines changed
 - You MUST NOT push directly to `main`
+
+### Git Workflow
+
+- This repo uses **native git only**. There is no jj/jujutsu here — use `git`
+  commands directly (`git commit`, `git push`, `git worktree`)
+- For isolated feature work, use a native git worktree:
+  `git worktree add ../rh-<branch> -b <type>/<branch>`. GSD workspaces, when
+  used, are plain git worktrees under the hood
+- When creating a worktree, install repo hooks in it: `lefthook install`
 
 ### Commit Messages
 
@@ -63,7 +96,8 @@ Scopes are recommended for clarity but not enforced. See `cog.toml` for scope de
 
 - PRs MUST pass all CI checks before merge
 - You MUST NOT use `gh pr edit --add-reviewer` for human reviewers
-- You MUST use `pr-review-toolkit:review-pr` for code review
+- You MUST run `/gsd-code-review` for code review (or `/gsd-ship`, which opens
+  the PR and runs review in one step)
 
 ### CI Workflows
 
@@ -135,12 +169,17 @@ E2E tests require build tags: `e2e` for in-process, `docker_e2e` for Docker cont
 - **yamlfmt**: `brew install yamlfmt`
 - **Task** (task runner): `brew install go-task`
 
-### Issue Tracking
+### Task & Phase Tracking
 
-All tasks are tracked in GitHub Issues. You MUST:
-
-- Reference issues in commits: `Fixes #123`, `Closes #456`
-- Create new issues for discovered work or follow-up tasks
+- **Phases & milestones**: `.planning/` (`ROADMAP.md`, `STATE.md`) is the source
+  of truth, managed via the GSD commands above — do not hand-edit phase status
+- **GitHub Issues**: external-facing work and bug reports. Reference them in
+  commits (`Fixes #123`, `Closes #456`) and create new issues for discovered
+  follow-up work
+- **Work items**: tracked in beads (`bd`) when work spans sessions or has
+  dependencies
+- **Durable memory**: record decisions, conventions, and gotchas in engram
+  memory (search-before-store) so they survive across sessions
 
 ## Project Context
 
@@ -177,6 +216,7 @@ For detailed information, see:
 
 | Topic | Location |
 |-------|----------|
+| Roadmap & phase status | `.planning/ROADMAP.md`, `.planning/STATE.md` |
 | Architecture & design | `docs/contributing/architecture.md` |
 | Release process (GoReleaser) | `docs/contributing/releasing.md` |
 | Testing strategy | `docs/contributing/testing.md` |
