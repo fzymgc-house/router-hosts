@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.13](https://github.com/fzymgc-house/router-hosts/compare/v0.10.12...v0.10.13) (2026-07-08)
+
+
+### Bug Fixes
+
+* **server:** fire on_success/on_failure hooks on regeneration ([#353](https://github.com/fzymgc-house/router-hosts/issues/353)) ([afc38ac](https://github.com/fzymgc-house/router-hosts/commit/afc38acddf72b1600eb43323fde3fa13ddc8f645))
+* **server:** wrap unbound conf in server: clause ([#356](https://github.com/fzymgc-house/router-hosts/issues/356)) ([d2af9fa](https://github.com/fzymgc-house/router-hosts/commit/d2af9fa6e28076870cb9814bf9ed184253a7130d))
+
 ## [0.10.12](https://github.com/fzymgc-house/router-hosts/compare/v0.10.11...v0.10.12) (2026-07-07)
 
 
