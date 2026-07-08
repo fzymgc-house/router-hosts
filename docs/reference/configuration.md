@@ -36,14 +36,22 @@ record types upstream when only `address=` is present. Both directives are
 scoped per-name, not zone-wide like `local=/<domain>/` (which would return
 `NXDOMAIN` for unmanaged names in the zone).
 
-When `unbound_conf_path` is configured, router-hosts writes, per managed name,
-one `local-zone: "<fqdn>." static` plus its `local-data` records:
+When `unbound_conf_path` is configured, router-hosts writes a `server:` clause
+header followed by, per managed name, one `local-zone: "<fqdn>." static` plus
+its `local-data` records:
 
 ```text
+server:
 local-zone: "api.fzymgc.house." static
 local-data: "api.fzymgc.house. 300 IN A 10.0.0.5"
 local-data: "api.fzymgc.house. 300 IN AAAA fd00::5"
 ```
+
+The `server:` header is required because `local-zone:`/`local-data:` are
+`server:`-clause options; it keeps the file valid whether you pull it in via a
+top-level `include:` or from inside an existing `server:` clause (unbound merges
+`server:` clauses). Without it, unbound rejects the file with a syntax error at
+the first `local-zone:`.
 
 `static` answers the listed record types and returns NODATA for any other type
 at that name, so a name's missing types (e.g. AAAA, HTTPS/type-65) are never
