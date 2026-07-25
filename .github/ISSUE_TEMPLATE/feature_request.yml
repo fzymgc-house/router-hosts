@@ -1,0 +1,154 @@
+name: Feature request
+description: Propose new functionality that does not exist today
+title: "feat: "
+labels: ["enhancement", "needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Features require approval before a PR is opened.** A maintainer applies
+        `approved-feature` once this issue is accepted. PRs linking an unapproved
+        feature issue are closed — see [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md).
+
+        Proposing an *improvement to something that already works*? Use the
+        **Enhancement** template instead.
+  - type: checkboxes
+    id: presubmission
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this feature has not been requested
+          required: true
+        - label: This adds new functionality (not an improvement to existing behavior)
+          required: true
+        - label: I have read `CONTRIBUTING.md` and understand the issue-first rule
+          required: true
+        - label: I am prepared to discuss scope before any implementation begins
+          required: true
+  - type: input
+    id: feature-name
+    attributes:
+      label: Feature name
+      description: A short, specific name for the feature.
+      placeholder: Gateway API HTTPRoute host synchronization
+    validations:
+      required: true
+  - type: dropdown
+    id: addition-type
+    attributes:
+      label: Type of addition
+      options:
+        - New CLI command or subcommand
+        - New gRPC API surface
+        - New storage capability
+        - New output generator (hosts/dnsmasq/unbound/other)
+        - New operator controller or CRD
+        - New observability signal (metric/trace/log)
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem does this solve? Describe the concrete situation, not the solution.
+      placeholder: |
+        Today, when X happens, operators must Y manually because Z is not tracked...
+    validations:
+      required: true
+  - type: textarea
+    id: what-added
+    attributes:
+      label: What is being added
+      description: Describe the new functionality with concrete examples (commands, config, API calls).
+      placeholder: |
+        A new `router-hosts host watch` subcommand that streams change events:
+
+        ```console
+        $ router-hosts host watch --format json
+        {"event":"created","hostname":"api.internal","ip":"10.0.0.5"}
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Full scope of changes
+      description: List files/packages created, files modified, and systems touched. Be exhaustive.
+      placeholder: |
+        **Created:**
+        - `internal/client/commands/watch.go`
+
+        **Modified:**
+        - `api/v1/hosts.proto` — add `WatchHosts` streaming RPC
+        - `internal/server/service.go` — implement the stream
+
+        **Systems touched:** gRPC service, client CLI, event store subscription
+    validations:
+      required: true
+  - type: textarea
+    id: user-stories
+    attributes:
+      label: User stories
+      description: At least two. Format — As a {role}, I want {capability}, so that {benefit}.
+      placeholder: |
+        1. As an operator, I want to stream host changes, so that I can drive external automation without polling.
+        2. As an SRE, I want change events with timestamps, so that I can correlate DNS changes with incidents.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: Testable pass/fail conditions. Each must be objectively verifiable.
+      placeholder: |
+        - [ ] `router-hosts host watch` emits one JSON object per host mutation
+        - [ ] Stream terminates cleanly on SIGINT with exit code 0
+        - [ ] Server-side stream is cancelled when the client disconnects
+        - [ ] Unit + E2E coverage keeps total coverage >= 80%
+    validations:
+      required: true
+  - type: checkboxes
+    id: components
+    attributes:
+      label: Components affected
+      options:
+        - label: CLI / client (`internal/client`)
+        - label: Server (`internal/server`)
+        - label: Storage (`internal/storage`)
+        - label: Protobuf API (`api/v1`, `proto/`)
+        - label: Kubernetes operator (`internal/operator`, `cmd/operator`)
+        - label: ACME / certificates (`internal/acme`)
+        - label: Config (`internal/config`)
+        - label: Docs only
+  - type: textarea
+    id: breaking-changes
+    attributes:
+      label: Breaking changes assessment
+      description: State explicitly whether this breaks CLI flags, config keys, the proto contract, or on-disk state. Write "None" if there are none, with reasoning.
+      placeholder: |
+        None. The new RPC is additive; existing proto field numbers are untouched
+        and older clients ignore the new service method.
+    validations:
+      required: true
+  - type: textarea
+    id: maintenance-burden
+    attributes:
+      label: Maintenance burden
+      description: What ongoing cost does this create? New dependencies, extra CI time, additional test surface, support load.
+      placeholder: |
+        Adds a long-lived streaming code path that needs leak testing. No new
+        third-party dependencies. Adds roughly 30s to the E2E suite.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else could solve the problem, and why is this the better choice? "None" is not an acceptable answer.
+      placeholder: |
+        - Polling `host list` on a timer — rejected: high latency, wasteful at scale.
+        - Firing the existing `on_success` hook — rejected: hooks are fire-and-forget
+          with no payload, so consumers cannot tell what changed.
+    validations:
+      required: true

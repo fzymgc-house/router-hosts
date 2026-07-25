@@ -1,0 +1,129 @@
+name: Bug report
+description: Report something that is broken
+title: "fix: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Bugs do **not** need pre-approval to fix — but a maintainer must apply
+        `confirmed-bug` before a fix PR is merged, so that we agree on the root cause.
+        See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md).
+
+        **Never paste real secrets.** Redact certificates, private keys, tokens, and
+        internal hostnames you do not want public.
+  - type: input
+    id: version
+    attributes:
+      label: router-hosts version
+      description: Output of `router-hosts version` (or the image tag / commit SHA).
+      placeholder: v0.10.13
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - CLI / client
+        - Server (`router-hosts serve`)
+        - Kubernetes operator
+        - TUI
+        - ACME / certificates
+        - Output generators (hosts/dnsmasq/unbound)
+        - Storage / SQLite
+        - Not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Linux (x86_64)
+        - Linux (arm64)
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Container image
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: go-version
+    attributes:
+      label: Go version
+      description: Output of `go version`. Enter "n/a" if you are using a prebuilt binary or image.
+      placeholder: go1.25.0 darwin/arm64
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Describe the actual behavior. Include exact error text and relevant log lines.
+      placeholder: |
+        `router-hosts serve` exits immediately with:
+
+        ```text
+        Error: doing regenerateOutputs: open /etc/unbound/hosts.conf: permission denied
+        ```
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened instead?
+      placeholder: |
+        The server should log the write failure, fire the `on_failure` hook, and
+        keep serving gRPC rather than exiting.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Numbered, minimal steps. Include config (redacted) if relevant.
+      placeholder: |
+        1. Configure `unbound_conf_path = "/etc/unbound/hosts.conf"` owned by root
+        2. Run `router-hosts serve --config server.toml` as a non-root user
+        3. Observe immediate exit
+    validations:
+      required: true
+  - type: dropdown
+    id: frequency
+    attributes:
+      label: Frequency
+      options:
+        - Always (100%)
+        - Often (>50%)
+        - Intermittent (<50%)
+        - Happened once
+    validations:
+      required: true
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity / impact
+      options:
+        - Critical — data loss, or service is completely unusable
+        - High — core workflow blocked, no workaround
+        - Medium — workflow degraded, workaround exists
+        - Low — cosmetic or minor annoyance
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and configuration
+      description: Relevant logs, stack traces, and config. Redact secrets first. This is automatically formatted as a code block.
+      render: shell
+  - type: checkboxes
+    id: pii
+    attributes:
+      label: Sensitive data confirmation
+      options:
+        - label: I have removed all private keys, certificates, tokens, and passwords from this report
+          required: true
+        - label: I have redacted any internal hostnames or IPs I do not want published
+          required: true

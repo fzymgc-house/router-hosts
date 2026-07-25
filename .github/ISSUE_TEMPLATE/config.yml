@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or usage help
+    url: https://github.com/fzymgc-house/router-hosts/discussions
+    about: Ask usage questions here rather than opening an issue.
+  - name: Documentation
+    url: https://github.com/fzymgc-house/router-hosts/tree/main/docs
+    about: Architecture, testing, ACME, and operations guides.
+  - name: Security vulnerability
+    url: https://github.com/fzymgc-house/router-hosts/security/advisories/new
+    about: Report security issues privately — do not open a public issue.
