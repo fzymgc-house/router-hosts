@@ -1,0 +1,122 @@
+name: Enhancement
+description: Improve something that already exists
+title: "enhance: "
+labels: ["enhancement", "needs-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Enhancements require approval before a PR is opened.** A maintainer applies
+        `approved-enhancement` once this issue is accepted — see
+        [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md).
+
+        Proposing functionality that does not exist yet? Use the **Feature request**
+        template. Reporting something broken? Use **Bug report**.
+  - type: checkboxes
+    id: presubmission
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: I searched existing issues and this enhancement has not been proposed
+          required: true
+        - label: This improves existing behavior (it is not new functionality and not a bug)
+          required: true
+        - label: I have read `CONTRIBUTING.md` and understand the issue-first rule
+          required: true
+        - label: I am prepared to discuss scope before any implementation begins
+          required: true
+  - type: input
+    id: what-improved
+    attributes:
+      label: What is being improved
+      description: Name the specific existing behavior, command, or component.
+      placeholder: "`router-hosts host list` table output column alignment"
+    validations:
+      required: true
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: Current behavior
+      description: Describe what happens today, with a concrete example (command + output).
+      placeholder: |
+        ```console
+        $ router-hosts host list
+        HOSTNAME IP ALIASES
+        api.internal 10.0.0.5 api,api-v1
+        ```
+        Columns are single-space separated, so long hostnames misalign the whole table.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-behavior
+    attributes:
+      label: Proposed behavior
+      description: Describe what should happen instead, with a concrete example.
+      placeholder: |
+        ```console
+        $ router-hosts host list
+        HOSTNAME       IP         ALIASES
+        api.internal   10.0.0.5   api, api-v1
+        ```
+        Columns padded to the widest cell, computed per render.
+    validations:
+      required: true
+  - type: textarea
+    id: reason-benefit
+    attributes:
+      label: Reason and benefit
+      description: Why is this worth doing? Be specific — "it's better" or "cleaner" is not enough.
+      placeholder: |
+        Operators read this table interactively during incidents. Misaligned columns
+        force manual scanning and have caused at least one misread IP.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope of changes
+      description: Which files/packages change? Keep the blast radius explicit.
+      placeholder: |
+        - `internal/client/output/table.go` — width computation
+        - `internal/client/output/table_test.go` — golden output updates
+    validations:
+      required: true
+  - type: textarea
+    id: breaking-changes
+    attributes:
+      label: Breaking changes assessment
+      description: Does this alter output parsed by scripts, flag behavior, config keys, or the proto contract? Write "None" with reasoning if not.
+      placeholder: |
+        Table output is human-facing only; scripted consumers use `--format json`
+        or `--format csv`, neither of which changes. No breaking change.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: What else was considered, and why is this preferable? "None" is not an acceptable answer.
+      placeholder: |
+        - Leave as-is and tell users to pipe through `column -t` — rejected: poor
+          default UX and breaks on values containing spaces.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area affected
+      options:
+        - CLI / client
+        - TUI
+        - Output formatting
+        - Server / gRPC
+        - Storage
+        - Protobuf API
+        - Kubernetes operator
+        - ACME / certificates
+        - Config
+        - Observability / metrics
+        - Build / CI
+        - Documentation
+    validations:
+      required: true

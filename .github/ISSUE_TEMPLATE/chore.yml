@@ -1,0 +1,95 @@
+name: Chore
+description: Maintenance work with no user-facing behavior change
+title: "chore: "
+labels: ["maintenance", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Chores are internal maintenance — dependency bumps, CI changes, refactors,
+        test infrastructure, docs upkeep. If the change alters what users see or do,
+        it is a **feature** or **enhancement**, not a chore.
+  - type: checkboxes
+    id: presubmission
+    attributes:
+      label: Pre-submission checklist
+      options:
+        - label: This change is not user-facing (no CLI, config, API, or output behavior changes)
+          required: true
+        - label: I searched existing issues and this task is not already tracked
+          required: true
+  - type: textarea
+    id: task
+    attributes:
+      label: Maintenance task
+      description: What needs to be done, in one or two sentences.
+      placeholder: |
+        Migrate the remaining table-driven storage tests to `t.TempDir()` so no test
+        writes to the real filesystem.
+    validations:
+      required: true
+  - type: dropdown
+    id: maintenance-type
+    attributes:
+      label: Type of maintenance
+      options:
+        - Dependency update
+        - CI / build tooling
+        - Internal refactor (no behavior change)
+        - Test infrastructure or coverage
+        - Documentation upkeep
+        - Lint / formatting
+        - Repository configuration
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: current-state
+    attributes:
+      label: Current state
+      description: Be specific — name files, versions, or commands. Vague descriptions get closed.
+      placeholder: |
+        `internal/storage/sqlite/store_test.go` lines 210-340 write to
+        `./testdata/tmp`, which survives between runs and causes cross-test bleed.
+    validations:
+      required: true
+  - type: textarea
+    id: proposed-work
+    attributes:
+      label: Proposed work
+      description: The concrete steps to take.
+      placeholder: |
+        1. Replace `./testdata/tmp` with `t.TempDir()` in each affected test
+        2. Delete the now-unused `testdata/tmp` fixture directory
+        3. Add a lint rule or review note preventing reintroduction
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance criteria
+      description: How do we know this is done? Must be objectively verifiable.
+      placeholder: |
+        - [ ] No test in `internal/storage` references a path outside `t.TempDir()`
+        - [ ] `task test` passes with `-race`
+        - [ ] Coverage remains >= 80%
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area affected
+      options:
+        - CLI / client
+        - Server / gRPC
+        - Storage
+        - Protobuf API
+        - Kubernetes operator
+        - ACME / certificates
+        - Config
+        - Build / CI
+        - Tests
+        - Documentation
+        - Dependencies
+    validations:
+      required: true
