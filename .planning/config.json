@@ -80,5 +80,10 @@
   "model_profile": "adaptive",
   "plan_review": {
     "source_grounding": true
+  },
+  "claude_orchestration": {
+    "enabled": true,
+    "execution_backend": "auto",
+    "min_agent_sdk_version": "0.3.149"
   }
 }
