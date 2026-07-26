@@ -19,9 +19,11 @@ tasks:
       - go build -trimpath -ldflags="-s -w" -o bin/router-hosts ./cmd/router-hosts
       - go build -trimpath -ldflags="-s -w" -o bin/operator ./cmd/operator
   test:
-    desc: Run all unit and integration tests
+    desc: Run all unit and integration tests. Pass extra go test args after "--" (e.g. `task test -- -run TestFoo ./internal/operator/`).
+    vars:
+      TEST_ARGS: '{{.CLI_ARGS | default "./..."}}'
     cmds:
-      - go test ./... -race -count=1
+      - go test -race -count=1 {{.TEST_ARGS}}
   test:e2e:
     desc: Run E2E tests with real mTLS (in-process)
     cmds:
