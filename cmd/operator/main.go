@@ -85,7 +85,7 @@ func run() error {
 	}
 
 	if defaultIngressIP == "" {
-		logger.Warn("--default-ingress-ip is empty; IngressRoute and Gateway API controllers will create hosts with no IP")
+		logger.Warn(defaultIngressIPWarning(enableGateway))
 	}
 
 	// Create gRPC client for communicating with router-hosts server.
@@ -155,4 +155,18 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// defaultIngressIPWarning returns the message logged when
+// --default-ingress-ip is empty, naming only the controllers actually
+// registered (WR-01). The Gateway API controllers are opt-in via
+// --enable-gateway; naming them in the warning when that flag is unset
+// (the default) misleads an operator running only the IngressRoute
+// controller, who never enabled Gateway API support, into thinking the
+// warning references a feature they turned on.
+func defaultIngressIPWarning(enableGateway bool) string {
+	if enableGateway {
+		return "--default-ingress-ip is empty; IngressRoute and Gateway API controllers will create hosts with no IP"
+	}
+	return "--default-ingress-ip is empty; IngressRoute controller will create hosts with no IP"
 }
