@@ -612,10 +612,18 @@ func (r *GatewayRouteReconciler) addOrAdoptGatewayHost(ctx context.Context, log 
 	// IngressRoute hostname and a Gateway route hostname routinely collide on the
 	// same IP — exactly the Traefik-to-Gateway-API migration this phase enables.
 	//
-	// The comment is the per-object identity (k8s-gateway:<namespace>/<name>);
-	// tags only identify the controller kind and cannot separate two routes of
-	// the same kind. Both are checked: the comment establishes ownership, the
-	// tags are defense in depth against a user-authored comment collision.
+	// BOTH halves are load-bearing; neither is decoration.
+	//
+	// The comment carries per-object identity (k8s-gateway:<namespace>/<name>),
+	// which separates two routes that differ in namespace or name.
+	//
+	// The tags carry the kind, and they are the ONLY thing separating two
+	// objects of DIFFERENT kinds sharing one namespace/name — an HTTPRoute and
+	// a TLSRoute both named "web" in "default" produce the identical comment
+	// k8s-gateway:default/web, so the comment check passes for both. Each
+	// reconciler stamps only its own KindName, and the server replaces the tag
+	// set wholesale rather than merging it (internal/server/commands.go), so
+	// tags cannot accumulate both kinds. Do not weaken this half.
 	if existing.Comment != comment || !hasGatewayProvenance(existing.Tags, r.KindName) {
 		return "", oops.Errorf(
 			"refusing to adopt host %s (id %s): owned by another object (comment %q tags %v, want comment %q with gateway + %s)",

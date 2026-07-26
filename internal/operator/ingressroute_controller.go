@@ -430,9 +430,11 @@ func setHostIDsAnnotation(obj client.Object, ids map[string]string) error {
 // ingressHostInSync reports whether a server-side host entry already matches the
 // desired IngressRoute-derived state. Tags are compared order-insensitively
 // (reusing equalStringSetsIgnoreOrder from the hostmapping controller). The
-// comment is excluded — it is operator-derived and not carried on HostEntry —
-// and aliases are excluded because the operator never sets aliases for
-// IngressRoute-derived hosts.
+// comment is excluded — it is operator-derived, so a difference there does not
+// mean the entry is out of sync (HostEntry does carry Comment as of the phase 7
+// adoption-provenance gate; it is deliberately not compared here) — and aliases
+// are excluded because the operator never sets aliases for IngressRoute-derived
+// hosts.
 func ingressHostInSync(entry *HostEntry, ip, hostname string, tags []string) bool {
 	return entry.IP == ip &&
 		entry.Hostname == hostname &&

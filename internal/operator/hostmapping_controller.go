@@ -377,7 +377,9 @@ func (r *HostMappingReconciler) setSyncedCondition(hm *operatorv1alpha1.HostMapp
 // the desired HostMapping spec. Aliases and tags are compared order-insensitively
 // because the server does not guarantee element order. The comment is
 // intentionally excluded: it is operator-derived ("k8s:ns/name"), not part of
-// the spec, and HostEntry does not carry it.
+// the spec, so a difference there does not mean the entry is out of sync.
+// (HostEntry does carry Comment as of the phase 7 adoption-provenance gate;
+// it is deliberately not compared here.)
 func hostEntryMatchesSpec(entry *HostEntry, spec operatorv1alpha1.HostMappingSpec) bool {
 	return entry.IP == spec.IP &&
 		entry.Hostname == spec.Hostname &&
