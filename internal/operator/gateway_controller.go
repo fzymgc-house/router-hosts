@@ -447,6 +447,25 @@ func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger
 				// not "align" this with syncHost without re-deriving the
 				// tradeoff recorded in D-13.
 				if err := r.HostClient.UpdateHost(ctx, id, ip, hostname, comment, nil, tags, ""); err != nil {
+					if errors.Is(err, ErrHostNotFound) {
+						// CR-04: the tracked ID vanished out-of-band (e.g.
+						// deleted directly via the CLI while still named in
+						// this route's annotation). Recreate it, mirroring
+						// ingressroute_controller.go's syncHost self-heal —
+						// the spec is the source of truth — instead of
+						// retaining a dead ID that can never successfully
+						// update again and would wedge this hostname forever.
+						log.Warn("host entry vanished before update; recreating", "hostname", hostname, "staleHostId", id)
+						newID, addErr := r.addOrAdoptGatewayHost(ctx, log, ip, hostname, comment, tags)
+						if addErr != nil {
+							log.Error("failed to recreate vanished host entry", "hostname", hostname, "error", addErr)
+							hadError = true
+							// The stale ID is dead; nothing to retain.
+							continue
+						}
+						newIDs[hostname] = newID
+						continue
+					}
 					log.Error("failed to update host entry", "hostname", hostname, "hostId", id, "error", err)
 					hadError = true
 					// Retain the known ID so the stale-cleanup pass below does
@@ -485,6 +504,15 @@ func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger
 			continue
 		}
 		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
+			if errors.Is(err, ErrHostNotFound) {
+				// CR-04: already gone — the desired end state was already
+				// reached. Drop it entirely; retaining it in newIDs would
+				// make it indistinguishable from an in-sync entry on the
+				// next reconcile's !maps.Equal check, permanently wedging
+				// the annotation and the requeue loop.
+				log.Info("stale host entry already gone", "hostname", hostname, "hostId", id)
+				continue
+			}
 			log.Error("failed to delete stale host entry", "hostname", hostname, "hostId", id, "error", err)
 			// Retain the ID so it is not orphaned from the annotation.
 			newIDs[hostname] = id

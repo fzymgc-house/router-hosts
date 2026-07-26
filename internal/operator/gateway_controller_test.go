@@ -1124,6 +1124,87 @@ func TestSyncRoute_RetainsIDOnStaleDeleteFailure(t *testing.T) {
 	assert.Equal(t, "id-stale", ids["stale.example.com"])
 }
 
+// TestSyncRoute_StaleDeleteNotFoundDropsFromAnnotation is the first half of
+// the CR-04 regression: DeleteHost returning ErrHostNotFound for a stale ID
+// (already deleted on a prior reconcile whose batch r.Update then failed, or
+// deleted out-of-band) must drop the hostname from the annotation on this
+// same reconcile — not retain it, which would make newIDs equal existingIDs
+// again on every future reconcile, permanently skipping the annotation
+// write via the !maps.Equal guard and wedging the stuck entry forever.
+func TestSyncRoute_StaleDeleteNotFoundDropsFromAnnotation(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"keep.example.com"}, map[string]string{
+		"keep.example.com": "id-keep",
+		"gone.example.com": "id-gone",
+	})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error { return nil },
+		deleteHostFn: func(_ context.Context, _ string) error {
+			return oops.Wrapf(ErrHostNotFound, "deleting host")
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "a NotFound delete is a success, not an error requiring requeue")
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "gone.example.com", "a NotFound stale entry must be dropped, not retained")
+	assert.Equal(t, "id-keep", ids["keep.example.com"])
+}
+
+// TestSyncRoute_UpdateNotFoundRecreatesEntry is the second half of the CR-04
+// regression: UpdateHost returning ErrHostNotFound for a tracked hostname
+// (the entry vanished out-of-band, e.g. deleted directly via the CLI while
+// still named in the route's annotation) must trigger a recreate via
+// addOrAdoptGatewayHost, mirroring ingressroute_controller.go's syncHost
+// self-heal — not a permanently stuck update that can never succeed again.
+func TestSyncRoute_UpdateNotFoundRecreatesEntry(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, map[string]string{
+		"a.example.com": "stale-id",
+	})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var addCalls int
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, id, _, _, _ string, _, _ []string, _ string) error {
+			assert.Equal(t, "stale-id", id)
+			return oops.Wrapf(ErrHostNotFound, "updating host")
+		},
+		addHostFn: func(_ context.Context, ip, hostname, _ string, _, _ []string) (string, error) {
+			addCalls++
+			assert.Equal(t, "10.0.0.1", ip)
+			assert.Equal(t, "a.example.com", hostname)
+			return "recreated-id", nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, 1, addCalls)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "recreated-id", ids["a.example.com"])
+}
+
 func TestSyncRoute_NeverDeletesUntrackedID(t *testing.T) {
 	s := gatewayScheme(t)
 
