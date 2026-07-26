@@ -23,6 +23,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // recordingHandler is a minimal slog.Handler that captures every record
@@ -1327,4 +1329,216 @@ func TestReconcile_Route_DeleteAllThreeKinds(t *testing.T) {
 	var updatedTLS gatewayv1.TLSRoute
 	err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "troute", Namespace: "default"}, &updatedTLS)
 	assert.True(t, apierrors.IsNotFound(err), "expected TLSRoute to be gone after finalizer removal, got err=%v", err)
+}
+
+// ---------------------------------------------------------------------------
+// Plan 05: parentRef field index and Gateway map-func re-enqueue (D-17)
+// ---------------------------------------------------------------------------
+
+func TestRouteParentRefIndexFunc_ExplicitNamespace(t *testing.T) {
+	route := newRouteWithParentRefs("default", gatewayv1.ParentReference{Name: "gw", Namespace: nsPtr("infra")})
+	assert.Equal(t, []string{"infra/gw"}, routeParentRefIndexFunc(route))
+}
+
+func TestRouteParentRefIndexFunc_DefaultsToRouteNamespace(t *testing.T) {
+	route := newRouteWithParentRefs("default", gatewayv1.ParentReference{Name: "gw"})
+	assert.Equal(t, []string{"default/gw"}, routeParentRefIndexFunc(route))
+}
+
+func TestRouteParentRefIndexFunc_MultipleAndEmpty(t *testing.T) {
+	route := newRouteWithParentRefs(
+		"default",
+		gatewayv1.ParentReference{Name: "gw-a"},
+		gatewayv1.ParentReference{Name: "gw-b", Namespace: nsPtr("infra")},
+	)
+	assert.Equal(t, []string{"default/gw-a", "infra/gw-b"}, routeParentRefIndexFunc(route))
+
+	empty := newRouteWithParentRefs("default")
+	keys := routeParentRefIndexFunc(empty)
+	assert.Empty(t, keys)
+	assert.NotNil(t, keys, "expected an empty non-nil slice for a route with no parentRefs")
+
+	assert.Empty(t, routeParentRefIndexFunc(&gatewayv1.Gateway{}))
+}
+
+func TestMapGatewayToRoutes_EnqueuesReferencingRoutes(t *testing.T) {
+	routeA := newRouteWithParentRefs("infra", gatewayv1.ParentReference{Name: "gw"})
+	routeA.Name = "route-a"
+	routeB := newRouteWithParentRefs("infra", gatewayv1.ParentReference{Name: "gw"})
+	routeB.Name = "route-b"
+	routeC := newRouteWithParentRefs("infra", gatewayv1.ParentReference{Name: "other"})
+	routeC.Name = "route-c"
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(routeA, routeB, routeC).
+		WithIndex(&gatewayv1.HTTPRoute{}, parentRefIndexKey, routeParentRefIndexFunc).
+		Build()
+
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+	gw := newGateway("infra", "gw")
+
+	requests := r.mapGatewayToRoutes(context.Background(), gw)
+	got := make([]types.NamespacedName, len(requests))
+	for i, req := range requests {
+		got[i] = req.NamespacedName
+	}
+	assert.ElementsMatch(t, []types.NamespacedName{
+		{Namespace: "infra", Name: "route-a"},
+		{Namespace: "infra", Name: "route-b"},
+	}, got)
+}
+
+func TestMapGatewayToRoutes_NoMatches(t *testing.T) {
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithIndex(&gatewayv1.HTTPRoute{}, parentRefIndexKey, routeParentRefIndexFunc).
+		Build()
+
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+	gw := newGateway("infra", "gw")
+
+	requests := r.mapGatewayToRoutes(context.Background(), gw)
+	assert.Empty(t, requests)
+}
+
+func TestMapGatewayToRoutes_ListErrorReturnsNil(t *testing.T) {
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithIndex(&gatewayv1.HTTPRoute{}, parentRefIndexKey, routeParentRefIndexFunc).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(_ context.Context, _ client.WithWatch, _ client.ObjectList, _ ...client.ListOption) error {
+				return errors.New("boom")
+			},
+		}).
+		Build()
+
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+	gw := newGateway("infra", "gw")
+
+	requests := r.mapGatewayToRoutes(context.Background(), gw)
+	assert.Nil(t, requests)
+}
+
+func TestMapGatewayToRoutes_PerKind(t *testing.T) {
+	httpRoute := newRouteWithParentRefs("infra", gatewayv1.ParentReference{Name: "gw"})
+	httpRoute.Name = "http-route"
+
+	grpcRoute := &gatewayv1.GRPCRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "grpc-route", Namespace: "infra"},
+		Spec: gatewayv1.GRPCRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{{Name: "gw"}}},
+		},
+	}
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(httpRoute, grpcRoute).
+		WithIndex(&gatewayv1.HTTPRoute{}, parentRefIndexKey, routeParentRefIndexFunc).
+		WithIndex(&gatewayv1.GRPCRoute{}, parentRefIndexKey, routeParentRefIndexFunc).
+		Build()
+
+	r := &GatewayRouteReconciler{
+		Client:     k8sClient,
+		HostClient: &mockHostClient{},
+		Log:        slog.Default(),
+		KindName:   "grpcroute",
+		newObject:  func() client.Object { return &gatewayv1.GRPCRoute{} },
+		newList:    func() client.ObjectList { return &gatewayv1.GRPCRouteList{} },
+	}
+
+	gw := newGateway("infra", "gw")
+	requests := r.mapGatewayToRoutes(context.Background(), gw)
+	require.Len(t, requests, 1)
+	assert.Equal(t, types.NamespacedName{Namespace: "infra", Name: "grpc-route"}, requests[0].NamespacedName)
+	// reconcile.Request wraps NamespacedName; assert the type explicitly so a
+	// future refactor of mapGatewayToRoutes's return type is caught here.
+	var _ []reconcile.Request = requests
+}
+
+// ---------------------------------------------------------------------------
+// Plan 05: per-route-kind CRD-presence gating (D-04/D-05)
+// ---------------------------------------------------------------------------
+
+func gatewayGVKAt(kind, version string) schema.GroupVersionKind {
+	return schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: version, Kind: kind}
+}
+
+func TestGatewayKindPresent_AllRouteKindsPresent(t *testing.T) {
+	mapper := apimeta.NewDefaultRESTMapper(nil)
+	for _, k := range gatewayRouteKinds() {
+		mapper.Add(k.gvk, apimeta.RESTScopeNamespace)
+	}
+	for _, k := range gatewayRouteKinds() {
+		assert.True(t, gatewayKindPresent(mapper, k.gvk), "expected %s present", k.name)
+	}
+}
+
+func TestGatewayKindPresent_PartiallyInstalled(t *testing.T) {
+	mapper := apimeta.NewDefaultRESTMapper(nil)
+	mapper.Add(gatewayGVKAt("HTTPRoute", "v1"), apimeta.RESTScopeNamespace)
+
+	for _, k := range gatewayRouteKinds() {
+		want := k.name == "httproute"
+		assert.Equal(t, want, gatewayKindPresent(mapper, k.gvk), "kind %s", k.name)
+	}
+}
+
+func TestGatewayKindPresent_AllAbsent(t *testing.T) {
+	mapper := apimeta.NewDefaultRESTMapper(nil)
+	for _, k := range gatewayRouteKinds() {
+		assert.False(t, gatewayKindPresent(mapper, k.gvk), "kind %s", k.name)
+	}
+}
+
+func TestGatewayKindPresent_WrongVersion(t *testing.T) {
+	mapper := apimeta.NewDefaultRESTMapper(nil)
+	mapper.Add(gatewayGVKAt("TLSRoute", "v1alpha2"), apimeta.RESTScopeNamespace)
+
+	assert.False(t, gatewayKindPresent(mapper, gatewayGVKAt("TLSRoute", "v1")))
+}
+
+// ---------------------------------------------------------------------------
+// Plan 05: Gateway watch gated on Gateway CRD presence (research Pitfall 1)
+// ---------------------------------------------------------------------------
+
+func TestGatewayKindPresent_GatewayGVKPresent(t *testing.T) {
+	mapper := apimeta.NewDefaultRESTMapper(nil)
+	mapper.Add(gatewayGVK, apimeta.RESTScopeNamespace)
+	assert.True(t, gatewayKindPresent(mapper, gatewayGVK))
+}
+
+func TestGatewayKindPresent_GatewayGVKAbsent(t *testing.T) {
+	mapper := apimeta.NewDefaultRESTMapper(nil)
+	for _, k := range gatewayRouteKinds() {
+		mapper.Add(k.gvk, apimeta.RESTScopeNamespace)
+	}
+
+	for _, k := range gatewayRouteKinds() {
+		assert.True(t, gatewayKindPresent(mapper, k.gvk), "kind %s", k.name)
+	}
+	assert.False(t, gatewayKindPresent(mapper, gatewayGVK))
+}
+
+// TestSetupWithManager_WatchGatewayFlagIsThreaded asserts the wiring contract
+// without a real ctrl.Manager: SetupWithManager's signature carries the
+// watchGateway bool (a compile-time assertion via method-value assignment,
+// which binds the receiver but never invokes the method), and gatewayGVK is
+// built from the non-deprecated gatewayGroupVersionKind helper rather than
+// the deprecated gatewayv1.SchemeGroupVersion. The informer-startup behavior
+// this flag ultimately gates (whether the Gateway watch's informer is ever
+// registered) is covered by the manual cluster verification in
+// 07-VALIDATION.md, per research Pitfall 3 — SetupWithManager needs a real
+// manager to exercise beyond this signature/wiring check, and this package's
+// two existing controllers' SetupWithManager methods are precedent for
+// staying at 0% direct coverage here.
+func TestSetupWithManager_WatchGatewayFlagIsThreaded(t *testing.T) {
+	assert.Equal(t, gatewayGroupVersionKind("Gateway"), gatewayGVK)
+
+	var setup func(ctrl.Manager, bool) error = (&GatewayRouteReconciler{}).SetupWithManager
+	assert.NotNil(t, setup)
 }
