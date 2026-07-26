@@ -13,6 +13,9 @@ command-line flags (there is no `RouterHostsConfig` CRD).
 - Helm 3.0+
 - router-hosts server with mTLS enabled
 - Traefik CRDs installed (for `IngressRoute`/`IngressRouteTCP` syncing)
+- Gateway API CRDs (`gateway.networking.k8s.io`) installed in the cluster —
+  required only when `gateway.enabled` is `true`. This chart does **not**
+  bundle these CRDs; install them separately before enabling the value.
 
 ## Installation
 
@@ -113,11 +116,19 @@ helm install router-hosts-operator charts/router-hosts-operator \
 | `healthCheck.startupProbe.*` | Startup probe timing settings | See values.yaml |
 | `serviceAccount.create` | Create ServiceAccount | `true` |
 | `rbac.create` | Create RBAC resources | `true` |
+| `gateway.enabled` | Enable the HTTPRoute/GRPCRoute/TLSRoute controllers (`--enable-gateway`) | `false` |
+
+A controller is started only for a route kind whose CRD is actually installed
+in the cluster at `gateway.networking.k8s.io/v1`; enabling `gateway.enabled`
+on a cluster with only some route kinds installed is safe.
 
 > Tagging is fixed in the binary and not configurable via this chart:
 > IngressRoute-derived hosts get `kubernetes`, `traefik`, and `ingress`;
-> `HostMapping` entries get only the `tags` from their spec. The log level
-> (`info`, JSON) is also fixed.
+> Gateway-derived hosts get `kubernetes`, `gateway`, and the lowercase kind
+> name (`httproute`, `grpcroute`, or `tlsroute`), with a
+> `k8s-gateway:<namespace>/<name>` provenance comment; `HostMapping` entries
+> get only the `tags` from their spec. The log level (`info`, JSON) is also
+> fixed.
 
 ### Health Check Endpoints
 
@@ -136,6 +147,12 @@ controllers actually use:
 - **IngressRoutes / IngressRouteTCP** (`traefik.io/v1alpha1`): get, list, watch,
   update, patch — the controller writes a finalizer and the host-id annotation
   back to the object.
+- **HTTPRoutes / GRPCRoutes / TLSRoutes** (`gateway.networking.k8s.io/v1`):
+  get, list, watch, update, patch — the controller writes the same cleanup
+  finalizer and a host-ids annotation back to the route object.
+- **Gateways** (`gateway.networking.k8s.io/v1`): get, list, watch only — the
+  operator only reads `status.addresses` to resolve an IP and never writes a
+  Gateway.
 - **HostMappings** (`router-hosts.fzymgc.house/v1alpha1`): get, list, watch,
   update, patch, plus the `status` and `finalizers` subresources.
 
@@ -185,6 +202,40 @@ spec:
         - name: myapp
           port: 80
 ```
+
+### Sync Gateway API Routes
+
+With `gateway.enabled: true` and the Gateway API CRDs installed, the operator
+watches `HTTPRoute`, `GRPCRoute`, and `TLSRoute` resources and creates a host
+entry for each hostname in `spec.hostnames`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: myapp
+  namespace: default
+spec:
+  parentRefs:
+    - name: my-gateway
+  hostnames:
+    - myapp.example.com
+  rules:
+    - backendRefs:
+        - name: myapp
+          port: 80
+```
+
+Behavioral notes:
+
+- **IP resolution**: the entry IP comes from the first `IPAddress`-typed
+  address of the first parent Gateway (in `parentRefs` declaration order) that
+  has one. `Hostname`-typed addresses are skipped.
+- **Fallback**: `routerHosts.defaultIngressIP` is used when no parent Gateway
+  supplies an address. With no fallback configured, the route is requeued and
+  retried rather than given an IP-less entry.
+- **Wildcard hostnames** (`*.example.com`) are skipped — they cannot become a
+  concrete DNS entry.
 
 ### Create Explicit Host Mappings
 
@@ -248,6 +299,12 @@ kubectl describe hostmapping <name> -n <namespace>
 - **IngressRoute hosts created with no IP**: set `routerHosts.defaultIngressIP`.
 - **`forbidden` errors in logs**: ensure `rbac.create: true` (or that equivalent
   RBAC exists) so the controllers can write finalizers/annotations.
+- **Gateway API routes not producing entries**: check, in order, whether
+  `gateway.enabled` is `false`; whether the route kind's CRD is not installed
+  at `gateway.networking.k8s.io/v1` (the operator only starts a controller for
+  kinds whose CRD is present); or whether neither a parent Gateway address nor
+  `routerHosts.defaultIngressIP` yields an IP. The operator's startup log lines
+  name each skipped route kind and the required apiVersion.
 
 ## Development
 
