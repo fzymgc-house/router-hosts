@@ -1,0 +1,193 @@
+package operator
+
+import (
+	"context"
+	"log/slog"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+)
+
+// gatewayScheme builds a scheme registering only the Gateway API v1 kinds
+// (HTTPRoute, GRPCRoute, TLSRoute, Gateway). Do not reuse ingressRouteScheme,
+// which registers unrelated Traefik unstructured GVKs.
+func gatewayScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	s := runtime.NewScheme()
+	require.NoError(t, gatewayv1.Install(s))
+	return s
+}
+
+func newHTTPRouteReconciler(t *testing.T, k8sClient client.Client, hc HostClient) *GatewayRouteReconciler {
+	t.Helper()
+	return &GatewayRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  hc,
+		Log:         slog.Default(),
+		KindName:    "httproute",
+		newObject:   func() client.Object { return &gatewayv1.HTTPRoute{} },
+		newList:     func() client.ObjectList { return &gatewayv1.HTTPRouteList{} },
+		DefaultIP:   "0.0.0.0",
+		DefaultTags: []string{"kubernetes"},
+	}
+}
+
+func TestHostnamesOf_HTTPRoute(t *testing.T) {
+	route := &gatewayv1.HTTPRoute{
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"a.example.com"},
+		},
+	}
+	assert.Equal(t, []string{"a.example.com"}, hostnamesOf(route))
+	assert.Nil(t, hostnamesOf(&gatewayv1.Gateway{}))
+}
+
+func TestResolveIP_FromParentGateway(t *testing.T) {
+	ipType := gatewayv1.IPAddressType
+	gw := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "infra"},
+		Status: gatewayv1.GatewayStatus{
+			Addresses: []gatewayv1.GatewayStatusAddress{
+				{Type: &ipType, Value: "10.1.2.3"},
+			},
+		},
+	}
+
+	parentNS := gatewayv1.Namespace("infra")
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: "default"},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{Name: "gw", Namespace: &parentNS},
+				},
+			},
+		},
+	}
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gw).Build()
+
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+	ip := r.resolveIP(context.Background(), r.Log, route)
+	assert.Equal(t, "10.1.2.3", ip)
+}
+
+func TestGatewayKindPresent_UsesRESTMapper(t *testing.T) {
+	present := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
+	absent := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute"}
+
+	mapper := apimeta.NewDefaultRESTMapper(nil)
+	mapper.Add(present, apimeta.RESTScopeNamespace)
+
+	assert.True(t, gatewayKindPresent(mapper, present))
+	assert.False(t, gatewayKindPresent(mapper, absent))
+}
+
+func TestReconcile_HTTPRoute_CreatesHost(t *testing.T) {
+	ipType := gatewayv1.IPAddressType
+	gw := &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "gw", Namespace: "infra"},
+		Status: gatewayv1.GatewayStatus{
+			Addresses: []gatewayv1.GatewayStatusAddress{
+				{Type: &ipType, Value: "10.1.2.3"},
+			},
+		},
+	}
+
+	parentNS := gatewayv1.Namespace("infra")
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "route1",
+			Namespace:  "default",
+			Finalizers: []string{gatewayCleanupFinalizer},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{
+					{Name: "gw", Namespace: &parentNS},
+				},
+			},
+			Hostnames: []gatewayv1.Hostname{"app.example.com"},
+		},
+	}
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route, gw).Build()
+
+	var addedHosts []string
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, comment string, aliases, tags []string) (string, error) {
+			addedHosts = append(addedHosts, hostname)
+			assert.Equal(t, "10.1.2.3", ip)
+			assert.Equal(t, "k8s-gateway:default/route1", comment)
+			assert.Nil(t, aliases)
+			assert.Contains(t, tags, "kubernetes")
+			assert.Contains(t, tags, "gateway")
+			assert.Contains(t, tags, "httproute")
+			return "gw-host-1", nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "route1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, []string{"app.example.com"}, addedHosts)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "gw-host-1", ids["app.example.com"])
+}
+
+func TestReconcile_HTTPRoute_AddsFinalizerAndReturns(t *testing.T) {
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "route1",
+			Namespace: "default",
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"app.example.com"},
+		},
+	}
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var addHostCalled bool
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, comment string, aliases, tags []string) (string, error) {
+			addHostCalled = true
+			return "unexpected", nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "route1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.False(t, addHostCalled)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	assert.Contains(t, updated.Finalizers, gatewayCleanupFinalizer)
+}
