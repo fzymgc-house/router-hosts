@@ -133,6 +133,134 @@ func TestResolveIP_FromParentGateway(t *testing.T) {
 	assert.Equal(t, "10.1.2.3", ip)
 }
 
+// newGateway builds a Gateway with the given namespace, name, and status
+// addresses, for resolveIP test fixtures.
+func newGateway(namespace, name string, addrs ...gatewayv1.GatewayStatusAddress) *gatewayv1.Gateway {
+	return &gatewayv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Status:     gatewayv1.GatewayStatus{Addresses: addrs},
+	}
+}
+
+// newRouteWithParentRefs builds an HTTPRoute in the given namespace with the
+// given parentRefs, for resolveIP test fixtures.
+func newRouteWithParentRefs(namespace string, refs ...gatewayv1.ParentReference) *gatewayv1.HTTPRoute {
+	return &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "route1", Namespace: namespace},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: refs},
+		},
+	}
+}
+
+func ipAddr(v string) gatewayv1.GatewayStatusAddress {
+	t := gatewayv1.IPAddressType
+	return gatewayv1.GatewayStatusAddress{Type: &t, Value: v}
+}
+
+func hostnameAddr(v string) gatewayv1.GatewayStatusAddress {
+	t := gatewayv1.HostnameAddressType
+	return gatewayv1.GatewayStatusAddress{Type: &t, Value: v}
+}
+
+func nsPtr(ns string) *gatewayv1.Namespace {
+	n := gatewayv1.Namespace(ns)
+	return &n
+}
+
+func TestResolveIP_SkipsHostnameTypeAddress(t *testing.T) {
+	gw := newGateway("default", "gw", hostnameAddr("lb.example.com"))
+	route := newRouteWithParentRefs("default", gatewayv1.ParentReference{Name: "gw"})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gw).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+	r.DefaultIP = "0.0.0.0"
+
+	assert.Equal(t, "0.0.0.0", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestResolveIP_PrefersFirstIPAddressWithinOneGateway(t *testing.T) {
+	gw := newGateway("default", "gw", hostnameAddr("lb.example.com"), ipAddr("10.1.2.3"), ipAddr("10.9.9.9"))
+	route := newRouteWithParentRefs("default", gatewayv1.ParentReference{Name: "gw"})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gw).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+
+	assert.Equal(t, "10.1.2.3", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestResolveIP_MultipleParentsFirstWins(t *testing.T) {
+	gwA := newGateway("default", "gw-a", ipAddr("10.0.0.1"))
+	gwB := newGateway("default", "gw-b", ipAddr("10.0.0.2"))
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gwA, gwB).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+
+	route := newRouteWithParentRefs("default",
+		gatewayv1.ParentReference{Name: "gw-a"}, gatewayv1.ParentReference{Name: "gw-b"})
+	for i := 0; i < 10; i++ {
+		assert.Equal(t, "10.0.0.1", r.resolveIP(context.Background(), r.Log, route))
+	}
+
+	reversed := newRouteWithParentRefs("default",
+		gatewayv1.ParentReference{Name: "gw-b"}, gatewayv1.ParentReference{Name: "gw-a"})
+	assert.Equal(t, "10.0.0.2", r.resolveIP(context.Background(), r.Log, reversed))
+}
+
+func TestResolveIP_SkipsEarlierParentWithoutIP(t *testing.T) {
+	gwHostnameOnly := newGateway("default", "gw-hostname-only", hostnameAddr("lb.example.com"))
+	gwWithIP := newGateway("default", "gw-with-ip", ipAddr("10.5.5.5"))
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gwHostnameOnly, gwWithIP).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+
+	route := newRouteWithParentRefs("default",
+		gatewayv1.ParentReference{Name: "gw-hostname-only"}, gatewayv1.ParentReference{Name: "gw-with-ip"})
+
+	assert.Equal(t, "10.5.5.5", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestResolveIP_DefaultsParentNamespaceToRoute(t *testing.T) {
+	gwApps := newGateway("apps", "gw", ipAddr("10.1.1.1"))
+	gwInfra := newGateway("infra", "gw", ipAddr("10.2.2.2"))
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gwApps, gwInfra).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+
+	route := newRouteWithParentRefs("apps", gatewayv1.ParentReference{Name: "gw"})
+
+	assert.Equal(t, "10.1.1.1", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestResolveIP_HonorsExplicitParentNamespace(t *testing.T) {
+	gwApps := newGateway("apps", "gw", ipAddr("10.1.1.1"))
+	gwInfra := newGateway("infra", "gw", ipAddr("10.2.2.2"))
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gwApps, gwInfra).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+
+	route := newRouteWithParentRefs("apps", gatewayv1.ParentReference{Name: "gw", Namespace: nsPtr("infra")})
+
+	assert.Equal(t, "10.2.2.2", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestResolveIP_IgnoresEmptyAddressValue(t *testing.T) {
+	gw := newGateway("default", "gw", ipAddr(""), ipAddr("10.3.3.3"))
+	route := newRouteWithParentRefs("default", gatewayv1.ParentReference{Name: "gw"})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gw).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+
+	assert.Equal(t, "10.3.3.3", r.resolveIP(context.Background(), r.Log, route))
+}
+
 func TestGatewayKindPresent_UsesRESTMapper(t *testing.T) {
 	present := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
 	absent := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute"}
@@ -391,4 +519,137 @@ func TestExtractHostnames_AllSkipped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ctrl.Result{}, result)
 	assert.False(t, addHostCalled)
+}
+
+func TestResolveIP_FallsBackToFlagWhenGatewayMissing(t *testing.T) {
+	route := newRouteWithParentRefs("default", gatewayv1.ParentReference{Name: "does-not-exist"})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+	r.DefaultIP = "0.0.0.0"
+
+	assert.Equal(t, "0.0.0.0", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestResolveIP_FallsBackWhenNoParentRefs(t *testing.T) {
+	route := newRouteWithParentRefs("default")
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+	r.DefaultIP = "0.0.0.0"
+
+	assert.Equal(t, "0.0.0.0", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestResolveIP_ContinuesPastFailedGet(t *testing.T) {
+	gwWithIP := newGateway("default", "gw-with-ip", ipAddr("10.7.7.7"))
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gwWithIP).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+
+	route := newRouteWithParentRefs("default",
+		gatewayv1.ParentReference{Name: "missing-gw"}, gatewayv1.ParentReference{Name: "gw-with-ip"})
+
+	assert.Equal(t, "10.7.7.7", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestResolveIP_ReturnsEmptyWhenNoIPAndNoDefault(t *testing.T) {
+	gwHostnameOnly := newGateway("default", "gw", hostnameAddr("lb.example.com"))
+	route := newRouteWithParentRefs("default", gatewayv1.ParentReference{Name: "gw"})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gwHostnameOnly).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+	r.DefaultIP = ""
+
+	assert.Equal(t, "", r.resolveIP(context.Background(), r.Log, route))
+}
+
+func TestSyncRoute_RequeuesShortAndCreatesNothingWithoutIP(t *testing.T) {
+	gwHostnameOnly := newGateway("default", "gw", hostnameAddr("lb.example.com"))
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "route1",
+			Namespace:  "default",
+			Finalizers: []string{gatewayCleanupFinalizer},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{{Name: "gw"}},
+			},
+			Hostnames: []gatewayv1.Hostname{"app.example.com"},
+		},
+	}
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route, gwHostnameOnly).Build()
+
+	var addCalls, updateCalls, deleteCalls int
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, comment string, aliases, tags []string) (string, error) {
+			addCalls++
+			return "unexpected", nil
+		},
+		updateHostFn: func(_ context.Context, id, ip, hostname, comment string, aliases, tags []string, version string) error {
+			updateCalls++
+			return nil
+		},
+		deleteHostFn: func(_ context.Context, id string) error {
+			deleteCalls++
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = ""
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayShort}, result)
+	assert.Zero(t, addCalls)
+	assert.Zero(t, updateCalls)
+	assert.Zero(t, deleteCalls)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	assert.NotContains(t, updated.Annotations, hostIDsAnnotation)
+}
+
+func TestSyncRoute_UsesDefaultIPWhenParentHasNone(t *testing.T) {
+	gwHostnameOnly := newGateway("default", "gw", hostnameAddr("lb.example.com"))
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "route1",
+			Namespace:  "default",
+			Finalizers: []string{gatewayCleanupFinalizer},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{{Name: "gw"}},
+			},
+			Hostnames: []gatewayv1.Hostname{"app.example.com"},
+		},
+	}
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route, gwHostnameOnly).Build()
+
+	var addedIPs []string
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, comment string, aliases, tags []string) (string, error) {
+			addedIPs = append(addedIPs, ip)
+			return "gw-host-1", nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "9.9.9.9"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, []string{"9.9.9.9"}, addedIPs)
 }
