@@ -2,6 +2,9 @@ package operator
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -652,4 +655,668 @@ func TestSyncRoute_UsesDefaultIPWhenParentHasNone(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ctrl.Result{}, result)
 	assert.Equal(t, []string{"9.9.9.9"}, addedIPs)
+}
+
+// hostnamesToGateway converts []string to []gatewayv1.Hostname, for building
+// route fixtures from plain string slices.
+func hostnamesToGateway(hostnames []string) []gatewayv1.Hostname {
+	out := make([]gatewayv1.Hostname, len(hostnames))
+	for i, h := range hostnames {
+		out[i] = gatewayv1.Hostname(h)
+	}
+	return out
+}
+
+// newHTTPRouteTracking builds an HTTPRoute with the gatewayCleanupFinalizer
+// already present (so syncRoute can be exercised directly, matching how
+// Reconcile calls it after the finalizer-add branch), the given spec
+// hostnames, and — when existingIDs is non-empty — a host-ids annotation
+// seeded from it, for syncRoute diff test fixtures.
+func newHTTPRouteTracking(name, namespace string, hostnames []string, existingIDs map[string]string) *gatewayv1.HTTPRoute {
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       name,
+			Namespace:  namespace,
+			Finalizers: []string{gatewayCleanupFinalizer},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: hostnamesToGateway(hostnames),
+		},
+	}
+	if len(existingIDs) > 0 {
+		data, _ := json.Marshal(existingIDs)
+		route.Annotations = map[string]string{hostIDsAnnotation: string(data)}
+	}
+	return route
+}
+
+func TestSyncRoute_CreatesNewHostnames(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com", "b.example.com"}, nil)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	nextID := 1
+	var addedHosts []string
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, hostname, _ string, _, _ []string) (string, error) {
+			addedHosts = append(addedHosts, hostname)
+			id := fmt.Sprintf("id-%d", nextID)
+			nextID++
+			return id, nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.ElementsMatch(t, []string{"a.example.com", "b.example.com"}, addedHosts)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "id-1", ids["a.example.com"])
+	assert.Equal(t, "id-2", ids["b.example.com"])
+}
+
+func TestSyncRoute_UpdatesTrackedHostnames(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, map[string]string{"a.example.com": "id-1"})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var updateCalls, addCalls int
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, id, ip, hostname, comment string, aliases, tags []string, _ string) error {
+			updateCalls++
+			assert.Equal(t, "id-1", id)
+			assert.Equal(t, "10.0.0.1", ip)
+			assert.Equal(t, "a.example.com", hostname)
+			assert.Equal(t, "k8s-gateway:default/route1", comment)
+			assert.Nil(t, aliases)
+			assert.Contains(t, tags, "gateway")
+			assert.Contains(t, tags, "httproute")
+			return nil
+		},
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			addCalls++
+			return "unexpected", nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, 1, updateCalls)
+	assert.Zero(t, addCalls)
+}
+
+func TestSyncRoute_UpdatesEvenWhenIPUnchanged(t *testing.T) {
+	// D-13: UpdateHost is issued unconditionally for every tracked hostname
+	// on every reconcile that reaches syncRoute, even when the resolved IP
+	// is identical to the previous reconcile's. This is the intentional
+	// mechanism that propagates a changed Gateway IP without the controller
+	// keeping any extra "last known IP" state. Do not "fix" this into a
+	// no-op when the IP looks unchanged — see D-13.
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, map[string]string{"a.example.com": "id-1"})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var updateCalls int
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			updateCalls++
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	_, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, 1, updateCalls)
+}
+
+func TestSyncRoute_DeletesRemovedHostnames(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, map[string]string{
+		"a.example.com": "id-a",
+		"b.example.com": "id-b",
+	})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var deletedIDs []string
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error { return nil },
+		deleteHostFn: func(_ context.Context, id string) error {
+			deletedIDs = append(deletedIDs, id)
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, []string{"id-b"}, deletedIDs)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"a.example.com": "id-a"}, ids)
+}
+
+func TestSyncRoute_SkipsUpdateWhenNothingChanged(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, nil)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "id-1", nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	ctx := context.Background()
+	var obj gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route1", Namespace: "default"}, &obj))
+	_, err := r.syncRoute(ctx, r.Log, &obj, extractHostnames(r.Log, &obj))
+	require.NoError(t, err)
+
+	var afterFirst gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route1", Namespace: "default"}, &afterFirst))
+	rvAfterFirst := afterFirst.ResourceVersion
+
+	_, err = r.syncRoute(ctx, r.Log, &afterFirst, extractHostnames(r.Log, &afterFirst))
+	require.NoError(t, err)
+
+	var afterSecond gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route1", Namespace: "default"}, &afterSecond))
+	assert.Equal(t, rvAfterFirst, afterSecond.ResourceVersion)
+}
+
+func TestSyncRoute_PerHostErrorDoesNotAbortBatch(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com", "b.example.com", "c.example.com"}, nil)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var created []string
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, hostname, _ string, _, _ []string) (string, error) {
+			if hostname == "a.example.com" {
+				return "", errors.New("boom")
+			}
+			created = append(created, hostname)
+			return "id-" + hostname, nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayLong}, result)
+	assert.ElementsMatch(t, []string{"b.example.com", "c.example.com"}, created)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "a.example.com")
+	assert.Contains(t, ids, "b.example.com")
+	assert.Contains(t, ids, "c.example.com")
+}
+
+func TestSyncRoute_RetainsPriorIDOnUpdateFailure(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, map[string]string{"a.example.com": "id-1"})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var deleteCalls int
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			return errors.New("boom")
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			deleteCalls++
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayLong}, result)
+	assert.Zero(t, deleteCalls)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "id-1", ids["a.example.com"])
+}
+
+func TestSyncRoute_RetainsIDOnStaleDeleteFailure(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"keep.example.com"}, map[string]string{
+		"keep.example.com":  "id-keep",
+		"stale.example.com": "id-stale",
+	})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	mock := &mockHostClient{
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error { return nil },
+		deleteHostFn: func(_ context.Context, _ string) error {
+			return errors.New("boom")
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayLong}, result)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "id-stale", ids["stale.example.com"])
+}
+
+func TestSyncRoute_NeverDeletesUntrackedID(t *testing.T) {
+	s := gatewayScheme(t)
+
+	everHeldIDs := make(map[string]bool)
+	var deletedIDs []string
+	nextID := 1
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			id := fmt.Sprintf("id-%d", nextID)
+			nextID++
+			everHeldIDs[id] = true
+			return id, nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error { return nil },
+		deleteHostFn: func(_ context.Context, id string) error {
+			deletedIDs = append(deletedIDs, id)
+			return nil
+		},
+	}
+
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, nil)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	ctx := context.Background()
+
+	// Create.
+	var obj gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route1", Namespace: "default"}, &obj))
+	_, err := r.syncRoute(ctx, r.Log, &obj, extractHostnames(r.Log, &obj))
+	require.NoError(t, err)
+
+	// Edit: add a second hostname.
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route1", Namespace: "default"}, &obj))
+	obj.Spec.Hostnames = append(obj.Spec.Hostnames, "b.example.com")
+	require.NoError(t, k8sClient.Update(ctx, &obj))
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route1", Namespace: "default"}, &obj))
+	_, err = r.syncRoute(ctx, r.Log, &obj, extractHostnames(r.Log, &obj))
+	require.NoError(t, err)
+
+	// Removal: drop both hostnames.
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route1", Namespace: "default"}, &obj))
+	obj.Spec.Hostnames = nil
+	require.NoError(t, k8sClient.Update(ctx, &obj))
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route1", Namespace: "default"}, &obj))
+	_, err = r.syncRoute(ctx, r.Log, &obj, extractHostnames(r.Log, &obj))
+	require.NoError(t, err)
+
+	for _, id := range deletedIDs {
+		assert.True(t, everHeldIDs[id], "deleted ID %s was never held by this object's annotation", id)
+	}
+	assert.NotEmpty(t, deletedIDs)
+}
+
+func TestSyncRoute_CorruptAnnotationRequeuesWithoutWriting(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, nil)
+	route.Annotations = map[string]string{hostIDsAnnotation: "not valid json"}
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var calls int
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			calls++
+			return "unexpected", nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			calls++
+			return nil
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			calls++
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.Error(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayShort}, result)
+	assert.Zero(t, calls)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	assert.Equal(t, "not valid json", updated.Annotations[hostIDsAnnotation])
+}
+
+func TestSyncRoute_DuplicateHostnameAcrossRoutesDoesNotCrossDelete(t *testing.T) {
+	routeA := newHTTPRouteTracking("route-a", "default", []string{"shared.example.com"}, nil)
+	routeB := newHTTPRouteTracking("route-b", "default", []string{"shared.example.com"}, nil)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(routeA, routeB).Build()
+
+	nextID := 1
+	var deletedIDs []string
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			id := fmt.Sprintf("id-%d", nextID)
+			nextID++
+			return id, nil
+		},
+		deleteHostFn: func(_ context.Context, id string) error {
+			deletedIDs = append(deletedIDs, id)
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	ctx := context.Background()
+
+	var a gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &a))
+	_, err := r.syncRoute(ctx, r.Log, &a, extractHostnames(r.Log, &a))
+	require.NoError(t, err)
+
+	var b gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-b", Namespace: "default"}, &b))
+	_, err = r.syncRoute(ctx, r.Log, &b, extractHostnames(r.Log, &b))
+	require.NoError(t, err)
+
+	// Remove the hostname from route B only.
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-b", Namespace: "default"}, &b))
+	bIDsBefore, err := getHostIDsAnnotation(r.Log, &b)
+	require.NoError(t, err)
+	bID := bIDsBefore["shared.example.com"]
+	require.NotEmpty(t, bID)
+
+	b.Spec.Hostnames = nil
+	require.NoError(t, k8sClient.Update(ctx, &b))
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-b", Namespace: "default"}, &b))
+	_, err = r.syncRoute(ctx, r.Log, &b, extractHostnames(r.Log, &b))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{bID}, deletedIDs)
+
+	var updatedA gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &updatedA))
+	aIDs, err := getHostIDsAnnotation(r.Log, &updatedA)
+	require.NoError(t, err)
+	assert.Contains(t, aIDs, "shared.example.com")
+}
+
+// newDeletingHTTPRoute builds an HTTPRoute already marked for deletion, for
+// reconcileDelete test fixtures. Finalizers are set before DeletionTimestamp,
+// mirroring the exact seeding order ingressroute_controller_test.go's
+// TestReconcile_IngressRoute_Delete uses — the fake client's resourceVersion
+// semantics depend on this order rather than a Create-then-Delete round-trip.
+func newDeletingHTTPRoute(t *testing.T, name, namespace string, finalizers []string, existingIDs map[string]string) *gatewayv1.HTTPRoute {
+	t.Helper()
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+	}
+	route.SetFinalizers(finalizers)
+	now := metav1.Now()
+	route.SetDeletionTimestamp(&now)
+	if len(existingIDs) > 0 {
+		data, err := json.Marshal(existingIDs)
+		require.NoError(t, err)
+		route.SetAnnotations(map[string]string{hostIDsAnnotation: string(data)})
+	}
+	return route
+}
+
+func TestReconcile_HTTPRoute_DeletesHostsOnFinalize(t *testing.T) {
+	route := newDeletingHTTPRoute(t, "route1", "default", []string{gatewayCleanupFinalizer}, map[string]string{
+		"a.example.com": "id-a",
+		"b.example.com": "id-b",
+	})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var deletedIDs []string
+	mock := &mockHostClient{
+		deleteHostFn: func(_ context.Context, id string) error {
+			deletedIDs = append(deletedIDs, id)
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "route1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.ElementsMatch(t, []string{"id-a", "id-b"}, deletedIDs)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	assert.NotContains(t, updated.Finalizers, gatewayCleanupFinalizer)
+}
+
+func TestReconcile_Route_DeleteWithoutFinalizerIsNoOp(t *testing.T) {
+	// The fake client refuses to seed an object with a DeletionTimestamp and
+	// no finalizers at all (mirroring the real API server's behavior: such
+	// an object would already be gone). Seed a finalizer this reconciler
+	// does not own, so ContainsFinalizer(gatewayCleanupFinalizer) is still
+	// false and reconcileDelete's no-op guard is genuinely exercised.
+	route := newDeletingHTTPRoute(t, "route1", "default", []string{"other.example/finalizer"}, nil)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var calls int
+	mock := &mockHostClient{
+		deleteHostFn: func(_ context.Context, _ string) error {
+			calls++
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "route1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Zero(t, calls)
+}
+
+func TestReconcile_Route_PartialDeleteKeepsFinalizerAndRequeues(t *testing.T) {
+	route := newDeletingHTTPRoute(t, "route1", "default", []string{gatewayCleanupFinalizer}, map[string]string{
+		"ok.example.com":   "id-ok",
+		"fail.example.com": "id-fail",
+	})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	mock := &mockHostClient{
+		deleteHostFn: func(_ context.Context, id string) error {
+			if id == "id-fail" {
+				return errors.New("boom")
+			}
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "route1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayShort}, result)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	assert.Contains(t, updated.Finalizers, gatewayCleanupFinalizer)
+
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "ok.example.com")
+	assert.Equal(t, "id-fail", ids["fail.example.com"])
+}
+
+func TestReconcile_Route_DeleteCorruptAnnotationRequeues(t *testing.T) {
+	route := newDeletingHTTPRoute(t, "route1", "default", []string{gatewayCleanupFinalizer}, nil)
+	route.Annotations = map[string]string{hostIDsAnnotation: "not valid json"}
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var calls int
+	mock := &mockHostClient{
+		deleteHostFn: func(_ context.Context, _ string) error {
+			calls++
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "route1", Namespace: "default"},
+	})
+	require.Error(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayShort}, result)
+	assert.Zero(t, calls)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	assert.Contains(t, updated.Finalizers, gatewayCleanupFinalizer)
+}
+
+func TestReconcile_Route_DeleteAllThreeKinds(t *testing.T) {
+	s := gatewayScheme(t)
+	now := metav1.Now()
+
+	grpcRoute := &gatewayv1.GRPCRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "groute", Namespace: "default"},
+	}
+	grpcRoute.SetFinalizers([]string{gatewayCleanupFinalizer})
+	grpcRoute.SetDeletionTimestamp(&now)
+	grpcIDsJSON, err := json.Marshal(map[string]string{"grpc.example.com": "id-grpc"})
+	require.NoError(t, err)
+	grpcRoute.SetAnnotations(map[string]string{hostIDsAnnotation: string(grpcIDsJSON)})
+
+	tlsRoute := &gatewayv1.TLSRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "troute", Namespace: "default"},
+	}
+	tlsRoute.SetFinalizers([]string{gatewayCleanupFinalizer})
+	tlsRoute.SetDeletionTimestamp(&now)
+	tlsIDsJSON, err := json.Marshal(map[string]string{"tls.example.com": "id-tls"})
+	require.NoError(t, err)
+	tlsRoute.SetAnnotations(map[string]string{hostIDsAnnotation: string(tlsIDsJSON)})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(grpcRoute, tlsRoute).Build()
+
+	var deletedIDs []string
+	mock := &mockHostClient{
+		deleteHostFn: func(_ context.Context, id string) error {
+			deletedIDs = append(deletedIDs, id)
+			return nil
+		},
+	}
+
+	grpcReconciler := &GatewayRouteReconciler{
+		Client:     k8sClient,
+		HostClient: mock,
+		Log:        slog.Default(),
+		KindName:   "grpcroute",
+		newObject:  func() client.Object { return &gatewayv1.GRPCRoute{} },
+		newList:    func() client.ObjectList { return &gatewayv1.GRPCRouteList{} },
+	}
+	tlsReconciler := &GatewayRouteReconciler{
+		Client:     k8sClient,
+		HostClient: mock,
+		Log:        slog.Default(),
+		KindName:   "tlsroute",
+		newObject:  func() client.Object { return &gatewayv1.TLSRoute{} },
+		newList:    func() client.ObjectList { return &gatewayv1.TLSRouteList{} },
+	}
+
+	result, err := grpcReconciler.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "groute", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+
+	result, err = tlsReconciler.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "troute", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+
+	assert.ElementsMatch(t, []string{"id-grpc", "id-tls"}, deletedIDs)
+
+	var updatedGRPC gatewayv1.GRPCRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "groute", Namespace: "default"}, &updatedGRPC))
+	assert.NotContains(t, updatedGRPC.Finalizers, gatewayCleanupFinalizer)
+
+	var updatedTLS gatewayv1.TLSRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "troute", Namespace: "default"}, &updatedTLS))
+	assert.NotContains(t, updatedTLS.Finalizers, gatewayCleanupFinalizer)
 }
