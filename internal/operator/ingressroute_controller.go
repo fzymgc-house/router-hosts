@@ -387,7 +387,7 @@ func appendRegexMatches(dst []string, re *regexp.Regexp, s string) []string {
 // object's annotations. It returns an error if the annotation is present
 // but contains corrupt JSON, preventing callers from proceeding with an
 // incomplete view of existing host IDs.
-func getHostIDsAnnotation(log *slog.Logger, obj *unstructured.Unstructured) (map[string]string, error) {
+func getHostIDsAnnotation(log *slog.Logger, obj client.Object) (map[string]string, error) {
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		return nil, nil
@@ -407,7 +407,7 @@ func getHostIDsAnnotation(log *slog.Logger, obj *unstructured.Unstructured) (map
 
 // setHostIDsAnnotation stores the hostname -> hostID mapping as a JSON
 // annotation on the object.
-func setHostIDsAnnotation(obj *unstructured.Unstructured, ids map[string]string) error {
+func setHostIDsAnnotation(obj client.Object, ids map[string]string) error {
 	if len(ids) == 0 {
 		annotations := obj.GetAnnotations()
 		delete(annotations, hostIDsAnnotation)
