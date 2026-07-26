@@ -5,15 +5,15 @@ milestone_name: K8s-Native Automation
 current_phase: 07
 current_phase_name: gateway-api-support
 status: executing
-stopped_at: Completed 07-01-PLAN.md
-last_updated: "2026-07-26T16:15:22.106Z"
+stopped_at: Completed 07-06-PLAN.md
+last_updated: "2026-07-26T16:25:23.769Z"
 last_activity: 2026-07-26
 last_activity_desc: Phase 07 execution started
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 6
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 ## Current Position
 
 Phase: 07 (gateway-api-support) — EXECUTING
-Plan: 2 of 6
+Plan: 3 of 6
 Status: Ready to execute
 Last activity: 2026-07-26 — Phase 07 execution started
 
-Progress: [██░░░░░░░░] 17%
+Progress: [███░░░░░░░] 33%
 
 ## Performance Metrics
 
@@ -60,6 +60,7 @@ Progress: [██░░░░░░░░] 17%
 | Plan | Duration | Tasks | Files |
 |------|----------|-------|-------|
 | Phase 07 P01 | 40min | 4 tasks | 6 files |
+| Phase 07 P06 | 25min | 2 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -72,6 +73,8 @@ Load-bearing locked decisions affecting current/forward work:
 - **router-hosts-v5b / -vl8 / -4w2** (LOCKED): compaction via HostCompacted seed, manual scope, GetAtTime sacrificed — Phase 6
 - **Rust → Go migration (2026-02-22)**: current stack is Go/SQLite-only; Rust-era Service-controller design was never ported (Phase 8 gap)
 - [Phase ?]: D-09 confirmed at plan checkpoint: single gatewayCleanupFinalizer (router-hosts.fzymgc.house/gateway-cleanup) shared across all three Gateway API route kinds, not per-kind finalizers
+- [Phase ?]: Fixed pre-existing lefthook.yaml regex-vs-glob bug in check-yaml exclude (Rule 3, blocking); added .yamlfmt.yaml with retain_line_breaks:true to preserve values.yaml formatting style
+- [Phase ?]: Gateway API RBAC: write verbs (update/patch) only on httproutes/grpcroutes/tlsroutes for finalizer+annotation write-back; gateways stays read-only get/list/watch
 
 ### Pending Todos
 
@@ -94,6 +97,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-26T16:15:22.100Z
-Stopped at: Completed 07-01-PLAN.md
+Last session: 2026-07-26T16:25:23.762Z
+Stopped at: Completed 07-06-PLAN.md
 Resume file: None
