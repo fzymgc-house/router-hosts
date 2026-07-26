@@ -69,6 +69,7 @@ Approved 2026-07-25 from #364.
 - [ ] **TMPL-04**: Writes to a path are atomic (write-and-rename), so a consumer watching the file never observes a partial write
 - [ ] **TMPL-05**: Sink mode holds the rendered artifact current as host data changes without polling, and recovers after a connection interruption without emitting a truncated artifact
 - [ ] **TMPL-06**: `ExportHosts` and sink streaming yield lazily (O(1) memory, client backpressure) instead of materializing the full result set — currently `service.go:609` calls `store.ListAll` and builds the entire payload first (absorbs #23)
+- [ ] **TMPL-07**: Client-side stream collection is bounded and fails with a clear error past the limit, so a malicious or buggy server cannot exhaust client memory — currently `internal/client/commands/host.go:345`/`:363`, `snapshot.go`, and `importexport.go` all `append` without a cap (absorbs #38)
 
 ## v2 Requirements
 
@@ -128,6 +129,7 @@ Acknowledged but deferred; not in the current roadmap.
 | TMPL-04 | Phase 10 | Pending |
 | TMPL-05 | Phase 10 | Pending |
 | TMPL-06 | Phase 10 | Pending |
+| TMPL-07 | Phase 10 | Pending |
 
 **Coverage:**
 
