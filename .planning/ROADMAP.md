@@ -148,16 +148,17 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 
 **Goal**: A consumer defines its own output format and keeps it current, so one stateful server feeds N independent consumers and new resolver formats stop requiring an upstream release.
 **Depends on**: Phase 1
-**Requirements**: TMPL-01, TMPL-02, TMPL-03, TMPL-04, TMPL-05, TMPL-06
+**Requirements**: TMPL-01, TMPL-02, TMPL-03, TMPL-04, TMPL-05, TMPL-06, TMPL-07
 **Success Criteria** (what must be TRUE):
 
 1. A caller supplies a template and receives host data rendered through it, with no code change to this project
 2. The field set a template may reference is documented and versioned, and a template referencing an undefined key fails loudly rather than rendering empty
 3. A render or write failure leaves any previously written artifact byte-identical, and a concurrent reader never observes a partially written file
 4. Sink mode reflects a host mutation without operator intervention and recovers on its own after a connection interruption, without emitting a truncated artifact
-5. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
+5. Neither side of a stream can be driven out of memory by the other: the server yields lazily instead of materializing the full result set, and the client refuses an unbounded response rather than collecting it
+6. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 **Plans**: TBD
-**Status**: Not started — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06
+**Status**: Not started — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07
 
 ## Progress
 
