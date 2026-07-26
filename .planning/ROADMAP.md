@@ -6,9 +6,17 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 
 ## Milestones
 
-- ✅ **v1 Shipped Baseline** — Phases 1–6 (shipped, at v0.10.13)
-- 🚧 **K8s-Native Automation** — Phases 7–9 (active; north-star parity)
-- 📋 **Consumer-Owned Output** — Phase 10 (approved 2026-07-25 from #364)
+### ✅ v0.10.13 — v1 Shipped Baseline
+
+Phases 1–6. Shipped pre-GSD; reconstructed retrospectively at bootstrap (2026-07-07).
+
+### 🚧 v0.11.0 — K8s-Native Automation
+
+Phases 7–9. Active; north-star operator / Gateway-API parity.
+
+### 📋 v0.12.0 — Consumer-Owned Output
+
+Phase 10. Approved 2026-07-25 from #364.
 
 ## Phases
 
@@ -27,7 +35,7 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 - [ ] **Phase 9: Hook Reliability & Metrics** - Hook execution metrics + configurable timeout/concurrency
 - [ ] **Phase 10: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink
 
-## Phase Details
+## ✅ v0.10.13 — v1 Shipped Baseline (Phase Details)
 
 ### Phase 1: Event-Sourced Host Core (CLI + gRPC/mTLS)
 
@@ -113,6 +121,8 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 **Plans**: shipped (pre-GSD)
 **Status**: Complete — shipped (v0.10.13; governed by ADRs v5b, vl8, 4w2)
 
+## 🚧 v0.11.0 — K8s-Native Automation (Phase Details)
+
 ### Phase 7: Gateway API Support
 
 **Goal**: Gateway API routes auto-populate router DNS, closing the largest operator-parity gap toward the north star.
@@ -175,6 +185,8 @@ Plans:
 
 **Plans**: TBD
 **Status**: Not started
+
+## 📋 v0.12.0 — Consumer-Owned Output (Phase Details)
 
 ### Phase 10: Consumer-Rendered Output (templates + sink)
 
