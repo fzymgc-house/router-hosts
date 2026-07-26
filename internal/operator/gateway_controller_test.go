@@ -191,3 +191,81 @@ func TestReconcile_HTTPRoute_AddsFinalizerAndReturns(t *testing.T) {
 	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
 	assert.Contains(t, updated.Finalizers, gatewayCleanupFinalizer)
 }
+
+func TestHostnamesOf_AllKinds(t *testing.T) {
+	httpRoute := &gatewayv1.HTTPRoute{
+		Spec: gatewayv1.HTTPRouteSpec{Hostnames: []gatewayv1.Hostname{"a.example.com"}},
+	}
+	grpcRoute := &gatewayv1.GRPCRoute{
+		Spec: gatewayv1.GRPCRouteSpec{Hostnames: []gatewayv1.Hostname{"grpc.example.com"}},
+	}
+	tlsRoute := &gatewayv1.TLSRoute{
+		Spec: gatewayv1.TLSRouteSpec{Hostnames: []gatewayv1.Hostname{"tls.example.com"}},
+	}
+
+	assert.Equal(t, []string{"a.example.com"}, hostnamesOf(httpRoute))
+	assert.Equal(t, []string{"grpc.example.com"}, hostnamesOf(grpcRoute))
+	assert.Equal(t, []string{"tls.example.com"}, hostnamesOf(tlsRoute))
+	assert.Nil(t, hostnamesOf(&gatewayv1.Gateway{}))
+}
+
+func TestParentRefsOf_AllKinds(t *testing.T) {
+	ref := gatewayv1.ParentReference{Name: "gw"}
+
+	httpRoute := &gatewayv1.HTTPRoute{
+		Spec: gatewayv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{ref}},
+		},
+	}
+	grpcRoute := &gatewayv1.GRPCRoute{
+		Spec: gatewayv1.GRPCRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{ref}},
+		},
+	}
+	tlsRoute := &gatewayv1.TLSRoute{
+		Spec: gatewayv1.TLSRouteSpec{
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{ParentRefs: []gatewayv1.ParentReference{ref}},
+		},
+	}
+
+	assert.Equal(t, []gatewayv1.ParentReference{ref}, parentRefsOf(httpRoute))
+	assert.Equal(t, []gatewayv1.ParentReference{ref}, parentRefsOf(grpcRoute))
+	assert.Equal(t, []gatewayv1.ParentReference{ref}, parentRefsOf(tlsRoute))
+	assert.Nil(t, parentRefsOf(&gatewayv1.Gateway{}))
+}
+
+func TestGatewayRouteKinds_CoversThreeKinds(t *testing.T) {
+	kinds := gatewayRouteKinds()
+	require.Len(t, kinds, 3)
+
+	wantNames := []string{"httproute", "grpcroute", "tlsroute"}
+	for i, k := range kinds {
+		assert.Equal(t, wantNames[i], k.name)
+		assert.Equal(t, "gateway.networking.k8s.io", k.gvk.Group)
+		assert.Equal(t, "v1", k.gvk.Version)
+	}
+
+	assert.IsType(t, &gatewayv1.HTTPRoute{}, kinds[0].newObject())
+	assert.IsType(t, &gatewayv1.HTTPRouteList{}, kinds[0].newList())
+	assert.IsType(t, &gatewayv1.GRPCRoute{}, kinds[1].newObject())
+	assert.IsType(t, &gatewayv1.GRPCRouteList{}, kinds[1].newList())
+	assert.IsType(t, &gatewayv1.TLSRoute{}, kinds[2].newObject())
+	assert.IsType(t, &gatewayv1.TLSRouteList{}, kinds[2].newList())
+}
+
+func TestGatewayScheme_InstallsAllRouteKinds(t *testing.T) {
+	s := gatewayScheme(t)
+
+	for _, gvk := range []schema.GroupVersionKind{
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRouteList"},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute"},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRouteList"},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "TLSRoute"},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "TLSRouteList"},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"},
+		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GatewayList"},
+	} {
+		assert.True(t, s.Recognizes(gvk), "scheme does not recognize %s", gvk)
+	}
+}
