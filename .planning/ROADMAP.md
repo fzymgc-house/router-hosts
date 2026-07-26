@@ -134,12 +134,12 @@ Phase 10. Approved 2026-07-25 from #364.
 2. Route entry IPs are resolved from the parent Gateway's `status.addresses`
 3. Deleting or editing a route updates/removes the corresponding DNS entries, and the shipped Helm chart + RBAC grant the operator watch/list access to Gateway API resources
 
-**Plans**: 6 plans
+**Plans**: 1/6 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 07-01-PLAN.md — Tracer: pin gateway-api v1.6.1, share the host-ids helpers, and take one HTTPRoute hostname end to end into a router DNS entry
+- [x] 07-01-PLAN.md — Tracer: pin gateway-api v1.6.1, share the host-ids helpers, and take one HTTPRoute hostname end to end into a router DNS entry
 - [ ] 07-06-PLAN.md — Helm chart: Gateway API RBAC, `gateway.enabled` opt-in, and chart docs
 
 **Wave 2** *(blocked on Wave 1 completion)*
@@ -218,7 +218,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Observability | v1 Baseline | shipped | Complete | v0.10.13 |
 | 5. Split-Horizon DNS Output | v1 Baseline | shipped | Complete | v0.10.13 |
 | 6. Aggregate Compaction | v1 Baseline | shipped | Complete | v0.10.13 |
-| 7. Gateway API Support | K8s-Native Automation | 0/TBD | Not started | - |
+| 7. Gateway API Support | K8s-Native Automation | 1/6 | In Progress|  |
 | 8. Service Controller | K8s-Native Automation | 0/TBD | Not started | - |
 | 9. Hook Reliability & Metrics | K8s-Native Automation | 0/TBD | Not started | - |
 | 10. Consumer-Rendered Output | Consumer-Owned Output | 0/TBD | Not started | - |
