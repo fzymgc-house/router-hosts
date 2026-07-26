@@ -117,8 +117,18 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 1. Creating an HTTPRoute, GRPCRoute, or TLSRoute results in router DNS entries for each of its hostnames
 2. Route entry IPs are resolved from the parent Gateway's `status.addresses`
 3. Deleting or editing a route updates/removes the corresponding DNS entries, and the shipped Helm chart + RBAC grant the operator watch/list access to Gateway API resources
-**Plans**: TBD
-**Status**: Not started — design exists (2026-06-07, Draft); no Gateway API controller or `gateway-api` dependency in the Go operator yet
+**Plans**: 6 plans
+
+Plans:
+
+- [ ] 07-01-PLAN.md — Tracer: pin gateway-api v1.6.1, share the host-ids helpers, and take one HTTPRoute hostname end to end into a router DNS entry
+- [ ] 07-02-PLAN.md — Expand to GRPCRoute and TLSRoute; filter wildcard, duplicate, and invalid hostnames
+- [ ] 07-03-PLAN.md — Complete IP resolution from parent Gateway `status.addresses`, including fallback and no-IP requeue
+- [ ] 07-04-PLAN.md — Route lifecycle: create/update/delete diff, finalizer cleanup, corrupt-annotation safety
+- [ ] 07-05-PLAN.md — parentRef field index, Gateway re-enqueue, and CRD-presence gating for every watched kind
+- [ ] 07-06-PLAN.md — Helm chart: Gateway API RBAC, `gateway.enabled` opt-in, and chart docs
+
+**Status**: Planned — 6 plans across 5 waves (07-01 and 07-06 run in parallel in wave 1)
 
 ### Phase 8: Kubernetes Service Controller
 
