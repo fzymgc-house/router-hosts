@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 
 	"github.com/samber/oops"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -14,6 +15,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
+	"github.com/fzymgc-house/router-hosts/internal/validation"
 )
 
 // gatewayCleanupFinalizer is the single finalizer applied to every Gateway
@@ -114,16 +117,39 @@ func parentRefsOf(obj client.Object) []gatewayv1.ParentReference {
 	}
 }
 
-// extractHostnames returns the de-duplicated hostnames declared on a route.
-// Wildcard skipping and validation.ValidateHostname filtering land in plan 02.
-func extractHostnames(_ *slog.Logger, obj client.Object) []string {
+// extractHostnames returns the hostnames declared on a route that are safe to
+// become router DNS entries, in first-appearance order. This is the single
+// hostname filter every route kind passes through before any HostClient
+// call:
+//
+//  1. A `*`-prefixed wildcard is skipped — it cannot be a concrete entry
+//     (D-18).
+//  2. Duplicates are skipped, tracked by a seen set.
+//  3. Each remaining name is validated with validation.ValidateHostname;
+//     failures are logged and skipped, never fatal (D-18).
+//  4. A dot-less (non-FQDN) name is accepted but logged at Warn, matching
+//     HostMapping/IngressRoute behavior (D-19).
+func extractHostnames(log *slog.Logger, obj client.Object) []string {
 	seen := make(map[string]struct{})
 	var hostnames []string
 	for _, h := range hostnamesOf(obj) {
+		if strings.HasPrefix(h, "*") {
+			continue
+		}
 		if _, exists := seen[h]; exists {
 			continue
 		}
 		seen[h] = struct{}{}
+
+		if err := validation.ValidateHostname(h); err != nil {
+			log.Warn("skipping invalid hostname extracted from Gateway API route", "hostname", h, "error", err)
+			continue
+		}
+
+		if !strings.Contains(h, ".") {
+			log.Warn("hostname has no dot; accepting as non-FQDN per D-19", "hostname", h)
+		}
+
 		hostnames = append(hostnames, h)
 	}
 	return hostnames
