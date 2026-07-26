@@ -817,7 +817,16 @@ func TestSyncRoute_AdoptsExistingHostOnAlreadyExists(t *testing.T) {
 			findCalls++
 			assert.Equal(t, "10.0.0.1", ip)
 			assert.Equal(t, "a.example.com", hostname)
-			return &HostEntry{ID: "orphaned-id", IP: ip, Hostname: hostname}, nil
+			// The orphan is THIS object's own earlier creation, so the server
+			// holds the comment and tags syncRoute stamped on it. Adoption is
+			// only correct for an entry this object owns (T-07-02); returning a
+			// provenance-less entry here would describe a server reply that
+			// cannot occur.
+			return &HostEntry{
+				ID: "orphaned-id", IP: ip, Hostname: hostname,
+				Comment: "k8s-gateway:default/route1",
+				Tags:    []string{"kubernetes", "gateway", "httproute"},
+			}, nil
 		},
 	}
 
@@ -879,7 +888,14 @@ func TestSyncRoute_RecoversFromCreateSucceedsThenAnnotationUpdateFails(t *testin
 			return "", oops.Wrapf(ErrHostAlreadyExists, "adding host")
 		},
 		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
-			return &HostEntry{ID: "orphan-1", IP: ip, Hostname: hostname}, nil
+			// "orphan-1" was created by this same object's first AddHost, so
+			// the server stored the comment and tags syncRoute passed. Adoption
+			// is correct precisely because the provenance matches (T-07-02).
+			return &HostEntry{
+				ID: "orphan-1", IP: ip, Hostname: hostname,
+				Comment: "k8s-gateway:default/route1",
+				Tags:    []string{"kubernetes", "gateway", "httproute"},
+			}, nil
 		},
 	}
 
@@ -1315,6 +1331,62 @@ func TestSyncRoute_CorruptAnnotationRequeuesWithoutWriting(t *testing.T) {
 	assert.Equal(t, "not valid json", updated.Annotations[hostIDsAnnotation])
 }
 
+// fakeHostStore models the server's uniqueness constraint on (ip, hostname):
+// AddHost rejects a duplicate pair with ErrHostAlreadyExists and FindHost then
+// serves that conflicting entry. Mocks that hand out a fresh ID per AddHost
+// describe a server that cannot exist (see internal/server/commands.go, which
+// rejects the duplicate), and so never reach the adoption branch at all.
+type fakeHostStore struct {
+	entries map[string]*HostEntry // keyed by ip|hostname
+	nextID  int
+	deleted []string
+}
+
+func newFakeHostStore() *fakeHostStore {
+	return &fakeHostStore{entries: map[string]*HostEntry{}}
+}
+
+func (f *fakeHostStore) key(ip, hostname string) string { return ip + "|" + hostname }
+
+// seed inserts an entry owned by someone else — a different comment and/or a
+// different tag set than the reconciler under test would write.
+func (f *fakeHostStore) seed(id, ip, hostname, comment string, tags []string) {
+	f.entries[f.key(ip, hostname)] = &HostEntry{
+		ID: id, IP: ip, Hostname: hostname, Comment: comment, Tags: tags,
+	}
+}
+
+func (f *fakeHostStore) client() *mockHostClient {
+	return &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, comment string, _, tags []string) (string, error) {
+			k := f.key(ip, hostname)
+			if _, exists := f.entries[k]; exists {
+				return "", oops.Wrapf(ErrHostAlreadyExists, "adding host %s/%s", ip, hostname)
+			}
+			f.nextID++
+			id := fmt.Sprintf("id-%d", f.nextID)
+			f.entries[k] = &HostEntry{ID: id, IP: ip, Hostname: hostname, Comment: comment, Tags: tags}
+			return id, nil
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			return f.entries[f.key(ip, hostname)], nil
+		},
+		deleteHostFn: func(_ context.Context, id string) error {
+			f.deleted = append(f.deleted, id)
+			for k, e := range f.entries {
+				if e.ID == id {
+					delete(f.entries, k)
+				}
+			}
+			return nil
+		},
+	}
+}
+
+// T-07-02: two routes of the SAME kind declaring one hostname. The server
+// rejects the second create, so route B meets route A's live entry through the
+// adoption path. B must refuse it — adopting would put A's ID in B's annotation
+// and deleting B would then destroy A's DNS entry.
 func TestSyncRoute_DuplicateHostnameAcrossRoutesDoesNotCrossDelete(t *testing.T) {
 	routeA := newHTTPRouteTracking("route-a", "default", []string{"shared.example.com"}, nil)
 	routeB := newHTTPRouteTracking("route-b", "default", []string{"shared.example.com"}, nil)
@@ -1322,21 +1394,8 @@ func TestSyncRoute_DuplicateHostnameAcrossRoutesDoesNotCrossDelete(t *testing.T)
 	s := gatewayScheme(t)
 	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(routeA, routeB).Build()
 
-	nextID := 1
-	var deletedIDs []string
-	mock := &mockHostClient{
-		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
-			id := fmt.Sprintf("id-%d", nextID)
-			nextID++
-			return id, nil
-		},
-		deleteHostFn: func(_ context.Context, id string) error {
-			deletedIDs = append(deletedIDs, id)
-			return nil
-		},
-	}
-
-	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	store := newFakeHostStore()
+	r := newHTTPRouteReconciler(t, k8sClient, store.client())
 	r.DefaultIP = "10.0.0.1"
 
 	ctx := context.Background()
@@ -1346,31 +1405,98 @@ func TestSyncRoute_DuplicateHostnameAcrossRoutesDoesNotCrossDelete(t *testing.T)
 	_, err := r.syncRoute(ctx, r.Log, &a, extractHostnames(r.Log, &a))
 	require.NoError(t, err)
 
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &a))
+	aIDs, err := getHostIDsAnnotation(r.Log, &a)
+	require.NoError(t, err)
+	aID := aIDs["shared.example.com"]
+	require.NotEmpty(t, aID, "route A must own the entry it created")
+
+	// Route B hits AlreadyExists and must refuse to adopt route A's entry.
 	var b gatewayv1.HTTPRoute
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-b", Namespace: "default"}, &b))
-	_, err = r.syncRoute(ctx, r.Log, &b, extractHostnames(r.Log, &b))
-	require.NoError(t, err)
+	res, err := r.syncRoute(ctx, r.Log, &b, extractHostnames(r.Log, &b))
+	require.NoError(t, err, "a refused adoption must not fail the reconcile")
+	assert.Positive(t, res.RequeueAfter, "refused adoption should requeue")
 
-	// Remove the hostname from route B only.
 	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-b", Namespace: "default"}, &b))
-	bIDsBefore, err := getHostIDsAnnotation(r.Log, &b)
+	bIDs, err := getHostIDsAnnotation(r.Log, &b)
 	require.NoError(t, err)
-	bID := bIDsBefore["shared.example.com"]
-	require.NotEmpty(t, bID)
+	assert.NotContains(t, bIDs, "shared.example.com", "route B must not track an entry it does not own")
 
-	b.Spec.Hostnames = nil
-	require.NoError(t, k8sClient.Update(ctx, &b))
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-b", Namespace: "default"}, &b))
-	_, err = r.syncRoute(ctx, r.Log, &b, extractHostnames(r.Log, &b))
+	// Deleting route B must not touch route A's entry.
+	require.NoError(t, r.Delete(ctx, &b))
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &a))
+	aIDsAfter, err := getHostIDsAnnotation(r.Log, &a)
+	require.NoError(t, err)
+	assert.Equal(t, aID, aIDsAfter["shared.example.com"], "route A must still own its entry")
+	assert.NotContains(t, store.deleted, aID, "route A's entry must never be deleted by route B")
+	assert.NotNil(t, store.entries[store.key("10.0.0.1", "shared.example.com")], "entry must still be live")
+}
+
+// T-07-02: an IngressRoute already published this hostname at the shared
+// --default-ingress-ip. The Gateway route must not adopt (and later delete) it.
+func TestAddOrAdopt_RefusesForeignIngressRouteEntry(t *testing.T) {
+	route := newHTTPRouteTracking("route-a", "default", []string{"app.example.com"}, nil)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	store := newFakeHostStore()
+	store.seed("ingress-owned-id", "10.0.0.1", "app.example.com",
+		"k8s-ingressroute:default/legacy", []string{"kubernetes", "traefik", "ingress"})
+
+	r := newHTTPRouteReconciler(t, k8sClient, store.client())
+	r.DefaultIP = "10.0.0.1"
+
+	ctx := context.Background()
+	var obj gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &obj))
+	_, err := r.syncRoute(ctx, r.Log, &obj, extractHostnames(r.Log, &obj))
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{bID}, deletedIDs)
-
-	var updatedA gatewayv1.HTTPRoute
-	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &updatedA))
-	aIDs, err := getHostIDsAnnotation(r.Log, &updatedA)
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &obj))
+	ids, err := getHostIDsAnnotation(r.Log, &obj)
 	require.NoError(t, err)
-	assert.Contains(t, aIDs, "shared.example.com")
+	assert.NotContains(t, ids, "app.example.com", "must not adopt the IngressRoute's entry")
+	assert.Empty(t, store.deleted, "must not delete the IngressRoute's entry")
+	assert.Equal(t, "ingress-owned-id", store.entries[store.key("10.0.0.1", "app.example.com")].ID)
+}
+
+// CR-02 recovery must still work: AddHost succeeded on a previous reconcile but
+// the annotation persist failed, so this object meets its OWN entry. Same
+// comment and tags — adoption is correct here and must not regress.
+func TestAddOrAdopt_AdoptsOwnEntryAfterAnnotationPersistFailure(t *testing.T) {
+	route := newHTTPRouteTracking("route-a", "default", []string{"app.example.com"}, nil)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	store := newFakeHostStore()
+	store.seed("orphaned-own-id", "10.0.0.1", "app.example.com",
+		"k8s-gateway:default/route-a", []string{"kubernetes", "gateway", "httproute"})
+
+	r := newHTTPRouteReconciler(t, k8sClient, store.client())
+	r.DefaultIP = "10.0.0.1"
+
+	ctx := context.Background()
+	var obj gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &obj))
+	_, err := r.syncRoute(ctx, r.Log, &obj, extractHostnames(r.Log, &obj))
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(ctx, types.NamespacedName{Name: "route-a", Namespace: "default"}, &obj))
+	ids, err := getHostIDsAnnotation(r.Log, &obj)
+	require.NoError(t, err)
+	assert.Equal(t, "orphaned-own-id", ids["app.example.com"], "must adopt its own orphaned entry")
+}
+
+func TestHasGatewayProvenance(t *testing.T) {
+	assert.True(t, hasGatewayProvenance([]string{"kubernetes", "gateway", "httproute"}, "httproute"))
+	assert.False(t, hasGatewayProvenance([]string{"kubernetes", "traefik", "ingress"}, "httproute"),
+		"IngressRoute tags must not pass")
+	assert.False(t, hasGatewayProvenance([]string{"kubernetes", "gateway", "tlsroute"}, "httproute"),
+		"a different route kind must not pass")
+	assert.False(t, hasGatewayProvenance(nil, "httproute"))
 }
 
 // newDeletingHTTPRoute builds an HTTPRoute already marked for deletion, for

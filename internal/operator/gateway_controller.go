@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/samber/oops"
@@ -597,8 +598,41 @@ func (r *GatewayRouteReconciler) addOrAdoptGatewayHost(ctx context.Context, log 
 		// error so the reconcile requeues and retries.
 		return "", oops.Errorf("host %s reported AlreadyExists but was not found for adoption", hostname)
 	}
+	// T-07-02: adopt ONLY an entry this exact object previously created.
+	// FindHost exact-matches on (ip, hostname) alone, which is NOT proof of
+	// ownership: the server enforces uniqueness on that pair, so the conflicting
+	// entry may belong to an IngressRoute, a HostMapping, or another route —
+	// including another route of this same kind. Adopting it would write a
+	// foreign ID into this object's host-ids annotation, and the stale-cleanup
+	// and reconcileDelete passes would then legitimately DeleteHost it,
+	// silently destroying another owner's live DNS entry.
+	//
+	// This is reachable in normal operation, not theoretical: --default-ingress-ip
+	// is a single flag shared by the IngressRoute and Gateway controllers, so an
+	// IngressRoute hostname and a Gateway route hostname routinely collide on the
+	// same IP — exactly the Traefik-to-Gateway-API migration this phase enables.
+	//
+	// The comment is the per-object identity (k8s-gateway:<namespace>/<name>);
+	// tags only identify the controller kind and cannot separate two routes of
+	// the same kind. Both are checked: the comment establishes ownership, the
+	// tags are defense in depth against a user-authored comment collision.
+	if existing.Comment != comment || !hasGatewayProvenance(existing.Tags, r.KindName) {
+		return "", oops.Errorf(
+			"refusing to adopt host %s (id %s): owned by another object (comment %q tags %v, want comment %q with gateway + %s)",
+			hostname, existing.ID, existing.Comment, existing.Tags, comment, r.KindName,
+		)
+	}
 	log.Info("adopted existing host entry from Gateway API route", "hostname", hostname, "hostId", existing.ID)
 	return existing.ID, nil
+}
+
+// hasGatewayProvenance reports whether tags identify a host entry created by
+// the Gateway route controller for kindName. syncRoute stamps every entry it
+// writes with "gateway" plus the reconciler's KindName, so requiring both
+// excludes IngressRoute entries ("traefik", "ingress"), HostMapping entries,
+// and entries owned by a Gateway route of a different kind.
+func hasGatewayProvenance(tags []string, kindName string) bool {
+	return slices.Contains(tags, "gateway") && slices.Contains(tags, kindName)
 }
 
 // gatewayKindPresent reports whether gvk is resolvable via mapper, used to
