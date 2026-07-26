@@ -40,6 +40,7 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 2. Every mutation is persisted as an immutable event in the SQLite event log; replaying events reproduces current state
 3. Client and server refuse to communicate without valid mutual TLS certificates
 4. User can assign multiple aliases to one canonical entry and browse/import/export entries via TUI and table/JSON/CSV
+
 **Plans**: shipped (pre-GSD)
 **Status**: Complete — shipped (v0.10.13; migrated Rust → Go 2026-02-22)
 
@@ -53,6 +54,7 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 1. Sending SIGHUP reloads certificates and config without dropping in-flight connections (validated against Vault Agent rotation)
 2. The server automatically obtains and renews TLS certificates via ACME on a renewal loop
 3. ACME DNS-01 challenges complete through Cloudflare using env-expanded credentials
+
 **Plans**: shipped (pre-GSD)
 **Status**: Complete — shipped (v0.10.13)
 
@@ -66,6 +68,7 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 1. Creating a HostMapping custom resource results in a corresponding router DNS entry
 2. IngressRoute hostnames sync to router DNS entries with configurable IP resolution
 3. Deleting a source resource removes its DNS entry via the deletion scheduler
+
 **Plans**: shipped (pre-GSD)
 **Status**: Complete — shipped (v0.10.13; HostMapping + IngressRoute controllers only)
 
@@ -78,6 +81,7 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 
 1. The server exports metrics via OpenTelemetry (OTLP / Prometheus) that a collector can scrape
 2. Trace context propagates across gRPC requests so a request can be followed end-to-end
+
 **Plans**: shipped (pre-GSD)
 **Status**: Complete — shipped (v0.10.13)
 
@@ -91,6 +95,7 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 1. On each successful write the server regenerates a `dnsmasq` config alongside the hosts file
 2. The server emits an `unbound` config with one `local-zone "<fqdn>." static` per managed name (hostname + each alias)
 3. Querying a managed name's HTTPS (type-65) or AAAA record does not leak to upstream recursion, and unmanaged sibling names are not NXDOMAIN'd (ADR router-hosts-bzg)
+
 **Plans**: shipped (pre-GSD)
 **Status**: Complete — shipped (v0.10.13)
 
@@ -104,6 +109,7 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 1. Invoking `CompactAggregates` (RPC/CLI) replaces an aggregate's history with a single `HostCompacted` seed event at the preserved OCC version, atomically
 2. A compacted aggregate rehydrates to identical live/deleted state with its ULID and hostname preserved
 3. `router_hosts_aggregate_events_max` and `router_hosts_aggregates_over_threshold` gauges are exported for remediation alerts
+
 **Plans**: shipped (pre-GSD)
 **Status**: Complete — shipped (v0.10.13; governed by ADRs v5b, vl8, 4w2)
 
@@ -117,16 +123,30 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 1. Creating an HTTPRoute, GRPCRoute, or TLSRoute results in router DNS entries for each of its hostnames
 2. Route entry IPs are resolved from the parent Gateway's `status.addresses`
 3. Deleting or editing a route updates/removes the corresponding DNS entries, and the shipped Helm chart + RBAC grant the operator watch/list access to Gateway API resources
+
 **Plans**: 6 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 07-01-PLAN.md — Tracer: pin gateway-api v1.6.1, share the host-ids helpers, and take one HTTPRoute hostname end to end into a router DNS entry
-- [ ] 07-02-PLAN.md — Expand to GRPCRoute and TLSRoute; filter wildcard, duplicate, and invalid hostnames
-- [ ] 07-03-PLAN.md — Complete IP resolution from parent Gateway `status.addresses`, including fallback and no-IP requeue
-- [ ] 07-04-PLAN.md — Route lifecycle: create/update/delete diff, finalizer cleanup, corrupt-annotation safety
-- [ ] 07-05-PLAN.md — parentRef field index, Gateway re-enqueue, and CRD-presence gating for every watched kind
 - [ ] 07-06-PLAN.md — Helm chart: Gateway API RBAC, `gateway.enabled` opt-in, and chart docs
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 07-02-PLAN.md — Expand to GRPCRoute and TLSRoute; filter wildcard, duplicate, and invalid hostnames
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 07-03-PLAN.md — Complete IP resolution from parent Gateway `status.addresses`, including fallback and no-IP requeue
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 07-04-PLAN.md — Route lifecycle: create/update/delete diff, finalizer cleanup, corrupt-annotation safety
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 07-05-PLAN.md — parentRef field index, Gateway re-enqueue, and CRD-presence gating for every watched kind
 
 **Status**: Planned — 6 plans across 5 waves (07-01 and 07-06 run in parallel in wave 1)
 
@@ -139,6 +159,7 @@ Plans:
 
 1. A LoadBalancer or NodePort Service with the configured annotations produces router DNS entries
 2. Service IPs are resolved per the IP-resolution rules, and entries are removed when the Service is deleted
+
 **Plans**: TBD
 **Status**: Not started — Rust-era design (2026-01-02) never ported to the Go operator; north-star parity gap
 
@@ -151,6 +172,7 @@ Plans:
 
 1. Each `on_success` / `on_failure` hook execution emits count, duration, and outcome metrics (closes the dead-metrics gap, router-hosts-0ed)
 2. A per-hook timeout is configurable (no longer a fixed 30s) and hook execution is bounded so a slow hook cannot block write processing (router-hosts-ee0)
+
 **Plans**: TBD
 **Status**: Not started
 
@@ -167,6 +189,7 @@ Plans:
 4. Sink mode reflects a host mutation without operator intervention and recovers on its own after a connection interruption, without emitting a truncated artifact
 5. Neither side of a stream can be driven out of memory by the other: the server yields lazily instead of materializing the full result set, and the client refuses an unbounded response rather than collecting it
 6. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
+
 **Plans**: TBD
 **Status**: Not started — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07
 
