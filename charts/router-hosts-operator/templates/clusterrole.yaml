@@ -13,6 +13,17 @@ rules:
     resources: ["ingressroutes", "ingressroutetcps"]
     verbs: ["get", "list", "watch", "update", "patch"]
 
+  # Gateway API routes (gateway.networking.k8s.io). The controller writes a
+  # finalizer + host-ids annotation, so update;patch are required.
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes", "grpcroutes", "tlsroutes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+
+  # Gateway resources are read-only (IP resolution from status.addresses).
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways"]
+    verbs: ["get", "list", "watch"]
+
   # HostMapping resources (router-hosts.fzymgc.house/v1alpha1).
   # The controller adds/removes a cleanup finalizer (update/patch) and writes
   # reconcile state to the status subresource. Verbs mirror the controller's

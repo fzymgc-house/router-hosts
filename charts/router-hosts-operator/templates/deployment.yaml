@@ -49,6 +49,9 @@ spec:
             {{- with .Values.routerHosts.defaultIngressIP }}
             - --default-ingress-ip={{ . }}
             {{- end }}
+            {{- if .Values.gateway.enabled }}
+            - --enable-gateway
+            {{- end }}
             - --health-probe-bind-address=:{{ .Values.healthCheck.port }}
             - --metrics-bind-address={{ .Values.metrics.bindAddress }}
             {{- if $leaderElectionEnabled }}
