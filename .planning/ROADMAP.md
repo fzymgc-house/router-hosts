@@ -2,12 +2,13 @@
 
 ## Overview
 
-router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control plane with a CLI/TUI and a Kubernetes operator. Phases 1–6 reconstruct the shipped feature-spines as completed milestones so project state is anchored at an accurate built baseline. Phases 7–9 carry the project forward toward its north star — full operator / Gateway-API parity and hands-off cluster integration — starting with the largest gaps (Gateway API, then the Service controller) and finishing with hook reliability.
+router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control plane with a CLI/TUI and a Kubernetes operator. Phases 1–6 reconstruct the shipped feature-spines as completed milestones so project state is anchored at an accurate built baseline. Phases 7–9 carry the project forward toward its north star — full operator / Gateway-API parity and hands-off cluster integration — starting with the largest gaps (Gateway API, then the Service controller) and finishing with hook reliability. Phase 10 opens a second axis: moving output rendering from the server to the consumer, so a single stateful server can feed N independent consumers without accreting a per-resolver format for each.
 
 ## Milestones
 
 - ✅ **v1 Shipped Baseline** — Phases 1–6 (shipped, at v0.10.13)
 - 🚧 **K8s-Native Automation** — Phases 7–9 (active; north-star parity)
+- 📋 **Consumer-Owned Output** — Phase 10 (approved 2026-07-25 from #364)
 
 ## Phases
 
@@ -24,6 +25,7 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 - [ ] **Phase 7: Gateway API Support** - Reconcile HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS
 - [ ] **Phase 8: Kubernetes Service Controller** - DNS entries for LoadBalancer/NodePort Services
 - [ ] **Phase 9: Hook Reliability & Metrics** - Hook execution metrics + configurable timeout/concurrency
+- [ ] **Phase 10: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink
 
 ## Phase Details
 
@@ -142,10 +144,25 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 **Plans**: TBD
 **Status**: Not started
 
+### Phase 10: Consumer-Rendered Output (templates + sink)
+
+**Goal**: A consumer defines its own output format and keeps it current, so one stateful server feeds N independent consumers and new resolver formats stop requiring an upstream release.
+**Depends on**: Phase 1
+**Requirements**: TMPL-01, TMPL-02, TMPL-03, TMPL-04, TMPL-05, TMPL-06
+**Success Criteria** (what must be TRUE):
+
+1. A caller supplies a template and receives host data rendered through it, with no code change to this project
+2. The field set a template may reference is documented and versioned, and a template referencing an undefined key fails loudly rather than rendering empty
+3. A render or write failure leaves any previously written artifact byte-identical, and a concurrent reader never observes a partially written file
+4. Sink mode reflects a host mutation without operator intervention and recovers on its own after a connection interruption, without emitting a truncated artifact
+5. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
+**Plans**: TBD
+**Status**: Not started — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06
+
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 (Phases 1–6 already shipped)
+Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 (Phases 1–6 already shipped)
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -158,3 +175,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 7. Gateway API Support | K8s-Native Automation | 0/TBD | Not started | - |
 | 8. Service Controller | K8s-Native Automation | 0/TBD | Not started | - |
 | 9. Hook Reliability & Metrics | K8s-Native Automation | 0/TBD | Not started | - |
+| 10. Consumer-Rendered Output | Consumer-Owned Output | 0/TBD | Not started | - |
