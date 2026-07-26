@@ -130,15 +130,24 @@ func parentRefsOf(obj client.Object) []gatewayv1.ParentReference {
 const parentRefIndexKey = "spec.parentRefs.gateway"
 
 // routeParentRefIndexFunc is the field-index extractor for parentRefIndexKey.
-// It emits "<namespace>/<name>" for every parentRef declared on obj, in
-// declaration order, defaulting the namespace to obj's own namespace when a
-// parentRef sets none — the same defaulting resolveIP already applies. It is
-// a pure function over client.Object, so it is unit-testable without a
-// manager (D-17), and always returns a non-nil (possibly empty) slice.
+// It emits "<namespace>/<name>" for every Gateway-kind parentRef declared on
+// obj, in declaration order, defaulting the namespace to obj's own namespace
+// when a parentRef sets none — the same defaulting resolveIP already
+// applies. It is a pure function over client.Object, so it is unit-testable
+// without a manager (D-17), and always returns a non-nil (possibly empty)
+// slice.
+//
+// WR-02: a parentRef whose Kind is set and not "Gateway" (e.g. a GAMMA-style
+// Service mesh parent) is skipped — it can never name a Gateway object, so
+// indexing it would only pollute the field index with an entry
+// mapGatewayToRoutes can never match.
 func routeParentRefIndexFunc(obj client.Object) []string {
 	refs := parentRefsOf(obj)
 	keys := make([]string, 0, len(refs))
 	for _, ref := range refs {
+		if !isGatewayKindRef(ref) {
+			continue
+		}
 		ns := obj.GetNamespace()
 		if ref.Namespace != nil {
 			ns = string(*ref.Namespace)
@@ -146,6 +155,13 @@ func routeParentRefIndexFunc(obj client.Object) []string {
 		keys = append(keys, ns+"/"+string(ref.Name))
 	}
 	return keys
+}
+
+// isGatewayKindRef reports whether ref names a Gateway-kind parent. Per the
+// Gateway API spec, ParentReference.Kind defaults to "Gateway" when unset,
+// so a nil Kind is treated as a Gateway reference.
+func isGatewayKindRef(ref gatewayv1.ParentReference) bool {
+	return ref.Kind == nil || string(*ref.Kind) == "Gateway"
 }
 
 // mapGatewayToRoutes is the handler.MapFunc that re-enqueues every route of
@@ -348,6 +364,12 @@ func (r *GatewayRouteReconciler) reconcileDelete(ctx context.Context, log *slog.
 // first IPAddress-typed address found. Falls back to r.DefaultIP when no
 // parent Gateway yields one (D-15).
 //
+// A parentRef whose Kind is set and not "Gateway" is skipped without a Get
+// call (WR-02): it names some other parent kind (e.g. a GAMMA-style Service
+// mesh parent), which today would only fail-safe with a wasted NotFound Get,
+// but is now filtered explicitly and consistently with
+// routeParentRefIndexFunc.
+//
 // A parent Gateway Get that fails with NotFound is an ordinary "parent not
 // created yet" condition and is skipped silently; any other Get failure is
 // logged at Error level naming the Gateway, but the walk still continues to
@@ -356,6 +378,9 @@ func (r *GatewayRouteReconciler) reconcileDelete(ctx context.Context, log *slog.
 // supplying an IP (D-16).
 func (r *GatewayRouteReconciler) resolveIP(ctx context.Context, log *slog.Logger, obj client.Object) string {
 	for _, ref := range parentRefsOf(obj) {
+		if !isGatewayKindRef(ref) {
+			continue
+		}
 		ns := obj.GetNamespace()
 		if ref.Namespace != nil {
 			ns = string(*ref.Namespace)

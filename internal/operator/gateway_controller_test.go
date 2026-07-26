@@ -267,6 +267,25 @@ func TestResolveIP_IgnoresEmptyAddressValue(t *testing.T) {
 	assert.Equal(t, "10.3.3.3", r.resolveIP(context.Background(), r.Log, route))
 }
 
+// TestResolveIP_SkipsNonGatewayKindParentRef is the WR-02 regression for
+// resolveIP: a parentRef whose Kind is set and not "Gateway" must be skipped
+// without attempting a Get, and must not prevent a later Gateway-kind
+// parentRef (or r.DefaultIP) from supplying an IP.
+func TestResolveIP_SkipsNonGatewayKindParentRef(t *testing.T) {
+	gw := newGateway("default", "gw", ipAddr("10.4.4.4"))
+	route := newRouteWithParentRefs(
+		"default",
+		gatewayv1.ParentReference{Name: "svc", Kind: kindPtr("Service")},
+		gatewayv1.ParentReference{Name: "gw"},
+	)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(gw).Build()
+	r := newHTTPRouteReconciler(t, k8sClient, &mockHostClient{})
+
+	assert.Equal(t, "10.4.4.4", r.resolveIP(context.Background(), r.Log, route))
+}
+
 func TestGatewayKindPresent_UsesRESTMapper(t *testing.T) {
 	present := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
 	absent := schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "GRPCRoute"}
@@ -1630,6 +1649,27 @@ func TestRouteParentRefIndexFunc_ExplicitNamespace(t *testing.T) {
 func TestRouteParentRefIndexFunc_DefaultsToRouteNamespace(t *testing.T) {
 	route := newRouteWithParentRefs("default", gatewayv1.ParentReference{Name: "gw"})
 	assert.Equal(t, []string{"default/gw"}, routeParentRefIndexFunc(route))
+}
+
+// kindPtr builds a *gatewayv1.Kind for ParentReference.Kind test fixtures.
+func kindPtr(k string) *gatewayv1.Kind {
+	kind := gatewayv1.Kind(k)
+	return &kind
+}
+
+// TestRouteParentRefIndexFunc_SkipsNonGatewayKind is the WR-02 regression:
+// a parentRef whose Kind is set and not "Gateway" (e.g. a GAMMA-style
+// Service mesh parent) must not be indexed — it can never name a Gateway
+// object, so indexing it only pollutes parentRefIndexKey with an entry
+// mapGatewayToRoutes can never match.
+func TestRouteParentRefIndexFunc_SkipsNonGatewayKind(t *testing.T) {
+	route := newRouteWithParentRefs(
+		"default",
+		gatewayv1.ParentReference{Name: "gw", Kind: kindPtr("Gateway")},
+		gatewayv1.ParentReference{Name: "svc", Kind: kindPtr("Service")},
+		gatewayv1.ParentReference{Name: "gw2"}, // Kind unset defaults to Gateway
+	)
+	assert.Equal(t, []string{"default/gw", "default/gw2"}, routeParentRefIndexFunc(route))
 }
 
 func TestRouteParentRefIndexFunc_MultipleAndEmpty(t *testing.T) {
