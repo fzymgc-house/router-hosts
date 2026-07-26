@@ -210,9 +210,61 @@ func (r *GatewayRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return r.syncRoute(ctx, log, obj, extractHostnames(log, obj))
 }
 
-// reconcileDelete handles route deletion. Stubbed for the tracer; filled in
-// with the full cleanup lifecycle in plan 04.
-func (r *GatewayRouteReconciler) reconcileDelete(_ context.Context, _ *slog.Logger, _ client.Object) (ctrl.Result, error) {
+// reconcileDelete removes every host entry this route owns before releasing
+// the finalizer, mirroring ingressroute_controller.go's reconcileDelete.
+// Deletion always happens before the finalizer is dropped, never the other
+// order: removing the finalizer first would let Kubernetes garbage-collect
+// the object — and its host-ids annotation, the only record of what this
+// controller created — while entries it still names are live on the
+// router (D-09).
+//
+// A corrupt host-ids annotation returns an error and requeues after
+// requeueDelayShort without deleting anything or touching the finalizer
+// (D-14): proceeding on a partial view could treat a still-tracked hostname
+// as unknown and either skip deleting it or, worse, drop the finalizer while
+// entries the annotation could no longer describe remain live.
+//
+// A partial delete (some DeleteHost calls fail) persists the still-live IDs
+// back to the annotation, keeps the finalizer, and requeues after
+// requeueDelayShort so the next reconcile retries only the remainder
+// (D-14) — no entry is ever orphaned by being forgotten. The finalizer is
+// removed only once every tracked ID has been confirmed deleted.
+func (r *GatewayRouteReconciler) reconcileDelete(ctx context.Context, log *slog.Logger, obj client.Object) (ctrl.Result, error) {
+	if !controllerutil.ContainsFinalizer(obj, gatewayCleanupFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	existingIDs, err := getHostIDsAnnotation(log, obj)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, err
+	}
+
+	remainingIDs := make(map[string]string, len(existingIDs))
+	var hadDeleteError bool
+	for hostname, id := range existingIDs {
+		log.Info("deleting host entry for deleted route", "hostname", hostname, "hostId", id)
+		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
+			log.Error("failed to delete host entry during cleanup", "hostname", hostname, "hostId", id, "error", err)
+			remainingIDs[hostname] = id
+			hadDeleteError = true
+		}
+	}
+	if hadDeleteError {
+		// Persist remaining IDs so they are not orphaned on the next reconcile.
+		if err := setHostIDsAnnotation(obj, remainingIDs); err != nil {
+			return ctrl.Result{}, oops.Wrapf(err, "setting host IDs annotation after partial delete")
+		}
+		if err := r.Update(ctx, obj); err != nil {
+			return ctrl.Result{}, oops.Wrapf(err, "updating %s annotations after partial delete", r.KindName)
+		}
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
+	}
+
+	controllerutil.RemoveFinalizer(obj, gatewayCleanupFinalizer)
+	if err := r.Update(ctx, obj); err != nil {
+		return ctrl.Result{}, oops.Wrapf(err, "removing finalizer from %s", r.KindName)
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -251,17 +303,25 @@ func (r *GatewayRouteReconciler) resolveIP(ctx context.Context, log *slog.Logger
 	return r.DefaultIP
 }
 
-// syncRoute is the tracer's happy path: it creates a host entry for every
-// hostname not yet tracked in the host-ids annotation and persists the
-// resulting map. It refuses to write any entry when resolveIP yields no IP,
-// requeuing after requeueDelayShort instead (D-16). The update/delete diff
-// and per-host error accumulation land in plan 04.
+// syncRoute converges router host entries with the route's currently
+// declared hostnames: a hostname not yet tracked in the host-ids annotation
+// is created, an already-tracked hostname is updated unconditionally
+// (D-13), and a hostname no longer present in hostnames is deleted from both
+// the router and the annotation (GW-01).
+//
+// It refuses to write any entry when resolveIP yields no IP, requeuing after
+// requeueDelayShort instead, before the annotation is even read (D-16) —
+// writing an entry with no resolved IP would publish wrong DNS.
+//
+// A per-host failure never aborts the batch: the failing hostname is logged
+// and skipped for its own operation, the rest of the batch still runs, and
+// the result requeues after requeueDelayLong instead of returning an error
+// (D-14). A corrupt host-ids annotation is the one failure that does abort
+// immediately, returning an error and requeuing after requeueDelayShort
+// without touching the router at all — proceeding on a partial view of the
+// annotation could mistake a still-tracked hostname for a removed one and
+// delete a live entry (D-14).
 func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger, obj client.Object, hostnames []string) (ctrl.Result, error) {
-	if len(hostnames) == 0 {
-		log.Debug("no hostnames extracted from route")
-		return ctrl.Result{}, nil
-	}
-
 	ip := r.resolveIP(ctx, log, obj)
 	if ip == "" {
 		log.Warn("no IP resolved for route; requeuing without writing any host entry")
@@ -281,21 +341,68 @@ func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger
 	tags = append(tags, r.DefaultTags...)
 	tags = append(tags, "gateway", r.KindName)
 
+	var hadError bool
 	for _, hostname := range hostnames {
 		if id, ok := existingIDs[hostname]; ok {
+			// D-13: UpdateHost is issued unconditionally for every tracked
+			// hostname, even when the resolved IP is unchanged from the
+			// previous reconcile. This deliberately diverges from
+			// ingressroute_controller.go's syncHost, which reads the
+			// current entry first via GetHost and skips a no-op update —
+			// that idempotency guard is NOT ported here. The unconditional
+			// update is what propagates a changed Gateway IP without this
+			// controller keeping any "last known IP" state of its own. Do
+			// not "align" this with syncHost without re-deriving the
+			// tradeoff recorded in D-13.
+			if err := r.HostClient.UpdateHost(ctx, id, ip, hostname, comment, nil, tags, ""); err != nil {
+				log.Error("failed to update host entry", "hostname", hostname, "hostId", id, "error", err)
+				hadError = true
+				// Retain the known ID so the stale-cleanup pass below does
+				// not mistake this still-tracked hostname for a removed one
+				// and issue a spurious DeleteHost (D-14).
+				newIDs[hostname] = id
+				continue
+			}
 			newIDs[hostname] = id
 			continue
 		}
+
+		// Not yet tracked: create. There is no adoption or AlreadyExists
+		// retry path here — D-13's design does not use GetHost or FindHost.
 		id, err := r.HostClient.AddHost(ctx, ip, hostname, comment, nil, tags)
 		if err != nil {
-			return ctrl.Result{RequeueAfter: requeueDelayLong}, oops.Wrapf(err, "adding host %s", hostname)
+			log.Error("failed to add host entry", "hostname", hostname, "error", err)
+			hadError = true
+			// No prior ID to retain — a failed create has nothing to track.
+			continue
 		}
 		log.Info("host entry created from Gateway API route", "hostname", hostname, "hostId", id)
 		newIDs[hostname] = id
 	}
 
+	// Stale-cleanup pass: delete every entry this object owns that is no
+	// longer among the current hostnames. Every deletion target comes from
+	// this object's own annotation — never from a hostname lookup, an IP
+	// lookup, or a cross-object query — so this can never delete an entry
+	// owned by another route, a HostMapping, or an IngressRoute (threat
+	// T-07-02).
+	for hostname, id := range existingIDs {
+		if _, ok := newIDs[hostname]; ok {
+			continue
+		}
+		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
+			log.Error("failed to delete stale host entry", "hostname", hostname, "hostId", id, "error", err)
+			// Retain the ID so it is not orphaned from the annotation.
+			newIDs[hostname] = id
+			hadError = true
+			continue
+		}
+		log.Info("stale host entry deleted from Gateway API route", "hostname", hostname, "hostId", id)
+	}
+
 	// Persist the annotation only when the ID map actually changed, matching
-	// the IngressRoute controller's no-op-write avoidance (D-13).
+	// the IngressRoute controller's no-op-write avoidance (D-13). A no-op
+	// Update bumps the resourceVersion and re-triggers the watch for nothing.
 	if !maps.Equal(existingIDs, newIDs) {
 		if err := setHostIDsAnnotation(obj, newIDs); err != nil {
 			return ctrl.Result{}, oops.Wrapf(err, "setting host IDs annotation")
@@ -305,6 +412,9 @@ func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger
 		}
 	}
 
+	if hadError {
+		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
+	}
 	return ctrl.Result{}, nil
 }
 

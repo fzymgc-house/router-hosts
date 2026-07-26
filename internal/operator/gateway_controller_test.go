@@ -12,6 +12,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1150,9 +1151,13 @@ func TestReconcile_HTTPRoute_DeletesHostsOnFinalize(t *testing.T) {
 	assert.Equal(t, ctrl.Result{}, result)
 	assert.ElementsMatch(t, []string{"id-a", "id-b"}, deletedIDs)
 
+	// Once the finalizer is removed, the fake client (mirroring the real API
+	// server) actually deletes the object rather than leaving a finalizer-less
+	// husk behind — so a NotFound Get here is the positive confirmation that
+	// the finalizer was released, not a test bug.
 	var updated gatewayv1.HTTPRoute
-	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
-	assert.NotContains(t, updated.Finalizers, gatewayCleanupFinalizer)
+	err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated)
+	assert.True(t, apierrors.IsNotFound(err), "expected object to be gone after finalizer removal, got err=%v", err)
 }
 
 func TestReconcile_Route_DeleteWithoutFinalizerIsNoOp(t *testing.T) {
@@ -1312,11 +1317,14 @@ func TestReconcile_Route_DeleteAllThreeKinds(t *testing.T) {
 
 	assert.ElementsMatch(t, []string{"id-grpc", "id-tls"}, deletedIDs)
 
+	// Once the finalizer is removed, the fake client (mirroring the real API
+	// server) deletes the object outright — a NotFound Get is the positive
+	// confirmation that the finalizer was released for each kind.
 	var updatedGRPC gatewayv1.GRPCRoute
-	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "groute", Namespace: "default"}, &updatedGRPC))
-	assert.NotContains(t, updatedGRPC.Finalizers, gatewayCleanupFinalizer)
+	err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "groute", Namespace: "default"}, &updatedGRPC)
+	assert.True(t, apierrors.IsNotFound(err), "expected GRPCRoute to be gone after finalizer removal, got err=%v", err)
 
 	var updatedTLS gatewayv1.TLSRoute
-	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "troute", Namespace: "default"}, &updatedTLS))
-	assert.NotContains(t, updatedTLS.Finalizers, gatewayCleanupFinalizer)
+	err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "troute", Namespace: "default"}, &updatedTLS)
+	assert.True(t, apierrors.IsNotFound(err), "expected TLSRoute to be gone after finalizer removal, got err=%v", err)
 }
