@@ -46,7 +46,7 @@
 ### Gateway API Support (Phase 7, active)
 
 - [ ] **GW-01**: Operator reconciles Gateway API HTTPRoute / GRPCRoute / TLSRoute hostnames into router DNS entries
-- [ ] **GW-02**: Operator resolves route IPs from the parent Gateway's `status.addresses`
+- [x] **GW-02**: Operator resolves route IPs from the parent Gateway's `status.addresses`
 - [x] **GW-03**: Helm chart and RBAC grant the operator watch/list access to Gateway API route resources
 
 ### Kubernetes Service Controller (Phase 8, active)
@@ -117,7 +117,7 @@ Acknowledged but deferred; not in the current roadmap.
 | COMP-01 | Phase 6 | Complete |
 | COMP-02 | Phase 6 | Complete |
 | GW-01 | Phase 7 | Pending |
-| GW-02 | Phase 7 | Pending |
+| GW-02 | Phase 7 | Complete |
 | GW-03 | Phase 7 | Complete |
 | SVC-01 | Phase 8 | Pending |
 | SVC-02 | Phase 8 | Pending |
