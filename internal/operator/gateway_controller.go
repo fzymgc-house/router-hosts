@@ -46,8 +46,10 @@ func gatewayGroupVersionKind(kind string) schema.GroupVersionKind {
 }
 
 // gatewayRouteKinds returns the set of Gateway API route kinds this operator
-// reconciles. Only HTTPRoute is wired up for the tracer; GRPCRoute and
-// TLSRoute are added in plan 02.
+// reconciles, in the order httproute, grpcroute, tlsroute. All three are
+// served from sigs.k8s.io/gateway-api/apis/v1 (D-02): TLSRoute graduated to
+// that package in v1.6.1 and is its storage version, so there is no
+// apis/v1alpha2 surface to handle here.
 func gatewayRouteKinds() []gatewayRouteKind {
 	return []gatewayRouteKind{
 		{
@@ -56,31 +58,56 @@ func gatewayRouteKinds() []gatewayRouteKind {
 			newObject: func() client.Object { return &gatewayv1.HTTPRoute{} },
 			newList:   func() client.ObjectList { return &gatewayv1.HTTPRouteList{} },
 		},
+		{
+			name:      "grpcroute",
+			gvk:       gatewayGroupVersionKind("GRPCRoute"),
+			newObject: func() client.Object { return &gatewayv1.GRPCRoute{} },
+			newList:   func() client.ObjectList { return &gatewayv1.GRPCRouteList{} },
+		},
+		{
+			name:      "tlsroute",
+			gvk:       gatewayGroupVersionKind("TLSRoute"),
+			newObject: func() client.Object { return &gatewayv1.TLSRoute{} },
+			newList:   func() client.ObjectList { return &gatewayv1.TLSRouteList{} },
+		},
 	}
 }
 
 // hostnamesOf returns the hostnames declared on a Gateway API route object.
-// Kinds not yet wired up (Gateway, GRPCRoute, TLSRoute) return nil; GRPCRoute
-// and TLSRoute arms are added in plan 02.
+// Kinds not covered (e.g. Gateway) return nil.
 func hostnamesOf(obj client.Object) []string {
 	switch route := obj.(type) {
 	case *gatewayv1.HTTPRoute:
-		hostnames := make([]string, 0, len(route.Spec.Hostnames))
-		for _, h := range route.Spec.Hostnames {
-			hostnames = append(hostnames, string(h))
-		}
-		return hostnames
+		return hostnamesFrom(route.Spec.Hostnames)
+	case *gatewayv1.GRPCRoute:
+		return hostnamesFrom(route.Spec.Hostnames)
+	case *gatewayv1.TLSRoute:
+		return hostnamesFrom(route.Spec.Hostnames)
 	default:
 		return nil
 	}
 }
 
+// hostnamesFrom converts a []gatewayv1.Hostname to []string. Shared by every
+// hostnamesOf arm since the three route specs declare an identically shaped
+// Hostnames field.
+func hostnamesFrom(hostnames []gatewayv1.Hostname) []string {
+	out := make([]string, 0, len(hostnames))
+	for _, h := range hostnames {
+		out = append(out, string(h))
+	}
+	return out
+}
+
 // parentRefsOf returns the parentRefs declared on a Gateway API route object.
-// Kinds not yet wired up return nil; GRPCRoute and TLSRoute arms are added in
-// plan 02.
+// Kinds not covered (e.g. Gateway) return nil.
 func parentRefsOf(obj client.Object) []gatewayv1.ParentReference {
 	switch route := obj.(type) {
 	case *gatewayv1.HTTPRoute:
+		return route.Spec.ParentRefs
+	case *gatewayv1.GRPCRoute:
+		return route.Spec.ParentRefs
+	case *gatewayv1.TLSRoute:
 		return route.Spec.ParentRefs
 	default:
 		return nil
