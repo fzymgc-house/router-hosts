@@ -309,6 +309,16 @@ func (r *GatewayRouteReconciler) reconcileDelete(ctx context.Context, log *slog.
 	for hostname, id := range existingIDs {
 		log.Info("deleting host entry for deleted route", "hostname", hostname, "hostId", id)
 		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
+			if errors.Is(err, ErrHostNotFound) {
+				// CR-03: the entry is already gone — the desired end state
+				// (no live entry for this ID) was already reached, whether
+				// it was deleted on a prior reconcile whose finalizer-removal
+				// r.Update then failed, or out-of-band via the CLI. Treating
+				// this as a real failure would fold it into remainingIDs and
+				// hadDeleteError forever, permanently wedging the finalizer.
+				log.Info("host entry already gone during cleanup", "hostname", hostname, "hostId", id)
+				continue
+			}
 			log.Error("failed to delete host entry during cleanup", "hostname", hostname, "hostId", id, "error", err)
 			remainingIDs[hostname] = id
 			hadDeleteError = true

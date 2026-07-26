@@ -1297,6 +1297,42 @@ func newDeletingHTTPRoute(t *testing.T, name, namespace string, finalizers []str
 	return route
 }
 
+// TestReconcile_Route_DeleteTreatsNotFoundAsSuccess is the CR-03 regression:
+// DeleteHost returning ErrHostNotFound (e.g. the entry was already deleted
+// on a prior reconcile whose finalizer-removal r.Update then failed, or was
+// deleted out-of-band via the CLI) must be treated as the desired end state
+// having already been reached, not folded into remainingIDs/hadDeleteError
+// like a real failure — which would permanently wedge the finalizer, since
+// every retry of an already-deleted ID returns NotFound again forever.
+func TestReconcile_Route_DeleteTreatsNotFoundAsSuccess(t *testing.T) {
+	route := newDeletingHTTPRoute(t, "route1", "default", []string{gatewayCleanupFinalizer}, map[string]string{
+		"gone.example.com": "id-gone",
+	})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	mock := &mockHostClient{
+		deleteHostFn: func(_ context.Context, _ string) error {
+			return oops.Wrapf(ErrHostNotFound, "deleting host")
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "route1", Namespace: "default"},
+	})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+
+	// The finalizer must be removed and the object gone — a NotFound entry
+	// must not wedge the finalizer forever.
+	var updated gatewayv1.HTTPRoute
+	err = k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated)
+	assert.True(t, apierrors.IsNotFound(err), "expected object to be gone after finalizer removal, got err=%v", err)
+}
+
 func TestReconcile_HTTPRoute_DeletesHostsOnFinalize(t *testing.T) {
 	route := newDeletingHTTPRoute(t, "route1", "default", []string{gatewayCleanupFinalizer}, map[string]string{
 		"a.example.com": "id-a",
