@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/samber/oops"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -773,6 +774,126 @@ func TestSyncRoute_CreatesNewHostnames(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "id-1", ids["a.example.com"])
 	assert.Equal(t, "id-2", ids["b.example.com"])
+}
+
+func TestSyncRoute_AdoptsExistingHostOnAlreadyExists(t *testing.T) {
+	// CR-02 regression: when AddHost reports AlreadyExists for an
+	// untracked hostname, syncRoute must adopt the existing entry via
+	// FindHost (addOrAdoptGatewayHost) rather than treating the reply as a
+	// fatal create failure with no ID retained — which would permanently
+	// orphan the pre-existing entry (invisible to this route's annotation,
+	// therefore never reachable by stale-cleanup or reconcileDelete, and
+	// every future AddHost for the same pair fails identically forever).
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, nil)
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var findCalls int
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "", oops.Wrapf(ErrHostAlreadyExists, "adding host")
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			findCalls++
+			assert.Equal(t, "10.0.0.1", ip)
+			assert.Equal(t, "a.example.com", hostname)
+			return &HostEntry{ID: "orphaned-id", IP: ip, Hostname: hostname}, nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, 1, findCalls)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.Equal(t, "orphaned-id", ids["a.example.com"])
+}
+
+// TestSyncRoute_RecoversFromCreateSucceedsThenAnnotationUpdateFails is the
+// full CR-02 scenario end to end: AddHost succeeds and creates a real
+// server-side entry, but the batch's annotation-persisting r.Update then
+// fails, so the ID is never recorded anywhere durable. On the very next
+// reconcile, getHostIDsAnnotation still reports the hostname as untracked,
+// so syncRoute calls AddHost again for the same (ip, hostname) pair — which
+// the server (enforcing uniqueness on that pair) rejects with
+// AlreadyExists. Without adoption, that second reconcile would also fail to
+// record any ID, permanently orphaning the entry created by the first
+// AddHost. With addOrAdoptGatewayHost, it is adopted instead.
+func TestSyncRoute_RecoversFromCreateSucceedsThenAnnotationUpdateFails(t *testing.T) {
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, nil)
+
+	s := gatewayScheme(t)
+	var failUpdate bool
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(route).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Update: func(ctx context.Context, c client.WithWatch, o client.Object, opts ...client.UpdateOption) error {
+				if failUpdate {
+					return errors.New("resource version conflict")
+				}
+				return c.Update(ctx, o, opts...)
+			},
+		}).
+		Build()
+
+	// The first AddHost call "succeeds" server-side (a real entry is
+	// created with ID "orphan-1"), but the reconcile's later annotation
+	// r.Update fails, so that ID is never persisted. Every subsequent
+	// AddHost call for the same pair reports AlreadyExists, and FindHost
+	// returns the entry adoption should recover.
+	var addCalls int
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			addCalls++
+			if addCalls == 1 {
+				return "orphan-1", nil
+			}
+			return "", oops.Wrapf(ErrHostAlreadyExists, "adding host")
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			return &HostEntry{ID: "orphan-1", IP: ip, Hostname: hostname}, nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "10.0.0.1"
+
+	// Reconcile 1: AddHost succeeds, but the annotation write fails — the
+	// created entry is not recorded anywhere.
+	failUpdate = true
+	_, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.Error(t, err)
+	assert.Equal(t, 1, addCalls)
+
+	var afterFirst gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &afterFirst))
+	firstIDs, err := getHostIDsAnnotation(r.Log, &afterFirst)
+	require.NoError(t, err)
+	assert.NotContains(t, firstIDs, "a.example.com", "annotation write failed; nothing should be recorded yet")
+
+	// Reconcile 2: getHostIDsAnnotation still reports the hostname as
+	// untracked, so AddHost is retried and gets AlreadyExists back. Adoption
+	// must recover "orphan-1" rather than skipping it.
+	failUpdate = false
+	result, err := r.syncRoute(context.Background(), r.Log, &afterFirst, extractHostnames(r.Log, &afterFirst))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.Equal(t, 2, addCalls)
+
+	var afterSecond gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &afterSecond))
+	secondIDs, err := getHostIDsAnnotation(r.Log, &afterSecond)
+	require.NoError(t, err)
+	assert.Equal(t, "orphan-1", secondIDs["a.example.com"], "the entry created by the first AddHost must be adopted, not orphaned")
 }
 
 func TestSyncRoute_UpdatesTrackedHostnames(t *testing.T) {

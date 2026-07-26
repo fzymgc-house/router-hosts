@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"maps"
@@ -448,16 +449,16 @@ func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger
 				continue
 			}
 
-			// Not yet tracked: create. There is no adoption or AlreadyExists
-			// retry path here — D-13's design does not use GetHost or FindHost.
-			id, err := r.HostClient.AddHost(ctx, ip, hostname, comment, nil, tags)
+			// Not yet tracked: create, adopting a pre-existing entry on
+			// AlreadyExists (CR-02) rather than orphaning it — see
+			// addOrAdoptGatewayHost.
+			id, err := r.addOrAdoptGatewayHost(ctx, log, ip, hostname, comment, tags)
 			if err != nil {
 				log.Error("failed to add host entry", "hostname", hostname, "error", err)
 				hadError = true
 				// No prior ID to retain — a failed create has nothing to track.
 				continue
 			}
-			log.Info("host entry created from Gateway API route", "hostname", hostname, "hostId", id)
 			newIDs[hostname] = id
 		}
 	}
@@ -502,6 +503,39 @@ func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger
 		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
 	}
 	return ctrl.Result{}, nil
+}
+
+// addOrAdoptGatewayHost creates a host entry for (ip, hostname), adopting a
+// pre-existing entry via FindHost when the server reports AlreadyExists,
+// mirroring ingressroute_controller.go's addOrAdopt (CR-02).
+//
+// Without this, a create that races ahead of a persisted annotation — e.g.
+// AddHost succeeds but the batch's later r.Update fails — leaves the created
+// entry permanently orphaned: the next reconcile reads the still-stale
+// annotation, treats the hostname as untracked, retries AddHost for the same
+// (ip, hostname) pair, and gets AlreadyExists back forever with no path to
+// recover the ID. Adopting the existing entry here closes that gap.
+func (r *GatewayRouteReconciler) addOrAdoptGatewayHost(ctx context.Context, log *slog.Logger, ip, hostname, comment string, tags []string) (string, error) {
+	id, err := r.HostClient.AddHost(ctx, ip, hostname, comment, nil, tags)
+	if err == nil {
+		log.Info("host entry created from Gateway API route", "hostname", hostname, "hostId", id)
+		return id, nil
+	}
+	if !errors.Is(err, ErrHostAlreadyExists) {
+		return "", oops.Wrapf(err, "creating host %s", hostname)
+	}
+
+	existing, findErr := r.HostClient.FindHost(ctx, ip, hostname)
+	if findErr != nil {
+		return "", oops.Wrapf(findErr, "finding host %s for adoption", hostname)
+	}
+	if existing == nil {
+		// Race: the entry vanished between AddHost and FindHost. Surface an
+		// error so the reconcile requeues and retries.
+		return "", oops.Errorf("host %s reported AlreadyExists but was not found for adoption", hostname)
+	}
+	log.Info("adopted existing host entry from Gateway API route", "hostname", hostname, "hostId", existing.ID)
+	return existing.ID, nil
 }
 
 // gatewayKindPresent reports whether gvk is resolvable via mapper, used to
