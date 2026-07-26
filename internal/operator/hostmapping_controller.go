@@ -158,6 +158,35 @@ func (r *HostMappingReconciler) adoptExistingHost(ctx context.Context, log *slog
 		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
 	}
 
+	// T-07-02: adopt ONLY an entry this HostMapping previously created.
+	// FindHost matches on (ip, hostname) alone, which is not proof of ownership:
+	// the server enforces uniqueness on that pair, so the conflicting entry may
+	// belong to an IngressRoute, a Gateway API route, or a hand-created CLI
+	// entry. Adopting it would put a foreign ID in Status.HostID, after which
+	// reconcileDelete would DeleteHost it and destroy another owner's live DNS
+	// entry. --default-ingress-ip is shared across the operator's controllers,
+	// so these collisions arise in ordinary use, not just under attack.
+	//
+	// The comment is the discriminator, and it alone: it is operator-derived
+	// ("k8s:<namespace>/<name>"), unique per object, and its prefix is disjoint
+	// from the IngressRoute ("k8s-ingress:") and Gateway ("k8s-gateway:")
+	// controllers. Kubernetes names cannot contain ":", so no object can forge
+	// another's. Tags are deliberately NOT checked here — unlike the other two
+	// controllers, a HostMapping's tags come from user-supplied Spec.Tags and
+	// therefore prove nothing about provenance.
+	wantComment := fmt.Sprintf("k8s:%s/%s", hm.Namespace, hm.Name)
+	if existing.Comment != wantComment {
+		msg := fmt.Sprintf("refusing to adopt host %s: owned by another object (comment %q, want %q)",
+			existing.ID, existing.Comment, wantComment)
+		log.Error(msg, "ip", hm.Spec.IP, "hostname", hm.Spec.Hostname)
+		r.setStatus(hm, operatorv1alpha1.HostMappingPhaseError, msg, "")
+		r.setSyncedCondition(hm, metav1.ConditionFalse, "AdoptionRefused", msg)
+		if statusErr := r.Status().Update(ctx, hm); statusErr != nil {
+			log.Error("failed to update status", "error", statusErr)
+		}
+		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
+	}
+
 	log.Info("adopting existing host entry", "existingID", existing.ID, "ip", hm.Spec.IP, "hostname", hm.Spec.Hostname)
 	hm.Status.HostID = existing.ID
 	hm.Status.HostVersion = existing.Version

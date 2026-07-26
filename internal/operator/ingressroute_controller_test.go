@@ -1057,7 +1057,15 @@ func TestReconcile_IngressRoute_AddHostAlreadyExists_Adopts(t *testing.T) {
 			findCalled = true
 			assert.Equal(t, "10.0.0.1", ip)
 			assert.Equal(t, "app.example.com", hostname)
-			return &HostEntry{ID: "adopted-id", IP: ip, Hostname: hostname, Version: "3"}, nil
+			// This IngressRoute's own earlier creation, so the server holds the
+			// comment and tags syncHost stamped on it. Adoption is gated on
+			// both (T-07-02).
+			return &HostEntry{
+				ID: "adopted-id", IP: ip, Hostname: hostname,
+				Comment: "k8s-ingress:default/my-ir",
+				Tags:    []string{"kubernetes", "traefik", "ingress"},
+				Version: "3",
+			}, nil
 		},
 	}
 
@@ -1457,4 +1465,61 @@ func TestReconcile_IngressRoute_MultiHost_AllInSync_NoWrites(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, ctrl.Result{}, result, "all in sync; no requeue")
 	assert.Zero(t, updateCalls, "no annotation r.Update when the ID map is unchanged across multiple hosts")
+}
+
+// T-07-02: the (ip, hostname) pair collides with an entry owned by a Gateway
+// API route. Adoption must be refused — adopting would put a foreign ID in this
+// IngressRoute's host-ids annotation, and stale-cleanup or reconcileDelete
+// would then destroy the Gateway route's live DNS entry.
+func TestReconcile_IngressRoute_RefusesForeignEntryAdoption(t *testing.T) {
+	s := ingressRouteScheme(t)
+
+	obj := newIngressRoute("my-ir", "default", []map[string]interface{}{
+		{"match": "Host(`app.example.com`)"},
+	})
+	obj.SetFinalizers([]string{ingressRouteCleanupFinalizer})
+
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(obj).Build()
+
+	var deleteCalled bool
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, _ string, _, _ []string) (string, error) {
+			return "", fmt.Errorf("adding host %s/%s: %w", ip, hostname, ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			// Owned by a Gateway API route, not by this IngressRoute.
+			return &HostEntry{
+				ID: "gateway-owned-id", IP: ip, Hostname: hostname,
+				Comment: "k8s-gateway:default/web",
+				Tags:    []string{"kubernetes", "gateway", "httproute"},
+				Version: "3",
+			}, nil
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			deleteCalled = true
+			return nil
+		},
+	}
+
+	r := &IngressRouteReconciler{
+		Client:      k8sClient,
+		HostClient:  mock,
+		Log:         slog.Default(),
+		DefaultIP:   "10.0.0.1",
+		DefaultTags: []string{"kubernetes"},
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-ir", Namespace: "default"},
+	})
+	require.NoError(t, err, "a refused adoption must not fail the reconcile")
+	assert.False(t, deleteCalled, "must never delete another owner's entry")
+
+	var updated unstructured.Unstructured
+	updated.SetGroupVersionKind(obj.GroupVersionKind())
+	require.NoError(t, k8sClient.Get(context.Background(),
+		types.NamespacedName{Name: "my-ir", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.NotContains(t, ids, "app.example.com", "must not track an entry it does not own")
 }

@@ -760,10 +760,15 @@ func TestReconcile_AlreadyExists_AdoptsExistingHost(t *testing.T) {
 		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
 			assert.Equal(t, "192.168.1.10", ip)
 			assert.Equal(t, "my-host.local", hostname)
+			// The entry is this HostMapping's own earlier creation, so the
+			// server holds the comment reconcileCreate stamped on it. Adoption
+			// is gated on that comment (T-07-02), so a provenance-less entry
+			// here would describe a server reply that cannot occur.
 			return &HostEntry{
 				ID:       "existing-id-42",
 				IP:       ip,
 				Hostname: hostname,
+				Comment:  "k8s:default/my-host",
 				Version:  "v3",
 			}, nil
 		},
@@ -833,7 +838,7 @@ func TestReconcile_AlreadyExists_Idempotent(t *testing.T) {
 			return "", fmt.Errorf("adding host: %w", ErrHostAlreadyExists)
 		},
 		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
-			return &HostEntry{ID: "existing-id-42", IP: ip, Hostname: hostname, Version: "v1"}, nil
+			return &HostEntry{ID: "existing-id-42", IP: ip, Hostname: hostname, Comment: "k8s:default/my-host", Version: "v1"}, nil
 		},
 		updateHostFn: func(_ context.Context, _ string, _, _, _ string, _, _ []string, _ string) error {
 			updateCalls++
@@ -892,9 +897,9 @@ func TestReconcile_FindHost_ExactMatch(t *testing.T) {
 			// Simulate the server returning a prefix-collision candidate first,
 			// then the actual match. FindHost must return the exact match only.
 			candidates := []*HostEntry{
-				{ID: "wrong-id", IP: "10.0.0.99", Hostname: "host.local"},    // wrong IP
-				{ID: "right-id", IP: "10.0.0.1", Hostname: "host.local"},     // exact match
-				{ID: "also-wrong", IP: "10.0.0.1", Hostname: "host.local.x"}, // wrong hostname
+				{ID: "wrong-id", IP: "10.0.0.99", Hostname: "host.local"},                                // wrong IP
+				{ID: "right-id", IP: "10.0.0.1", Hostname: "host.local", Comment: "k8s:default/my-host"}, // exact match
+				{ID: "also-wrong", IP: "10.0.0.1", Hostname: "host.local.x"},                             // wrong hostname
 			}
 			for _, c := range candidates {
 				if c.IP == ip && c.Hostname == hostname {
@@ -1515,7 +1520,7 @@ func TestReconcile_Update_GetHostNotFound_RecreateAdoptsOnAlreadyExists(t *testi
 			return "", fmt.Errorf("adding host: %w", ErrHostAlreadyExists)
 		},
 		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
-			return &HostEntry{ID: "adopted-id", IP: ip, Hostname: hostname, Aliases: []string{"alias1"}, Tags: []string{"kubernetes"}, Version: "v9"}, nil
+			return &HostEntry{ID: "adopted-id", IP: ip, Hostname: hostname, Comment: "k8s:default/my-host", Aliases: []string{"alias1"}, Tags: []string{"kubernetes"}, Version: "v9"}, nil
 		},
 	}
 
@@ -1677,4 +1682,59 @@ func TestReconcile_Create_NoRecreatedEvent(t *testing.T) {
 
 	events := drainEvents(rec)
 	assert.Empty(t, events, "first-time create must not emit a Recreated event")
+}
+
+// T-07-02: the (ip, hostname) pair collides with an entry owned by a Gateway
+// API route. Adoption must be refused — adopting would put a foreign ID in
+// Status.HostID, and deleting this HostMapping would then destroy the Gateway
+// route's live DNS entry.
+func TestReconcile_AlreadyExists_RefusesForeignEntry(t *testing.T) {
+	s := testScheme(t)
+	hm := newTestHostMapping("my-host", "default", "192.168.1.10", "my-host.local")
+	hm.Finalizers = []string{hostCleanupFinalizer}
+
+	k8sClient := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(hm).
+		WithStatusSubresource(hm).
+		Build()
+
+	var updateCalled, deleteCalled bool
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "", fmt.Errorf("adding host: %w", ErrHostAlreadyExists)
+		},
+		findHostFn: func(_ context.Context, ip, hostname string) (*HostEntry, error) {
+			// Owned by a Gateway API route, not by this HostMapping.
+			return &HostEntry{
+				ID: "gateway-owned-id", IP: ip, Hostname: hostname,
+				Comment: "k8s-gateway:default/web",
+				Tags:    []string{"kubernetes", "gateway", "httproute"},
+				Version: "v1",
+			}, nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			updateCalled = true
+			return nil
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			deleteCalled = true
+			return nil
+		},
+	}
+
+	r := &HostMappingReconciler{Client: k8sClient, Scheme: s, HostClient: mock, Log: slog.Default()}
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "my-host", Namespace: "default"},
+	})
+	require.NoError(t, err, "a refused adoption must not fail the reconcile")
+	assert.Positive(t, result.RequeueAfter, "refused adoption should requeue")
+	assert.False(t, updateCalled, "must not converge an entry it does not own")
+	assert.False(t, deleteCalled, "must never delete another owner's entry")
+
+	var updated operatorv1alpha1.HostMapping
+	require.NoError(t, k8sClient.Get(context.Background(),
+		types.NamespacedName{Name: "my-host", Namespace: "default"}, &updated))
+	assert.Empty(t, updated.Status.HostID, "must not record a foreign host ID")
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -275,8 +276,36 @@ func (r *IngressRouteReconciler) addOrAdopt(ctx context.Context, log *slog.Logge
 		// so the reconcile requeues and retries.
 		return "", oops.Errorf("host %s reported AlreadyExists but was not found for adoption", hostname)
 	}
+	// T-07-02: adopt ONLY an entry this exact object previously created.
+	// FindHost matches on (ip, hostname) alone, which is not proof of ownership:
+	// the server enforces uniqueness on that pair, so the conflicting entry may
+	// belong to a Gateway API route, a HostMapping, or another IngressRoute.
+	// Adopting it would put a foreign ID in this object's host-ids annotation,
+	// after which stale-cleanup and reconcileDelete would DeleteHost it and
+	// destroy another owner's live DNS entry. --default-ingress-ip is shared
+	// across the operator's controllers, so these collisions arise in ordinary
+	// use, not just under attack.
+	//
+	// The comment carries per-object identity ("k8s-ingress:<namespace>/<name>",
+	// prefix-disjoint from "k8s:" and "k8s-gateway:"); the tags carry the
+	// controller. Both are operator-derived here — unlike HostMapping, an
+	// IngressRoute's tags never come from user spec — so both are checked.
+	if existing.Comment != comment || !hasIngressProvenance(existing.Tags) {
+		return "", oops.Errorf(
+			"refusing to adopt host %s (id %s): owned by another object (comment %q tags %v, want comment %q with traefik + ingress)",
+			hostname, existing.ID, existing.Comment, existing.Tags, comment,
+		)
+	}
 	log.Info("adopted existing host entry from IngressRoute", "hostname", hostname, "hostId", existing.ID)
 	return existing.ID, nil
+}
+
+// hasIngressProvenance reports whether tags identify a host entry created by
+// the IngressRoute controller. syncHost stamps every entry it writes with
+// "traefik" and "ingress", so requiring both excludes Gateway route entries
+// ("gateway" + kind) and HostMapping entries (user-supplied Spec.Tags).
+func hasIngressProvenance(tags []string) bool {
+	return slices.Contains(tags, "traefik") && slices.Contains(tags, "ingress")
 }
 
 // reconcileDelete removes all host entries associated with this IngressRoute.
