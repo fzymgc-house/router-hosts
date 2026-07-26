@@ -623,6 +623,56 @@ func TestSyncRoute_RequeuesShortAndCreatesNothingWithoutIP(t *testing.T) {
 	assert.NotContains(t, updated.Annotations, hostIDsAnnotation)
 }
 
+func TestSyncRoute_NoIPStillPrunesStaleEntries(t *testing.T) {
+	// CR-01 regression: syncRoute's no-IP early return used to skip the
+	// stale-cleanup pass entirely (it returned before the annotation was
+	// even read), leaving a removed hostname's host entry live on the
+	// router forever whenever the route's parent Gateway has no address and
+	// no DefaultIP is configured. The stale-cleanup pass must run
+	// regardless of whether an IP resolved — only the create/update loop is
+	// gated on ip != "" (D-16).
+	route := newHTTPRouteTracking("route1", "default", []string{"a.example.com"}, map[string]string{
+		"a.example.com": "id-a",
+		"b.example.com": "id-b",
+	})
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var addCalls, updateCalls int
+	var deletedIDs []string
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			addCalls++
+			return "unexpected", nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			updateCalls++
+			return nil
+		},
+		deleteHostFn: func(_ context.Context, id string) error {
+			deletedIDs = append(deletedIDs, id)
+			return nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	r.DefaultIP = "" // no parent Gateway seeded either, so resolveIP yields ""
+
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayShort}, result)
+	assert.Zero(t, addCalls)
+	assert.Zero(t, updateCalls)
+	assert.Equal(t, []string{"id-b"}, deletedIDs)
+
+	var updated gatewayv1.HTTPRoute
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "route1", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(r.Log, &updated)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"a.example.com": "id-a"}, ids)
+}
+
 func TestSyncRoute_UsesDefaultIPWhenParentHasNone(t *testing.T) {
 	gwHostnameOnly := newGateway("default", "gw", hostnameAddr("lb.example.com"))
 	route := &gatewayv1.HTTPRoute{
