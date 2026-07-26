@@ -4,17 +4,17 @@ milestone: v0.11.0
 milestone_name: K8s-Native Automation
 current_phase: 07
 current_phase_name: gateway-api-support
-status: executing
-stopped_at: Completed 07-04-PLAN.md
-last_updated: "2026-07-26T16:56:13.333Z"
+status: verifying
+stopped_at: Completed 07-05-PLAN.md
+last_updated: "2026-07-26T17:08:40.742Z"
 last_activity: 2026-07-26
 last_activity_desc: Phase 07 execution started
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 6
-  completed_plans: 5
-  percent: 0
+  completed_plans: 6
+  percent: 33
 ---
 
 # Project State
@@ -30,10 +30,10 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 
 Phase: 07 (gateway-api-support) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-26 — Phase 07 execution started
 
-Progress: [████████░░] 83%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -64,6 +64,7 @@ Progress: [████████░░] 83%
 | Phase 07-gateway-api-support P02 | 35min | 2 tasks | 2 files |
 | Phase 07 P03 | 20min | 2 tasks | 2 files |
 | Phase 07 P04 | 25min | 2 tasks | 2 files |
+| Phase 07 P05 | 20min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -85,6 +86,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 07-03: syncRoute requeues after requeueDelayShort with nil error when resolveIP yields no IP, before any HostClient call or annotation write (D-16, GW-02)
 - [Phase ?]: 07-04: Removed syncRoute's pre-existing zero-hostnames early return so the stale-cleanup delete pass runs even when a route's hostnames are edited down to zero (Rule 1 bug fix)
 - [Phase ?]: 07-04: syncRoute's update path is deliberately unconditional (no GetHost-before-Update guard) per D-13; reconcileDelete now performs full cleanup-then-finalizer-release; GW-01 marked complete
+- [Phase ?]: 07-05: parentRef field index (D-17) + Gateway watch, gated on gatewayKindPresent(mapper, gatewayGVK) computed once and threaded through SetupWithManager(mgr, watchGateway) so a cluster with route CRDs but no Gateway CRD still starts cleanly (research Pitfall 1)
+- [Phase ?]: 07-05: gatewayGVK built via gatewayGroupVersionKind("Gateway") not the deprecated gatewayv1.SchemeGroupVersion.WithKind, keeping all four GVKs on the same non-deprecated construction path
 
 ### Pending Todos
 
@@ -107,6 +110,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-26T16:56:13.327Z
-Stopped at: Completed 07-04-PLAN.md
+Last session: 2026-07-26T17:08:40.736Z
+Stopped at: Completed 07-05-PLAN.md
 Resume file: None
