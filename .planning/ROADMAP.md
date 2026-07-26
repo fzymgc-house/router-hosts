@@ -30,7 +30,7 @@ Phase 10. Approved 2026-07-25 from #364.
 - [x] **Phase 4: Observability (OpenTelemetry)** - Metrics export and trace-context propagation
 - [x] **Phase 5: Split-Horizon DNS Output (dnsmasq + unbound)** - Leak-free per-name authoritative resolver config
 - [x] **Phase 6: Aggregate Compaction (manual RPC + gauges)** - Operator-driven event-log compaction with observability
-- [ ] **Phase 7: Gateway API Support** - Reconcile HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS
+- [x] **Phase 7: Gateway API Support** - Reconcile HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS
 - [ ] **Phase 8: Kubernetes Service Controller** - DNS entries for LoadBalancer/NodePort Services
 - [ ] **Phase 9: Hook Reliability & Metrics** - Hook execution metrics + configurable timeout/concurrency
 - [ ] **Phase 10: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink
@@ -158,7 +158,7 @@ Plans:
 
 - [x] 07-05-PLAN.md — parentRef field index, Gateway re-enqueue, and CRD-presence gating for every watched kind
 
-**Status**: Planned — 6 plans across 5 waves (07-01 and 07-06 run in parallel in wave 1)
+**Status**: Complete (2026-07-26) — 6 plans across 5 waves; verified 16/16 must-haves. Code review found 4 Critical + 2 Warning issues, all fixed and re-verified before completion.
 
 ### Phase 8: Kubernetes Service Controller
 
