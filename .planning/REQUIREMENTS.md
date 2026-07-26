@@ -59,6 +59,17 @@
 - [ ] **HOOK-01**: Server emits execution metrics (count, duration, outcome) for `on_success` / `on_failure` hooks (currently dead code — tracked as router-hosts-0ed)
 - [ ] **HOOK-02**: Hook execution supports a configurable per-hook timeout and a bounded concurrency model so a slow hook cannot block the write path (currently fixed 30s + sequential — tracked as router-hosts-ee0)
 
+### Consumer-Rendered Output (Phase 10, approved)
+
+Approved 2026-07-25 from #364.
+
+- [ ] **TMPL-01**: A caller supplies a template and receives host data rendered through it, without a code change to this project
+- [ ] **TMPL-02**: The field set a template may reference is documented and versioned as an explicit compatibility surface (at minimum `ip_address`, `hostname`, `aliases`, `tags`, `comment`) rather than being whatever the internal struct happens to expose
+- [ ] **TMPL-03**: A template referencing an undefined key fails loudly; a render failure never emits a partial or empty artifact and leaves any previous artifact byte-identical
+- [ ] **TMPL-04**: Writes to a path are atomic (write-and-rename), so a consumer watching the file never observes a partial write
+- [ ] **TMPL-05**: Sink mode holds the rendered artifact current as host data changes without polling, and recovers after a connection interruption without emitting a truncated artifact
+- [ ] **TMPL-06**: `ExportHosts` and sink streaming yield lazily (O(1) memory, client backpressure) instead of materializing the full result set — currently `service.go:609` calls `store.ListAll` and builds the entire payload first (absorbs #23)
+
 ## v2 Requirements
 
 Acknowledged but deferred; not in the current roadmap.
@@ -111,6 +122,12 @@ Acknowledged but deferred; not in the current roadmap.
 | SVC-02 | Phase 8 | Pending |
 | HOOK-01 | Phase 9 | Pending |
 | HOOK-02 | Phase 9 | Pending |
+| TMPL-01 | Phase 10 | Pending |
+| TMPL-02 | Phase 10 | Pending |
+| TMPL-03 | Phase 10 | Pending |
+| TMPL-04 | Phase 10 | Pending |
+| TMPL-05 | Phase 10 | Pending |
+| TMPL-06 | Phase 10 | Pending |
 
 **Coverage:**
 
