@@ -16,6 +16,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/fzymgc-house/router-hosts/internal/validation"
 )
@@ -116,6 +118,68 @@ func parentRefsOf(obj client.Object) []gatewayv1.ParentReference {
 	default:
 		return nil
 	}
+}
+
+// parentRefIndexKey is the field-index key registered on each route kind's
+// parentRefs (D-17). routeParentRefIndexFunc is its extractor and
+// mapGatewayToRoutes is its only reader (via client.MatchingFields); both
+// must agree on the same "<namespace>/<name>" format and the same
+// namespace-defaulting rule, or a Gateway change silently stops propagating
+// to the routes that reference it.
+const parentRefIndexKey = "spec.parentRefs.gateway"
+
+// routeParentRefIndexFunc is the field-index extractor for parentRefIndexKey.
+// It emits "<namespace>/<name>" for every parentRef declared on obj, in
+// declaration order, defaulting the namespace to obj's own namespace when a
+// parentRef sets none — the same defaulting resolveIP already applies. It is
+// a pure function over client.Object, so it is unit-testable without a
+// manager (D-17), and always returns a non-nil (possibly empty) slice.
+func routeParentRefIndexFunc(obj client.Object) []string {
+	refs := parentRefsOf(obj)
+	keys := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		ns := obj.GetNamespace()
+		if ref.Namespace != nil {
+			ns = string(*ref.Namespace)
+		}
+		keys = append(keys, ns+"/"+string(ref.Name))
+	}
+	return keys
+}
+
+// mapGatewayToRoutes is the handler.MapFunc that re-enqueues every route of
+// this reconciler's kind whose parentRefs name gw (GW-02): a Gateway status
+// change — most importantly a changed or newly-populated status.addresses —
+// re-triggers a reconcile of every dependent route without polling, since
+// syncRoute's UpdateHost call is unconditional (D-13) and simply resolves a
+// fresh IP on that reconcile. Any List or list-extraction failure is logged
+// and treated as "no routes to enqueue" (nil) rather than panicking or
+// propagating the error to the caller, which controller-runtime does not
+// expect a MapFunc to return.
+func (r *GatewayRouteReconciler) mapGatewayToRoutes(ctx context.Context, gw client.Object) []reconcile.Request {
+	key := gw.GetNamespace() + "/" + gw.GetName()
+
+	list := r.newList()
+	if err := r.List(ctx, list, client.MatchingFields{parentRefIndexKey: key}); err != nil {
+		r.Log.Error("failed to list routes for Gateway re-enqueue", "gateway", key, "kind", r.KindName, "error", err)
+		return nil
+	}
+
+	items, err := apimeta.ExtractList(list)
+	if err != nil {
+		r.Log.Error("failed to extract route list for Gateway re-enqueue", "gateway", key, "kind", r.KindName, "error", err)
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(items))
+	for _, item := range items {
+		obj, ok := item.(client.Object)
+		if !ok {
+			continue
+		}
+		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+	}
+	return requests
 }
 
 // extractHostnames returns the hostnames declared on a route that are safe to
@@ -425,15 +489,31 @@ func gatewayKindPresent(mapper apimeta.RESTMapper, gvk schema.GroupVersionKind) 
 	return err == nil
 }
 
+// gatewayGVK is the GroupVersionKind for the Gateway kind itself, resolved
+// via the same non-deprecated gatewayGroupVersionKind helper the three route
+// kinds use (not gatewayv1.SchemeGroupVersion, which staticcheck SA1019
+// flags as deprecated). It gates the cross-object Gateway watch on CRD
+// presence exactly like the route kinds are gated (D-04/D-05): unlike a
+// route kind, an ungated Gateway watch can fail the manager's shared
+// informer cache at startup even when every route CRD is installed, taking
+// down the already-shipped HostMapping and IngressRoute controllers with it
+// (research Pitfall 1).
+var gatewayGVK = gatewayGroupVersionKind("Gateway")
+
 // SetupGatewayControllers registers a GatewayRouteReconciler for every
 // Gateway API route kind whose CRD is present in the cluster, skipping (and
-// logging) any that are absent. The Gateway watch and field index land in
-// plan 05.
+// logging) any that are absent. The Gateway CRD's presence is resolved once,
+// via the same RESTMapper and gatewayKindPresent helper, and threaded into
+// every route controller's SetupWithManager so the Gateway watch clause is
+// gated identically for all three kinds.
 func SetupGatewayControllers(mgr ctrl.Manager, log *slog.Logger, hc HostClient, defaultIP string, defaultTags []string) error {
 	mapper := mgr.GetRESTMapper()
+	watchGateway := gatewayKindPresent(mapper, gatewayGVK)
+
 	for _, k := range gatewayRouteKinds() {
 		if !gatewayKindPresent(mapper, k.gvk) {
-			log.Info("Gateway API CRD not installed; skipping controller", "kind", k.name)
+			log.Info("Gateway API CRD not installed; skipping controller",
+				"kind", k.name, "requiredAPIVersion", "gateway.networking.k8s.io/v1")
 			continue
 		}
 		rec := &GatewayRouteReconciler{
@@ -446,19 +526,36 @@ func SetupGatewayControllers(mgr ctrl.Manager, log *slog.Logger, hc HostClient, 
 			DefaultIP:   defaultIP,
 			DefaultTags: defaultTags,
 		}
-		if err := rec.SetupWithManager(mgr); err != nil {
+		if err := rec.SetupWithManager(mgr, watchGateway); err != nil {
 			return oops.Wrapf(err, "setting up gateway controller for %s", k.name)
 		}
-		log.Info("Gateway API controller registered", "kind", k.name)
+		log.Info("Gateway API controller registered", "kind", k.name, "watchesGateway", watchGateway)
 	}
 	return nil
 }
 
-// SetupWithManager registers this reconciler with the controller manager.
-// The parentRefs field index and the Gateway watch land in plan 05.
-func (r *GatewayRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+// SetupWithManager registers this reconciler with the controller manager. It
+// registers the parentRefs field index unconditionally — the route kind
+// gate in SetupGatewayControllers has already confirmed this kind's CRD is
+// installed before calling this method, so indexing it is always safe — and
+// adds the cross-object Gateway watch only when watchGateway is true
+// (research Pitfall 1): a route CRD being installed does not imply the
+// Gateway CRD is, and an ungated Watches(&gatewayv1.Gateway{}, ...) clause
+// fails the manager's shared informer cache at startup on such a cluster,
+// taking every other controller down with it. When watchGateway is false,
+// routes still reconcile and resolveIP falls back to --default-ingress-ip
+// (D-16); only the event-driven re-enqueue on a Gateway status change is
+// lost, and with no Gateway CRD there is no Gateway object to change anyway.
+func (r *GatewayRouteReconciler) SetupWithManager(mgr ctrl.Manager, watchGateway bool) error {
+	if err := mgr.GetFieldIndexer().IndexField(context.Background(), r.newObject(), parentRefIndexKey, routeParentRefIndexFunc); err != nil {
+		return oops.Wrapf(err, "indexing %s parentRefs", r.KindName)
+	}
+
+	bldr := ctrl.NewControllerManagedBy(mgr).
 		For(r.newObject()).
-		Named("gateway-" + r.KindName).
-		Complete(r)
+		Named("gateway-" + r.KindName)
+	if watchGateway {
+		bldr = bldr.Watches(&gatewayv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.mapGatewayToRoutes))
+	}
+	return bldr.Complete(r)
 }

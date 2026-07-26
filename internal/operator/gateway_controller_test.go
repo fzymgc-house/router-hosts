@@ -24,7 +24,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // recordingHandler is a minimal slog.Handler that captures every record
@@ -1455,9 +1454,6 @@ func TestMapGatewayToRoutes_PerKind(t *testing.T) {
 	requests := r.mapGatewayToRoutes(context.Background(), gw)
 	require.Len(t, requests, 1)
 	assert.Equal(t, types.NamespacedName{Namespace: "infra", Name: "grpc-route"}, requests[0].NamespacedName)
-	// reconcile.Request wraps NamespacedName; assert the type explicitly so a
-	// future refactor of mapGatewayToRoutes's return type is caught here.
-	var _ []reconcile.Request = requests
 }
 
 // ---------------------------------------------------------------------------
@@ -1536,9 +1532,15 @@ func TestGatewayKindPresent_GatewayGVKAbsent(t *testing.T) {
 // manager to exercise beyond this signature/wiring check, and this package's
 // two existing controllers' SetupWithManager methods are precedent for
 // staying at 0% direct coverage here.
+// setupWithManagerFunc names the exact signature SetupWithManager must carry
+// so the assignment below is a genuine, non-redundant type assertion (a bare
+// `var setup func(...) error = ...` gets flagged by staticcheck as an
+// inferable, and therefore removable, type annotation).
+type setupWithManagerFunc func(ctrl.Manager, bool) error
+
 func TestSetupWithManager_WatchGatewayFlagIsThreaded(t *testing.T) {
 	assert.Equal(t, gatewayGroupVersionKind("Gateway"), gatewayGVK)
 
-	var setup func(ctrl.Manager, bool) error = (&GatewayRouteReconciler{}).SetupWithManager
+	var setup setupWithManagerFunc = (&GatewayRouteReconciler{}).SetupWithManager
 	assert.NotNil(t, setup)
 }
