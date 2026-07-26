@@ -5,15 +5,15 @@ milestone_name: K8s-Native Automation
 current_phase: 07
 current_phase_name: gateway-api-support
 status: executing
-stopped_at: Completed 07-03-PLAN.md
-last_updated: "2026-07-26T16:43:50.553Z"
+stopped_at: Completed 07-04-PLAN.md
+last_updated: "2026-07-26T16:56:13.333Z"
 last_activity: 2026-07-26
 last_activity_desc: Phase 07 execution started
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 6
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-07)
 ## Current Position
 
 Phase: 07 (gateway-api-support) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-07-26 — Phase 07 execution started
 
-Progress: [███████░░░] 67%
+Progress: [████████░░] 83%
 
 ## Performance Metrics
 
@@ -63,6 +63,7 @@ Progress: [███████░░░] 67%
 | Phase 07 P06 | 25min | 2 tasks | 6 files |
 | Phase 07-gateway-api-support P02 | 35min | 2 tasks | 2 files |
 | Phase 07 P03 | 20min | 2 tasks | 2 files |
+| Phase 07 P04 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 07-03: resolveIP's ordering/type-filter/namespace-default behavior was already fully implemented in plan 07-01's tracer; task 1 needed only test coverage
 - [Phase ?]: 07-03: resolveIP now logs Error (not Debug) on a non-NotFound parent Gateway Get failure; NotFound stays silent (D-16)
 - [Phase ?]: 07-03: syncRoute requeues after requeueDelayShort with nil error when resolveIP yields no IP, before any HostClient call or annotation write (D-16, GW-02)
+- [Phase ?]: 07-04: Removed syncRoute's pre-existing zero-hostnames early return so the stale-cleanup delete pass runs even when a route's hostnames are edited down to zero (Rule 1 bug fix)
+- [Phase ?]: 07-04: syncRoute's update path is deliberately unconditional (no GetHost-before-Update guard) per D-13; reconcileDelete now performs full cleanup-then-finalizer-release; GW-01 marked complete
 
 ### Pending Todos
 
@@ -104,6 +107,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-26T16:43:50.548Z
-Stopped at: Completed 07-03-PLAN.md
+Last session: 2026-07-26T16:56:13.327Z
+Stopped at: Completed 07-04-PLAN.md
 Resume file: None

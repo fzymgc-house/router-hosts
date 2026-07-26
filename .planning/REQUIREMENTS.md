@@ -45,7 +45,7 @@
 
 ### Gateway API Support (Phase 7, active)
 
-- [ ] **GW-01**: Operator reconciles Gateway API HTTPRoute / GRPCRoute / TLSRoute hostnames into router DNS entries
+- [x] **GW-01**: Operator reconciles Gateway API HTTPRoute / GRPCRoute / TLSRoute hostnames into router DNS entries
 - [x] **GW-02**: Operator resolves route IPs from the parent Gateway's `status.addresses`
 - [x] **GW-03**: Helm chart and RBAC grant the operator watch/list access to Gateway API route resources
 
@@ -116,7 +116,7 @@ Acknowledged but deferred; not in the current roadmap.
 | DNSOUT-02 | Phase 5 | Complete |
 | COMP-01 | Phase 6 | Complete |
 | COMP-02 | Phase 6 | Complete |
-| GW-01 | Phase 7 | Pending |
+| GW-01 | Phase 7 | Complete |
 | GW-02 | Phase 7 | Complete |
 | GW-03 | Phase 7 | Complete |
 | SVC-01 | Phase 8 | Pending |
