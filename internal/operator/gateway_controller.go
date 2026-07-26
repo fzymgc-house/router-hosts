@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/samber/oops"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -218,9 +219,14 @@ func (r *GatewayRouteReconciler) reconcileDelete(_ context.Context, _ *slog.Logg
 // resolveIP resolves the target IP for a route by walking its parentRefs in
 // declaration order, reading each parent Gateway's status, and returning the
 // first IPAddress-typed address found. Falls back to r.DefaultIP when no
-// parent Gateway yields one. The error and fallback matrix (e.g. distinguishing
-// "Gateway not found" from "Gateway has no address yet") is expanded in
-// plan 03.
+// parent Gateway yields one (D-15).
+//
+// A parent Gateway Get that fails with NotFound is an ordinary "parent not
+// created yet" condition and is skipped silently; any other Get failure is
+// logged at Error level naming the Gateway, but the walk still continues to
+// the next parentRef either way. resolveIP never fails the reconcile itself —
+// an unreachable parent must not prevent a later parent or r.DefaultIP from
+// supplying an IP (D-16).
 func (r *GatewayRouteReconciler) resolveIP(ctx context.Context, log *slog.Logger, obj client.Object) string {
 	for _, ref := range parentRefsOf(obj) {
 		ns := obj.GetNamespace()
@@ -230,7 +236,9 @@ func (r *GatewayRouteReconciler) resolveIP(ctx context.Context, log *slog.Logger
 
 		gw := &gatewayv1.Gateway{}
 		if err := r.Get(ctx, client.ObjectKey{Namespace: ns, Name: string(ref.Name)}, gw); err != nil {
-			log.Debug("failed to get parent Gateway", "namespace", ns, "name", ref.Name, "error", err)
+			if !apierrors.IsNotFound(err) {
+				log.Error("failed to get parent Gateway", "namespace", ns, "name", ref.Name, "error", err)
+			}
 			continue
 		}
 
@@ -245,8 +253,9 @@ func (r *GatewayRouteReconciler) resolveIP(ctx context.Context, log *slog.Logger
 
 // syncRoute is the tracer's happy path: it creates a host entry for every
 // hostname not yet tracked in the host-ids annotation and persists the
-// resulting map. The update/delete diff, per-host error accumulation, and
-// requeue paths land in plan 04.
+// resulting map. It refuses to write any entry when resolveIP yields no IP,
+// requeuing after requeueDelayShort instead (D-16). The update/delete diff
+// and per-host error accumulation land in plan 04.
 func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger, obj client.Object, hostnames []string) (ctrl.Result, error) {
 	if len(hostnames) == 0 {
 		log.Debug("no hostnames extracted from route")
@@ -254,6 +263,10 @@ func (r *GatewayRouteReconciler) syncRoute(ctx context.Context, log *slog.Logger
 	}
 
 	ip := r.resolveIP(ctx, log, obj)
+	if ip == "" {
+		log.Warn("no IP resolved for route; requeuing without writing any host entry")
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
+	}
 
 	existingIDs, err := getHostIDsAnnotation(log, obj)
 	if err != nil {
