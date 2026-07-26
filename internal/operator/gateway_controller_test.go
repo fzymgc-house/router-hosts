@@ -3,6 +3,8 @@ package operator
 import (
 	"context"
 	"log/slog"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,6 +20,53 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
+
+// recordingHandler is a minimal slog.Handler that captures every record
+// emitted through it, used to assert on warn-level log output without
+// depending on a specific logging library beyond the standard slog package.
+type recordingHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+// hasWarnRecordContaining reports whether any captured warn-level record's
+// message or attributes mention needle.
+func (h *recordingHandler) hasWarnRecordContaining(needle string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		if r.Level != slog.LevelWarn {
+			continue
+		}
+		if strings.Contains(r.Message, needle) {
+			return true
+		}
+		found := false
+		r.Attrs(func(a slog.Attr) bool {
+			if strings.Contains(a.Value.String(), needle) {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
 
 // gatewayScheme builds a scheme registering only the Gateway API v1 kinds
 // (HTTPRoute, GRPCRoute, TLSRoute, Gateway). Do not reuse ingressRouteScheme,
@@ -268,4 +317,78 @@ func TestGatewayScheme_InstallsAllRouteKinds(t *testing.T) {
 	} {
 		assert.True(t, s.Recognizes(gvk), "scheme does not recognize %s", gvk)
 	}
+}
+
+func TestExtractHostnames_SkipsWildcards(t *testing.T) {
+	route := &gatewayv1.HTTPRoute{
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"*.example.com", "ok.example.com"},
+		},
+	}
+	assert.Equal(t, []string{"ok.example.com"}, extractHostnames(slog.Default(), route))
+}
+
+func TestExtractHostnames_SkipsInvalid(t *testing.T) {
+	route := &gatewayv1.HTTPRoute{
+		Spec: gatewayv1.HTTPRouteSpec{
+			// "-bad.example.com" fails validation.ValidateHostname (leading hyphen).
+			Hostnames: []gatewayv1.Hostname{"-bad.example.com", "good.example.com"},
+		},
+	}
+	assert.Equal(t, []string{"good.example.com"}, extractHostnames(slog.Default(), route))
+}
+
+func TestExtractHostnames_DeDuplicates(t *testing.T) {
+	route := &gatewayv1.HTTPRoute{
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"a.example.com", "a.example.com", "b.example.com"},
+		},
+	}
+	assert.Equal(t, []string{"a.example.com", "b.example.com"}, extractHostnames(slog.Default(), route))
+}
+
+func TestExtractHostnames_AcceptsDotlessWithWarning(t *testing.T) {
+	route := &gatewayv1.HTTPRoute{
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"router"},
+		},
+	}
+
+	handler := &recordingHandler{}
+	log := slog.New(handler)
+
+	assert.Equal(t, []string{"router"}, extractHostnames(log, route))
+	assert.True(t, handler.hasWarnRecordContaining("router"), "expected a warn-level record naming the dot-less hostname")
+}
+
+func TestExtractHostnames_AllSkipped(t *testing.T) {
+	route := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "route1",
+			Namespace:  "default",
+			Finalizers: []string{gatewayCleanupFinalizer},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"*.example.com"},
+		},
+	}
+
+	assert.Empty(t, extractHostnames(slog.Default(), route))
+
+	s := gatewayScheme(t)
+	k8sClient := fake.NewClientBuilder().WithScheme(s).WithObjects(route).Build()
+
+	var addHostCalled bool
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, ip, hostname, comment string, aliases, tags []string) (string, error) {
+			addHostCalled = true
+			return "unexpected", nil
+		},
+	}
+
+	r := newHTTPRouteReconciler(t, k8sClient, mock)
+	result, err := r.syncRoute(context.Background(), r.Log, route, extractHostnames(r.Log, route))
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result)
+	assert.False(t, addHostCalled)
 }
