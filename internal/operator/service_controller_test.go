@@ -1031,3 +1031,108 @@ func TestSyncService_PartialFailureRetainsIDs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"old.example.com": "id-old", "web.example.com": "id-new"}, ids)
 }
+
+// TestSyncService_AdoptionRefused is the T-08-01/D-21 dual-provenance gate:
+// a conflicting entry at the Service's own (ip, hostname) is adopted only
+// when BOTH its comment and its tags identify it as this Service's own
+// prior entry. Uses newFakeHostStore (gateway_controller_test.go) rather
+// than a bare mockHostClient literal — a mock that hands out a fresh ID per
+// AddHost models a server that accepts duplicate (ip, hostname) pairs,
+// which internal/server/commands.go rejects, so it would never reach the
+// adoption branch at all.
+func TestSyncService_AdoptionRefused(t *testing.T) {
+	const ip = "10.0.0.5"
+	const hostname = "web.example.com"
+	const wantComment = "k8s-service:default/web"
+
+	newCandidate := func() *corev1.Service {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: hostname,
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: ip}}
+		return svc
+	}
+
+	t.Run("foreign_comment", func(t *testing.T) {
+		store := newFakeHostStore()
+		store.seed("foreign-id", ip, hostname, "k8s-ingress:default/other", []string{"kubernetes", "service"})
+
+		svc := newCandidate()
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		r := newServiceReconciler(t, k8sClient, store.client())
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		assert.Contains(t, store.entries, store.key(ip, hostname), "the seeded entry must still be present")
+		assert.Empty(t, store.deleted)
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+		require.NoError(t, err)
+		assert.NotContains(t, ids, hostname, "the foreign ID must never enter this Service's annotation")
+	})
+
+	t.Run("foreign_tags", func(t *testing.T) {
+		store := newFakeHostStore()
+		store.seed("foreign-id", ip, hostname, wantComment, []string{"kubernetes", "traefik", "ingress"})
+
+		svc := newCandidate()
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		r := newServiceReconciler(t, k8sClient, store.client())
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		assert.Contains(t, store.entries, store.key(ip, hostname), "the seeded entry must still be present")
+		assert.Empty(t, store.deleted)
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+		require.NoError(t, err)
+		assert.NotContains(t, ids, hostname, "the foreign ID must never enter this Service's annotation")
+	})
+
+	t.Run("own_entry_adopted", func(t *testing.T) {
+		store := newFakeHostStore()
+		store.seed("own-id", ip, hostname, wantComment, []string{"kubernetes", "service"})
+
+		svc := newCandidate()
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		r := newServiceReconciler(t, k8sClient, store.client())
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{hostname: "own-id"}, ids)
+	})
+}
+
+// TestHasServiceProvenance is table-driven: only a tag set containing
+// "service" identifies an entry as Service-controller-owned. "kubernetes"
+// alone is not discriminating — it comes from the shared DefaultTags.
+func TestHasServiceProvenance(t *testing.T) {
+	tests := []struct {
+		name string
+		tags []string
+		want bool
+	}{
+		{"service_tag_present", []string{"kubernetes", "service"}, true},
+		{"ingress_tags", []string{"kubernetes", "traefik", "ingress"}, false},
+		{"gateway_tags", []string{"kubernetes", "gateway", "httproute"}, false},
+		{"kubernetes_only", []string{"kubernetes"}, false},
+		{"nil_tags", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, hasServiceProvenance(tt.tags))
+		})
+	}
+}
