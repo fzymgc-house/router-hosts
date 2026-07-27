@@ -170,8 +170,27 @@ Plans:
 1. A LoadBalancer or NodePort Service with the configured annotations produces router DNS entries
 2. Service IPs are resolved per the IP-resolution rules, and entries are removed when the Service is deleted
 
-**Plans**: TBD
-**Status**: Not started — Rust-era design (2026-01-02) never ported to the Go operator; north-star parity gap
+**Plans**: 5 plans
+
+Plans:
+**Wave 1**
+
+- [ ] 08-01-PLAN.md — Tracer: one annotated LoadBalancer Service becomes one router DNS entry, behind `--enable-service`
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 08-02-PLAN.md — IP resolution matrix, the four failure/waiting Events, and the cluster-scoped `events` RBAC fix
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 08-03-PLAN.md — Hostname validation, aliases, and the fail-closed per-host sync path
+- [ ] 08-05-PLAN.md — Chart `serviceController.enabled` toggle, `task test:chart` content assertions, and chart docs
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 08-04-PLAN.md — Desired-set diff, provenance-gated adoption, and finalizer cleanup
+
+**Status**: Planned — Rust-era design (2026-01-02) never ported to the Go operator; north-star parity gap
 
 ### Phase 9: Hook Reliability & Metrics
 
