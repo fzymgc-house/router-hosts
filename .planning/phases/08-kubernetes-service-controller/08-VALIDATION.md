@@ -22,7 +22,7 @@ created: 2026-07-26
 |----------|-------|
 | **Framework** | Go `testing` + `stretchr/testify` (`assert`/`require`) — matches `hostmapping_controller_test.go` / `gateway_controller_test.go` |
 | **Config file** | none — plain `go test`, invoked only via `task test` per CLAUDE.md |
-| **Quick run command** | `task test -- -run 'TestService' ./internal/operator/` |
+| **Quick run command** | `task test -- -v -run 'Service' ./internal/operator/` (see the pattern warning below) |
 | **Full suite command** | `task test:coverage:ci` (enforces the ≥80% threshold) |
 | **Chart command** | `task test:chart` (helm present in this environment — it will actually run, not self-skip) |
 | **Estimated runtime** | ~15s scoped / ~120s full suite |
@@ -31,7 +31,7 @@ created: 2026-07-26
 
 ## Sampling Rate
 
-- **After every task commit:** `task test -- -run 'TestService' ./internal/operator/`
+- **After every task commit:** `task test -- -v -run 'Service' ./internal/operator/`
 - **After every plan wave:** `task test:coverage:ci`
 - **Before `/gsd-verify-work`:** `task test:coverage:ci` green **AND** `task test:chart` green
 - **Max feedback latency:** ~15 seconds (scoped run)
@@ -51,6 +51,24 @@ status alone. Phase 7 seeded 7 rows here; **3 were wrong and still exited 0**:
 
 **Therefore:** run each row with `-v` and **count `--- PASS` lines**, recording the count in the row.
 Where a specific subtest is the point of the row, grep for its **name string**, not just a count.
+
+### The `-run` pattern trap (caught live on 2026-07-26, plan 08-01)
+
+This file originally specified `-run 'TestService'` as the quick-run command. Go's `-run` is an
+**unanchored regex over the test-function name**, and `TestService` does **not** match
+`TestReconcileService_AddsFinalizerAndReturns` or `TestReconcileService_LoadBalancerCreatesHost` —
+the literal substring `TestService` does not occur in `TestReconcileService…`. Measured after
+08-01 landed:
+
+| pattern | top-level `--- PASS` | verdict |
+|---|---|---|
+| `-run 'TestService'` | 1 of 3 | silently blind, exits 0 |
+| `-run 'Service'` | 3 of 3 | correct |
+
+This is the Phase 7 regression reproducing inside the very file written to prevent it. The lesson
+generalizes: a `Test<Noun>` prefix pattern misses every `Test<Verb><Noun>` sibling. **Prove a
+scoping pattern by counting what it runs against the test-function inventory
+(`rg '^func Test' <pkg>/*_test.go`) — never assume it covers a family by prefix.**
 
 The `helm template … | grep -q` idiom inherited from Phase 7's `test:chart` is itself an
 exit-status-only assertion — **do not copy it forward** for the new D-25 rows. Assert on rendered
