@@ -35,6 +35,7 @@ func run() error {
 		caCertPath           string
 		defaultIngressIP     string
 		enableGateway        bool
+		enableService        bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "Address the metrics endpoint binds to")
@@ -46,6 +47,7 @@ func run() error {
 	flag.StringVar(&caCertPath, "tls-ca", "", "Path to CA certificate for server verification")
 	flag.StringVar(&defaultIngressIP, "default-ingress-ip", "", "Default IP for hosts extracted from IngressRoutes and Gateway API routes")
 	flag.BoolVar(&enableGateway, "enable-gateway", false, "Enable Gateway API HTTPRoute/GRPCRoute/TLSRoute controllers")
+	flag.BoolVar(&enableService, "enable-service", false, "Enable the Kubernetes Service controller")
 	flag.Parse()
 
 	// Set up structured slog logging and bridge to controller-runtime's logr.
@@ -129,6 +131,20 @@ func run() error {
 		if err := operator.SetupGatewayControllers(mgr, logger.With("controller", "gateway"),
 			hostClient, defaultIngressIP, []string{"kubernetes"}); err != nil {
 			logger.Error("unable to create Gateway API controllers", "error", err)
+			return err
+		}
+	}
+
+	// Register Service controller, opt-in only (D-03).
+	if enableService {
+		if err := (&operator.ServiceReconciler{
+			Client:      mgr.GetClient(),
+			HostClient:  hostClient,
+			Log:         logger.With("controller", "service"),
+			DefaultTags: []string{"kubernetes"},
+			Recorder:    mgr.GetEventRecorder("service-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			logger.Error("unable to create Service controller", "error", err)
 			return err
 		}
 	}
