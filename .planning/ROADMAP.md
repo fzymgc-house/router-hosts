@@ -170,7 +170,7 @@ Plans:
 1. A LoadBalancer or NodePort Service with the configured annotations produces router DNS entries
 2. Service IPs are resolved per the IP-resolution rules, and entries are removed when the Service is deleted
 
-**Plans**: 4/5 plans executed
+**Plans**: 5/5 plans executed
 
 Plans:
 **Wave 1**
@@ -188,7 +188,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 08-04-PLAN.md — Desired-set diff, provenance-gated adoption, and finalizer cleanup
+- [x] 08-04-PLAN.md — Desired-set diff, provenance-gated adoption, and finalizer cleanup
 
 **Status**: Planned — Rust-era design (2026-01-02) never ported to the Go operator; north-star parity gap
 
@@ -238,6 +238,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 5. Split-Horizon DNS Output | v1 Baseline | shipped | Complete | v0.10.13 |
 | 6. Aggregate Compaction | v1 Baseline | shipped | Complete | v0.10.13 |
 | 7. Gateway API Support | K8s-Native Automation | 6/6 | In Progress|  |
-| 8. Service Controller | K8s-Native Automation | 4/5 | In Progress|  |
+| 8. Service Controller | K8s-Native Automation | 5/5 | In Progress|  |
 | 9. Hook Reliability & Metrics | K8s-Native Automation | 0/TBD | Not started | - |
 | 10. Consumer-Rendered Output | Consumer-Owned Output | 0/TBD | Not started | - |

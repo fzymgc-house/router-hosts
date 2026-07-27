@@ -4,17 +4,17 @@ milestone: v0.11.0
 milestone_name: K8s-Native Automation
 current_phase: 08
 current_phase_name: Kubernetes Service Controller
-status: executing
-stopped_at: Completed 08-05-PLAN.md
-last_updated: "2026-07-27T04:05:30.897Z"
+status: verifying
+stopped_at: Completed 08-04-PLAN.md (final plan of phase 08)
+last_updated: "2026-07-27T21:31:10.548Z"
 last_activity: 2026-07-26
 last_activity_desc: Phase 08 execution started
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 11
-  completed_plans: 10
-  percent: 33
+  completed_plans: 11
+  percent: 67
 ---
 
 # Project State
@@ -30,10 +30,10 @@ See: .planning/PROJECT.md (updated 2026-07-26)
 
 Phase: 08 (Kubernetes Service Controller) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-07-26 — Phase 08 execution started
 
-Progress: [█████████░] 91%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
@@ -70,6 +70,7 @@ Progress: [█████████░] 91%
 | Phase 08 P02 | 45min | 3 tasks | 3 files |
 | Phase 08-kubernetes-service-controller P03 | 50min | 3 tasks | 2 files |
 | Phase 08 P05 | ~40min | 3 tasks | 4 files |
+| Phase 08 P04 | 70min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -100,6 +101,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: syncServiceHost failures are handled by syncService identically to the tracer's addOrAdoptService failures (log.Error + RequeueAfter: requeueDelayLong, nil returned error) — the previously-tracked ID survives because the annotation write is skipped on that branch
 - [Phase ?]: D-23 followed exactly: serviceController.enabled key deliberately not named service.enabled, verified by asserting the bare service: key is absent from values.yaml
 - [Phase ?]: Both required negative controls for task test:chart's new Service RBAC assertions were run manually (widened services verbs, deleted events rule), each proven to fail loudly, then reverted and re-verified green
+- [Phase ?]: syncService restructured around a switch-computed desired set with no early return, so all four D-17 stop-managing transitions delete through one code path
+- [Phase ?]: addOrAdoptService gates adoption on BOTH existing.Comment == k8s-service:<ns>/<name> AND hasServiceProvenance(tags) — refusing a foreign entry on either half
 
 ### Pending Todos
 
@@ -122,6 +125,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-27T04:05:30.889Z
-Stopped at: Completed 08-05-PLAN.md
+Last session: 2026-07-27T21:31:10.542Z
+Stopped at: Completed 08-04-PLAN.md (final plan of phase 08)
 Resume file: None
