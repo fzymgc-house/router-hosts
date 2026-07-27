@@ -223,6 +223,106 @@ func TestServiceDesiredHostname(t *testing.T) {
 	})
 }
 
+func TestServiceDesiredAliases(t *testing.T) {
+	const canonical = "web.example.com"
+
+	t.Run("absent_annotation_returns_empty_non_nil", func(t *testing.T) {
+		log := slog.New(&recordingHandler{})
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Empty(t, aliases)
+	})
+
+	t.Run("empty_annotation_returns_empty_non_nil", func(t *testing.T) {
+		log := slog.New(&recordingHandler{})
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: "",
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Empty(t, aliases)
+	})
+
+	t.Run("single_alias", func(t *testing.T) {
+		log := slog.New(&recordingHandler{})
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: "www.example.com",
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Equal(t, []string{"www.example.com"}, aliases)
+	})
+
+	t.Run("comma_separated_trimmed", func(t *testing.T) {
+		log := slog.New(&recordingHandler{})
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: " www.example.com , api.example.com ",
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Equal(t, []string{"www.example.com", "api.example.com"}, aliases)
+	})
+
+	t.Run("empty_segments_ignored", func(t *testing.T) {
+		log := slog.New(&recordingHandler{})
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: "www.example.com,,api.example.com,",
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Equal(t, []string{"www.example.com", "api.example.com"}, aliases)
+	})
+
+	t.Run("invalid_alias_dropped", func(t *testing.T) {
+		h := &recordingHandler{}
+		log := slog.New(h)
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: "www.example.com,-bad.example.com",
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Equal(t, []string{"www.example.com"}, aliases)
+		assert.True(t, h.hasWarnRecordContaining("-bad.example.com"))
+	})
+
+	t.Run("ip_address_alias_dropped", func(t *testing.T) {
+		h := &recordingHandler{}
+		log := slog.New(h)
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: "www.example.com,10.0.0.5",
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Equal(t, []string{"www.example.com"}, aliases)
+		assert.True(t, h.hasWarnRecordContaining("10.0.0.5"))
+	})
+
+	t.Run("alias_matching_hostname_dropped", func(t *testing.T) {
+		h := &recordingHandler{}
+		log := slog.New(h)
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: "web.example.com,www.example.com",
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Equal(t, []string{"www.example.com"}, aliases)
+		assert.True(t, h.hasWarnRecordContaining("web.example.com"))
+	})
+
+	t.Run("duplicate_alias_deduped", func(t *testing.T) {
+		h := &recordingHandler{}
+		log := slog.New(h)
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: "www.example.com,WWW.example.com",
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Equal(t, []string{"www.example.com"}, aliases)
+		assert.True(t, h.hasWarnRecordContaining("WWW.example.com"))
+	})
+}
+
 func TestReconcileService_AddsFinalizerAndReturns(t *testing.T) {
 	s := testScheme(t)
 	svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
