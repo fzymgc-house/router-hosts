@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/fzymgc-house/router-hosts/internal/validation"
@@ -455,12 +456,26 @@ func (r *ServiceReconciler) syncServiceHost(ctx context.Context, log *slog.Logge
 	return r.addOrAdoptService(ctx, log, ip, hostname, comment, aliases, tags)
 }
 
-// addOrAdoptService creates a host entry for (ip, hostname). For the tracer,
-// an ErrHostAlreadyExists response is a hard error rather than an adoption:
-// the provenance-gated adoption branch (D-21, mirroring addOrAdopt +
-// hasIngressProvenance in ingressroute_controller.go) lands in plan 04 and
-// MUST NOT be approximated here with a bare adopt, which would let this
-// Service's annotation capture a foreign entry's ID.
+// addOrAdoptService creates a host entry for (ip, hostname), adopting a
+// pre-existing entry via FindHost when the server reports AlreadyExists,
+// mirroring ingressroute_controller.go's addOrAdopt (T-08-01, D-21).
+//
+// FindHost matches on (ip, hostname) alone, which is NOT proof of
+// ownership: the server enforces uniqueness on that pair, so the
+// conflicting entry may belong to a HostMapping, an IngressRoute, or a
+// Gateway route — including another Service. Adopting it would write a
+// foreign ID into this Service's host-ids annotation, after which the
+// stale-cleanup pass and reconcileDelete would legitimately DeleteHost it,
+// silently destroying another owner's live DNS entry.
+//
+// D-11 keeps this controller off the shared --default-ingress-ip, which
+// makes such collisions less routine here than for the IngressRoute and
+// Gateway controllers (a Service's IP comes from its own status or its own
+// annotation, not a shared flag) — but that does not make the check
+// optional: the collision is still reachable whenever a Service's resolved
+// (ip, hostname) happens to match an entry already owned by something else.
+//
+// BOTH halves of the gate below are load-bearing; neither is decoration.
 func (r *ServiceReconciler) addOrAdoptService(ctx context.Context, log *slog.Logger, ip, hostname, comment string, aliases, tags []string) (string, error) {
 	id, err := r.HostClient.AddHost(ctx, ip, hostname, comment, aliases, tags)
 	if err == nil {
@@ -470,7 +485,35 @@ func (r *ServiceReconciler) addOrAdoptService(ctx context.Context, log *slog.Log
 	if !errors.Is(err, ErrHostAlreadyExists) {
 		return "", oops.Wrapf(err, "creating host %s", hostname)
 	}
-	return "", oops.Errorf("host %s already exists on the server; Service adoption is not yet implemented", hostname)
+
+	existing, findErr := r.HostClient.FindHost(ctx, ip, hostname)
+	if findErr != nil {
+		return "", oops.Wrapf(findErr, "finding host %s for adoption", hostname)
+	}
+	if existing == nil {
+		// Race: the entry vanished between AddHost and FindHost. Surface an
+		// error so the reconcile requeues and retries.
+		return "", oops.Errorf("host %s reported AlreadyExists but was not found for adoption", hostname)
+	}
+	if existing.Comment != comment || !hasServiceProvenance(existing.Tags) {
+		return "", oops.Errorf(
+			"refusing to adopt host %s (id %s): owned by another object (comment %q tags %v, want comment %q with service)",
+			hostname, existing.ID, existing.Comment, existing.Tags, comment,
+		)
+	}
+	log.Info("adopted existing host entry from Service", "hostname", hostname, "hostId", existing.ID)
+	return existing.ID, nil
+}
+
+// hasServiceProvenance reports whether tags identify a host entry created
+// by the Service controller. syncService stamps every entry it writes with
+// the literal "service" tag in addition to DefaultTags, so checking only
+// that one tag is sufficient — "kubernetes" comes from the shared
+// DefaultTags and is therefore not discriminating (the same reasoning
+// recorded at gateway_controller.go:620-626). Unlike
+// hasGatewayProvenance, one kind means no KindName parameter is needed.
+func hasServiceProvenance(tags []string) bool {
+	return slices.Contains(tags, "service")
 }
 
 // reconcileDelete is a stub for the tracer: it removes the finalizer when
