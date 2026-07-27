@@ -52,8 +52,8 @@ type ServiceReconciler struct {
 
 	// DefaultTags are applied to all host entries created from Services, in
 	// addition to the literal "service" tag. Unlike IngressRouteReconciler
-	// and GatewayRouteReconciler, there is deliberately no DefaultIP field:
-	// D-11 forbids --default-ingress-ip as a Service IP fallback.
+	// and GatewayRouteReconciler, there is deliberately no default-IP field
+	// here: D-11 forbids --default-ingress-ip as a Service IP fallback.
 	DefaultTags []string
 
 	// Recorder emits Kubernetes Events for operator-visible failure/waiting
@@ -89,16 +89,30 @@ func serviceEnabledPredicate() predicate.Predicate {
 	}
 }
 
-// resolveServiceIP resolves the IP to publish for svc. The ip-address
-// annotation, when non-empty, always overrides LoadBalancer status (D-11).
-// Otherwise, for a LoadBalancer Service, it walks status.loadBalancer.ingress
-// in order and returns the first entry with a non-empty IP field (D-09);
-// entries carrying only a Hostname (AWS ELB style) are skipped, never
-// resolved. waiting is true only when the Service is a LoadBalancer with no
-// IP-bearing ingress entry yet — the caller should requeue rather than treat
-// this as a terminal condition. Every other Spec.Type returns ("", false) for
-// the tracer; the full type matrix lands in plan 02.
+// resolveServiceIP resolves the IP to publish for svc across the full
+// locked type matrix (D-09, D-10, D-11). waiting is true only for a
+// LoadBalancer Service with no IP-bearing ingress entry yet — the caller
+// should requeue rather than treat this as a terminal condition; every other
+// case (unsupported type, NodePort with no override) is terminal and
+// returns waiting=false alongside an empty ip.
+//
+// Evaluation order:
+//  1. Reject unsupported types first. Anything other than LoadBalancer or
+//     NodePort returns ("", false) immediately, so the ip-address annotation
+//     cannot resurrect a ClusterIP or ExternalName Service.
+//  2. Apply the ip-address annotation override. It wins over LoadBalancer
+//     status when both are present and is the sole IP source for NodePort.
+//  3. For LoadBalancer only, walk status.loadBalancer.ingress in order and
+//     return the first entry with a non-empty IP field. Entries carrying
+//     only a Hostname (AWS ELB style) are skipped, never resolved — a CNAME
+//     target is not a host entry IP. Falling off the end means the load
+//     balancer is still provisioning: return ("", true).
+//  4. NodePort with no override returns ("", false): nothing will ever
+//     supply an IP for it, so there is nothing to wait for.
 func resolveServiceIP(svc *corev1.Service) (ip string, waiting bool) {
+	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer && svc.Spec.Type != corev1.ServiceTypeNodePort {
+		return "", false
+	}
 	if override := svc.GetAnnotations()[serviceIPAddressAnnotation]; override != "" {
 		return override, false
 	}
