@@ -169,6 +169,60 @@ func TestResolveServiceIP(t *testing.T) {
 	})
 }
 
+func TestServiceDesiredHostname(t *testing.T) {
+	t.Run("missing_annotation", func(t *testing.T) {
+		log := slog.New(&recordingHandler{})
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		assert.Equal(t, "", serviceDesiredHostname(log, svc))
+	})
+
+	t.Run("empty_annotation", func(t *testing.T) {
+		log := slog.New(&recordingHandler{})
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceHostnameAnnotation: "",
+		})
+		assert.Equal(t, "", serviceDesiredHostname(log, svc))
+	})
+
+	t.Run("whitespace_trimmed", func(t *testing.T) {
+		log := slog.New(&recordingHandler{})
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceHostnameAnnotation: "  web.example.com  ",
+		})
+		assert.Equal(t, "web.example.com", serviceDesiredHostname(log, svc))
+	})
+
+	t.Run("valid_fqdn", func(t *testing.T) {
+		h := &recordingHandler{}
+		log := slog.New(h)
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		assert.Equal(t, "web.example.com", serviceDesiredHostname(log, svc))
+		assert.False(t, h.hasWarnRecordContaining("web.example.com"))
+	})
+
+	t.Run("invalid_dropped", func(t *testing.T) {
+		h := &recordingHandler{}
+		log := slog.New(h)
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceHostnameAnnotation: "-bad.example.com",
+		})
+		assert.Equal(t, "", serviceDesiredHostname(log, svc))
+		assert.True(t, h.hasWarnRecordContaining("-bad.example.com"))
+	})
+
+	t.Run("dotless_accepted_with_warning", func(t *testing.T) {
+		h := &recordingHandler{}
+		log := slog.New(h)
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceHostnameAnnotation: "router",
+		})
+		assert.Equal(t, "router", serviceDesiredHostname(log, svc))
+		assert.True(t, h.hasWarnRecordContaining("router"))
+	})
+}
+
 func TestReconcileService_AddsFinalizerAndReturns(t *testing.T) {
 	s := testScheme(t)
 	svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
@@ -288,6 +342,28 @@ func TestSyncService_Events(t *testing.T) {
 	t.Run("MissingHostname", func(t *testing.T) {
 		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceEnabledAnnotation: "true",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		rec := events.NewFakeRecorder(10)
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+		r.Recorder = rec
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		select {
+		case msg := <-rec.Events:
+			assert.Contains(t, msg, "Warning MissingHostname ")
+		default:
+			t.Fatal("expected an event")
+		}
+	})
+
+	t.Run("MissingHostname_when_invalid", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "-bad.example.com",
 		})
 		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
 		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
