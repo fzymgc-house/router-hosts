@@ -2,6 +2,7 @@ package operator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
@@ -616,5 +617,154 @@ func TestSyncService_TerminalConditionsDoNotRequeue(t *testing.T) {
 		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
 		require.NoError(t, err)
 		assert.Equal(t, requeueDelayShort, result.RequeueAfter)
+	})
+}
+
+// TestSyncService_AliasesClearedSendsEmptySlice is the Pitfall 2 regression
+// guard: a Service already tracked with aliases on the server, but no
+// aliases annotation on the object, must send UpdateHost a non-nil empty
+// slice — never nil, which grpcHostClient.UpdateHost treats as "leave
+// untouched" and would leak the stale alias forever.
+func TestSyncService_AliasesClearedSendsEmptySlice(t *testing.T) {
+	svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+		serviceEnabledAnnotation:  "true",
+		serviceHostnameAnnotation: "web.example.com",
+	})
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+	require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+	var updateCalls int
+	var captured []string
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{ID: id, Aliases: []string{"www.example.com"}, Version: "v1"}, nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, aliases, _ []string, _ string) error {
+			updateCalls++
+			captured = aliases
+			return nil
+		},
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			t.Fatal("AddHost must not be called when the hostname is already tracked")
+			return "", nil
+		},
+	}
+	r := newServiceReconciler(t, k8sClient, mock)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+	require.NoError(t, err)
+	assert.Equal(t, 1, updateCalls)
+	assert.NotNil(t, captured)
+	assert.Empty(t, captured)
+}
+
+// TestSyncService_AliasesSentOnCreate verifies a fresh Service's aliases
+// annotation is threaded through to AddHost in order.
+func TestSyncService_AliasesSentOnCreate(t *testing.T) {
+	svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+		serviceEnabledAnnotation:  "true",
+		serviceHostnameAnnotation: "web.example.com",
+		serviceAliasesAnnotation:  "www.example.com,api.example.com",
+	})
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+	var captured []string
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, aliases, _ []string) (string, error) {
+			captured = aliases
+			return "svc-host-1", nil
+		},
+	}
+	r := newServiceReconciler(t, k8sClient, mock)
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"www.example.com", "api.example.com"}, captured)
+}
+
+// TestSyncService_UpdatePath exercises syncServiceHost's read-before-write
+// fail-closed guard directly (D-18, D-19).
+func TestSyncService_UpdatePath(t *testing.T) {
+	t.Run("passes_version_from_get", func(t *testing.T) {
+		var gotVersion string
+		mock := &mockHostClient{
+			getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+				return &HostEntry{ID: id, Version: "v7"}, nil
+			},
+			updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, version string) error {
+				gotVersion = version
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, fake.NewClientBuilder().WithScheme(testScheme(t)).Build(), mock)
+
+		id, err := r.syncServiceHost(context.Background(), slog.Default(), "id-1", "10.0.0.7", "web.example.com",
+			"k8s-service:default/web", []string{}, []string{"kubernetes", "service"})
+		require.NoError(t, err)
+		assert.Equal(t, "id-1", id)
+		assert.Equal(t, "v7", gotVersion)
+	})
+
+	t.Run("recreates_when_get_reports_not_found", func(t *testing.T) {
+		var addHostCalls int
+		mock := &mockHostClient{
+			getHostFn: func(_ context.Context, _ string) (*HostEntry, error) {
+				return nil, ErrHostNotFound
+			},
+			updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+				t.Fatal("UpdateHost must not be called when the entry vanished")
+				return nil
+			},
+			addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+				addHostCalls++
+				return "new-id", nil
+			},
+		}
+		r := newServiceReconciler(t, fake.NewClientBuilder().WithScheme(testScheme(t)).Build(), mock)
+
+		id, err := r.syncServiceHost(context.Background(), slog.Default(), "stale-id", "10.0.0.7", "web.example.com",
+			"k8s-service:default/web", []string{}, []string{"kubernetes", "service"})
+		require.NoError(t, err)
+		assert.Equal(t, 1, addHostCalls)
+		assert.Equal(t, "new-id", id)
+	})
+
+	t.Run("fails_closed_on_read_error", func(t *testing.T) {
+		mock := &mockHostClient{
+			getHostFn: func(_ context.Context, _ string) (*HostEntry, error) {
+				return nil, errors.New("boom")
+			},
+			updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+				t.Fatal("UpdateHost must not be called on a read error")
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, fake.NewClientBuilder().WithScheme(testScheme(t)).Build(), mock)
+
+		id, err := r.syncServiceHost(context.Background(), slog.Default(), "id-1", "10.0.0.7", "web.example.com",
+			"k8s-service:default/web", []string{}, []string{"kubernetes", "service"})
+		require.Error(t, err)
+		assert.Equal(t, "id-1", id, "the previously tracked ID must be retained on a fail-closed error")
+	})
+
+	t.Run("fails_closed_on_empty_entry", func(t *testing.T) {
+		mock := &mockHostClient{
+			getHostFn: func(_ context.Context, _ string) (*HostEntry, error) {
+				return nil, nil
+			},
+			updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+				t.Fatal("UpdateHost must not be called on an empty entry")
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, fake.NewClientBuilder().WithScheme(testScheme(t)).Build(), mock)
+
+		_, err := r.syncServiceHost(context.Background(), slog.Default(), "id-1", "10.0.0.7", "web.example.com",
+			"k8s-service:default/web", []string{}, []string{"kubernetes", "service"})
+		require.Error(t, err)
 	})
 }
