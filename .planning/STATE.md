@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: K8s-Native Automation
-current_phase: 8
+current_phase: 08
 current_phase_name: Kubernetes Service Controller
 status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-07-27T00:55:24.175Z"
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-07-27T01:10:27.726Z"
 last_activity: 2026-07-26
-last_activity_desc: Phase 07 complete, transitioned to Phase 8
+last_activity_desc: Phase 08 execution started
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 11
-  completed_plans: 6
+  completed_plans: 7
   percent: 33
 ---
 
@@ -24,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-26)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Phase 8 — kubernetes-service-controller
+**Current focus:** Phase 08 — Kubernetes Service Controller
 
 ## Current Position
 
-Phase: 8 — Kubernetes Service Controller
-Plan: Not started
+Phase: 08 (Kubernetes Service Controller) — EXECUTING
+Plan: 2 of 5
 Status: Ready to execute
-Last activity: 2026-07-26 — Phase 07 complete, transitioned to Phase 8
+Last activity: 2026-07-26 — Phase 08 execution started
 
-Progress: [██████████] 100%
+Progress: [██████░░░░] 64%
 
 ## Performance Metrics
 
@@ -66,6 +66,7 @@ Progress: [██████████] 100%
 | Phase 07 P03 | 20min | 2 tasks | 2 files |
 | Phase 07 P04 | 25min | 2 tasks | 2 files |
 | Phase 07 P05 | 20min | 3 tasks | 2 files |
+| Phase 08 P01 | 20min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -89,6 +90,7 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 07-04: syncRoute's update path is deliberately unconditional (no GetHost-before-Update guard) per D-13; reconcileDelete now performs full cleanup-then-finalizer-release; GW-01 marked complete
 - [Phase ?]: 07-05: parentRef field index (D-17) + Gateway watch, gated on gatewayKindPresent(mapper, gatewayGVK) computed once and threaded through SetupWithManager(mgr, watchGateway) so a cluster with route CRDs but no Gateway CRD still starts cleanly (research Pitfall 1)
 - [Phase ?]: 07-05: gatewayGVK built via gatewayGroupVersionKind("Gateway") not the deprecated gatewayv1.SchemeGroupVersion.WithKind, keeping all four GVKs on the same non-deprecated construction path
+- [Phase ?]: Confirmed service-cleanup finalizer string per locked CONTEXT D-16 (checkpoint resolved: confirm-service-cleanup)
 
 ### Pending Todos
 
@@ -111,6 +113,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-27T00:13:36.373Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-kubernetes-service-controller/08-CONTEXT.md
+Last session: 2026-07-27T01:10:27.720Z
+Stopped at: Completed 08-01-PLAN.md
+Resume file: None

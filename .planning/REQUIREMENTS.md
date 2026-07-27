@@ -51,8 +51,8 @@
 
 ### Kubernetes Service Controller (Phase 8, active)
 
-- [ ] **SVC-01**: Operator creates router DNS entries for LoadBalancer and NodePort Services from configured annotations
-- [ ] **SVC-02**: Operator resolves Service IPs and removes entries when the Service is deleted
+- [x] **SVC-01**: Operator creates router DNS entries for LoadBalancer and NodePort Services from configured annotations
+- [x] **SVC-02**: Operator resolves Service IPs and removes entries when the Service is deleted
 
 ### Hook Reliability & Metrics (Phase 9, active)
 
@@ -119,8 +119,8 @@ Acknowledged but deferred; not in the current roadmap.
 | GW-01 | Phase 7 | Complete |
 | GW-02 | Phase 7 | Complete |
 | GW-03 | Phase 7 | Complete |
-| SVC-01 | Phase 8 | Pending |
-| SVC-02 | Phase 8 | Pending |
+| SVC-01 | Phase 8 | Complete |
+| SVC-02 | Phase 8 | Complete |
 | HOOK-01 | Phase 9 | Pending |
 | HOOK-02 | Phase 9 | Pending |
 | TMPL-01 | Phase 10 | Pending |
