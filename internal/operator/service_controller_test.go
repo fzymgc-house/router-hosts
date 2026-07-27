@@ -80,6 +80,94 @@ func TestServiceEnabledPredicate(t *testing.T) {
 	})
 }
 
+func TestResolveServiceIP(t *testing.T) {
+	t.Run("loadbalancer_first_ip", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "10.0.0.7", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("loadbalancer_hostname_only_skipped", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{Hostname: "elb.aws.example"}}
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "", ip)
+		assert.True(t, waiting)
+	})
+
+	t.Run("loadbalancer_hostname_then_ip", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
+			{Hostname: "elb.aws.example"},
+			{IP: "10.0.0.9"},
+		}
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "10.0.0.9", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("loadbalancer_entry_with_both_fields", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{
+			{IP: "10.0.0.3", Hostname: "elb.aws.example"},
+		}
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "10.0.0.3", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("loadbalancer_empty_status", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "", ip)
+		assert.True(t, waiting)
+	})
+
+	t.Run("nodeport_with_annotation", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeNodePort, map[string]string{
+			serviceIPAddressAnnotation: "192.168.1.50",
+		})
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "192.168.1.50", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("nodeport_without_annotation", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeNodePort, nil)
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("annotation_overrides_loadbalancer_status", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceIPAddressAnnotation: "192.168.1.50",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "192.168.1.50", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("clusterip_unsupported", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeClusterIP, map[string]string{
+			serviceIPAddressAnnotation: "192.168.1.50",
+		})
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("externalname_unsupported", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeExternalName, nil)
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "", ip)
+		assert.False(t, waiting)
+	})
+}
+
 func TestReconcileService_AddsFinalizerAndReturns(t *testing.T) {
 	s := testScheme(t)
 	svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
