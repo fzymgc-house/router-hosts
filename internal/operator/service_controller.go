@@ -516,11 +516,46 @@ func hasServiceProvenance(tags []string) bool {
 	return slices.Contains(tags, "service")
 }
 
-// reconcileDelete is a stub for the tracer: it removes the finalizer when
-// present. The full cleanup pass over tracked host IDs lands in plan 04.
+// reconcileDelete deletes every host entry tracked in svc's host-ids
+// annotation and only then releases the cleanup finalizer, mirroring
+// ingressroute_controller.go:311-348 (D-16). The ordering is the whole
+// point: the finalizer is the only thing guaranteeing the operator gets a
+// chance to clean up, so it is released last, and only on full success.
 func (r *ServiceReconciler) reconcileDelete(ctx context.Context, log *slog.Logger, svc *corev1.Service) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(svc, serviceCleanupFinalizer) {
+		// Another controller's deletion path, nothing to do.
 		return ctrl.Result{}, nil
+	}
+
+	existingIDs, err := getHostIDsAnnotation(log, svc)
+	if err != nil {
+		// The ownership record is unreadable: releasing the finalizer here
+		// would strand every entry it named as an unowned leak in router
+		// DNS (D-18). Do not touch the finalizer.
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, err
+	}
+
+	remainingIDs := make(map[string]string, len(existingIDs))
+	var hadDeleteError bool
+	for hostname, id := range existingIDs {
+		log.Info("deleting host entry for deleted Service", "hostname", hostname, "hostId", id)
+		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
+			log.Error("failed to delete host entry during cleanup", "hostname", hostname, "hostId", id, "error", err)
+			remainingIDs[hostname] = id
+			hadDeleteError = true
+		}
+	}
+	if hadDeleteError {
+		// Persist remaining IDs so they are not orphaned on the next
+		// reconcile, and leave the finalizer in place so Kubernetes keeps
+		// the object alive for the retry.
+		if err := setHostIDsAnnotation(svc, remainingIDs); err != nil {
+			return ctrl.Result{}, oops.Wrapf(err, "setting host IDs annotation after partial delete")
+		}
+		if err := r.Update(ctx, svc); err != nil {
+			return ctrl.Result{}, oops.Wrapf(err, "updating Service annotations after partial delete")
+		}
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
 	}
 
 	controllerutil.RemoveFinalizer(svc, serviceCleanupFinalizer)
