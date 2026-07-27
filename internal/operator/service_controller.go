@@ -83,23 +83,50 @@ func serviceEnabled(obj client.Object) bool {
 	return obj.GetAnnotations()[serviceEnabledAnnotation] == "true"
 }
 
+// serviceOwnsState reports whether obj carries evidence that this
+// controller has previously acted on it — the cleanup finalizer or a
+// non-empty host-ids annotation — independent of the current opt-in
+// annotation. CR-01: a Service that opted out (annotation removed) before
+// being deleted still carries serviceCleanupFinalizer, since only
+// reconcileDelete ever removes it. If the watch predicate keeps gating
+// solely on serviceEnabled, the deletionTimestamp Update that
+// `kubectl delete service` produces for such a Service is rejected forever
+// (neither old nor new carries `enabled: "true"`), Reconcile never runs,
+// reconcileDelete never runs, and the finalizer wedges the object in
+// Terminating with no self-heal. An object satisfying serviceOwnsState must
+// always be admitted so Reconcile gets a chance to release the finalizer.
+func serviceOwnsState(obj client.Object) bool {
+	return controllerutil.ContainsFinalizer(obj, serviceCleanupFinalizer) ||
+		obj.GetAnnotations()[hostIDsAnnotation] != ""
+}
+
 // serviceEnabledPredicate gates the Service watch on the opt-in annotation
-// (D-03, D-04). UpdateFunc deliberately inspects BOTH the old and the new
-// object (D-05): a predicate that inspects only the new object cannot see an
-// opt-out edit (annotation present -> absent), which would silently orphan
-// that Service's DNS entry. Hand-rolled rather than built from
+// (D-03, D-04), OR-ed with serviceOwnsState (CR-01) so a Service this
+// controller still owns cleanup state for is never silently dropped.
+// UpdateFunc deliberately inspects BOTH the old and the new object (D-05): a
+// predicate that inspects only the new object cannot see an opt-out edit
+// (annotation present -> absent), which would silently orphan that
+// Service's DNS entry. Hand-rolled rather than built from
 // predicate.NewPredicateFuncs, which threads only the new object into its
 // UpdateFunc and therefore cannot express this. No generation-changed
 // predicate is chained in front of it either: a Service has a status
 // subresource, so an annotation-only write never bumps metadata.generation
 // (RESEARCH Pattern 1).
+//
+// CreateFunc and DeleteFunc are gated the same way as UpdateFunc (not just
+// serviceEnabled) so an informer resync after an operator restart — which
+// re-delivers pre-existing objects as Create events — still admits a
+// Service mid-teardown that opted out before restart.
 func serviceEnabledPredicate() predicate.Predicate {
+	admit := func(obj client.Object) bool {
+		return serviceEnabled(obj) || serviceOwnsState(obj)
+	}
 	return predicate.Funcs{
-		CreateFunc:  func(e event.CreateEvent) bool { return serviceEnabled(e.Object) },
-		DeleteFunc:  func(e event.DeleteEvent) bool { return serviceEnabled(e.Object) },
-		GenericFunc: func(e event.GenericEvent) bool { return serviceEnabled(e.Object) },
+		CreateFunc:  func(e event.CreateEvent) bool { return admit(e.Object) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return admit(e.Object) },
+		GenericFunc: func(e event.GenericEvent) bool { return admit(e.Object) },
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			return serviceEnabled(e.ObjectOld) || serviceEnabled(e.ObjectNew)
+			return admit(e.ObjectOld) || admit(e.ObjectNew)
 		},
 	}
 }

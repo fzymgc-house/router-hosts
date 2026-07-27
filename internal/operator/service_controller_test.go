@@ -79,6 +79,23 @@ func TestServiceEnabledPredicate(t *testing.T) {
 	t.Run("update_both_disabled", func(t *testing.T) {
 		assert.False(t, pred.Update(event.UpdateEvent{ObjectOld: disabled, ObjectNew: disabled}))
 	})
+	t.Run("update_deletion_of_opted_out_but_finalized", func(t *testing.T) {
+		// CR-01: a Service that opted out (annotation removed) before being
+		// deleted still carries serviceCleanupFinalizer, since only
+		// reconcileDelete removes it. kubectl delete then produces an Update
+		// where NEITHER old nor new carries `enabled: "true"` — this must
+		// still be admitted, or Reconcile never runs and the finalizer
+		// wedges the object in Terminating forever.
+		optedOutFinalized := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		optedOutFinalized.Finalizers = []string{serviceCleanupFinalizer}
+
+		deleting := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		deleting.Finalizers = []string{serviceCleanupFinalizer}
+		now := metav1.Now()
+		deleting.DeletionTimestamp = &now
+
+		assert.True(t, pred.Update(event.UpdateEvent{ObjectOld: optedOutFinalized, ObjectNew: deleting}))
+	})
 	t.Run("delete_enabled", func(t *testing.T) {
 		assert.True(t, pred.Delete(event.DeleteEvent{Object: enabled}))
 	})
