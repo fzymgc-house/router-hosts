@@ -183,7 +183,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 08-03-PLAN.md — Hostname validation, aliases, and the fail-closed per-host sync path
+- [x] 08-03-PLAN.md — Hostname validation, aliases, and the fail-closed per-host sync path
 - [ ] 08-05-PLAN.md — Chart `serviceController.enabled` toggle, `task test:chart` content assertions, and chart docs
 
 **Wave 4** *(blocked on Wave 3 completion)*
