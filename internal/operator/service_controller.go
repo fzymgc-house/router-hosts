@@ -39,6 +39,18 @@ const (
 	serviceIPAddressAnnotation = "router-hosts.fzymgc.house/ip-address"
 )
 
+// Kubernetes Event reasons for the operator-visible failure/waiting states
+// (D-12), carried forward verbatim from the Rust-era design of record.
+// InvalidServiceType, MissingHostname, and MissingIPAddress are terminal for
+// now (D-14): the next Service update re-triggers reconcile naturally, so
+// none of them sets a timed requeue. Only PendingLoadBalancer requeues.
+const (
+	reasonInvalidServiceType  = "InvalidServiceType"
+	reasonMissingHostname     = "MissingHostname"
+	reasonMissingIPAddress    = "MissingIPAddress"
+	reasonPendingLoadBalancer = "PendingLoadBalancer"
+)
+
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
@@ -133,6 +145,18 @@ func serviceDesiredHostname(svc *corev1.Service) string {
 	return svc.GetAnnotations()[serviceHostnameAnnotation]
 }
 
+// emitEvent records a Kubernetes Event against svc when r.Recorder is set.
+// It is a no-op when r.Recorder is nil, so tests that do not assert on
+// events can leave it unset (event emission is best-effort telemetry, never
+// control flow). action is always the literal "Reconcile", mirroring the
+// HostMappingReconciler.recreateMissingHost call site.
+func (r *ServiceReconciler) emitEvent(svc *corev1.Service, eventtype, reason, note string, args ...any) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Eventf(svc, nil, eventtype, reason, "Reconcile", note, args...)
+}
+
 // Reconcile handles a single reconciliation loop for a Service resource.
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := r.Log.With("service", req.NamespacedName)
@@ -168,18 +192,53 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return r.syncService(ctx, log, svc)
 }
 
-// syncService is the tracer's happy path: resolve the hostname and IP, and
-// if both are present, create (or adopt) exactly one host entry and persist
-// its ID to the host-ids annotation. The update path for an already-tracked
-// hostname, per-host error accumulation, stale-cleanup diffing, and
-// requeue-on-error land in plan 04.
+// syncService resolves the hostname and IP for svc and, if both are
+// present, creates (or adopts) exactly one host entry and persists its ID
+// to the host-ids annotation. Four operator-visible failure/waiting states
+// short-circuit before any HostClient call, each emitting the matching
+// Kubernetes Event (D-12) and creating nothing:
+//
+//   - unsupported Spec.Type -> InvalidServiceType (terminal, D-14)
+//   - no hostname annotation -> MissingHostname (terminal, D-14)
+//   - LoadBalancer still provisioning -> PendingLoadBalancer (requeues
+//     after requeueDelayShort, D-09/D-14)
+//   - NodePort with no ip-address annotation -> MissingIPAddress (terminal,
+//     D-14)
+//
+// These early returns are provisional: plan 04 restructures syncService so
+// the desired set is computed and diffed even when it is empty (D-17), at
+// which point each terminal branch must still emit its event but fall
+// through to the stale-cleanup pass instead of returning early.
+//
+// The update path for an already-tracked hostname, per-host error
+// accumulation, and stale-cleanup diffing land in plan 04.
 func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, svc *corev1.Service) (ctrl.Result, error) {
+	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer && svc.Spec.Type != corev1.ServiceTypeNodePort {
+		r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidServiceType,
+			"Service %s/%s has type %s, which router-hosts does not support", svc.Namespace, svc.Name, svc.Spec.Type)
+		log.Warn("unsupported Service type", "type", svc.Spec.Type)
+		return ctrl.Result{}, nil
+	}
+
 	hostname := serviceDesiredHostname(svc)
+	if hostname == "" {
+		r.emitEvent(svc, corev1.EventTypeWarning, reasonMissingHostname,
+			"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceHostnameAnnotation)
+		log.Warn("missing hostname annotation", "annotation", serviceHostnameAnnotation)
+		return ctrl.Result{}, nil
+	}
+
 	ip, waiting := resolveServiceIP(svc)
-	if hostname == "" || ip == "" {
-		if waiting {
-			return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
-		}
+	if waiting {
+		r.emitEvent(svc, corev1.EventTypeNormal, reasonPendingLoadBalancer,
+			"Waiting for a LoadBalancer IP for Service %s/%s", svc.Namespace, svc.Name)
+		log.Info("waiting for LoadBalancer IP")
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
+	}
+	if ip == "" {
+		r.emitEvent(svc, corev1.EventTypeWarning, reasonMissingIPAddress,
+			"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceIPAddressAnnotation)
+		log.Warn("missing ip-address annotation", "annotation", serviceIPAddressAnnotation)
 		return ctrl.Result{}, nil
 	}
 
