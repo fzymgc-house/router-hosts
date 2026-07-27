@@ -52,6 +52,9 @@ spec:
             {{- if .Values.gateway.enabled }}
             - --enable-gateway
             {{- end }}
+            {{- if .Values.serviceController.enabled }}
+            - --enable-service
+            {{- end }}
             - --health-probe-bind-address=:{{ .Values.healthCheck.port }}
             - --metrics-bind-address={{ .Values.metrics.bindAddress }}
             {{- if $leaderElectionEnabled }}

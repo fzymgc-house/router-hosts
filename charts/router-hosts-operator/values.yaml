@@ -55,6 +55,23 @@ rbac:
 gateway:
   enabled: false
 
+# Kubernetes v1/Service controller support. When enabled, the operator
+# additionally watches Services and syncs annotated LoadBalancer/NodePort
+# Services the same way it syncs Traefik IngressRoutes (per-Service opt-in via
+# the router-hosts.fzymgc.house/enabled annotation — this value alone does not
+# register any Service).
+# Deliberately NOT named `service:` — that key is the near-universal Helm
+# convention for a chart's own Service resource, and claiming it here would
+# permanently block ever adding a real Service to this chart. This is an
+# intentional asymmetry with the gateway.enabled key above; see the chart
+# README for the rationale.
+# NOTE: the operator's shared informer caches every Service in the cluster
+# once this is enabled, regardless of the per-object opt-in annotation — a
+# cache selector can filter on a label but not on an annotation. See the
+# README for the memory-footprint tradeoff.
+serviceController:
+  enabled: false
+
 # Pod annotations
 podAnnotations: {}
 
