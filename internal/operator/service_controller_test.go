@@ -10,6 +10,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -239,4 +240,204 @@ func TestReconcileService_LoadBalancerCreatesHost(t *testing.T) {
 	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"web.example.com": "svc-host-1"}, ids)
+}
+
+// newReadySvc builds a Service fixture that already carries the cleanup
+// finalizer, so Reconcile proceeds straight to syncService instead of
+// stopping after the finalizer-add early return.
+func newReadySvc(name string, svcType corev1.ServiceType, annotations map[string]string) *corev1.Service {
+	svc := newTrackedService(name, "default", svcType, annotations)
+	svc.Finalizers = []string{serviceCleanupFinalizer}
+	return svc
+}
+
+// noAddHostMock fails the test if AddHost is ever called; the four
+// failure/waiting reasons under test must all create nothing.
+func noAddHostMock(t *testing.T) *mockHostClient {
+	t.Helper()
+	return &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			t.Fatal("AddHost must not be called for this fixture")
+			return "", nil
+		},
+	}
+}
+
+func TestSyncService_Events(t *testing.T) {
+	t.Run("InvalidServiceType", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeClusterIP, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		rec := events.NewFakeRecorder(10)
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+		r.Recorder = rec
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		select {
+		case msg := <-rec.Events:
+			assert.Contains(t, msg, "Warning InvalidServiceType ")
+		default:
+			t.Fatal("expected an event")
+		}
+	})
+
+	t.Run("MissingHostname", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation: "true",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		rec := events.NewFakeRecorder(10)
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+		r.Recorder = rec
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		select {
+		case msg := <-rec.Events:
+			assert.Contains(t, msg, "Warning MissingHostname ")
+		default:
+			t.Fatal("expected an event")
+		}
+	})
+
+	t.Run("MissingIPAddress", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeNodePort, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		rec := events.NewFakeRecorder(10)
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+		r.Recorder = rec
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		select {
+		case msg := <-rec.Events:
+			assert.Contains(t, msg, "Warning MissingIPAddress ")
+		default:
+			t.Fatal("expected an event")
+		}
+	})
+
+	t.Run("PendingLoadBalancer", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		rec := events.NewFakeRecorder(10)
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+		r.Recorder = rec
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		select {
+		case msg := <-rec.Events:
+			assert.Contains(t, msg, "Normal PendingLoadBalancer ")
+		default:
+			t.Fatal("expected an event")
+		}
+	})
+
+	t.Run("no_success_event_on_create", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		rec := events.NewFakeRecorder(10)
+		mock := &mockHostClient{
+			addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+				return "svc-host-1", nil
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+		r.Recorder = rec
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		select {
+		case msg := <-rec.Events:
+			t.Fatalf("expected no event on the success path, got %q", msg)
+		default:
+		}
+	})
+
+	t.Run("nil_recorder_is_safe", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation: "true",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+		require.Nil(t, r.Recorder)
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+	})
+}
+
+func TestSyncService_TerminalConditionsDoNotRequeue(t *testing.T) {
+	t.Run("invalid_service_type", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeClusterIP, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, ctrl.Result{}, result)
+	})
+
+	t.Run("missing_hostname", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation: "true",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, ctrl.Result{}, result)
+	})
+
+	t.Run("missing_ip_address", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeNodePort, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, ctrl.Result{}, result)
+	})
+
+	t.Run("pending_load_balancer_requeues_short", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, requeueDelayShort, result.RequeueAfter)
+	})
 }
