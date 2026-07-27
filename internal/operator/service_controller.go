@@ -170,6 +170,52 @@ func serviceDesiredHostname(log *slog.Logger, svc *corev1.Service) string {
 	return hostname
 }
 
+// serviceDesiredAliases returns the validated, deduplicated alias list from
+// the aliases annotation, mapped onto the host entry's native Aliases field
+// (D-07). The result is ALWAYS non-nil, including when the annotation is
+// absent or empty: grpcHostClient.UpdateHost only attaches the wire-level
+// aliases update when the Go slice is non-nil
+// (internal/operator/grpc_hostclient.go:131-133), so a nil result would
+// silently mean "leave the server's aliases alone" instead of "clear them"
+// and a Service whose aliases were removed would keep publishing them
+// forever (RESEARCH Pitfall 2).
+//
+// The annotation is comma-split, each segment trimmed, and empty segments
+// skipped. Each surviving alias is validated individually with
+// validation.ValidateAliases (canonical-hostname match, IP-address
+// rejection, hostname validity); an invalid alias is logged at Warn and
+// dropped, never fatal (D-07). Because the per-alias call cannot see the
+// other aliases, duplicates are deduplicated case-insensitively here, also
+// logged at Warn.
+func serviceDesiredAliases(log *slog.Logger, svc *corev1.Service, canonicalHostname string) []string {
+	segments := strings.Split(svc.GetAnnotations()[serviceAliasesAnnotation], ",")
+	result := make([]string, 0, len(segments))
+	seen := make(map[string]struct{}, len(segments))
+
+	for _, segment := range segments {
+		alias := strings.TrimSpace(segment)
+		if alias == "" {
+			continue
+		}
+
+		if errs := validation.ValidateAliases([]string{alias}, canonicalHostname); len(errs) > 0 {
+			log.Warn("skipping invalid alias annotation", "alias", alias, "error", errs[0])
+			continue
+		}
+
+		lower := strings.ToLower(alias)
+		if _, exists := seen[lower]; exists {
+			log.Warn("skipping duplicate alias annotation", "alias", alias)
+			continue
+		}
+		seen[lower] = struct{}{}
+
+		result = append(result, alias)
+	}
+
+	return result
+}
+
 // emitEvent records a Kubernetes Event against svc when r.Recorder is set.
 // It is a no-op when r.Recorder is nil, so tests that do not assert on
 // events can leave it unset (event emission is best-effort telemetry, never
@@ -273,13 +319,14 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 	}
 
 	comment := fmt.Sprintf("k8s-service:%s/%s", svc.Namespace, svc.Name)
+	aliases := serviceDesiredAliases(log, svc, hostname)
 
 	// Copy DefaultTags to avoid mutating the shared backing array.
 	tags := make([]string, 0, len(r.DefaultTags)+1)
 	tags = append(tags, r.DefaultTags...)
 	tags = append(tags, "service")
 
-	id, err := r.addOrAdoptService(ctx, log, ip, hostname, comment, nil, tags)
+	id, err := r.addOrAdoptService(ctx, log, ip, hostname, comment, aliases, tags)
 	if err != nil {
 		log.Error("failed to sync host entry", "hostname", hostname, "error", err)
 		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil

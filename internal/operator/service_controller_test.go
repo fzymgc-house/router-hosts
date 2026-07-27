@@ -374,7 +374,8 @@ func TestReconcileService_LoadBalancerCreatesHost(t *testing.T) {
 			assert.Equal(t, "10.0.0.7", ip)
 			assert.Equal(t, "web.example.com", hostname)
 			assert.Equal(t, "k8s-service:default/web", comment)
-			assert.Nil(t, aliases)
+			assert.NotNil(t, aliases)
+			assert.Empty(t, aliases)
 			assert.ElementsMatch(t, []string{"kubernetes", "service"}, tags)
 			return "svc-host-1", nil
 		},
