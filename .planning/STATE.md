@@ -5,15 +5,15 @@ milestone_name: K8s-Native Automation
 current_phase: 08
 current_phase_name: Kubernetes Service Controller
 status: executing
-stopped_at: Completed 08-03-PLAN.md
-last_updated: "2026-07-27T03:56:10.757Z"
+stopped_at: Completed 08-05-PLAN.md
+last_updated: "2026-07-27T04:05:30.897Z"
 last_activity: 2026-07-26
 last_activity_desc: Phase 08 execution started
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
   percent: 33
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-26)
 ## Current Position
 
 Phase: 08 (Kubernetes Service Controller) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-07-26 — Phase 08 execution started
 
-Progress: [████████░░] 82%
+Progress: [█████████░] 91%
 
 ## Performance Metrics
 
@@ -69,6 +69,7 @@ Progress: [████████░░] 82%
 | Phase 08 P01 | 20min | 2 tasks | 3 files |
 | Phase 08 P02 | 45min | 3 tasks | 3 files |
 | Phase 08-kubernetes-service-controller P03 | 50min | 3 tasks | 2 files |
+| Phase 08 P05 | ~40min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -97,6 +98,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 08-02: resolveServiceIP rejects unsupported Service types before applying the ip-address annotation override, so ClusterIP/ExternalName cannot be resurrected by the annotation
 - [Phase ?]: TestSyncService_UpdatePath tests syncServiceHost directly (not through full Reconcile) to isolate the D-18/D-19 fail-closed branch logic from annotation-persistence plumbing already covered elsewhere
 - [Phase ?]: syncServiceHost failures are handled by syncService identically to the tracer's addOrAdoptService failures (log.Error + RequeueAfter: requeueDelayLong, nil returned error) — the previously-tracked ID survives because the annotation write is skipped on that branch
+- [Phase ?]: D-23 followed exactly: serviceController.enabled key deliberately not named service.enabled, verified by asserting the bare service: key is absent from values.yaml
+- [Phase ?]: Both required negative controls for task test:chart's new Service RBAC assertions were run manually (widened services verbs, deleted events rule), each proven to fail loudly, then reverted and re-verified green
 
 ### Pending Todos
 
@@ -119,6 +122,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-27T03:56:10.750Z
-Stopped at: Completed 08-03-PLAN.md
+Last session: 2026-07-27T04:05:30.889Z
+Stopped at: Completed 08-05-PLAN.md
 Resume file: None
