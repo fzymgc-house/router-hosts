@@ -281,8 +281,10 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 // which point each terminal branch must still emit its event but fall
 // through to the stale-cleanup pass instead of returning early.
 //
-// The update path for an already-tracked hostname, per-host error
-// accumulation, and stale-cleanup diffing land in plan 04.
+// The update path for an already-tracked hostname is syncServiceHost;
+// per-host error accumulation across a desired set larger than one entry and
+// stale-cleanup diffing land in plan 04 (a Service produces at most one
+// hostname, D-06/D-07, so there is nothing to accumulate errors across yet).
 func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, svc *corev1.Service) (ctrl.Result, error) {
 	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer && svc.Spec.Type != corev1.ServiceTypeNodePort {
 		r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidServiceType,
@@ -326,7 +328,8 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 	tags = append(tags, r.DefaultTags...)
 	tags = append(tags, "service")
 
-	id, err := r.addOrAdoptService(ctx, log, ip, hostname, comment, aliases, tags)
+	prevID := existingIDs[hostname]
+	id, err := r.syncServiceHost(ctx, log, prevID, ip, hostname, comment, aliases, tags)
 	if err != nil {
 		log.Error("failed to sync host entry", "hostname", hostname, "error", err)
 		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
@@ -346,6 +349,57 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// syncServiceHost ensures a server-side host entry exists for (ip, hostname)
+// with the desired aliases and tags and returns its ID. prevID is the ID
+// currently tracked in the host-ids annotation, or "" when the host is not
+// yet tracked.
+//
+// Modelled on IngressRouteReconciler.syncHost (ingressroute_controller.go:
+// 216-253): a non-empty prevID is read first via GetHost, and the read's
+// result is what supplies the optimistic-concurrency version and the
+// fail-closed guard against a blind UpdateHost re-appending events (#338).
+// Unlike syncHost, there is no "already in sync" early return: D-19 keeps
+// UpdateHost unconditional for Services so a changed LoadBalancer IP or a
+// changed alias set propagates without this controller keeping any
+// last-known state.
+func (r *ServiceReconciler) syncServiceHost(ctx context.Context, log *slog.Logger, prevID, ip, hostname, comment string, aliases, tags []string) (string, error) {
+	if prevID == "" {
+		return r.addOrAdoptService(ctx, log, ip, hostname, comment, aliases, tags)
+	}
+
+	current, getErr := r.HostClient.GetHost(ctx, prevID)
+	switch {
+	case getErr == nil && current != nil:
+		err := r.HostClient.UpdateHost(ctx, prevID, ip, hostname, comment, aliases, tags, current.Version)
+		if err == nil {
+			log.Info("host entry updated from Service", "hostname", hostname, "hostId", prevID)
+			return prevID, nil
+		}
+		if !errors.Is(err, ErrHostNotFound) {
+			return prevID, oops.Wrapf(err, "updating host %s", prevID)
+		}
+		// Vanished between the read and the write — recreate below.
+		log.Warn("host entry vanished before update; recreating", "hostname", hostname, "staleHostId", prevID)
+	case errors.Is(getErr, ErrHostNotFound):
+		// Deleted out-of-band — recreate below. The Service is the source of
+		// truth.
+		log.Warn("host entry not found on server; recreating", "hostname", hostname, "staleHostId", prevID)
+	case getErr == nil && current == nil:
+		// Server returned neither an entry nor an error. Fail closed rather
+		// than treating it as a delete-and-recreate, which a missing entry
+		// without a NotFound code does not justify.
+		return prevID, oops.Errorf("reading host %s before update: empty entry returned", prevID)
+	default:
+		// Fail closed on a non-NotFound read error: without current state we
+		// can neither pick a safe OCC version nor avoid re-appending events
+		// (#338). Surface the error so the caller retains the ID and
+		// requeues.
+		return prevID, oops.Wrapf(getErr, "reading host %s before update", prevID)
+	}
+
+	return r.addOrAdoptService(ctx, log, ip, hostname, comment, aliases, tags)
 }
 
 // addOrAdoptService creates a host entry for (ip, hostname). For the tracer,
