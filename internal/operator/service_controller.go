@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"strings"
 
+	"github.com/fzymgc-house/router-hosts/internal/validation"
 	"github.com/samber/oops"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/events"
@@ -139,10 +141,33 @@ func resolveServiceIP(svc *corev1.Service) (ip string, waiting bool) {
 	return "", true
 }
 
-// serviceDesiredHostname returns the hostname annotation verbatim. Validation
-// and the dot-less warning (D-08) land in plan 03.
-func serviceDesiredHostname(svc *corev1.Service) string {
-	return svc.GetAnnotations()[serviceHostnameAnnotation]
+// serviceDesiredHostname returns the trimmed, validated hostname annotation,
+// or the empty string when the annotation is absent/blank or fails
+// validation.ValidateHostname (D-06, D-08). An invalid hostname is logged at
+// Warn and treated as absent — the caller's existing MissingHostname branch
+// is the right operator-visible signal for it, matching the extractHostnames
+// shape in gateway_controller.go and the extractHosts shape in
+// ingressroute_controller.go. A dot-less (non-FQDN) hostname is accepted but
+// logged at Warn (D-08): under locked ADR router-hosts-bzg a bare name makes
+// unbound authoritative for a whole pseudo-TLD, but the IngressRoute,
+// Gateway, and HostMapping controllers all accept it, and enforcing it in
+// only this controller would make the operator inconsistent with itself.
+func serviceDesiredHostname(log *slog.Logger, svc *corev1.Service) string {
+	hostname := strings.TrimSpace(svc.GetAnnotations()[serviceHostnameAnnotation])
+	if hostname == "" {
+		return ""
+	}
+
+	if err := validation.ValidateHostname(hostname); err != nil {
+		log.Warn("invalid hostname annotation", "hostname", hostname, "error", err)
+		return ""
+	}
+
+	if !strings.Contains(hostname, ".") {
+		log.Warn("hostname has no dot; accepting as non-FQDN per D-08", "hostname", hostname)
+	}
+
+	return hostname
 }
 
 // emitEvent records a Kubernetes Event against svc when r.Recorder is set.
@@ -220,7 +245,7 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 		return ctrl.Result{}, nil
 	}
 
-	hostname := serviceDesiredHostname(svc)
+	hostname := serviceDesiredHostname(log, svc)
 	if hostname == "" {
 		r.emitEvent(svc, corev1.EventTypeWarning, reasonMissingHostname,
 			"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceHostnameAnnotation)
