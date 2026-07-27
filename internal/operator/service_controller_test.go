@@ -9,12 +9,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
 
@@ -1135,4 +1137,128 @@ func TestHasServiceProvenance(t *testing.T) {
 			assert.Equal(t, tt.want, hasServiceProvenance(tt.tags))
 		})
 	}
+}
+
+// newDeletingSvc builds a Service fixture carrying a non-nil
+// DeletionTimestamp, so Reconcile routes straight to reconcileDelete. The
+// fake client refuses to seed an object with a DeletionTimestamp and no
+// finalizers at all (mirroring the real API server, which would already
+// have removed such an object) — when withFinalizer is false, a foreign
+// finalizer this reconciler does not own is seeded instead, so
+// ContainsFinalizer(serviceCleanupFinalizer) is still false and
+// reconcileDelete's no-op guard is genuinely exercised.
+func newDeletingSvc(name string, annotations map[string]string, withFinalizer bool) *corev1.Service {
+	svc := newTrackedService(name, "default", corev1.ServiceTypeLoadBalancer, annotations)
+	if withFinalizer {
+		svc.Finalizers = []string{serviceCleanupFinalizer}
+	} else {
+		svc.Finalizers = []string{"other.example/finalizer"}
+	}
+	now := metav1.Now()
+	svc.DeletionTimestamp = &now
+	return svc
+}
+
+// TestReconcileService_DeleteRemovesHostsAndFinalizer covers the D-16/D-18
+// reconcileDelete cleanup: every tracked entry is deleted before the
+// cleanup finalizer is released, a delete failure retains the remaining IDs
+// and requeues with the finalizer intact, a Service without the finalizer
+// is a no-op, and a corrupt annotation never releases the finalizer.
+func TestReconcileService_DeleteRemovesHostsAndFinalizer(t *testing.T) {
+	t.Run("deletes_tracked_entries_and_releases_finalizer", func(t *testing.T) {
+		svc := newDeletingSvc("web", nil, true)
+		require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		var deleted []string
+		mock := &mockHostClient{
+			deleteHostFn: func(_ context.Context, id string) error {
+				deleted = append(deleted, id)
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"id-1"}, deleted)
+
+		var updated corev1.Service
+		getErr := k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated)
+		if getErr == nil {
+			assert.False(t, controllerutil.ContainsFinalizer(&updated, serviceCleanupFinalizer))
+		} else {
+			assert.True(t, apierrors.IsNotFound(getErr))
+		}
+	})
+
+	t.Run("retains_ids_and_requeues_on_delete_failure", func(t *testing.T) {
+		svc := newDeletingSvc("web", nil, true)
+		require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		mock := &mockHostClient{
+			deleteHostFn: func(_ context.Context, _ string) error {
+				return errors.New("boom")
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayShort}, result)
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		assert.True(t, controllerutil.ContainsFinalizer(&updated, serviceCleanupFinalizer))
+		ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"web.example.com": "id-1"}, ids)
+	})
+
+	t.Run("no_finalizer_is_a_noop", func(t *testing.T) {
+		svc := newDeletingSvc("web", nil, false)
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		var calls int
+		mock := &mockHostClient{
+			deleteHostFn: func(_ context.Context, _ string) error {
+				calls++
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, ctrl.Result{}, result)
+		assert.Zero(t, calls)
+	})
+
+	t.Run("corrupt_annotation_requeues_without_deleting", func(t *testing.T) {
+		svc := newDeletingSvc("web", map[string]string{hostIDsAnnotation: "{not json"}, true)
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		var calls int
+		mock := &mockHostClient{
+			deleteHostFn: func(_ context.Context, _ string) error {
+				calls++
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.Error(t, err)
+		assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayShort}, result)
+		assert.Zero(t, calls)
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		assert.True(t, controllerutil.ContainsFinalizer(&updated, serviceCleanupFinalizer))
+	})
 }
