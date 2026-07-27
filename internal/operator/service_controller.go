@@ -241,9 +241,18 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return r.reconcileDelete(ctx, log, svc)
 	}
 
-	// Ensure finalizer is present. Return after adding so the next reconcile
-	// works with a fresh object from the informer cache.
+	// Ensure finalizer is present, but only for a Service that is either
+	// opted in or already tracking a host entry (D-17). A Service that is
+	// opted out AND tracks nothing has no cleanup to guarantee, so it never
+	// needs the finalizer; a Service that once opted in and still carries
+	// the host-ids annotation DOES need it, even after opting out, or its
+	// tracked entry could never be deleted via reconcileDelete. Return after
+	// adding so the next reconcile works with a fresh object from the
+	// informer cache.
 	if !controllerutil.ContainsFinalizer(svc, serviceCleanupFinalizer) {
+		if !serviceEnabled(svc) && svc.GetAnnotations()[hostIDsAnnotation] == "" {
+			return ctrl.Result{}, nil
+		}
 		controllerutil.AddFinalizer(svc, serviceCleanupFinalizer)
 		if err := r.Update(ctx, svc); err != nil {
 			return ctrl.Result{}, oops.Wrapf(err, "adding finalizer to Service")
@@ -251,90 +260,128 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
-	// Re-check the opt-in annotation against the freshly-fetched object
-	// rather than trusting the event payload: the predicate gates the queue,
-	// not the reconcile. For the tracer an opted-out Service simply does not
-	// act; plan 04 routes it through the desired-set diff so its entry is
-	// cleaned up.
-	if !serviceEnabled(svc) {
-		return ctrl.Result{}, nil
-	}
-
 	return r.syncService(ctx, log, svc)
 }
 
-// syncService resolves the hostname and IP for svc and, if both are
-// present, creates (or adopts) exactly one host entry and persists its ID
-// to the host-ids annotation. Four operator-visible failure/waiting states
-// short-circuit before any HostClient call, each emitting the matching
-// Kubernetes Event (D-12) and creating nothing:
+// syncService computes the desired set for svc — at most one hostname,
+// since a Service carries exactly one hostname (D-06/D-07) — diffs it
+// against the host-ids annotation, and converges the router to match. There
+// is deliberately NO early return on an empty desired set (D-17): the
+// stale-cleanup pass at the end of this function must run even when the
+// Service is opted out, has an unsupported type, or is missing its hostname
+// annotation, so that every "stop managing this" transition — opt-out, type
+// change, or hostname change — deletes the previously tracked entry through
+// this ONE code path instead of several separately maintained ones. This is
+// the Phase 7 07-04 fix carried forward: the early return at
+// ingressroute_controller.go:124-127 is precisely the bug not to reproduce
+// here.
+//
+// The four operator-visible failure/waiting states from the tracer still
+// each emit their Kubernetes Event (D-12), but none of them return early
+// any more:
 //
 //   - unsupported Spec.Type -> InvalidServiceType (terminal, D-14)
 //   - no hostname annotation -> MissingHostname (terminal, D-14)
 //   - LoadBalancer still provisioning -> PendingLoadBalancer (requeues
-//     after requeueDelayShort, D-09/D-14)
+//     after requeueDelayShort, D-09/D-14). This is the one case where an
+//     already-tracked hostname is NOT dropped from the desired set: the
+//     entry is still wanted, just not yet resolvable, so its previous ID is
+//     carried forward into newIDs rather than deleted by the stale-cleanup
+//     pass.
 //   - NodePort with no ip-address annotation -> MissingIPAddress (terminal,
 //     D-14)
-//
-// These early returns are provisional: plan 04 restructures syncService so
-// the desired set is computed and diffed even when it is empty (D-17), at
-// which point each terminal branch must still emit its event but fall
-// through to the stale-cleanup pass instead of returning early.
-//
-// The update path for an already-tracked hostname is syncServiceHost;
-// per-host error accumulation across a desired set larger than one entry and
-// stale-cleanup diffing land in plan 04 (a Service produces at most one
-// hostname, D-06/D-07, so there is nothing to accumulate errors across yet).
+//   - opted out (serviceEnabled false) -> no event; opting out is not an
+//     error, just an empty desired set.
 func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, svc *corev1.Service) (ctrl.Result, error) {
-	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer && svc.Spec.Type != corev1.ServiceTypeNodePort {
-		r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidServiceType,
-			"Service %s/%s has type %s, which router-hosts does not support", svc.Namespace, svc.Name, svc.Spec.Type)
-		log.Warn("unsupported Service type", "type", svc.Spec.Type)
-		return ctrl.Result{}, nil
-	}
-
-	hostname := serviceDesiredHostname(log, svc)
-	if hostname == "" {
-		r.emitEvent(svc, corev1.EventTypeWarning, reasonMissingHostname,
-			"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceHostnameAnnotation)
-		log.Warn("missing hostname annotation", "annotation", serviceHostnameAnnotation)
-		return ctrl.Result{}, nil
-	}
-
-	ip, waiting := resolveServiceIP(svc)
-	if waiting {
-		r.emitEvent(svc, corev1.EventTypeNormal, reasonPendingLoadBalancer,
-			"Waiting for a LoadBalancer IP for Service %s/%s", svc.Namespace, svc.Name)
-		log.Info("waiting for LoadBalancer IP")
-		return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
-	}
-	if ip == "" {
-		r.emitEvent(svc, corev1.EventTypeWarning, reasonMissingIPAddress,
-			"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceIPAddressAnnotation)
-		log.Warn("missing ip-address annotation", "annotation", serviceIPAddressAnnotation)
-		return ctrl.Result{}, nil
-	}
-
 	existingIDs, err := getHostIDsAnnotation(log, svc)
 	if err != nil {
 		return ctrl.Result{RequeueAfter: requeueDelayShort}, err
 	}
 
 	comment := fmt.Sprintf("k8s-service:%s/%s", svc.Namespace, svc.Name)
-	aliases := serviceDesiredAliases(log, svc, hostname)
 
 	// Copy DefaultTags to avoid mutating the shared backing array.
 	tags := make([]string, 0, len(r.DefaultTags)+1)
 	tags = append(tags, r.DefaultTags...)
 	tags = append(tags, "service")
 
-	prevID := existingIDs[hostname]
-	id, err := r.syncServiceHost(ctx, log, prevID, ip, hostname, comment, aliases, tags)
-	if err != nil {
-		log.Error("failed to sync host entry", "hostname", hostname, "error", err)
-		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
+	newIDs := make(map[string]string, len(existingIDs))
+	var hadError, waiting bool
+	var hostname string
+
+	switch {
+	case !serviceEnabled(svc):
+		// Opted out: desired set stays empty, no event — falls through to
+		// the stale-cleanup pass below.
+	case svc.Spec.Type != corev1.ServiceTypeLoadBalancer && svc.Spec.Type != corev1.ServiceTypeNodePort:
+		r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidServiceType,
+			"Service %s/%s has type %s, which router-hosts does not support", svc.Namespace, svc.Name, svc.Spec.Type)
+		log.Warn("unsupported Service type", "type", svc.Spec.Type)
+	default:
+		hostname = serviceDesiredHostname(log, svc)
+		if hostname == "" {
+			r.emitEvent(svc, corev1.EventTypeWarning, reasonMissingHostname,
+				"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceHostnameAnnotation)
+			log.Warn("missing hostname annotation", "annotation", serviceHostnameAnnotation)
+			break
+		}
+
+		ip, isWaiting := resolveServiceIP(svc)
+		switch {
+		case isWaiting:
+			r.emitEvent(svc, corev1.EventTypeNormal, reasonPendingLoadBalancer,
+				"Waiting for a LoadBalancer IP for Service %s/%s", svc.Namespace, svc.Name)
+			log.Info("waiting for LoadBalancer IP")
+			waiting = true
+			if id, ok := existingIDs[hostname]; ok {
+				newIDs[hostname] = id
+			}
+		case ip == "":
+			r.emitEvent(svc, corev1.EventTypeWarning, reasonMissingIPAddress,
+				"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceIPAddressAnnotation)
+			log.Warn("missing ip-address annotation", "annotation", serviceIPAddressAnnotation)
+		default:
+			aliases := serviceDesiredAliases(log, svc, hostname)
+			prevID := existingIDs[hostname]
+			id, syncErr := r.syncServiceHost(ctx, log, prevID, ip, hostname, comment, aliases, tags)
+			if syncErr != nil {
+				log.Error("failed to sync host entry", "hostname", hostname, "error", syncErr)
+				hadError = true
+				if prevID != "" {
+					// Retain the known ID so the stale-cleanup pass below
+					// does not mistake this still-desired hostname for a
+					// removed one and issue a spurious DeleteHost.
+					newIDs[hostname] = prevID
+				}
+			} else {
+				newIDs[hostname] = id
+			}
+		}
 	}
-	newIDs := map[string]string{hostname: id}
+
+	// Stale-cleanup pass, always reached (D-17): delete every entry this
+	// Service owns that is no longer in the desired set. Every deletion
+	// target comes from this Service's own annotation — never from a
+	// hostname lookup or a cross-object query — so this can never delete an
+	// entry owned by another Service, IngressRoute, Gateway route, or
+	// HostMapping.
+	for existingHostname, id := range existingIDs {
+		if _, ok := newIDs[existingHostname]; ok {
+			continue
+		}
+		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
+			if errors.Is(err, ErrHostNotFound) {
+				log.Info("stale host entry already gone", "hostname", existingHostname, "hostId", id)
+				continue
+			}
+			log.Error("failed to delete stale host entry", "hostname", existingHostname, "hostId", id, "error", err)
+			// Retain the ID so it is not orphaned from the annotation.
+			newIDs[existingHostname] = id
+			hadError = true
+			continue
+		}
+		log.Info("stale host entry deleted from Service", "hostname", existingHostname, "hostId", id)
+	}
 
 	// Persist the annotation only when the ID map actually changed, so a
 	// no-op Update does not bump the resourceVersion and re-trigger the
@@ -348,6 +395,12 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 		}
 	}
 
+	if waiting {
+		return ctrl.Result{RequeueAfter: requeueDelayShort}, nil
+	}
+	if hadError {
+		return ctrl.Result{RequeueAfter: requeueDelayLong}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
