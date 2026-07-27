@@ -37,4 +37,22 @@ rules:
   - apiGroups: ["router-hosts.fzymgc.house"]
     resources: ["hostmappings/finalizers"]
     verbs: ["update"]
+
+  # v1/Service resources. The controller writes a finalizer + host-ids
+  # annotation, so update;patch are required (D-24). No delete verb, and no
+  # status subresource grant: this controller never writes Service status —
+  # the Kubernetes Events below are the signalling channel instead.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+
+  # Kubernetes Events (D-12/D-13). No apiGroups: [""] events rule existed
+  # anywhere in this chart's ClusterRole before this phase — the only events
+  # rule was namespace-scoped in role-leader-election.yaml, which meant
+  # HostMappingReconciler's Recorder was failing silently for any HostMapping
+  # outside the operator's own namespace. This cluster-scoped rule fixes that
+  # as a side effect while enabling the Service controller's failure events.
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
 {{- end }}

@@ -39,6 +39,9 @@ const (
 	serviceIPAddressAnnotation = "router-hosts.fzymgc.house/ip-address"
 )
 
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+
 // ServiceReconciler watches v1/Service resources and, for those that opt in
 // via annotation, syncs a resolved (IP, hostname) pair to the router-hosts
 // server as a host entry.
