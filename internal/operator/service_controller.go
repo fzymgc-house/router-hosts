@@ -567,6 +567,14 @@ func (r *ServiceReconciler) reconcileDelete(ctx context.Context, log *slog.Logge
 	for hostname, id := range existingIDs {
 		log.Info("deleting host entry for deleted Service", "hostname", hostname, "hostId", id)
 		if err := r.HostClient.DeleteHost(ctx, id); err != nil {
+			if errors.Is(err, ErrHostNotFound) {
+				// CR-02: already gone — mirror syncService's stale-cleanup
+				// branch (:373-377). Treat as success: do not retain the ID
+				// or set hadDeleteError, or the finalizer wedges forever
+				// retrying a delete that can never succeed.
+				log.Info("host entry already gone during cleanup", "hostname", hostname, "hostId", id)
+				continue
+			}
 			log.Error("failed to delete host entry during cleanup", "hostname", hostname, "hostId", id, "error", err)
 			remainingIDs[hostname] = id
 			hadDeleteError = true

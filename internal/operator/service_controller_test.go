@@ -1210,6 +1210,36 @@ func TestReconcileService_DeleteRemovesHostsAndFinalizer(t *testing.T) {
 		}
 	})
 
+	t.Run("host_not_found_during_cleanup_releases_finalizer", func(t *testing.T) {
+		// CR-02: DeleteHost returning ErrHostNotFound for a tracked entry
+		// must be treated as SUCCESS (the entry is already gone), mirroring
+		// syncService's stale-cleanup branch (:373-377) — not as a delete
+		// failure that retains the ID and wedges the finalizer forever.
+		svc := newDeletingSvc("web", nil, true)
+		require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		mock := &mockHostClient{
+			deleteHostFn: func(_ context.Context, _ string) error {
+				return ErrHostNotFound
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+
+		result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, ctrl.Result{}, result)
+
+		var updated corev1.Service
+		getErr := k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated)
+		if getErr == nil {
+			assert.False(t, controllerutil.ContainsFinalizer(&updated, serviceCleanupFinalizer))
+		} else {
+			assert.True(t, apierrors.IsNotFound(getErr))
+		}
+	})
+
 	t.Run("retains_ids_and_requeues_on_delete_failure", func(t *testing.T) {
 		svc := newDeletingSvc("web", nil, true)
 		require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
