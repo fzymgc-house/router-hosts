@@ -768,3 +768,266 @@ func TestSyncService_UpdatePath(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// TestSyncService_StopManaging covers the four D-17 "stop managing this"
+// transitions: each seeds a Service already tracking
+// {"web.example.com": "id-1"} and asserts the stale-cleanup pass deletes it
+// through the SAME code path, regardless of which signal caused the desired
+// set to become empty (or to point at a different hostname).
+func TestSyncService_StopManaging(t *testing.T) {
+	t.Run("enabled_flipped_false", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation:  "false",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		var deleted []string
+		mock := &mockHostClient{
+			addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+				t.Fatal("AddHost must not be called when opting out")
+				return "", nil
+			},
+			deleteHostFn: func(_ context.Context, id string) error {
+				deleted = append(deleted, id)
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"id-1"}, deleted)
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+		require.NoError(t, err)
+		assert.Empty(t, ids)
+	})
+
+	t.Run("type_changed_to_clusterip", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeClusterIP, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		var deleted []string
+		rec := events.NewFakeRecorder(10)
+		mock := &mockHostClient{
+			addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+				t.Fatal("AddHost must not be called for an unsupported type")
+				return "", nil
+			},
+			deleteHostFn: func(_ context.Context, id string) error {
+				deleted = append(deleted, id)
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+		r.Recorder = rec
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"id-1"}, deleted)
+
+		select {
+		case msg := <-rec.Events:
+			assert.Contains(t, msg, "Warning InvalidServiceType ")
+		default:
+			t.Fatal("expected an InvalidServiceType event")
+		}
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+		require.NoError(t, err)
+		assert.Empty(t, ids)
+	})
+
+	t.Run("hostname_annotation_changed", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceEnabledAnnotation:  "true",
+			serviceHostnameAnnotation: "api.example.com",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.9"}}
+		require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		var deleted []string
+		var addHostCalls int
+		mock := &mockHostClient{
+			addHostFn: func(_ context.Context, ip, hostname, _ string, _, _ []string) (string, error) {
+				addHostCalls++
+				assert.Equal(t, "10.0.0.9", ip)
+				assert.Equal(t, "api.example.com", hostname)
+				return "id-2", nil
+			},
+			deleteHostFn: func(_ context.Context, id string) error {
+				deleted = append(deleted, id)
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, 1, addHostCalls)
+		assert.Equal(t, []string{"id-1"}, deleted)
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+		require.NoError(t, err)
+		assert.Equal(t, map[string]string{"api.example.com": "id-2"}, ids)
+	})
+
+	t.Run("enabled_annotation_removed", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceHostnameAnnotation: "web.example.com",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+		var deleted []string
+		mock := &mockHostClient{
+			addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+				t.Fatal("AddHost must not be called when the opt-in annotation is absent")
+				return "", nil
+			},
+			deleteHostFn: func(_ context.Context, id string) error {
+				deleted = append(deleted, id)
+				return nil
+			},
+		}
+		r := newServiceReconciler(t, k8sClient, mock)
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+		assert.Equal(t, []string{"id-1"}, deleted)
+
+		var updated corev1.Service
+		require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+		ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+		require.NoError(t, err)
+		assert.Empty(t, ids)
+	})
+}
+
+// TestSyncService_SkipsUpdateWhenUnchanged is the D-19 no-op-write guard: a
+// second reconcile with an unchanged spec must not bump the Service's
+// ResourceVersion, even though UpdateHost may still be called every time.
+func TestSyncService_SkipsUpdateWhenUnchanged(t *testing.T) {
+	svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+		serviceEnabledAnnotation:  "true",
+		serviceHostnameAnnotation: "web.example.com",
+	})
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+	require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+	mock := &mockHostClient{
+		getHostFn: func(_ context.Context, id string) (*HostEntry, error) {
+			return &HostEntry{ID: id, Version: "v1"}, nil
+		},
+	}
+	r := newServiceReconciler(t, k8sClient, mock)
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}}
+
+	_, err := r.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	var first corev1.Service
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, &first))
+	rv := first.ResourceVersion
+	require.NotEmpty(t, rv)
+
+	_, err = r.Reconcile(ctx, req)
+	require.NoError(t, err)
+
+	var second corev1.Service
+	require.NoError(t, k8sClient.Get(ctx, req.NamespacedName, &second))
+	assert.Equal(t, rv, second.ResourceVersion, "no object Update should be issued when the annotation is unchanged")
+}
+
+// TestSyncService_CorruptAnnotationRequeues is the D-18 fail-closed gate: an
+// unparseable host-ids annotation must stop the reconcile before any
+// HostClient call, never be treated as empty.
+func TestSyncService_CorruptAnnotationRequeues(t *testing.T) {
+	svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+		serviceEnabledAnnotation:  "true",
+		serviceHostnameAnnotation: "web.example.com",
+		hostIDsAnnotation:         "{not json",
+	})
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+	var calls int
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			calls++
+			return "unexpected", nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			calls++
+			return nil
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			calls++
+			return nil
+		},
+	}
+	r := newServiceReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+	require.Error(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayShort}, result)
+	assert.Zero(t, calls)
+}
+
+// TestSyncService_PartialFailureRetainsIDs exercises the D-18 retention rule
+// through the stale-cleanup pass: a hostname the Service no longer declares
+// fails to delete, so its ID must stay in the annotation rather than being
+// silently dropped, alongside the newly created entry for the now-desired
+// hostname.
+func TestSyncService_PartialFailureRetainsIDs(t *testing.T) {
+	svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+		serviceEnabledAnnotation:  "true",
+		serviceHostnameAnnotation: "web.example.com",
+	})
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+	require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"old.example.com": "id-old"}))
+
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			return "id-new", nil
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			return errors.New("boom")
+		},
+	}
+	r := newServiceReconciler(t, k8sClient, mock)
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{RequeueAfter: requeueDelayLong}, result)
+
+	var updated corev1.Service
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"old.example.com": "id-old", "web.example.com": "id-new"}, ids)
+}
