@@ -19,7 +19,7 @@ consume. Enumerated from the module source verified in `08-RESEARCH.md`
 | Annotation `router-hosts.fzymgc.house/enabled` (per-object opt-in gate) | INTEGRATE | |
 | Annotation `router-hosts.fzymgc.house/hostname` (required entry hostname) | INTEGRATE | |
 | Annotation `router-hosts.fzymgc.house/aliases` (native `Aliases` field) | INTEGRATE | |
-| Annotation `router-hosts.fzymgc.house/ip-address` (NodePort source / LB override) | INTEGRATE | |
+| Annotation `router-hosts.fzymgc.house/ip-address` (NodePort / LB override) | INTEGRATE | |
 | Update-event symmetry on the opt-in annotation (opt-out must be observable) | INTEGRATE | |
 | Finalizer + `host-ids` annotation write-back (`update`/`patch` on `services`) | INTEGRATE | |
 | core `events` `create`/`patch` (operator-visible failure signalling) | INTEGRATE | |
