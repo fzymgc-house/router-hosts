@@ -16,7 +16,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Cache Go modules and build
-        uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
           cache: go
       - uses: golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8
@@ -31,7 +31,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Cache Go modules and build
-        uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
           cache: go
       - name: Vulnerability check
@@ -47,7 +47,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Cache Go modules and build
-        uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
           cache: go
       - name: Install task runner
@@ -71,7 +71,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Cache Go modules and build
-        uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
           cache: go
       - name: Build all packages
@@ -98,7 +98,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Cache Go modules and build
-        uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
           cache: go
       - name: Install task runner
@@ -116,7 +116,7 @@ jobs:
           go-version-file: go.mod
           cache: false
       - name: Cache Go modules and build
-        uses: namespacelabs/nscloud-cache-action@15799a6b54e5765f85b2aac25b3f0df43ed571c0 # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
         with:
           cache: go
       - name: Install task runner
