@@ -469,5 +469,3 @@ these change observable behavior.
 
 *Phase: 8-Kubernetes Service Controller*
 *Context gathered: 2026-07-26*
-</content>
-</invoke>

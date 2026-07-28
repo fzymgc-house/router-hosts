@@ -198,4 +198,3 @@ cache, multi-IP / dual-stack entries, hostname-typed (CNAME) LoadBalancer
 ingress, `ExternalName` and headless Services, Service status write-back,
 project-wide FQDN enforcement, and refreshing the two 2026-01-02 Rust-era docs
 in place.
-</content>

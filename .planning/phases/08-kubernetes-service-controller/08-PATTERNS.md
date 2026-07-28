@@ -481,4 +481,3 @@ helm template "$CHART" --set serviceController.enabled=true \
 **Analog search scope:** `internal/operator/*.go` (controllers + tests), `cmd/operator/main.go`, `charts/router-hosts-operator/**`, `Taskfile.yml`
 **Files scanned:** `ingressroute_controller.go`, `gateway_controller.go`, `hostmapping_controller.go`, `hostclient.go`, `gateway_controller_test.go`, `main.go`, `clusterrole.yaml`, `values.yaml`, `deployment.yaml`, `Taskfile.yml`
 **Pattern extraction date:** 2026-07-26
-</content>

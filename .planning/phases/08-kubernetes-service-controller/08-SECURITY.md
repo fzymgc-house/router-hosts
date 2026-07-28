@@ -147,4 +147,3 @@ The same deploy also lands Phase 7's Gateway API RBAC, which has likewise never 
 - [ ] **Rollout action outstanding:** release chart `0.10.13+` and bump the ArgoCD pin, or T-08-04 remains live in production
 
 **Approval:** verified 2026-07-27 (artifact); production rollout pending
-</content>
