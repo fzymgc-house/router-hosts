@@ -8,8 +8,8 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/go-acme/lego/v4 v4.35.2
-	github.com/go-logr/logr v1.4.3
-	github.com/oklog/ulid/v2 v2.1.1
+	github.com/go-logr/logr v1.4.4
+	github.com/oklog/ulid/v2 v2.1.2
 	github.com/samber/oops v1.22.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1
@@ -21,9 +21,9 @@ require (
 	golang.org/x/term v0.44.0
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
-	k8s.io/api v0.36.1
-	k8s.io/apimachinery v0.36.1
-	k8s.io/client-go v0.36.1
+	k8s.io/api v0.36.3
+	k8s.io/apimachinery v0.36.3
+	k8s.io/client-go v0.36.3
 	pgregory.net/rapid v1.3.0
 	sigs.k8s.io/controller-runtime v0.24.1
 	zombiezen.com/go/sqlite v1.4.2
