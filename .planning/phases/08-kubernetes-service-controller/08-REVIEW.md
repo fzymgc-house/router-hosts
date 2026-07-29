@@ -1,7 +1,7 @@
 ---
 phase: 08-kubernetes-service-controller
-reviewed: 2026-07-27T00:00:00Z
-depth: standard
+reviewed: 2026-07-29T00:00:00Z
+depth: deep
 files_reviewed: 8
 files_reviewed_list:
   - internal/operator/service_controller.go
@@ -13,294 +13,219 @@ files_reviewed_list:
   - charts/router-hosts-operator/README.md
   - Taskfile.yml
 findings:
-  critical: 2
-  warning: 2
-  info: 1
+  critical: 0
+  warning: 1
+  info: 4
   total: 5
 status: issues_found
 ---
 
-# Phase 8: Code Review Report
+# Phase 08: Code Review Report
 
-**Reviewed:** 2026-07-27
-**Depth:** standard
+**Reviewed:** 2026-07-29T00:00:00Z
+**Depth:** deep
 **Files Reviewed:** 8
 **Status:** issues_found
 
 ## Summary
 
-The chart, RBAC, `cmd/operator/main.go` wiring, and the adoption-gate
-(`addOrAdoptService`/`hasServiceProvenance`) all match the locked D-01…D-28
-decisions faithfully, and the test suite (`service_controller_test.go`) is
-unusually disciplined — it deliberately uses `fakeHostStore` instead of a
-duplicate-ID-issuing mock for the adoption tests (avoiding the exact trap
-called out in the review brief), asserts `NotNil` + `Empty` rather than bare
-`Empty` for the alias nil-vs-empty guard, and exercises all four D-17
-"stop-managing" transitions plus the D-18 corrupt-annotation and
-partial-failure paths.
+This is a re-review of the six commits that landed in response to the prior
+standard-depth review (preserved at git `c70df9f`): CR-01 (predicate admits
+owned-but-opted-out Services), CR-02 (`DeleteHost` NotFound treated as success), WR-01
+(client-side alias cap enforcement), and WR-02 (client-side ip-address validation).
 
-Two BLOCKER-level defects were found, both in `service_controller.go`, both
-around lifecycle edges the test suite does not exercise:
+All four fixes were traced against their stated intent and cross-checked line-by-line
+against the commits (`fa47c6f`, `bc00c9b`, `79e78bc`, `4403ad1`) and their new
+regression tests, not merely trusted because they were reviewed-then-fixed:
 
-1. The opt-in/opt-out predicate (`serviceEnabledPredicate`) can permanently
-   orphan the cleanup finalizer on a Service that was opted out before being
-   deleted, wedging `kubectl delete service` forever with no self-heal.
-2. `reconcileDelete`'s per-host delete loop does not treat a `DeleteHost`
-   `NotFound` as success (unlike `syncService`'s own stale-cleanup loop two
-   functions above it in the same file), so cleaning up a Service whose
-   tracked entry was already removed out-of-band also wedges the finalizer.
+- **CR-01** (`serviceOwnsState` OR-ed into all four predicate funcs): traced the full
+  admit matrix for every `(ip, waiting)` tuple `resolveServiceIP` can return, and every
+  `Reconcile` path an admitted-but-opted-out Service can take. The predicate does not
+  over-admit: `serviceOwnsState` can only ever be true for an object this controller
+  itself previously wrote a finalizer or a host-ids annotation onto (both write paths
+  are gated behind having reached `syncService` at least once, i.e. having opted in at
+  least once), so no unrelated Service is pulled into reconcile traffic by this change.
+  `Reconcile` handles the admitted-but-opted-out case correctly: it proceeds straight
+  to `syncService`'s stale-cleanup pass (the finalizer is already present, so the
+  finalizer-add early-return block at `service_controller.go:336-345` is skipped) and
+  tears down every tracked entry without error.
+- **CR-02** (`reconcileDelete`'s `errors.Is(err, ErrHostNotFound)` branch): verified the
+  positive case (NotFound treated as success, finalizer released) and, per the review
+  brief, the *opposite* case — a genuine, non-NotFound `DeleteHost` failure still sets
+  `hadDeleteError`, retains the ID in `remainingIDs`, and leaves the finalizer in
+  place. Both paths are exercised by dedicated tests
+  (`host_not_found_during_cleanup_releases_finalizer` and
+  `retains_ids_and_requeues_on_delete_failure`).
+- **WR-02** (`serviceIPOverride` + `resolveServiceIP` validation + new
+  `reasonInvalidConfiguration` branch): traced every reachable `(ip, waiting)` tuple
+  through the now-five-way `syncService` switch and confirmed it is exhaustive and
+  non-shadowed — an invalid override can only ever reach the
+  `ip == "" && serviceIPOverride(svc) != ""` case, never the LoadBalancer-waiting or
+  NodePort-missing cases, and never falls through to LoadBalancer status.
+- **WR-01** (`serviceAliasCandidates` / `serviceAliasesExceedCap` aggregate check):
+  confirmed this is the only call site that can ever trip `validation.go`'s
+  `len(aliases) > MaxAliasesPerEntry` branch (per-alias calls in
+  `serviceDesiredAliases` structurally cannot reach it), and confirmed the cap check
+  runs *before* `AddHost`/`UpdateHost` on every path.
+- **T-08-24 carry-forward**: verified the "retain previously-tracked ID" logic in both
+  new `InvalidConfiguration` branches is correct in every combination, including the
+  no-existing-entry case (no-op: nothing to retain, nothing to delete) and the
+  simultaneous-hostname-change case (the *old* hostname's entry is correctly swept by
+  the stale-cleanup pass, since the carry-forward is keyed to the *current* hostname —
+  this is the intended "one code path handles every stop-managing transition"
+  behavior, not a regression).
+- **HostClient contract compliance**: all three sentinels (`ErrHostAlreadyExists`,
+  `ErrHostNotFound` from `UpdateHost`, `ErrHostNotFound` from `DeleteHost`) are
+  consumed via `errors.Is` in `service_controller.go` and none is silently swallowed
+  or mis-branched.
+- **Shared-helper cross-file check**: `getHostIDsAnnotation`/`setHostIDsAnnotation`/
+  `hostIDsAnnotation` (defined in `ingressroute_controller.go`) now have a fourth
+  caller in `service_controller.go`. Confirmed this cannot corrupt state another
+  controller depends on: the annotation is written on the *object being reconciled
+  itself* (a Service, IngressRoute, or Gateway route), never on a shared/cross-object
+  record, and `HostMappingReconciler` does not use this annotation at all — so there is
+  no cross-controller collision surface here.
 
-Two WARNING-level gaps were found around unvalidated annotation input that
-degrades to a silent, eventless, indefinite retry loop rather than a
-terminal or operator-visible state. One INFO item notes a test-coverage gap
-that let the two BLOCKERs ship undetected.
-
-## Critical Issues
-
-### CR-01: Opt-out-then-delete permanently orphans the cleanup finalizer, wedging `kubectl delete service` forever
-
-**File:** `internal/operator/service_controller.go:96-105` (predicate) interacting with `:524-567` (`reconcileDelete`)
-
-**Issue:** `serviceEnabledPredicate`'s `UpdateFunc` admits an event only when
-`serviceEnabled(old) || serviceEnabled(new)` — i.e., only when the `enabled`
-annotation is `"true"` on at least one side of the transition:
-
-```go
-UpdateFunc: func(e event.UpdateEvent) bool {
-    return serviceEnabled(e.ObjectOld) || serviceEnabled(e.ObjectNew)
-},
-```
-
-This correctly admits the D-05 opt-out transition itself (old carries
-`enabled: "true"`, new does not — `TestServiceEnabledPredicate/update_annotation_removed`
-covers exactly this). But it does **not** account for the object's
-finalizer state, and `TestServiceEnabledPredicate/update_both_disabled`
-explicitly locks in the opposite behavior as "correct": when *neither* old
-nor new carries `enabled: "true"`, the event is rejected — always, with no
-exception for an object that still carries `serviceCleanupFinalizer`.
-
-Walk the full lifecycle:
-
-1. Service opts in (`enabled: "true"`, `hostname: foo.example.com`) →
-   `Reconcile` adds `serviceCleanupFinalizer` (`:253-262`) and creates a host
-   entry.
-2. Owner opts out (removes the `enabled` annotation). The opt-out Update
-   event is admitted (old had `enabled: "true"`) → `syncService` deletes the
-   host entry and clears the `host-ids` annotation via the stale-cleanup
-   pass — but nothing in `Reconcile` or `syncService` ever removes the
-   finalizer; only `reconcileDelete` does that, and it only runs when
-   `DeletionTimestamp` is set. The finalizer is now permanently attached to
-   an "at rest" Service with no annotation trace of ever having opted in.
-3. Owner later runs `kubectl delete service foo`. Because the Service still
-   carries a finalizer, the API server does **not** remove the object; it
-   sets `metadata.deletionTimestamp` and emits an **Update** event (old =
-   pre-deletion state, new = same object plus `deletionTimestamp`).
-   Both `old` and `new` still lack the `enabled` annotation (nothing in step
-   2 restored it) — the predicate's `UpdateFunc` evaluates
-   `false || false` and **rejects the event**.
-4. `Reconcile` (and therefore `reconcileDelete`) is never invoked for this
-   Service again. The finalizer is never removed. The Service is stuck in
-   `Terminating` indefinitely — there is no self-heal, because a later
-   informer resync redelivers the *same* old/new annotation state and is
-   rejected identically every time.
-
-The common case (a Service deleted while still `enabled: "true"`) works
-correctly, because `deletionTimestamp` doesn't touch annotations, so
-`serviceEnabled(old)` stays true and the event is admitted. The bug is
-specific to "opt out, then delete" (or any sequence that leaves the object
-finalizer-bearing but currently `enabled != "true"` at delete time) — a
-realistic pattern for teardown scripts, Helm/Kustomize value flips before
-`kubectl delete`, or a CI pipeline that disables registration ahead of
-decommissioning a Service.
-
-This is a materially worse failure than the D-05 hazard the predicate was
-built to close: D-05 was about a *DNS entry* being orphaned (self-heals on
-the next relevant reconcile); this orphans the *Kubernetes object itself*,
-requiring a human to `kubectl patch service foo -p '{"metadata":{"finalizers":[]}}' --type=merge`
-to unstick it.
-
-**Fix:** Admit the event whenever either side is currently deleting, or
-either side still carries the cleanup finalizer — not only when the
-`enabled` annotation is present:
-
-```go
-UpdateFunc: func(e event.UpdateEvent) bool {
-    if e.ObjectNew.GetDeletionTimestamp() != nil {
-        return true
-    }
-    return serviceEnabled(e.ObjectOld) || serviceEnabled(e.ObjectNew) ||
-        controllerutil.ContainsFinalizer(e.ObjectOld, serviceCleanupFinalizer)
-},
-```
-
-Add a regression test that constructs a Service carrying the finalizer but
-*no* `enabled` annotation (simulating post-opt-out state), sets
-`DeletionTimestamp`, and asserts `pred.Update` returns `true` — the current
-`update_both_disabled` subtest asserts the opposite for a fixture that
-never carries the finalizer, so it does not catch this.
-
----
-
-### CR-02: `reconcileDelete` treats an already-gone host entry as a delete failure, wedging the finalizer
-
-**File:** `internal/operator/service_controller.go:538-547`
-
-**Issue:** `reconcileDelete`'s per-host cleanup loop does not distinguish
-`ErrHostNotFound` from any other `DeleteHost` error:
-
-```go
-for hostname, id := range existingIDs {
-    log.Info("deleting host entry for deleted Service", "hostname", hostname, "hostId", id)
-    if err := r.HostClient.DeleteHost(ctx, id); err != nil {
-        log.Error("failed to delete host entry during cleanup", "hostname", hostname, "hostId", id, "error", err)
-        remainingIDs[hostname] = id
-        hadDeleteError = true
-    }
-}
-```
-
-`grpcHostClient.DeleteHost` (`internal/operator/grpc_hostclient.go:149-158`)
-wraps a server-side `NotFound` gRPC status into `ErrHostNotFound`, which is a
-normal, expected outcome — the entry was already removed (manually via the
-CLI, by a prior partially-successful cleanup, or by any other legitimate
-out-of-band actor). `syncService`'s own stale-cleanup pass, two functions
-above this one in the same file, gets this right:
-
-```go
-// syncService, :373-377
-if err := r.HostClient.DeleteHost(ctx, id); err != nil {
-    if errors.Is(err, ErrHostNotFound) {
-        log.Info("stale host entry already gone", "hostname", existingHostname, "hostId", id)
-        continue
-    }
-    ...
-}
-```
-
-`reconcileDelete` has no equivalent branch. A `NotFound` on the
-DeletionTimestamp cleanup path is misclassified as `hadDeleteError = true`,
-so the ID is retained in `remainingIDs`, the finalizer is **not** released
-(`:548-559`), and the reconcile requeues after `requeueDelayShort` — forever,
-since the same `DeleteHost` call will return the same `NotFound` on every
-retry. The Service is stuck in `Terminating` until a human intervenes,
-exactly the outcome the review brief calls out: *"a `DeleteHost` NotFound
-must be treated as SUCCESS, or the finalizer wedges forever and blocks
-Service deletion cluster-wide"* (for the affected Service).
-
-**Fix:** Mirror the `syncService` stale-cleanup branch:
-
-```go
-for hostname, id := range existingIDs {
-    log.Info("deleting host entry for deleted Service", "hostname", hostname, "hostId", id)
-    if err := r.HostClient.DeleteHost(ctx, id); err != nil {
-        if errors.Is(err, ErrHostNotFound) {
-            log.Info("host entry already gone during cleanup", "hostname", hostname, "hostId", id)
-            continue
-        }
-        log.Error("failed to delete host entry during cleanup", "hostname", hostname, "hostId", id, "error", err)
-        remainingIDs[hostname] = id
-        hadDeleteError = true
-    }
-}
-```
-
-(Note: `ingressroute_controller.go:325-329`'s `reconcileDelete` has the
-identical gap, so this may be worth fixing project-wide — but only
-`service_controller.go` is in this phase's scope.)
+No BLOCKER-tier defect was found in the six reviewed commits or their tests. The
+findings below are a documentation-accuracy gap left behind by WR-01/WR-02, plus minor
+code-duplication and test-coverage notes.
 
 ## Warnings
 
-### WR-01: Aliases annotation bypasses the 50-alias server-side cap, causing a silent, eventless, indefinite retry loop
+### WR-08-01: README Events table is now incomplete/stale after WR-01/WR-02
 
-**File:** `internal/operator/service_controller.go:191-218`
+**File:** `charts/router-hosts-operator/README.md:314-318`
+**Issue:** The "Events" subsection of the Service controller docs still reads:
 
-**Issue:** `serviceDesiredAliases` validates each alias individually:
+> a Service owner may see four reasons via `kubectl describe service`:
+> `InvalidServiceType`, `MissingHostname`, `MissingIPAddress` (all `Warning`), and
+> `PendingLoadBalancer` (`Normal`, ...)
 
-```go
-if errs := validation.ValidateAliases([]string{alias}, canonicalHostname); len(errs) > 0 {
+This was accurate before this review cycle, but the WR-02 and WR-01 fixes
+(`79e78bc`, `4403ad1`) added a fifth reason, `InvalidConfiguration`, which fires for
+both an unparseable `ip-address` override and an over-cap `aliases` annotation
+(`service_controller.go:64`, `:429-451`). The README was not updated to mention it.
+
+This directly reproduces the exact problem the fix was written to solve: the code
+comment for `reasonInvalidConfiguration` (`service_controller.go:53-58`) explains at
+length that `MissingIPAddress` and `InvalidConfiguration` must stay distinguishable
+"in `kubectl describe service`" — but an operator who reaches for this README to
+understand what `InvalidConfiguration` means (rather than reading Go source) will not
+find it documented at all, only the four superseded reasons.
+
+**Fix:**
+
+```diff
+ **Events**: a Service owner may see four reasons via
+-`kubectl describe service`: `InvalidServiceType`, `MissingHostname`,
+-`MissingIPAddress` (all `Warning`), and `PendingLoadBalancer` (`Normal`,
+-while an IP is still provisioning). Success is logged by the operator
+-rather than evented, to keep the event stream usable.
++`kubectl describe service`: `InvalidServiceType`, `MissingHostname`,
++`MissingIPAddress`, and `InvalidConfiguration` (all `Warning`), and
++`PendingLoadBalancer` (`Normal`, while an IP is still provisioning).
++`InvalidConfiguration` fires when the `ip-address` annotation is present but
++fails IP validation, or when `aliases` exceeds the 50-alias-per-entry cap —
++distinct from `MissingIPAddress`/absent annotations, so a typo is never
++indistinguishable from an omission. Success is logged by the operator
++rather than evented, to keep the event stream usable.
 ```
 
-`validation.ValidateAliases` enforces `MaxAliasesPerEntry` (50) by checking
-`len(aliases) > MaxAliasesPerEntry` at the top of the function
-(`internal/validation/validation.go:93`) — but because this controller
-always calls it with a **one-element slice**, that check can never trigger
-here, no matter how many comma-separated aliases the annotation carries.
-The server enforces the same limit correctly on the *aggregate* slice
-(`internal/server/commands.go:102,264,394`), so a Service whose `aliases`
-annotation lists more than 50 entries will have every alias individually
-pass client-side validation, then have the single `AddHost`/`UpdateHost`
-call rejected server-side on every reconcile. `syncService` treats this as
-`hadError = true` and requeues via `requeueDelayLong` — forever, since the
-alias count never changes on its own. Unlike the four D-12 states
-(`InvalidServiceType`, `MissingHostname`, `MissingIPAddress`,
-`PendingLoadBalancer`), this failure mode emits no Kubernetes Event, so the
-Service owner has no `kubectl describe service` signal at all — only an
-operator-internal log line.
-
-**Fix:** Cap or warn on the aggregate alias count before the per-alias loop,
-e.g.:
-
-```go
-segments := strings.Split(svc.GetAnnotations()[serviceAliasesAnnotation], ",")
-if len(segments) > validation.MaxAliasesPerEntry {
-    log.Warn("aliases annotation exceeds maximum, truncating",
-        "count", len(segments), "max", validation.MaxAliasesPerEntry)
-    segments = segments[:validation.MaxAliasesPerEntry]
-}
-```
-
-### WR-02: `ip-address` override annotation is never format-validated client-side
-
-**File:** `internal/operator/service_controller.go:127-143` (`resolveServiceIP`)
-
-**Issue:** The `ip-address` annotation value is read and returned verbatim
-with no `net.ParseIP` (or equivalent) check:
-
-```go
-if override := svc.GetAnnotations()[serviceIPAddressAnnotation]; override != "" {
-    return override, false
-}
-```
-
-A malformed value (typo, trailing whitespace not caught by `TrimSpace`
-since none is applied here unlike the hostname path, a hostname pasted by
-mistake, etc.) flows straight into `AddHost`/`UpdateHost`, where
-`validation.ValidateIPAddress` (`internal/server/commands.go:96,197,388`)
-rejects it server-side. As with WR-01, the result is `hadError = true` and
-an indefinite `requeueDelayLong` retry loop with no Kubernetes Event —
-`MissingIPAddress` only fires when the annotation is *absent*, not when it
-is present but invalid, so a NodePort Service with a typo'd IP looks
-identical to a healthy one from `kubectl describe service`.
-
-**Fix:** Validate with the same package used server-side (or a local
-`net.ParseIP` check) and emit a `Warning` event (reusing
-`reasonMissingIPAddress` or a new reason) when the override fails to parse,
-so the failure is terminal-and-visible rather than silently perpetual.
+Also consider adding the 50-alias cap to the `aliases` row of the annotation
+reference table (`README.md:291`), since it's now an enforced, user-visible limit
+rather than dead validation code.
 
 ## Info
 
-### IN-01: No test exercises reconcileDelete's `ErrHostNotFound` path
+### IN-08-01: `serviceAliasCandidates` computed twice per reconcile on the sync path
 
-**File:** `internal/operator/service_controller_test.go:1167-1264`
+**File:** `internal/operator/service_controller.go:442, 454, 280`
+**Issue:** In `syncService`'s default branch, `candidates := serviceAliasCandidates(svc)`
+is computed for the cap check (line 442), and then `serviceDesiredAliases(log, svc,
+hostname)` (line 454) re-derives the identical candidate list internally by calling
+`serviceAliasCandidates(svc)` again (line 280). The comma-split/trim/filter work is
+duplicated on every reconcile of every alias-bearing Service. Correctness is
+unaffected (performance is out of scope for this review), but it's needless
+duplication introduced by the WR-01 fix that a small refactor removes.
+**Fix:** Have `serviceDesiredAliases` accept the already-computed `candidates []string`
+instead of re-deriving them from `svc`:
 
-**Issue:** `TestReconcileService_DeleteRemovesHostsAndFinalizer` covers a
-clean delete, a generic-error delete (`errors.New("boom")`), the no-finalizer
-no-op, and the corrupt-annotation case — but no subtest calls `deleteHostFn`
-with `ErrHostNotFound`. This is precisely the gap that let CR-02 ship: a
-test asserting `DeleteHost` returning `ErrHostNotFound` still releases the
-finalizer (mirroring the `syncService` stale-cleanup test coverage that
-does not exist for this function either) would have failed against the
-current code.
+```go
+func serviceDesiredAliases(log *slog.Logger, candidates []string, canonicalHostname string) []string {
+    result := make([]string, 0, len(candidates))
+    ...
+}
+// call site:
+aliases := serviceDesiredAliases(log, candidates, hostname)
+```
 
-**Fix:** Add a subtest seeding `deleteHostFn` to return `ErrHostNotFound`
-and asserting the finalizer is removed and no requeue occurs — the same
-shape as `syncService`'s implicit coverage via
-`TestSyncService_StopManaging` (which uses `nil`-returning deletes, not
-`ErrHostNotFound`, so even that path lacks an explicit NotFound-during-cleanup
-assertion; consider adding one there too for symmetry).
+### IN-08-02: `serviceIPOverride(svc)` called twice in the InvalidConfiguration branch
+
+**File:** `internal/operator/service_controller.go:429-430`
+**Issue:**
+
+```go
+case ip == "" && serviceIPOverride(svc) != "":
+    override := serviceIPOverride(svc)
+```
+
+`serviceIPOverride` re-reads and re-trims the annotation a second time in the same
+branch it was already evaluated for in the `case` condition. Harmless (cheap,
+deterministic), but avoidable.
+**Fix:** Bind it once with a switch-init statement:
+
+```go
+switch override := serviceIPOverride(svc); {
+case isWaiting:
+    ...
+case ip == "" && override != "":
+    r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidConfiguration,
+        "Service %s/%s has an invalid %s annotation value %q", svc.Namespace, svc.Name, serviceIPAddressAnnotation, override)
+    ...
+```
+
+### IN-08-03: CR-01's `serviceOwnsState` path is untested for `CreateFunc`/`DeleteFunc`/`GenericFunc`
+
+**File:** `internal/operator/service_controller_test.go:54-105`
+**Issue:** `TestServiceEnabledPredicate` gained one new subtest for CR-01
+(`update_deletion_of_opted_out_but_finalized`, covering `UpdateFunc`), but no subtest
+exercises `serviceOwnsState` admitting an opted-out-but-owning object through
+`CreateFunc`, `DeleteFunc`, or `GenericFunc`. The code comment added in the same
+commit (`service_controller.go:126-129`) specifically calls out `CreateFunc` as
+needing this for the informer-resync-after-restart scenario, but that scenario has no
+regression test guarding it.
+**Fix:** Add a subtest mirroring `update_deletion_of_opted_out_but_finalized` but for
+`pred.Create`, e.g.:
+
+```go
+t.Run("create_owns_state_but_opted_out", func(t *testing.T) {
+    svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+    svc.Finalizers = []string{serviceCleanupFinalizer}
+    assert.True(t, pred.Create(event.CreateEvent{Object: svc}))
+})
+```
+
+### IN-08-04: `ingressroute_controller.go`'s `reconcileDelete` still lacks the CR-02 fix
+
+**File:** `internal/operator/ingressroute_controller.go:323-330` (not in this phase's
+file scope — noted for cross-controller consistency only, not scored as a defect in
+the reviewed files)
+**Issue:** CR-02 established that this codebase's `HostClient` contract requires
+`DeleteHost` returning `ErrHostNotFound` to be treated as success (already mirrored in
+`gateway_controller.go:329` from an earlier phase). `ingressroute_controller.go`'s
+`reconcileDelete` still does not check `errors.Is(err, ErrHostNotFound)` at all — any
+`DeleteHost` failure, including NotFound, sets `hadDeleteError` and retains the
+finalizer forever. This is the identical bug pattern CR-02 just fixed for Service,
+left unfixed in the oldest of the three route/finalizer controllers. Not part of this
+phase's diff, so not scored against these files, but the review brief specifically
+asked for a comparison against IngressRoute's implementation of "the same contract,"
+and this is what that comparison turned up — worth a follow-up ticket.
+**Fix (follow-up, not this PR):** Port the same `errors.Is(err, ErrHostNotFound)` →
+`continue` branch CR-02 added to `service_controller.go:651-659` into
+`ingressroute_controller.go:325-329`.
 
 ---
 
-*Reviewed: 2026-07-27*
+*Reviewed: 2026-07-29T00:00:00Z*
 *Reviewer: Claude (gsd-code-reviewer)*
-*Depth: standard*
+*Depth: deep*
