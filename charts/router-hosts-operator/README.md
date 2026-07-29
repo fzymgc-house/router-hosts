@@ -288,7 +288,7 @@ annotation is never touched, even with the controller enabled cluster-wide.
 |------------|----------|---------|
 | `router-hosts.fzymgc.house/enabled` | Yes | `"true"` to opt this Service in. |
 | `router-hosts.fzymgc.house/hostname` | Yes | The single hostname to register. A Service has no hostname in its spec, so this is always explicit. |
-| `router-hosts.fzymgc.house/aliases` | No | Comma-separated aliases, mapped to the host entry's native `Aliases` field. Invalid aliases are dropped with a warning, never fatal. |
+| `router-hosts.fzymgc.house/aliases` | No | Comma-separated aliases, mapped to the host entry's native `Aliases` field. Invalid aliases are dropped with a warning, never fatal. Capped at 50 aliases per entry; exceeding the cap produces an `InvalidConfiguration` warning Event and freezes the entry rather than truncating it. |
 | `router-hosts.fzymgc.house/ip-address` | Required for `NodePort`; optional override for `LoadBalancer` | The IP to publish. |
 
 **Supported types**: only `LoadBalancer` and `NodePort`. `ClusterIP`,
@@ -311,10 +311,14 @@ Service's IP is knowable from the object itself, so a default would be a
 guess rather than a fallback — and sharing that IP across controllers is
 what makes cross-controller hostname collisions routine.
 
-**Events**: a Service owner may see four reasons via
+**Events**: a Service owner may see five reasons via
 `kubectl describe service`: `InvalidServiceType`, `MissingHostname`,
-`MissingIPAddress` (all `Warning`), and `PendingLoadBalancer` (`Normal`,
-while an IP is still provisioning). Success is logged by the operator
+`MissingIPAddress`, and `InvalidConfiguration` (all `Warning`), and
+`PendingLoadBalancer` (`Normal`, while an IP is still provisioning).
+`InvalidConfiguration` fires when the `ip-address` annotation is present but
+fails IP validation, or when `aliases` exceeds the 50-alias-per-entry cap —
+distinct from `MissingIPAddress`/absent annotations, so a typo is never
+indistinguishable from an omission. Success is logged by the operator
 rather than evented, to keep the event stream usable.
 
 **Cleanup**: the operator adds a
