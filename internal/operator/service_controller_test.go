@@ -3,9 +3,12 @@ package operator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 
+	"github.com/fzymgc-house/router-hosts/internal/validation"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -371,6 +374,27 @@ func TestServiceDesiredAliases(t *testing.T) {
 		assert.Equal(t, []string{"www.example.com"}, aliases)
 		assert.True(t, h.hasWarnRecordContaining("WWW.example.com"))
 	})
+
+	t.Run("sixty_aliases_returns_all_uncapped", func(t *testing.T) {
+		// Guard against a future silent-truncation shortcut: the cap is the
+		// caller's terminal decision (serviceAliasesExceedCap), not
+		// serviceDesiredAliases's to enforce by truncating.
+		log := slog.New(&recordingHandler{})
+		segments := make([]string, 0, 60)
+		want := make([]string, 0, 60)
+		for i := range 60 {
+			alias := fmt.Sprintf("alias%d.example.com", i)
+			segments = append(segments, alias)
+			want = append(want, alias)
+		}
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceAliasesAnnotation: strings.Join(segments, ","),
+		})
+		aliases := serviceDesiredAliases(log, svc, canonical)
+		assert.NotNil(t, aliases)
+		assert.Equal(t, want, aliases)
+		assert.Len(t, aliases, 60)
+	})
 }
 
 func TestReconcileService_AddsFinalizerAndReturns(t *testing.T) {
@@ -668,6 +692,62 @@ func TestSyncService_InvalidIPOverrideEmitsInvalidConfiguration(t *testing.T) {
 	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
 	require.NoError(t, err)
 	assert.Equal(t, ctrl.Result{}, result, "InvalidConfiguration must be terminal: no RequeueAfter")
+
+	select {
+	case msg := <-rec.Events:
+		assert.Contains(t, msg, "Warning InvalidConfiguration ")
+	default:
+		t.Fatal("expected an event")
+	}
+
+	var updated corev1.Service
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"web.example.com": "id-1"}, ids, "the previously tracked ID must be retained, not deleted")
+}
+
+// TestSyncService_AliasCapExceededEmitsInvalidConfiguration is the WR-01
+// regression guard: an aliases annotation whose candidate count exceeds
+// validation.MaxAliasesPerEntry must be caught by the aggregate
+// ValidateAliases call, reported as terminal InvalidConfiguration (never
+// silently retried forever), publish nothing, and never delete a
+// previously published host entry (design decision 2).
+func TestSyncService_AliasCapExceededEmitsInvalidConfiguration(t *testing.T) {
+	segments := make([]string, 0, validation.MaxAliasesPerEntry+1)
+	for i := range validation.MaxAliasesPerEntry + 1 {
+		segments = append(segments, fmt.Sprintf("alias%d.example.com", i))
+	}
+	svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
+		serviceEnabledAnnotation:  "true",
+		serviceHostnameAnnotation: "web.example.com",
+		serviceAliasesAnnotation:  strings.Join(segments, ","),
+	})
+	svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+	require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+	rec := events.NewFakeRecorder(10)
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			t.Fatal("AddHost must not be called when the alias cap is exceeded")
+			return "", nil
+		},
+		updateHostFn: func(_ context.Context, _, _, _, _ string, _, _ []string, _ string) error {
+			t.Fatal("UpdateHost must not be called when the alias cap is exceeded")
+			return nil
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			t.Fatal("DeleteHost must not be called; InvalidConfiguration freezes, it does not tear down")
+			return nil
+		},
+	}
+	r := newServiceReconciler(t, k8sClient, mock)
+	r.Recorder = rec
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "alias cap exceeded must be terminal: no RequeueAfter")
 
 	select {
 	case msg := <-rec.Events:
