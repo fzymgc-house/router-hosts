@@ -263,10 +263,13 @@ func serviceAliasesExceedCap(candidates []string, canonicalHostname string) bool
 }
 
 // serviceDesiredAliases returns the validated, deduplicated alias list from
-// the aliases annotation, mapped onto the host entry's native Aliases field
-// (D-07). The result is ALWAYS non-nil, including when the annotation is
-// absent or empty (see serviceAliasCandidates). The aggregate
-// MaxAliasesPerEntry cap is enforced by the caller via
+// candidates (the caller-supplied output of serviceAliasCandidates(svc)),
+// mapped onto the host entry's native Aliases field (D-07). Taking
+// candidates rather than svc avoids re-deriving the identical candidate list
+// a second time on every reconcile (IN-08-01) — the caller has already
+// computed it for the serviceAliasesExceedCap check. The result is ALWAYS
+// non-nil, including when candidates is empty (see serviceAliasCandidates).
+// The aggregate MaxAliasesPerEntry cap is enforced by the caller via
 // serviceAliasesExceedCap BEFORE this function runs; this function
 // deliberately does NOT truncate an over-cap candidate list, since silent
 // truncation would publish a partial alias set the user never asked for.
@@ -276,8 +279,7 @@ func serviceAliasesExceedCap(candidates []string, canonicalHostname string) bool
 // invalid alias is logged at Warn and dropped, never fatal (D-07). Because
 // the per-alias call cannot see the other aliases, duplicates are
 // deduplicated case-insensitively here, also logged at Warn.
-func serviceDesiredAliases(log *slog.Logger, svc *corev1.Service, canonicalHostname string) []string {
-	candidates := serviceAliasCandidates(svc)
+func serviceDesiredAliases(log *slog.Logger, candidates []string, canonicalHostname string) []string {
 	result := make([]string, 0, len(candidates))
 	seen := make(map[string]struct{}, len(candidates))
 
@@ -417,7 +419,11 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 		}
 
 		ip, isWaiting := resolveServiceIP(svc)
-		switch {
+		// switch override := ...; the init statement binds serviceIPOverride(svc)
+		// once for the whole switch (IN-08-02) rather than re-reading and
+		// re-trimming the annotation a second time inside the
+		// InvalidConfiguration case that already tested it in its condition.
+		switch override := serviceIPOverride(svc); {
 		case isWaiting:
 			r.emitEvent(svc, corev1.EventTypeNormal, reasonPendingLoadBalancer,
 				"Waiting for a LoadBalancer IP for Service %s/%s", svc.Namespace, svc.Name)
@@ -426,8 +432,7 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 			if id, ok := existingIDs[hostname]; ok {
 				newIDs[hostname] = id
 			}
-		case ip == "" && serviceIPOverride(svc) != "":
-			override := serviceIPOverride(svc)
+		case ip == "" && override != "":
 			r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidConfiguration,
 				"Service %s/%s has an invalid %s annotation value %q", svc.Namespace, svc.Name, serviceIPAddressAnnotation, override)
 			log.Warn("invalid ip-address annotation", "annotation", serviceIPAddressAnnotation, "value", override)
@@ -439,6 +444,9 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 				"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceIPAddressAnnotation)
 			log.Warn("missing ip-address annotation", "annotation", serviceIPAddressAnnotation)
 		default:
+			// candidates is computed once here (IN-08-01) and passed to both
+			// serviceAliasesExceedCap and serviceDesiredAliases below, instead
+			// of each re-deriving it from svc independently.
 			candidates := serviceAliasCandidates(svc)
 			if serviceAliasesExceedCap(candidates, hostname) {
 				r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidConfiguration,
@@ -451,7 +459,7 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 				break
 			}
 
-			aliases := serviceDesiredAliases(log, svc, hostname)
+			aliases := serviceDesiredAliases(log, candidates, hostname)
 			prevID := existingIDs[hostname]
 			id, syncErr := r.syncServiceHost(ctx, log, prevID, ip, hostname, comment, aliases, tags)
 			if syncErr != nil {

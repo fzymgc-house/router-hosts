@@ -282,7 +282,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 	t.Run("absent_annotation_returns_empty_non_nil", func(t *testing.T) {
 		log := slog.New(&recordingHandler{})
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Empty(t, aliases)
 	})
@@ -292,7 +292,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: "",
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Empty(t, aliases)
 	})
@@ -302,7 +302,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: "www.example.com",
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Equal(t, []string{"www.example.com"}, aliases)
 	})
@@ -312,7 +312,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: " www.example.com , api.example.com ",
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Equal(t, []string{"www.example.com", "api.example.com"}, aliases)
 	})
@@ -322,7 +322,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: "www.example.com,,api.example.com,",
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Equal(t, []string{"www.example.com", "api.example.com"}, aliases)
 	})
@@ -333,7 +333,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: "www.example.com,-bad.example.com",
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Equal(t, []string{"www.example.com"}, aliases)
 		assert.True(t, h.hasWarnRecordContaining("-bad.example.com"))
@@ -345,7 +345,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: "www.example.com,10.0.0.5",
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Equal(t, []string{"www.example.com"}, aliases)
 		assert.True(t, h.hasWarnRecordContaining("10.0.0.5"))
@@ -357,7 +357,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: "web.example.com,www.example.com",
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Equal(t, []string{"www.example.com"}, aliases)
 		assert.True(t, h.hasWarnRecordContaining("web.example.com"))
@@ -369,7 +369,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: "www.example.com,WWW.example.com",
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Equal(t, []string{"www.example.com"}, aliases)
 		assert.True(t, h.hasWarnRecordContaining("WWW.example.com"))
@@ -390,7 +390,7 @@ func TestServiceDesiredAliases(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceAliasesAnnotation: strings.Join(segments, ","),
 		})
-		aliases := serviceDesiredAliases(log, svc, canonical)
+		aliases := serviceDesiredAliases(log, serviceAliasCandidates(svc), canonical)
 		assert.NotNil(t, aliases)
 		assert.Equal(t, want, aliases)
 		assert.Len(t, aliases, 60)
