@@ -102,6 +102,33 @@ func TestServiceEnabledPredicate(t *testing.T) {
 	t.Run("delete_enabled", func(t *testing.T) {
 		assert.True(t, pred.Delete(event.DeleteEvent{Object: enabled}))
 	})
+	t.Run("create_owns_state_but_opted_out", func(t *testing.T) {
+		// IN-08-03: CreateFunc must admit an opted-out-but-owning object too
+		// (informer resync after an operator restart re-delivers pre-existing
+		// objects as Create events), mirroring
+		// update_deletion_of_opted_out_but_finalized above.
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		svc.Finalizers = []string{serviceCleanupFinalizer}
+		assert.True(t, pred.Create(event.CreateEvent{Object: svc}))
+	})
+	t.Run("delete_owns_state_but_opted_out", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		svc.Finalizers = []string{serviceCleanupFinalizer}
+		assert.True(t, pred.Delete(event.DeleteEvent{Object: svc}))
+	})
+	t.Run("generic_owns_state_but_opted_out", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, nil)
+		svc.Finalizers = []string{serviceCleanupFinalizer}
+		assert.True(t, pred.Generic(event.GenericEvent{Object: svc}))
+	})
+	t.Run("create_owns_state_via_host_ids_annotation", func(t *testing.T) {
+		// serviceOwnsState admits via EITHER the finalizer or a non-empty
+		// host-ids annotation; cover the annotation path too.
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			hostIDsAnnotation: `{"web.example.com":"id-1"}`,
+		})
+		assert.True(t, pred.Create(event.CreateEvent{Object: svc}))
+	})
 }
 
 func TestResolveServiceIP(t *testing.T) {
