@@ -43,15 +43,25 @@ const (
 )
 
 // Kubernetes Event reasons for the operator-visible failure/waiting states
-// (D-12), carried forward verbatim from the Rust-era design of record.
-// InvalidServiceType, MissingHostname, and MissingIPAddress are terminal for
-// now (D-14): the next Service update re-triggers reconcile naturally, so
-// none of them sets a timed requeue. Only PendingLoadBalancer requeues.
+// (D-12), carried forward verbatim from the Rust-era design of record, plus
+// a fifth reason — InvalidConfiguration — added to close WR-01/WR-02
+// (08-REVIEW.md). InvalidServiceType, MissingHostname, MissingIPAddress, and
+// InvalidConfiguration are all terminal (D-14): the next Service update
+// re-triggers reconcile naturally, so none of them sets a timed requeue.
+// Only PendingLoadBalancer requeues.
+//
+// MissingIPAddress and InvalidConfiguration are deliberately distinct
+// reasons rather than a reuse of one for the other: MissingIPAddress means
+// the ip-address annotation is ABSENT; InvalidConfiguration means an
+// annotation (ip-address, aliases, ...) is PRESENT but unusable. Collapsing
+// them would make a typo indistinguishable from an omission in `kubectl
+// describe service`, which is the exact invisibility WR-02 reported.
 const (
-	reasonInvalidServiceType  = "InvalidServiceType"
-	reasonMissingHostname     = "MissingHostname"
-	reasonMissingIPAddress    = "MissingIPAddress"
-	reasonPendingLoadBalancer = "PendingLoadBalancer"
+	reasonInvalidServiceType   = "InvalidServiceType"
+	reasonMissingHostname      = "MissingHostname"
+	reasonMissingIPAddress     = "MissingIPAddress"
+	reasonPendingLoadBalancer  = "PendingLoadBalancer"
+	reasonInvalidConfiguration = "InvalidConfiguration"
 )
 
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;update;patch
@@ -144,6 +154,11 @@ func serviceEnabledPredicate() predicate.Predicate {
 //     cannot resurrect a ClusterIP or ExternalName Service.
 //  2. Apply the ip-address annotation override. It wins over LoadBalancer
 //     status when both are present and is the sole IP source for NodePort.
+//     The value is trimmed and validated with validation.ValidateIPAddress;
+//     an unparseable override returns ("", false) immediately — it is never
+//     returned as an IP and never falls through to step 3, so an
+//     explicit-but-broken override is not silently papered over by
+//     LoadBalancer status.
 //  3. For LoadBalancer only, walk status.loadBalancer.ingress in order and
 //     return the first entry with a non-empty IP field. Entries carrying
 //     only a Hostname (AWS ELB style) are skipped, never resolved — a CNAME
@@ -155,7 +170,10 @@ func resolveServiceIP(svc *corev1.Service) (ip string, waiting bool) {
 	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer && svc.Spec.Type != corev1.ServiceTypeNodePort {
 		return "", false
 	}
-	if override := svc.GetAnnotations()[serviceIPAddressAnnotation]; override != "" {
+	if override := serviceIPOverride(svc); override != "" {
+		if err := validation.ValidateIPAddress(override); err != nil {
+			return "", false
+		}
 		return override, false
 	}
 	if svc.Spec.Type != corev1.ServiceTypeLoadBalancer {
@@ -167,6 +185,14 @@ func resolveServiceIP(svc *corev1.Service) (ip string, waiting bool) {
 		}
 	}
 	return "", true
+}
+
+// serviceIPOverride returns the TrimSpace'd ip-address annotation value on
+// svc, or the empty string when the annotation is absent or blank. Both
+// resolveServiceIP and syncService call this helper, so "the override is
+// present" has exactly one definition.
+func serviceIPOverride(svc *corev1.Service) string {
+	return strings.TrimSpace(svc.GetAnnotations()[serviceIPAddressAnnotation])
 }
 
 // serviceDesiredHostname returns the trimmed, validated hostname annotation,
@@ -318,6 +344,12 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 //     pass.
 //   - NodePort with no ip-address annotation -> MissingIPAddress (terminal,
 //     D-14)
+//   - ip-address annotation present but unparseable, or aliases annotation
+//     exceeding validation.MaxAliasesPerEntry -> InvalidConfiguration
+//     (terminal, D-14). Either freezes rather than tears down: any
+//     previously tracked ID for the hostname is carried forward into newIDs
+//     so the stale-cleanup pass does not delete a working, previously
+//     published entry over what may be a transient annotation typo.
 //   - opted out (serviceEnabled false) -> no event; opting out is not an
 //     error, just an empty desired set.
 func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, svc *corev1.Service) (ctrl.Result, error) {
@@ -361,6 +393,14 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 				"Waiting for a LoadBalancer IP for Service %s/%s", svc.Namespace, svc.Name)
 			log.Info("waiting for LoadBalancer IP")
 			waiting = true
+			if id, ok := existingIDs[hostname]; ok {
+				newIDs[hostname] = id
+			}
+		case ip == "" && serviceIPOverride(svc) != "":
+			override := serviceIPOverride(svc)
+			r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidConfiguration,
+				"Service %s/%s has an invalid %s annotation value %q", svc.Namespace, svc.Name, serviceIPAddressAnnotation, override)
+			log.Warn("invalid ip-address annotation", "annotation", serviceIPAddressAnnotation, "value", override)
 			if id, ok := existingIDs[hostname]; ok {
 				newIDs[hostname] = id
 			}
