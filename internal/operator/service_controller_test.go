@@ -162,6 +162,36 @@ func TestResolveServiceIP(t *testing.T) {
 		assert.False(t, waiting)
 	})
 
+	t.Run("nodeport_padded_valid_override", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeNodePort, map[string]string{
+			serviceIPAddressAnnotation: "  192.168.1.50  ",
+		})
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "192.168.1.50", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("nodeport_unparseable_override", func(t *testing.T) {
+		svc := newTrackedService("web", "default", corev1.ServiceTypeNodePort, map[string]string{
+			serviceIPAddressAnnotation: "not-an-ip",
+		})
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "", ip)
+		assert.False(t, waiting)
+	})
+
+	t.Run("loadbalancer_unparseable_override_does_not_fall_through", func(t *testing.T) {
+		// An explicit-but-broken override must not be silently papered over
+		// by falling through to LoadBalancer status.
+		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
+			serviceIPAddressAnnotation: "elb.aws.example",
+		})
+		svc.Status.LoadBalancer.Ingress = []corev1.LoadBalancerIngress{{IP: "10.0.0.7"}}
+		ip, waiting := resolveServiceIP(svc)
+		assert.Equal(t, "", ip)
+		assert.False(t, waiting)
+	})
+
 	t.Run("annotation_overrides_loadbalancer_status", func(t *testing.T) {
 		svc := newTrackedService("web", "default", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceIPAddressAnnotation: "192.168.1.50",
@@ -545,6 +575,28 @@ func TestSyncService_Events(t *testing.T) {
 		}
 	})
 
+	t.Run("InvalidConfiguration_ip_override", func(t *testing.T) {
+		svc := newReadySvc("web", corev1.ServiceTypeNodePort, map[string]string{
+			serviceEnabledAnnotation:   "true",
+			serviceHostnameAnnotation:  "web.example.com",
+			serviceIPAddressAnnotation: "not-an-ip",
+		})
+		k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+		rec := events.NewFakeRecorder(10)
+		r := newServiceReconciler(t, k8sClient, noAddHostMock(t))
+		r.Recorder = rec
+
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+		require.NoError(t, err)
+
+		select {
+		case msg := <-rec.Events:
+			assert.Contains(t, msg, "Warning InvalidConfiguration ")
+		default:
+			t.Fatal("expected an event")
+		}
+	})
+
 	t.Run("no_success_event_on_create", func(t *testing.T) {
 		svc := newReadySvc("web", corev1.ServiceTypeLoadBalancer, map[string]string{
 			serviceEnabledAnnotation:  "true",
@@ -583,6 +635,52 @@ func TestSyncService_Events(t *testing.T) {
 		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
 		require.NoError(t, err)
 	})
+}
+
+// TestSyncService_InvalidIPOverrideEmitsInvalidConfiguration is the WR-02
+// regression guard: an ip-address annotation present but unparseable must
+// be terminal, event-visible via InvalidConfiguration (never
+// MissingIPAddress, which means absent), and must never delete a
+// previously published host entry (design decision 2).
+func TestSyncService_InvalidIPOverrideEmitsInvalidConfiguration(t *testing.T) {
+	svc := newReadySvc("web", corev1.ServiceTypeNodePort, map[string]string{
+		serviceEnabledAnnotation:   "true",
+		serviceHostnameAnnotation:  "web.example.com",
+		serviceIPAddressAnnotation: "not-an-ip",
+	})
+	require.NoError(t, setHostIDsAnnotation(svc, map[string]string{"web.example.com": "id-1"}))
+
+	k8sClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(svc).Build()
+	rec := events.NewFakeRecorder(10)
+	mock := &mockHostClient{
+		addHostFn: func(_ context.Context, _, _, _ string, _, _ []string) (string, error) {
+			t.Fatal("AddHost must not be called for an unparseable ip-address override")
+			return "", nil
+		},
+		deleteHostFn: func(_ context.Context, _ string) error {
+			t.Fatal("DeleteHost must not be called; InvalidConfiguration freezes, it does not tear down")
+			return nil
+		},
+	}
+	r := newServiceReconciler(t, k8sClient, mock)
+	r.Recorder = rec
+
+	result, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "web", Namespace: "default"}})
+	require.NoError(t, err)
+	assert.Equal(t, ctrl.Result{}, result, "InvalidConfiguration must be terminal: no RequeueAfter")
+
+	select {
+	case msg := <-rec.Events:
+		assert.Contains(t, msg, "Warning InvalidConfiguration ")
+	default:
+		t.Fatal("expected an event")
+	}
+
+	var updated corev1.Service
+	require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Name: "web", Namespace: "default"}, &updated))
+	ids, err := getHostIDsAnnotation(slog.Default(), &updated)
+	require.NoError(t, err)
+	assert.Equal(t, map[string]string{"web.example.com": "id-1"}, ids, "the previously tracked ID must be retained, not deleted")
 }
 
 func TestSyncService_TerminalConditionsDoNotRequeue(t *testing.T) {
