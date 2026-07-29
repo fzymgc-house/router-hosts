@@ -114,6 +114,12 @@ None yet.
 - **[Phase 8]**: Service controller exists only as superseded Rust-era design; must be built fresh in Go.
 - **[Codebase]**: `service.go` (1033 LOC) and `commands.go` (519 LOC) are merge hotspots; in-tree `legacy_migration.go` is a permanent maintenance surface pending a removal milestone.
 
+### Quick Tasks Completed
+
+| # | Description | Date | Commit | Directory |
+|---|-------------|------|--------|-----------|
+| 260728-ude | Fix WR-01/WR-02: aggregate alias cap, ip-address validation, InvalidConfiguration event | 2026-07-29 | 4403ad1 | [260728-ude-fix-wr-01-and-wr-02-from-08-review-md-ag](./quick/260728-ude-fix-wr-01-and-wr-02-from-08-review-md-ag/) |
+
 ## Deferred Items
 
 Items acknowledged and carried forward:
