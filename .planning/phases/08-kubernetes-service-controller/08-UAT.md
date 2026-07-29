@@ -3,7 +3,7 @@ status: partial
 phase: 08-kubernetes-service-controller
 source: [08-01-SUMMARY.md, 08-02-SUMMARY.md, 08-03-SUMMARY.md, 08-04-SUMMARY.md, 08-05-SUMMARY.md]
 started: 2026-07-28T00:00:00.000Z
-updated: 2026-07-28T00:00:00.000Z
+updated: 2026-07-29T00:00:00.000Z
 ---
 
 # Phase 8: Kubernetes Service Controller — UAT
@@ -282,16 +282,48 @@ result: pass
 source: automated
 coverage_id: 08-05/D4
 
+### 38. WR-02: unparseable ip-address override is caught client-side with an InvalidConfiguration event
+
+expected: WR-02: an ip-address override annotation that is present but unparseable is validated client-side and emits a terminal InvalidConfiguration Warning event
+result: pass
+source: automated
+coverage_id: 260728-ude/D1
+verification: TestSyncService_InvalidIPOverrideEmitsInvalidConfiguration — PASS (re-run 2026-07-29)
+
+### 39. WR-01: aliases annotation over the 50-alias cap is caught client-side
+
+expected: WR-01: an aliases annotation whose candidate count exceeds validation.MaxAliasesPerEntry (50) is caught by a single aggregate ValidateAliases call and emits InvalidConfiguration
+result: pass
+source: automated
+coverage_id: 260728-ude/D2
+verification: TestSyncService_AliasCapExceededEmitsInvalidConfiguration — PASS (re-run 2026-07-29)
+
+### 40. Neither InvalidConfiguration branch tears down a published host entry (T-08-24)
+
+expected: Neither new InvalidConfiguration branch issues a DeleteHost — the tracked ID is carried forward into newIDs so the stale-cleanup pass leaves the live entry alone
+result: pass
+source: automated
+coverage_id: 260728-ude/D3
+verification: service_controller.go:436->440 and :452->457 both carry the ID forward; no DeleteHost in either branch (orchestrator-verified 2026-07-29)
+
 ## Summary
 
-total: 37
-passed: 36
+total: 40
+passed: 39
 issues: 0
 pending: 0
 skipped: 0
 blocked: 1
 
 *33 auto-passed by deterministic coverage classification; 3 verified by the orchestrator with evidence recorded per test; 1 blocked on deployment.*
+
+## Coverage Confirmation
+
+The 3 quick-task deliverables (entries 38-40, coverage ids 260728-ude/D1-D3) classified
+`all_auto_covered: true` with 0 human checkpoints. Their covering tests were re-run by the
+orchestrator on 2026-07-29 and pass; D3 (an absence — no DeleteHost issued) was verified by reading
+service_controller.go:436->440 and :452->457 after the IN-08-01/02 refactor moved those lines.
+User confirmed the coverage claim 2026-07-29.
 
 ## Gaps
 
