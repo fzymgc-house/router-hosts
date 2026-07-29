@@ -224,34 +224,64 @@ func serviceDesiredHostname(log *slog.Logger, svc *corev1.Service) string {
 	return hostname
 }
 
-// serviceDesiredAliases returns the validated, deduplicated alias list from
-// the aliases annotation, mapped onto the host entry's native Aliases field
-// (D-07). The result is ALWAYS non-nil, including when the annotation is
-// absent or empty: grpcHostClient.UpdateHost only attaches the wire-level
-// aliases update when the Go slice is non-nil
+// serviceAliasCandidates comma-splits the aliases annotation on svc, trims
+// each segment, and skips empty ones. The result is ALWAYS non-nil,
+// including when the annotation is absent or empty: grpcHostClient.UpdateHost
+// only attaches the wire-level aliases update when the Go slice is non-nil
 // (internal/operator/grpc_hostclient.go:131-133), so a nil result would
 // silently mean "leave the server's aliases alone" instead of "clear them"
 // and a Service whose aliases were removed would keep publishing them
-// forever (RESEARCH Pitfall 2).
-//
-// The annotation is comma-split, each segment trimmed, and empty segments
-// skipped. Each surviving alias is validated individually with
-// validation.ValidateAliases (canonical-hostname match, IP-address
-// rejection, hostname validity); an invalid alias is logged at Warn and
-// dropped, never fatal (D-07). Because the per-alias call cannot see the
-// other aliases, duplicates are deduplicated case-insensitively here, also
-// logged at Warn.
-func serviceDesiredAliases(log *slog.Logger, svc *corev1.Service, canonicalHostname string) []string {
+// forever (RESEARCH Pitfall 2, T-08-15). No per-alias validation is applied
+// here — that is serviceDesiredAliases's job for the accepted set and
+// serviceAliasesExceedCap's job for the aggregate cap.
+func serviceAliasCandidates(svc *corev1.Service) []string {
 	segments := strings.Split(svc.GetAnnotations()[serviceAliasesAnnotation], ",")
 	result := make([]string, 0, len(segments))
-	seen := make(map[string]struct{}, len(segments))
-
 	for _, segment := range segments {
-		alias := strings.TrimSpace(segment)
-		if alias == "" {
-			continue
+		if alias := strings.TrimSpace(segment); alias != "" {
+			result = append(result, alias)
 		}
+	}
+	return result
+}
 
+// serviceAliasesExceedCap reports whether candidates, taken as a whole,
+// trips validation.MaxAliasesPerEntry. It calls validation.ValidateAliases
+// ONCE on the full slice — the only way to ever reach the length check at
+// internal/validation/validation.go:93, since serviceDesiredAliases's
+// per-alias loop passes a one-element slice where that branch is
+// structurally unreachable (WR-01). Code inspection via oops.AsOops plus
+// Code(), rather than a bare len() comparison, keeps this controller and
+// internal/validation agreeing on one definition of the cap.
+func serviceAliasesExceedCap(candidates []string, canonicalHostname string) bool {
+	for _, err := range validation.ValidateAliases(candidates, canonicalHostname) {
+		if oopsErr, ok := oops.AsOops(err); ok && oopsErr.Code() == "too_many_aliases" {
+			return true
+		}
+	}
+	return false
+}
+
+// serviceDesiredAliases returns the validated, deduplicated alias list from
+// the aliases annotation, mapped onto the host entry's native Aliases field
+// (D-07). The result is ALWAYS non-nil, including when the annotation is
+// absent or empty (see serviceAliasCandidates). The aggregate
+// MaxAliasesPerEntry cap is enforced by the caller via
+// serviceAliasesExceedCap BEFORE this function runs; this function
+// deliberately does NOT truncate an over-cap candidate list, since silent
+// truncation would publish a partial alias set the user never asked for.
+//
+// Each candidate is validated individually with validation.ValidateAliases
+// (canonical-hostname match, IP-address rejection, hostname validity); an
+// invalid alias is logged at Warn and dropped, never fatal (D-07). Because
+// the per-alias call cannot see the other aliases, duplicates are
+// deduplicated case-insensitively here, also logged at Warn.
+func serviceDesiredAliases(log *slog.Logger, svc *corev1.Service, canonicalHostname string) []string {
+	candidates := serviceAliasCandidates(svc)
+	result := make([]string, 0, len(candidates))
+	seen := make(map[string]struct{}, len(candidates))
+
+	for _, alias := range candidates {
 		if errs := validation.ValidateAliases([]string{alias}, canonicalHostname); len(errs) > 0 {
 			log.Warn("skipping invalid alias annotation", "alias", alias, "error", errs[0])
 			continue
@@ -409,6 +439,18 @@ func (r *ServiceReconciler) syncService(ctx context.Context, log *slog.Logger, s
 				"Service %s/%s is missing the required %s annotation", svc.Namespace, svc.Name, serviceIPAddressAnnotation)
 			log.Warn("missing ip-address annotation", "annotation", serviceIPAddressAnnotation)
 		default:
+			candidates := serviceAliasCandidates(svc)
+			if serviceAliasesExceedCap(candidates, hostname) {
+				r.emitEvent(svc, corev1.EventTypeWarning, reasonInvalidConfiguration,
+					"Service %s/%s has %d aliases in the %s annotation, exceeding the maximum of %d",
+					svc.Namespace, svc.Name, len(candidates), serviceAliasesAnnotation, validation.MaxAliasesPerEntry)
+				log.Warn("aliases annotation exceeds maximum", "count", len(candidates), "max", validation.MaxAliasesPerEntry)
+				if id, ok := existingIDs[hostname]; ok {
+					newIDs[hostname] = id
+				}
+				break
+			}
+
 			aliases := serviceDesiredAliases(log, svc, hostname)
 			prevID := existingIDs[hostname]
 			id, syncErr := r.syncServiceHost(ctx, log, prevID, ip, hostname, comment, aliases, tags)
