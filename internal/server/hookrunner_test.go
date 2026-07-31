@@ -316,3 +316,161 @@ func TestHookRunner_ConcurrentTriggersConserve(t *testing.T) {
 
 	assert.Equal(t, int64(50), executed+coalesced, "no trigger may vanish: executed + coalesced must equal triggers issued")
 }
+
+// blockingStartedSentinelHook returns a HookDefinition whose command touches
+// startedPath, blocks polling for unblockPath to exist, then touches
+// markerPath — the shutdown-test analogue of blockingSentinelHook that also
+// signals when it has begun, needed to know a batch is in-flight before
+// calling Stop.
+func blockingStartedSentinelHook(name, startedPath, unblockPath, markerPath string) config.HookDefinition {
+	return config.HookDefinition{
+		Name: name,
+		Command: fmt.Sprintf(
+			`touch %q; while [ ! -f %q ]; do sleep 0.05; done; touch %q`,
+			startedPath, unblockPath, markerPath,
+		),
+	}
+}
+
+// router-hosts HOOK-02 (T-09-03): Stop(ctx) with no deadline waits for the
+// in-flight batch to finish before returning.
+func TestHookRunner_StopDrainsInFlightBatch(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	unblock := filepath.Join(dir, "unblock")
+	marker := filepath.Join(dir, "marker")
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{blockingStartedSentinelHook("drain-in-flight", started, unblock, marker)},
+		nil,
+		5*time.Second,
+		slog.Default(),
+	)
+	hooks.Start()
+
+	hooks.TriggerSuccess(1)
+	waitForFile(t, started)
+
+	f, err := os.Create(unblock)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	hooks.Stop(context.Background())
+
+	assert.FileExists(t, marker, "Stop must wait for the in-flight batch's completion")
+}
+
+// router-hosts HOOK-02 (T-09-03): Stop(ctx) drains the single still-pending
+// request before exiting, mirroring WriteQueue.process's drain-buffer step.
+func TestHookRunner_StopDrainsPendingRequest(t *testing.T) {
+	dir := t.TempDir()
+	runsLog := filepath.Join(dir, "runs.log")
+	started := filepath.Join(dir, "started")
+	unblock := filepath.Join(dir, "unblock")
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{blockingRunsLogHook("drain-pending", runsLog, started, unblock)},
+		nil,
+		5*time.Second,
+		slog.Default(),
+	)
+	hooks.Start()
+
+	hooks.TriggerSuccess(1) // A — starts immediately
+	waitForFile(t, started)
+
+	hooks.TriggerSuccess(2) // B — pending, never started before Stop
+
+	f, err := os.Create(unblock)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	hooks.Stop(context.Background())
+
+	logBytes, err := os.ReadFile(runsLog)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+	assert.Equal(t, []string{"1", "2"}, lines, "the single pending request must be drained before Stop returns")
+}
+
+// router-hosts HOOK-02 (T-09-03): Stop's deadline expiring while a hook is
+// still running must still return, having cancelled the runner's base
+// context and thereby killed the hook subprocess. Never asserts wall-clock
+// duration — a safety timeout only guards against the test hanging forever
+// if Stop fails to terminate, which is itself the failure signal.
+func TestHookRunner_StopDrainsThenCancels(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	unblock := filepath.Join(dir, "unblock") // deliberately never created
+	marker := filepath.Join(dir, "marker")
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{blockingStartedSentinelHook("never-unblocked", started, unblock, marker)},
+		nil,
+		30*time.Second, // the hook's own timeout must not be what ends this run
+		slog.Default(),
+	)
+	hooks.Start()
+
+	hooks.TriggerSuccess(1)
+	waitForFile(t, started)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	stopReturned := make(chan struct{})
+	go func() {
+		hooks.Stop(ctx)
+		close(stopReturned)
+	}()
+
+	select {
+	case <-stopReturned:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Stop did not return after its deadline expired — base context was not cancelled")
+	}
+
+	assert.NoFileExists(t, marker, "the hook subprocess must have been killed by the cancelled base context, never completing")
+}
+
+// router-hosts HOOK-02 (T-09-12): a Trigger after Stop is a no-op — it must
+// not panic, must not execute a hook, and must not record a coalesce.
+func TestHookRunner_TriggerAfterStopIsNoOp(t *testing.T) {
+	dir := t.TempDir()
+	runsLog := filepath.Join(dir, "runs.log")
+	started := filepath.Join(dir, "started")
+	unblock := filepath.Join(dir, "unblock")
+
+	m, reader := newTestMetrics(t)
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{blockingRunsLogHook("idle", runsLog, started, unblock)},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(m),
+	)
+	hooks.Start()
+	hooks.Stop(context.Background()) // idle runner, nothing ever triggered
+
+	require.NotPanics(t, func() {
+		hooks.TriggerSuccess(1)
+	})
+
+	_, err := os.Stat(runsLog)
+	assert.True(t, os.IsNotExist(err), "no hook may execute after Stop")
+
+	rm := collectMetrics(t, reader)
+	assert.Nil(t, findMetric(rm, "router_hosts_hook_runs_coalesced_total"), "no coalesce may be recorded after Stop")
+}
+
+// router-hosts HOOK-02 (T-09-12): calling Stop twice must not panic or block.
+func TestHookRunner_StopIsIdempotent(t *testing.T) {
+	hooks := NewHookExecutor(nil, nil, 5*time.Second, slog.Default())
+	hooks.Start()
+
+	require.NotPanics(t, func() {
+		hooks.Stop(context.Background())
+		hooks.Stop(context.Background())
+	})
+}
