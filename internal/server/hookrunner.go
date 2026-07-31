@@ -56,11 +56,19 @@ func (r *hookRunner) Start() {
 
 // Trigger enqueues req, coalescing with any not-yet-started pending request
 // (latest-wins). Never blocks and never touches hook I/O; safe to call from
-// the RPC goroutine.
+// the RPC goroutine. When req supersedes an already-pending request, records
+// router_hosts_hook_runs_coalesced_total exactly once — the superseded
+// request is dropped and will never execute.
 func (r *hookRunner) Trigger(req hookRunRequest) {
 	r.mu.Lock()
+	coalesced := r.pending != nil
 	r.pending = &req
 	r.mu.Unlock()
+
+	if coalesced {
+		r.log.Debug("hook run coalesced", "event", req.event)
+		r.exec.metrics.RecordHookRunCoalesced(context.Background(), req.event)
+	}
 
 	select {
 	case r.trigger <- struct{}{}:
