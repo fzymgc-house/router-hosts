@@ -5,15 +5,15 @@ milestone_name: K8s-Native Automation
 current_phase: 9
 current_phase_name: Hook Reliability & Metrics
 status: executing
-stopped_at: Completed 09-03-PLAN.md
-last_updated: "2026-07-31T15:42:13.556Z"
+stopped_at: Completed 09-04-PLAN.md
+last_updated: "2026-07-31T15:55:54.525Z"
 last_activity: 2026-07-31
 last_activity_desc: Phase 9 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 14
+  completed_plans: 15
   percent: 67
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-26)
 ## Current Position
 
 Phase: 9 (Hook Reliability & Metrics) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-07-31 — Phase 9 execution started
 
-Progress: [█████████░] 88%
+Progress: [█████████░] 94%
 
 ## Performance Metrics
 
@@ -75,6 +75,7 @@ Progress: [█████████░] 88%
 | Phase 09 P01 | 3min | 3 tasks | 8 files |
 | Phase 09 P02 | 15min | 2 tasks | 2 files |
 | Phase 09 P03 | 12min | 3 tasks | 4 files |
+| Phase 09 P04 | 6min | 3 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -111,6 +112,7 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: executeHook records metrics against the caller's (runner) ctx, not the per-hook hookCtx, since hookCtx may already be Done() at recording time
 - [Phase ?]: resolveTimeouts() is the primary positivity-enforcement point for hook timeouts; validate() negative-checks are a backstop for hand-constructed configs bypassing LoadServerConfig
 - [Phase ?]: Timeout classification checks hookCtx.Err() before the process error; coalesced-run counter carries only {type}, no name attribute
+- [Phase ?]: hookRunner.Trigger records router_hosts_hook_runs_coalesced_total exactly once per superseded request via context.Background(); adds a stopped-flag check closing a latent phantom-coalesce bug on repeated post-Stop triggers
 
 ### Pending Todos
 
@@ -139,6 +141,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-31T15:42:13.549Z
-Stopped at: Completed 09-03-PLAN.md
+Last session: 2026-07-31T15:55:54.517Z
+Stopped at: Completed 09-04-PLAN.md
 Resume file: None
