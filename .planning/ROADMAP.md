@@ -202,13 +202,13 @@ Plans:
 1. Each `on_success` / `on_failure` hook execution emits count, duration, and outcome metrics (closes the dead-metrics gap, router-hosts-0ed)
 2. A per-hook timeout is configurable (no longer a fixed 30s) and hook execution is bounded so a slow hook cannot block write processing (router-hosts-ee0)
 
-**Plans**: 2/5 plans executed
+**Plans**: 3/5 plans executed
 
 Plans:
 
 - [x] 09-01-PLAN.md — Tracer: end-to-end detached hook run with a config-resolved timeout and a recorded execution metric (wave 1)
 - [x] 09-02-PLAN.md — Config: `[hooks] default_timeout` resolution chain, positivity invariant, validation and TOML encoding edges (wave 2)
-- [ ] 09-03-PLAN.md — Metrics: timeout-vs-failure status classification and the `router_hosts_hook_runs_coalesced_total` instrument (wave 2)
+- [x] 09-03-PLAN.md — Metrics: timeout-vs-failure status classification and the `router_hosts_hook_runs_coalesced_total` instrument (wave 2)
 - [ ] 09-04-PLAN.md — Runner: coalescing accounting, conservation law, bounded drain-then-cancel shutdown (wave 3)
 - [ ] 09-05-PLAN.md — Docs: operations guide, configuration reference, and the phase CI gate (wave 4)
 
@@ -248,5 +248,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Aggregate Compaction | v1 Baseline | shipped | Complete | v0.10.13 |
 | 7. Gateway API Support | K8s-Native Automation | 6/6 | Complete | 2026-07-26 |
 | 8. Service Controller | K8s-Native Automation | 5/5 | Complete | 2026-07-30 |
-| 9. Hook Reliability & Metrics | K8s-Native Automation | 2/5 | In Progress|  |
+| 9. Hook Reliability & Metrics | K8s-Native Automation | 3/5 | In Progress|  |
 | 10. Consumer-Rendered Output | Consumer-Owned Output | 0/TBD | Not started | - |
