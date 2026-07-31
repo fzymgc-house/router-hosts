@@ -126,6 +126,14 @@ func (h *HookExecutor) RunFailure(ctx context.Context, entryCount int, errMsg st
 	h.runHooks(ctx, h.onFailure, "failure", entryCount, errMsg)
 }
 
+// MetricsEnabled reports whether the executor is wired to a real metrics
+// recorder (via WithMetrics) rather than the default DisabledMetrics(). Used
+// as a regression guard for the HOOK-01 wiring-order bug — see
+// internal/client/commands/serve_wiring_test.go.
+func (h *HookExecutor) MetricsEnabled() bool {
+	return h.metrics.enabled()
+}
+
 // HookNames returns the names of all configured hooks (success + failure).
 func (h *HookExecutor) HookNames() []string {
 	names := make([]string, 0, len(h.onSuccess)+len(h.onFailure))

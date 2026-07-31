@@ -4,11 +4,9 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/config"
@@ -74,7 +72,6 @@ func runServe(ctx context.Context, configPath string) error {
 
 	// Build service options
 	var svcOpts []server.ServiceOption
-	var hookExec *server.HookExecutor
 
 	// Hosts file generator (optional)
 	var hostsGen *server.HostsFileGenerator
@@ -109,58 +106,19 @@ func runServe(ctx context.Context, configPath string) error {
 	svcOpts = append(svcOpts, server.WithRetentionConfig(maxSnapsPtr, maxAgePtr))
 	svcOpts = append(svcOpts, server.WithVersion(Version, versionString()))
 
-	// Set up OTel metrics (optional). The hook executor is constructed AFTER
-	// this block, not before, so it can be wired to real metrics via
-	// WithMetrics — building it earlier would silently leave it on
-	// DisabledMetrics() forever (the literal HOOK-01 wiring gap).
-	var metrics *server.Metrics
+	// Set up OTel metrics and the hook executor together — extracted into
+	// configureMetricsAndHooks() so the wiring order (metrics before hook
+	// executor, the HOOK-01 fix) is unit-testable in isolation. See
+	// serve_wiring_test.go.
+	wired, err := configureMetricsAndHooks(cfg, store, logger)
+	if err != nil {
+		return err
+	}
+	defer wired.cleanup()
+
 	var serverOpts []server.Option
-
-	if cfg.Metrics != nil && cfg.Metrics.OTel != nil {
-		metrics, err = server.NewMetricsFromConfig(cfg.Metrics.OTel)
-		if err != nil {
-			return oops.Wrapf(err, "setup metrics")
-		}
-		defer func() {
-			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if serr := metrics.Shutdown(shutCtx); serr != nil {
-				logger.Error("metrics shutdown failed", "error", serr)
-			}
-		}()
-
-		serverOpts = append(serverOpts, server.WithGRPCOptions(
-			grpc.ChainUnaryInterceptor(server.UnaryMetricsInterceptor(metrics)),
-			grpc.ChainStreamInterceptor(server.StreamMetricsInterceptor(metrics)),
-		))
-
-		if rerr := metrics.RegisterAggregateEventGauges(store, server.DefaultAggregateEventsWarnThreshold); rerr != nil {
-			return oops.Wrapf(rerr, "register aggregate-event gauges")
-		}
-	}
-
-	// Hook executor (optional) — constructed after metrics so WithMetrics
-	// receives the real *server.Metrics (or nil, tolerated as a no-op, when
-	// OTel is unconfigured).
-	if len(cfg.Hooks.OnSuccess) > 0 || len(cfg.Hooks.OnFailure) > 0 {
-		hookExec = server.NewHookExecutor(
-			cfg.Hooks.OnSuccess,
-			cfg.Hooks.OnFailure,
-			cfg.Hooks.DefaultTimeout,
-			logger,
-			server.WithMetrics(metrics),
-		)
-		hookExec.Start()
-		svcOpts = append(svcOpts, server.WithHookExecutor(hookExec))
-	}
-	defer func() {
-		if hookExec == nil {
-			return
-		}
-		shutCtx, cancel := context.WithTimeout(context.Background(), server.GracefulShutdownTimeout)
-		defer cancel()
-		hookExec.Stop(shutCtx)
-	}()
+	serverOpts = append(serverOpts, wired.serverOpts...)
+	svcOpts = append(svcOpts, wired.svcOpts...)
 
 	// Create gRPC service implementation
 	svc := server.NewHostsServiceImpl(handler, store, svcOpts...)

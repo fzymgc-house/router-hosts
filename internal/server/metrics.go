@@ -194,6 +194,13 @@ func NewMetricsFromConfig(cfg *config.OTelConfig) (*Metrics, error) {
 	return NewMetrics(provider)
 }
 
+// enabled reports whether m is backed by a real meter provider (constructed
+// via NewMetrics/NewMetricsFromConfig) rather than DisabledMetrics()'s no-op
+// instruments, which never set meterProvider.
+func (m *Metrics) enabled() bool {
+	return m != nil && m.meterProvider != nil
+}
+
 // DisabledMetrics returns a Metrics struct with no-op instruments. Safe to call
 // recording methods on without side effects.
 func DisabledMetrics() *Metrics {
