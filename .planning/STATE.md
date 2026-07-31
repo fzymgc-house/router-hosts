@@ -1,18 +1,18 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.11.0
-milestone_name: K8s-Native Automation
+milestone: v0.12.0
+milestone_name: Hook Reliability & Metrics
 current_phase: 9
 status: completed
 stopped_at: Completed 09-05-PLAN.md
 last_updated: "2026-07-31T17:24:46.494Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 9 complete
+last_activity_desc: Phase 9 complete; milestone labels realigned to release boundaries
 progress:
-  total_phases: 3
-  completed_phases: 3
-  total_plans: 16
-  completed_plans: 16
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 5
   percent: 100
 current_phase_name: Hook Reliability & Metrics
 ---
@@ -24,7 +24,7 @@ current_phase_name: Hook Reliability & Metrics
 See: .planning/PROJECT.md (updated 2026-07-26)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Milestone v0.11.0 phases all complete — Phase 9 awaiting PR; next milestone is v0.12.0 (Phase 10, Consumer-Rendered Output)
+**Current focus:** Milestone v0.12.0 (Phase 9) complete and verified, shipping via PR #389; next milestone is v0.13.0 (Phase 10, Consumer-Rendered Output)
 
 ## Current Position
 

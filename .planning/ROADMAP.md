@@ -10,11 +10,19 @@ router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control 
 
 Phases 1–6. Shipped pre-GSD; reconstructed retrospectively at bootstrap (2026-07-07).
 
-### 🚧 v0.11.0 — K8s-Native Automation
+### ✅ v0.11.0 — K8s-Native Automation
 
-Phases 7–9. Active; north-star operator / Gateway-API parity.
+Phases 7–8. Shipped 2026-07-30 in PR #381; released as v0.11.0 (version bump
+corrected by the follow-up `Release-As:` PR #382). Operator / Gateway-API parity.
 
-### 📋 v0.12.0 — Consumer-Owned Output
+### 🚧 v0.12.0 — Hook Reliability & Metrics
+
+Phase 9. Complete and verified 2026-07-31; shipping via PR #389. Split out of
+the K8s-Native Automation milestone once v0.11.0 was cut after phase 8 — hook
+reliability is server-side observability, not operator parity, and it releases
+on its own.
+
+### 📋 v0.13.0 — Consumer-Owned Output
 
 Phase 10. Approved 2026-07-25 from #364.
 
@@ -121,7 +129,7 @@ Phase 10. Approved 2026-07-25 from #364.
 **Plans**: shipped (pre-GSD)
 **Status**: Complete — shipped (v0.10.13; governed by ADRs v5b, vl8, 4w2)
 
-## 🚧 v0.11.0 — K8s-Native Automation (Phase Details)
+## ✅ v0.11.0 — K8s-Native Automation (Phase Details)
 
 ### Phase 7: Gateway API Support
 
@@ -192,6 +200,8 @@ Plans:
 
 **Status**: Complete (2026-07-30) — 5 plans across 4 waves; 2/2 success criteria verified. Deep code review found 2 Critical + 2 Warning, all fixed and re-verified; security audit closed 20/21 threats with `threats_open: 0`; UAT 39/40 (1 blocked on deployment). Shipped in PR #381. **Deployment caveat:** T-08-04 (Events RBAC) remains live in production until v0.11.0 is released and the ArgoCD pin is bumped — see `08-SECURITY.md` § Deployment Caveat.
 
+## 🚧 v0.12.0 — Hook Reliability & Metrics (Phase Details)
+
 ### Phase 9: Hook Reliability & Metrics
 
 **Goal**: Post-edit hooks are observable and cannot stall the write path.
@@ -214,7 +224,7 @@ Plans:
 
 **Status**: Complete (2026-07-31) — 5 plans across 4 waves; 2/2 success criteria verified, 24/25 must-haves (1 backstop accepted on a documented mutex-ordering argument). Code review found 0 Critical + 3 Warning + 3 Info; all 3 Warnings and 1 Info fixed and re-verified, 2 Info consciously skipped (shutdown-cancel status classification tradeoff; plan-ID commit scopes, unfixable without rewriting history). `task ci` green at 85.8% coverage. **Deferred:** the live OTel/Prometheus scrape was never run (no collector available) — recorded as deferred, not passed, in `09-VALIDATION.md`.
 
-## 📋 v0.12.0 — Consumer-Owned Output (Phase Details)
+## 📋 v0.13.0 — Consumer-Owned Output (Phase Details)
 
 ### Phase 10: Consumer-Rendered Output (templates + sink)
 
@@ -248,5 +258,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Aggregate Compaction | v1 Baseline | shipped | Complete | v0.10.13 |
 | 7. Gateway API Support | K8s-Native Automation | 6/6 | Complete | 2026-07-26 |
 | 8. Service Controller | K8s-Native Automation | 5/5 | Complete | 2026-07-30 |
-| 9. Hook Reliability & Metrics | K8s-Native Automation | 5/5 | Complete | 2026-07-31 |
+| 9. Hook Reliability & Metrics | Hook Reliability & Metrics | 5/5 | Complete | 2026-07-31 |
 | 10. Consumer-Rendered Output | Consumer-Owned Output | 0/TBD | Not started | - |
