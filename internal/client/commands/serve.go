@@ -116,8 +116,7 @@ func runServe(ctx context.Context, configPath string) error {
 	}
 	defer wired.cleanup()
 
-	var serverOpts []server.Option
-	serverOpts = append(serverOpts, wired.serverOpts...)
+	serverOpts := wired.serverOpts
 	svcOpts = append(svcOpts, wired.svcOpts...)
 
 	// Create gRPC service implementation
