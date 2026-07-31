@@ -371,6 +371,36 @@ func TestNewHookExecutor_DefaultsToDisabledMetrics(t *testing.T) {
 	assert.FileExists(t, marker2)
 }
 
+// IN-01 regression: a non-positive defaultTimeout passed to NewHookExecutor
+// must fall back to config.DefaultHookTimeout rather than leaving an
+// unset-Timeout hook at 0. A 0 hook.Timeout produces an already-expired
+// context.WithTimeout deadline, so without the guard this hook would be
+// classified "timeout" on its very first run despite doing real, fast work.
+func TestNewHookExecutor_NonPositiveDefaultTimeoutFallsBack(t *testing.T) {
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "instant", Command: "true"}}, // Timeout unset (0)
+		nil,
+		0, // non-positive defaultTimeout — must not leave the hook's Timeout at 0
+		slog.Default(),
+		WithMetrics(m),
+	)
+	require.Equal(t, config.DefaultHookTimeout, executor.onSuccess[0].Timeout,
+		"non-positive defaultTimeout must fall back to config.DefaultHookTimeout")
+
+	executor.RunSuccess(context.Background(), 1)
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter)
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sum.DataPoints, 1)
+	assert.Equal(t, "success", extractAttrs(sum.DataPoints[0])["status"],
+		"hook must run to completion, not be pre-expired by a 0-duration deadline")
+}
+
 // router-hosts HOOK-01: a hook whose command returns essentially immediately
 // must still record exactly one executions_total increment and exactly one
 // duration_seconds observation with a positive-but-sub-second Sum — no

@@ -56,6 +56,16 @@ func WithMetrics(m *Metrics) HookExecutorOption {
 // definition held by the executor carries its own already-resolved timeout,
 // and no execution-time code path reads a global default.
 func NewHookExecutor(onSuccess, onFailure []config.HookDefinition, defaultTimeout time.Duration, logger *slog.Logger, opts ...HookExecutorOption) *HookExecutor {
+	// Guard against a non-positive defaultTimeout: config.LoadServerConfig's
+	// resolveTimeouts() already enforces > 0, but a caller that constructs a
+	// HookExecutor directly (bypassing config loading) could otherwise pass
+	// 0 here, leaving any hook with an unset Timeout permanently at 0 —
+	// context.WithTimeout(ctx, 0) produces an already-expired context, so
+	// every such hook would be classified "timeout" on its very first run.
+	if defaultTimeout <= 0 {
+		defaultTimeout = config.DefaultHookTimeout
+	}
+
 	resolvedSuccess := make([]config.HookDefinition, len(onSuccess))
 	copy(resolvedSuccess, onSuccess)
 	for i := range resolvedSuccess {
