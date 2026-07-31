@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -172,4 +174,145 @@ func TestRegenerateOutputs_NoHooksEmitsNoMetrics(t *testing.T) {
 
 	rm := collectMetrics(t, reader)
 	assert.Nil(t, findMetric(rm, "router_hosts_hook_executions_total"))
+}
+
+// waitForFile polls until path exists, failing the test if it never appears
+// within a generous bound. This is a synchronization primitive for crossing
+// the Go/subprocess boundary — never used to assert timing.
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s to appear", path)
+}
+
+// blockingRunsLogHook returns a HookDefinition whose command appends
+// $ROUTER_HOSTS_ENTRY_COUNT as one line to runsLogPath, touches startedPath
+// on every invocation, then blocks polling for unblockPath to exist before
+// returning — the coalescing/ordering-test analogue of blockingSentinelHook,
+// additionally recording which payloads actually ran and in what order.
+func blockingRunsLogHook(name, runsLogPath, startedPath, unblockPath string) config.HookDefinition {
+	return config.HookDefinition{
+		Name: name,
+		Command: fmt.Sprintf(
+			`echo "$ROUTER_HOSTS_ENTRY_COUNT" >> %q; touch %q; while [ ! -f %q ]; do sleep 0.05; done`,
+			runsLogPath, startedPath, unblockPath,
+		),
+	}
+}
+
+// router-hosts HOOK-02 (T-09-02): a Trigger arriving while a request is
+// already pending overwrites it (latest-wins) rather than queuing, and every
+// overwrite is counted on router_hosts_hook_runs_coalesced_total exactly
+// once. Conservation holds: executed batches + coalesced == triggers issued.
+// Samples the finish-instant BACKSTOP recorded at the top of this file.
+func TestHookRunner_CoalescesSupersededRuns(t *testing.T) {
+	dir := t.TempDir()
+	runsLog := filepath.Join(dir, "runs.log")
+	started := filepath.Join(dir, "started")
+	unblock := filepath.Join(dir, "unblock")
+
+	m, reader := newTestMetrics(t)
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{blockingRunsLogHook("record", runsLog, started, unblock)},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(m),
+	)
+	hooks.Start()
+
+	hooks.TriggerSuccess(1) // A — starts immediately, pending was nil
+	waitForFile(t, started)
+
+	hooks.TriggerSuccess(2) // B — pending was nil (A already taken), no coalesce
+	hooks.TriggerSuccess(3) // C — pending was B, exactly one coalesce, B dropped
+
+	f, err := os.Create(unblock)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	hooks.Stop(context.Background())
+
+	logBytes, err := os.ReadFile(runsLog)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+	require.Equal(t, []string{"1", "3"}, lines, "payload 2 must never execute — latest-wins")
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_runs_coalesced_total")
+	require.NotNil(t, counter, "coalesced counter metric not found")
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 1)
+	assert.Equal(t, int64(1), sum.DataPoints[0].Value)
+	assert.Equal(t, "success", extractAttrs(sum.DataPoints[0])["type"])
+
+	// Conservation: 2 executed batches + 1 coalesced == 3 triggers.
+	assert.Len(t, lines, 2)
+}
+
+// router-hosts HOOK-02 (T-09-02): under 50 concurrent Trigger calls, the
+// conservation law holds under the race detector — no trigger is silently
+// dropped, only ever coalesced or executed.
+func TestHookRunner_ConcurrentTriggersConserve(t *testing.T) {
+	dir := t.TempDir()
+	runsLog := filepath.Join(dir, "runs.log")
+	started := filepath.Join(dir, "started")
+	unblock := filepath.Join(dir, "unblock")
+
+	m, reader := newTestMetrics(t)
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{blockingRunsLogHook("record", runsLog, started, unblock)},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(m),
+	)
+	hooks.Start()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			hooks.TriggerSuccess(n)
+		}(i)
+	}
+	wg.Wait()
+
+	waitForFile(t, started)
+
+	f, err := os.Create(unblock)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	hooks.Stop(context.Background())
+
+	logBytes, err := os.ReadFile(runsLog)
+	require.NoError(t, err)
+	trimmed := strings.TrimSpace(string(logBytes))
+	var executed int64
+	if trimmed != "" {
+		executed = int64(len(strings.Split(trimmed, "\n")))
+	}
+
+	rm := collectMetrics(t, reader)
+	var coalesced int64
+	if counter := findMetric(rm, "router_hosts_hook_runs_coalesced_total"); counter != nil {
+		sum, ok := counter.Data.(metricdata.Sum[int64])
+		require.True(t, ok)
+		for _, dp := range sum.DataPoints {
+			coalesced += dp.Value
+		}
+	}
+
+	assert.Equal(t, int64(50), executed+coalesced, "no trigger may vanish: executed + coalesced must equal triggers issued")
 }
