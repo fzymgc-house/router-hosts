@@ -9,7 +9,6 @@
 **Tech Stack:** Go 1.25, `zombiezen.com/go/sqlite` (pure-Go SQLite), `samber/oops` errors, buf/protobuf gRPC, Cobra CLI, OpenTelemetry metrics (`go.opentelemetry.io/otel/metric` v1.44.0), `oklog/ulid/v2`.
 
 **Spec:** `docs/superpowers/specs/2026-06-26-aggregate-compaction-design.md`
-**Beads:** epic `router-hosts-eda` → feature `router-hosts-eda.2` → design `router-hosts-eda.2.1`
 
 ---
 
@@ -53,6 +52,7 @@ Three deliberate, code-grounded improvements over `2026-06-26-aggregate-compacti
 ## Task 1: `HostCompacted` domain event + projection fold
 
 **Files:**
+
 - Modify: `internal/domain/events.go` (const block ~55, `Valid()` ~17, `Decode()` ~115, `OccurredAt()` ~198, `NewHostEvent()` ~233, new struct after `HostImported` ~359)
 - Modify: `internal/storage/sqlite/projection.go:154` (`replayEvents` switch)
 - Test: `internal/domain/events_test.go`, `internal/storage/sqlite/sqlite_test.go`
@@ -267,6 +267,7 @@ Then: `jj commit -m "feat(domain): add HostCompacted seed event + replay"`
 ## Task 2: `ListAggregateIDs` on `EventStore`
 
 **Files:**
+
 - Modify: `internal/storage/storage.go:43` (interface)
 - Modify: `internal/storage/sqlite/eventstore.go` (new method) and `projection.go` (export helper if needed)
 - Modify: `internal/storage/storagetest/suite.go` (compliance test)
@@ -362,6 +363,7 @@ Then: `jj commit -m "feat(storage): add ListAggregateIDs to EventStore"`
 ## Task 3: `CompactAggregate` storage method
 
 **Files:**
+
 - Modify: `internal/storage/storage.go` (interface + `CompactResult` type)
 - Modify: `internal/storage/sqlite/eventstore.go` (impl + `deleteEventsForAggregate` helper)
 - Modify: `internal/storage/storagetest/suite.go` (compliance tests)
@@ -584,6 +586,7 @@ Then: `jj commit -m "feat(storage): add CompactAggregate event-log compaction"`
 ## Task 4: Command-handler compaction (single + bulk, write-queued)
 
 **Files:**
+
 - Modify: `internal/server/commands.go`
 - Test: `internal/server/commands_test.go`
 
@@ -737,9 +740,9 @@ Then: `jj commit -m "feat(server): add compaction command handlers"`
 ## Task 5: Proto `CompactAggregates` RPC
 
 **Files:**
+
 - Modify: `proto/router_hosts/v1/hosts.proto`
 - Regenerate: `api/v1/router_hosts/v1/*.pb.go` via `task proto:generate`
-
 - [ ] **Step 1: Add the RPC to the service block**
 
 In `proto/router_hosts/v1/hosts.proto`, inside `service HostsService`, after `DeleteSnapshot`:
@@ -793,7 +796,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Gate + commit**
 
-Run: `task lint`  (buf lint runs here; `task test` not needed — no Go logic yet, but run `go build ./...`)
+Run: `task lint` (buf lint runs here; `task test` not needed — no Go logic yet, but run `go build ./...`)
 Then: `jj commit -m "feat(proto): add CompactAggregates RPC"`
 
 ---
@@ -801,6 +804,7 @@ Then: `jj commit -m "feat(proto): add CompactAggregates RPC"`
 ## Task 6: gRPC service handler
 
 **Files:**
+
 - Modify: `internal/server/service.go`
 - Test: `internal/server/service_test.go`
 
@@ -952,10 +956,10 @@ Then: `jj commit -m "feat(server): add CompactAggregates gRPC handler"`
 ## Task 7: CLI `compact` command
 
 **Files:**
+
 - Create: `internal/client/commands/compact.go`
 - Modify: `internal/client/commands/root.go` (register the command)
 - Test: `internal/client/commands/compact_test.go` (optional smoke — mirror existing command tests if present)
-
 - [ ] **Step 1: Create the command**
 
 `internal/client/commands/compact.go` (mirrors `snapshot.go` patterns — `newClientFromFlags`, `commandContext`, `Flags.Quiet`):
@@ -1061,6 +1065,7 @@ Then: `jj commit -m "feat(client): add compact CLI command"`
 ## Task 8: Event-count observable-gauge metrics
 
 **Files:**
+
 - Modify: `internal/server/metrics.go` (new `RegisterAggregateEventGauges` method + const)
 - Modify: `internal/client/commands/serve.go` (wire it where `store` + `metrics` are both in scope)
 - Test: `internal/server/metrics_test.go`
@@ -1193,4 +1198,5 @@ Then: `jj commit -m "feat(server): add aggregate event-count gauges"`
 | `CompactAggregates` RPC | 5, 6 |
 | Cardinality-safe observable-gauge metrics | 8 |
 | Regression for #330/#323 (compact→update-at-version) | 3 |
+
 <!-- adr-capture: sha256=5d480f58a68c787e; session=cli; ts=2026-06-26T17:15:52Z; adrs=router-hosts-v5b,router-hosts-vl8,router-hosts-4w2 -->

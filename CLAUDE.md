@@ -176,10 +176,12 @@ E2E tests require build tags: `e2e` for in-process, `docker_e2e` for Docker cont
 - **GitHub Issues**: external-facing work and bug reports. Reference them in
   commits (`Fixes #123`, `Closes #456`) and create new issues for discovered
   follow-up work
-- **Work items**: tracked in beads (`bd`) when work spans sessions or has
-  dependencies
+- **Work items**: tracked as GitHub Issues. There is no separate work-item
+  tracker — beads (`bd`) was removed on 2026-07-31; do not reintroduce it or
+  route work items to it
 - **Durable memory**: record decisions, conventions, and gotchas in engram
-  memory (search-before-store) so they survive across sessions
+  memory (search-before-store) so they survive across sessions. engram is the
+  only durable-memory store for this repo — there is no `bd remember` fallback
 
 ## Project Context
 
