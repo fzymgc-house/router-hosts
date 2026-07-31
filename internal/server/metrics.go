@@ -31,13 +31,14 @@ var histogramBuckets = otelmetric.WithExplicitBucketBoundaries(
 
 // Metrics holds all OTel metric instruments for the server.
 type Metrics struct {
-	requestsTotal    otelmetric.Int64Counter
-	requestDuration  otelmetric.Float64Histogram
-	storageOpsTotal  otelmetric.Int64Counter
-	storageDuration  otelmetric.Float64Histogram
-	hookExecsTotal   otelmetric.Int64Counter
-	hookDuration     otelmetric.Float64Histogram
-	hostEntriesGauge otelmetric.Int64Gauge
+	requestsTotal          otelmetric.Int64Counter
+	requestDuration        otelmetric.Float64Histogram
+	storageOpsTotal        otelmetric.Int64Counter
+	storageDuration        otelmetric.Float64Histogram
+	hookExecsTotal         otelmetric.Int64Counter
+	hookDuration           otelmetric.Float64Histogram
+	hookRunsCoalescedTotal otelmetric.Int64Counter
+	hostEntriesGauge       otelmetric.Int64Gauge
 
 	meterProvider *metric.MeterProvider
 }
@@ -94,6 +95,13 @@ func NewMetrics(meterProvider *metric.MeterProvider) (*Metrics, error) {
 		return nil, oops.Wrapf(err, "create hook_duration histogram")
 	}
 
+	hookRunsCoalescedTotal, err := meter.Int64Counter("router_hosts_hook_runs_coalesced_total",
+		otelmetric.WithDescription("Total number of hook run batches superseded before executing"),
+	)
+	if err != nil {
+		return nil, oops.Wrapf(err, "create hook_runs_coalesced_total counter")
+	}
+
 	hostEntriesGauge, err := meter.Int64Gauge("router_hosts_hosts_entries",
 		otelmetric.WithDescription("Current number of host entries"),
 	)
@@ -102,14 +110,15 @@ func NewMetrics(meterProvider *metric.MeterProvider) (*Metrics, error) {
 	}
 
 	return &Metrics{
-		requestsTotal:    requestsTotal,
-		requestDuration:  requestDuration,
-		storageOpsTotal:  storageOpsTotal,
-		storageDuration:  storageDuration,
-		hookExecsTotal:   hookExecsTotal,
-		hookDuration:     hookDuration,
-		hostEntriesGauge: hostEntriesGauge,
-		meterProvider:    meterProvider,
+		requestsTotal:          requestsTotal,
+		requestDuration:        requestDuration,
+		storageOpsTotal:        storageOpsTotal,
+		storageDuration:        storageDuration,
+		hookExecsTotal:         hookExecsTotal,
+		hookDuration:           hookDuration,
+		hookRunsCoalescedTotal: hookRunsCoalescedTotal,
+		hostEntriesGauge:       hostEntriesGauge,
+		meterProvider:          meterProvider,
 	}, nil
 }
 
@@ -185,6 +194,13 @@ func NewMetricsFromConfig(cfg *config.OTelConfig) (*Metrics, error) {
 	return NewMetrics(provider)
 }
 
+// enabled reports whether m is backed by a real meter provider (constructed
+// via NewMetrics/NewMetricsFromConfig) rather than DisabledMetrics()'s no-op
+// instruments, which never set meterProvider.
+func (m *Metrics) enabled() bool {
+	return m != nil && m.meterProvider != nil
+}
+
 // DisabledMetrics returns a Metrics struct with no-op instruments. Safe to call
 // recording methods on without side effects.
 func DisabledMetrics() *Metrics {
@@ -197,16 +213,18 @@ func DisabledMetrics() *Metrics {
 	storageDuration, _ := noopMeter.Float64Histogram("router_hosts_storage_duration_seconds")
 	hookExecsTotal, _ := noopMeter.Int64Counter("router_hosts_hook_executions_total")
 	hookDuration, _ := noopMeter.Float64Histogram("router_hosts_hook_duration_seconds")
+	hookRunsCoalescedTotal, _ := noopMeter.Int64Counter("router_hosts_hook_runs_coalesced_total")
 	hostEntriesGauge, _ := noopMeter.Int64Gauge("router_hosts_hosts_entries")
 
 	return &Metrics{
-		requestsTotal:    requestsTotal,
-		requestDuration:  requestDuration,
-		storageOpsTotal:  storageOpsTotal,
-		storageDuration:  storageDuration,
-		hookExecsTotal:   hookExecsTotal,
-		hookDuration:     hookDuration,
-		hostEntriesGauge: hostEntriesGauge,
+		requestsTotal:          requestsTotal,
+		requestDuration:        requestDuration,
+		storageOpsTotal:        storageOpsTotal,
+		storageDuration:        storageDuration,
+		hookExecsTotal:         hookExecsTotal,
+		hookDuration:           hookDuration,
+		hookRunsCoalescedTotal: hookRunsCoalescedTotal,
+		hostEntriesGauge:       hostEntriesGauge,
 	}
 }
 
@@ -254,6 +272,17 @@ func (m *Metrics) RecordHookExecution(ctx context.Context, name, hookType, statu
 			attribute.String("type", hookType),
 		),
 	)
+}
+
+// RecordHookRunCoalesced records a coalesced hook run batch — a batch that
+// was superseded by a newer trigger before it ever started executing. This
+// counter deliberately does NOT increment router_hosts_hook_executions_total:
+// a coalesced run never invoked a hook command, so counting it there would
+// make the execution counter overstate work actually performed.
+func (m *Metrics) RecordHookRunCoalesced(ctx context.Context, hookType string) {
+	m.hookRunsCoalescedTotal.Add(ctx, 1, otelmetric.WithAttributes(
+		attribute.String("type", hookType),
+	))
 }
 
 // SetHostEntriesCount records the current host entry count as an absolute value.

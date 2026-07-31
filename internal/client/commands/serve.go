@@ -4,20 +4,15 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"time"
 
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/config"
 	"github.com/fzymgc-house/router-hosts/internal/server"
 	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
 )
-
-// defaultHookTimeout is the maximum duration for a single hook execution.
-const defaultHookTimeout = 30 * time.Second
 
 func newServeCmd() *cobra.Command {
 	var configPath string
@@ -97,17 +92,6 @@ func runServe(ctx context.Context, configPath string) error {
 		svcOpts = append(svcOpts, server.WithUnboundGenerator(unboundGen))
 	}
 
-	// Hook executor (optional)
-	if len(cfg.Hooks.OnSuccess) > 0 || len(cfg.Hooks.OnFailure) > 0 {
-		hookExec := server.NewHookExecutor(
-			cfg.Hooks.OnSuccess,
-			cfg.Hooks.OnFailure,
-			defaultHookTimeout,
-			logger,
-		)
-		svcOpts = append(svcOpts, server.WithHookExecutor(hookExec))
-	}
-
 	// Retention policy from config — only wire axes that are explicitly
 	// configured (non-zero). ApplyRetentionPolicy treats nil as "no limit".
 	var maxSnapsPtr, maxAgePtr *int
@@ -122,35 +106,21 @@ func runServe(ctx context.Context, configPath string) error {
 	svcOpts = append(svcOpts, server.WithRetentionConfig(maxSnapsPtr, maxAgePtr))
 	svcOpts = append(svcOpts, server.WithVersion(Version, versionString()))
 
+	// Set up OTel metrics and the hook executor together — extracted into
+	// configureMetricsAndHooks() so the wiring order (metrics before hook
+	// executor, the HOOK-01 fix) is unit-testable in isolation. See
+	// serve_wiring_test.go.
+	wired, err := configureMetricsAndHooks(cfg, store, logger)
+	if err != nil {
+		return err
+	}
+	defer wired.cleanup()
+
+	serverOpts := wired.serverOpts
+	svcOpts = append(svcOpts, wired.svcOpts...)
+
 	// Create gRPC service implementation
 	svc := server.NewHostsServiceImpl(handler, store, svcOpts...)
-
-	// Set up OTel metrics (optional)
-	var metrics *server.Metrics
-	var serverOpts []server.Option
-
-	if cfg.Metrics != nil && cfg.Metrics.OTel != nil {
-		metrics, err = server.NewMetricsFromConfig(cfg.Metrics.OTel)
-		if err != nil {
-			return oops.Wrapf(err, "setup metrics")
-		}
-		defer func() {
-			shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if serr := metrics.Shutdown(shutCtx); serr != nil {
-				logger.Error("metrics shutdown failed", "error", serr)
-			}
-		}()
-
-		serverOpts = append(serverOpts, server.WithGRPCOptions(
-			grpc.ChainUnaryInterceptor(server.UnaryMetricsInterceptor(metrics)),
-			grpc.ChainStreamInterceptor(server.StreamMetricsInterceptor(metrics)),
-		))
-
-		if rerr := metrics.RegisterAggregateEventGauges(store, server.DefaultAggregateEventsWarnThreshold); rerr != nil {
-			return oops.Wrapf(rerr, "register aggregate-event gauges")
-		}
-	}
 
 	// Create and configure gRPC server
 	srv, err := server.NewServer(*cfg, store, logger, serverOpts...)

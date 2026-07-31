@@ -1,10 +1,12 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -288,6 +290,260 @@ command = "echo test"
 	assert.Contains(t, err.Error(), "character limit")
 }
 
+func TestLoadServerConfig_HookTimeoutResolution(t *testing.T) {
+	tests := []struct {
+		name         string
+		hooksSection string
+		want         time.Duration
+	}{
+		{
+			name: "per-hook set, default set: per-hook wins",
+			hooksSection: `
+[hooks]
+default_timeout = "45s"
+
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+timeout = "5s"
+
+[[hooks.on_failure]]
+name = "alert-ops"
+command = "/usr/local/bin/alert-failure"
+timeout = "5s"
+`,
+			want: 5 * time.Second,
+		},
+		{
+			name: "per-hook absent, default set: default wins",
+			hooksSection: `
+[hooks]
+default_timeout = "45s"
+
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+
+[[hooks.on_failure]]
+name = "alert-ops"
+command = "/usr/local/bin/alert-failure"
+`,
+			want: 45 * time.Second,
+		},
+		{
+			name: "per-hook set, default absent: per-hook wins",
+			hooksSection: `
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+timeout = "5s"
+
+[[hooks.on_failure]]
+name = "alert-ops"
+command = "/usr/local/bin/alert-failure"
+timeout = "5s"
+`,
+			want: 5 * time.Second,
+		},
+		{
+			name: "both absent: built-in default",
+			hooksSection: `
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+
+[[hooks.on_failure]]
+name = "alert-ops"
+command = "/usr/local/bin/alert-failure"
+`,
+			want: DefaultHookTimeout,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfigFile(t, minimalConfig+tt.hooksSection)
+			cfg, err := LoadServerConfig(path)
+			require.NoError(t, err)
+
+			require.Len(t, cfg.Hooks.OnSuccess, 1)
+			require.Len(t, cfg.Hooks.OnFailure, 1)
+			assert.Equal(t, tt.want, cfg.Hooks.OnSuccess[0].Timeout)
+			assert.Equal(t, tt.want, cfg.Hooks.OnFailure[0].Timeout)
+		})
+	}
+}
+
+func TestLoadServerConfig_HookTimeoutExplicitZeroInherits(t *testing.T) {
+	content := minimalConfig + `
+[hooks]
+default_timeout = "45s"
+
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+timeout = "0s"
+`
+	path := writeConfigFile(t, content)
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+
+	require.Len(t, cfg.Hooks.OnSuccess, 1)
+	assert.Equal(t, 45*time.Second, cfg.Hooks.OnSuccess[0].Timeout)
+}
+
+func TestHooksConfig_ResolveTimeouts_Invariant(t *testing.T) {
+	tests := []struct {
+		name           string
+		defaultTimeout time.Duration
+		onSuccess      []HookDefinition
+		onFailure      []HookDefinition
+	}{
+		{
+			name: "both lists empty, no default set",
+		},
+		{
+			name:           "both lists empty, default set",
+			defaultTimeout: 45 * time.Second,
+		},
+		{
+			name:      "hooks set, no default",
+			onSuccess: []HookDefinition{{Name: "reload-dns", Command: "cmd"}},
+			onFailure: []HookDefinition{{Name: "alert-ops", Command: "cmd"}},
+		},
+		{
+			name:           "hooks set, default set",
+			defaultTimeout: 45 * time.Second,
+			onSuccess:      []HookDefinition{{Name: "reload-dns", Command: "cmd"}},
+			onFailure:      []HookDefinition{{Name: "alert-ops", Command: "cmd"}},
+		},
+		{
+			name:           "per-hook explicit timeout overrides default",
+			defaultTimeout: 45 * time.Second,
+			onSuccess:      []HookDefinition{{Name: "reload-dns", Command: "cmd", Timeout: 5 * time.Second}},
+			onFailure:      []HookDefinition{{Name: "alert-ops", Command: "cmd", Timeout: 5 * time.Second}},
+		},
+		{
+			name:      "only on_success populated, no default",
+			onSuccess: []HookDefinition{{Name: "reload-dns", Command: "cmd"}},
+		},
+		{
+			name:      "only on_failure populated, no default",
+			onFailure: []HookDefinition{{Name: "alert-ops", Command: "cmd"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := &HooksConfig{
+				OnSuccess:      tt.onSuccess,
+				OnFailure:      tt.onFailure,
+				DefaultTimeout: tt.defaultTimeout,
+			}
+			err := h.resolveTimeouts()
+			require.NoError(t, err)
+
+			assert.Positive(t, h.DefaultTimeout)
+			for _, hook := range h.OnSuccess {
+				assert.Positive(t, hook.Timeout)
+			}
+			for _, hook := range h.OnFailure {
+				assert.Positive(t, hook.Timeout)
+			}
+		})
+	}
+}
+
+func TestLoadServerConfig_EmptyHooksTable(t *testing.T) {
+	content := minimalConfig + `
+[hooks]
+default_timeout = "45s"
+`
+	path := writeConfigFile(t, content)
+	cfg, err := LoadServerConfig(path)
+	require.NoError(t, err)
+
+	assert.Empty(t, cfg.Hooks.OnSuccess)
+	assert.Empty(t, cfg.Hooks.OnFailure)
+	assert.Equal(t, 45*time.Second, cfg.Hooks.DefaultTimeout)
+}
+
+func TestLoadServerConfig_HookTimeoutRejectsNegative(t *testing.T) {
+	tests := []struct {
+		name             string
+		content          string
+		wantErrSubstr    []string
+		wantErrNotSubstr []string
+	}{
+		{
+			name: "negative per-hook timeout",
+			content: minimalConfig + `
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+timeout = "-5s"
+`,
+			wantErrSubstr: []string{"reload-dns", "timeout"},
+		},
+		{
+			name: "negative default_timeout, hook has no explicit timeout",
+			content: minimalConfig + `
+[hooks]
+default_timeout = "-1s"
+
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+`,
+			wantErrSubstr:    []string{"default_timeout"},
+			wantErrNotSubstr: []string{"reload-dns"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfigFile(t, tt.content)
+			_, err := LoadServerConfig(path)
+			require.Error(t, err)
+			for _, substr := range tt.wantErrSubstr {
+				assert.Contains(t, err.Error(), substr)
+			}
+			for _, substr := range tt.wantErrNotSubstr {
+				assert.NotContains(t, err.Error(), substr)
+			}
+		})
+	}
+}
+
+func TestLoadServerConfig_HookTimeoutEncoding(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout string // raw TOML value literal (quoted string or bare integer)
+		want    time.Duration
+	}{
+		{name: "seconds string", timeout: `"10s"`, want: 10 * time.Second},
+		{name: "minutes string", timeout: `"2m"`, want: 2 * time.Minute},
+		{name: "combined string", timeout: `"1m30s"`, want: 90 * time.Second},
+		{name: "bare integer decodes as nanoseconds (accepted, positive)", timeout: `10`, want: 10 * time.Nanosecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := minimalConfig + fmt.Sprintf(`
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+timeout = %s
+`, tt.timeout)
+			path := writeConfigFile(t, content)
+			cfg, err := LoadServerConfig(path)
+			require.NoError(t, err)
+			require.Len(t, cfg.Hooks.OnSuccess, 1)
+			assert.Equal(t, tt.want, cfg.Hooks.OnSuccess[0].Timeout)
+		})
+	}
+}
+
 func TestLoadServerConfig_SameNameDifferentHookTypesAllowed(t *testing.T) {
 	content := minimalConfig + `
 [[hooks.on_success]]
@@ -450,6 +706,16 @@ func TestHookDefinition_Validate(t *testing.T) {
 		{
 			name:    "name exactly 50 chars",
 			hook:    HookDefinition{Name: "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeee", Command: "echo"},
+			wantErr: "",
+		},
+		{
+			name:    "negative timeout",
+			hook:    HookDefinition{Name: "reload-dns", Command: "systemctl reload dnsmasq", Timeout: -1 * time.Second},
+			wantErr: "timeout",
+		},
+		{
+			name:    "positive timeout",
+			hook:    HookDefinition{Name: "reload-dns", Command: "systemctl reload dnsmasq", Timeout: 5 * time.Second},
 			wantErr: "",
 		},
 	}

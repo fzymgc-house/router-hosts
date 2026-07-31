@@ -163,9 +163,9 @@ func (s *HostsServiceImpl) regenerateOutputs(ctx context.Context, op string) {
 	}
 
 	if len(errMsgs) == 0 {
-		s.hooks.RunSuccess(ctx, entryCount)
+		s.hooks.TriggerSuccess(entryCount)
 	} else {
-		s.hooks.RunFailure(ctx, entryCount, strings.Join(errMsgs, "; "))
+		s.hooks.TriggerFailure(entryCount, strings.Join(errMsgs, "; "))
 	}
 }
 

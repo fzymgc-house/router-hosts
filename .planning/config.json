@@ -41,7 +41,7 @@
   },
   "git": {
     "create_tag": true,
-    "branching_strategy": "milestone"
+    "branching_strategy": "none"
   },
   "parallelization": {
     "enabled": true,

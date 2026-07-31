@@ -56,8 +56,8 @@
 
 ### Hook Reliability & Metrics (Phase 9, active)
 
-- [ ] **HOOK-01**: Server emits execution metrics (count, duration, outcome) for `on_success` / `on_failure` hooks (currently dead code — tracked as router-hosts-0ed)
-- [ ] **HOOK-02**: Hook execution supports a configurable per-hook timeout and a bounded concurrency model so a slow hook cannot block the write path (currently fixed 30s + sequential — tracked as router-hosts-ee0)
+- [x] **HOOK-01**: Server emits execution metrics (count, duration, outcome) for `on_success` / `on_failure` hooks (currently dead code — tracked as router-hosts-0ed)
+- [x] **HOOK-02**: Hook execution supports a configurable per-hook timeout and a bounded concurrency model so a slow hook cannot block the write path (currently fixed 30s + sequential — tracked as router-hosts-ee0)
 
 ### Consumer-Rendered Output (Phase 10, approved)
 
@@ -121,8 +121,8 @@ Acknowledged but deferred; not in the current roadmap.
 | GW-03 | Phase 7 | Complete |
 | SVC-01 | Phase 8 | Complete |
 | SVC-02 | Phase 8 | Complete |
-| HOOK-01 | Phase 9 | Pending |
-| HOOK-02 | Phase 9 | Pending |
+| HOOK-01 | Phase 9 | Complete |
+| HOOK-02 | Phase 9 | Complete |
 | TMPL-01 | Phase 10 | Pending |
 | TMPL-02 | Phase 10 | Pending |
 | TMPL-03 | Phase 10 | Pending |

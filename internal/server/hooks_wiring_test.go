@@ -72,10 +72,12 @@ func TestRegenerateOutputs_FiresOnSuccessHook(t *testing.T) {
 
 	dir := t.TempDir()
 	hooks, successSentinel, failureSentinel := sentinelHooks(dir)
+	hooks.Start()
 	gen := NewHostsFileGenerator(filepath.Join(dir, "hosts"))
 	svc := NewHostsServiceImpl(handler, store, WithHostsGenerator(gen), WithHookExecutor(hooks))
 
 	svc.RegenerateOutputs(ctx)
+	hooks.Stop(context.Background())
 
 	got, err := os.ReadFile(successSentinel)
 	require.NoError(t, err)
@@ -93,11 +95,13 @@ func TestRegenerateOutputs_FiresOnFailureHook(t *testing.T) {
 
 	dir := t.TempDir()
 	hooks, successSentinel, failureSentinel := sentinelHooks(dir)
+	hooks.Start()
 	// Parent dir does not exist, so atomicWriteFile's os.CreateTemp fails.
 	gen := NewHostsFileGenerator(filepath.Join(dir, "missing-subdir", "hosts"))
 	svc := NewHostsServiceImpl(handler, store, WithHostsGenerator(gen), WithHookExecutor(hooks))
 
 	svc.RegenerateOutputs(ctx)
+	hooks.Stop(context.Background())
 
 	got, err := os.ReadFile(failureSentinel)
 	require.NoError(t, err)
@@ -115,12 +119,14 @@ func TestRegenerateOutputs_PartialFailureFiresFailureHook(t *testing.T) {
 
 	dir := t.TempDir()
 	hooks, successSentinel, failureSentinel := sentinelHooks(dir)
+	hooks.Start()
 	goodGen := NewHostsFileGenerator(filepath.Join(dir, "hosts"))
 	badGen := NewDnsmasqConfGenerator(filepath.Join(dir, "missing-subdir", "dnsmasq.conf"))
 	svc := NewHostsServiceImpl(handler, store,
 		WithHostsGenerator(goodGen), WithDnsmasqGenerator(badGen), WithHookExecutor(hooks))
 
 	svc.RegenerateOutputs(ctx)
+	hooks.Stop(context.Background())
 
 	got, err := os.ReadFile(failureSentinel)
 	require.NoError(t, err)
@@ -136,9 +142,11 @@ func TestRegenerateOutputs_NoHooksWhenNoGenerator(t *testing.T) {
 
 	dir := t.TempDir()
 	hooks, successSentinel, failureSentinel := sentinelHooks(dir)
+	hooks.Start()
 	svc := NewHostsServiceImpl(handler, store, WithHookExecutor(hooks))
 
 	svc.RegenerateOutputs(ctx)
+	hooks.Stop(context.Background())
 
 	assert.NoFileExists(t, successSentinel)
 	assert.NoFileExists(t, failureSentinel)

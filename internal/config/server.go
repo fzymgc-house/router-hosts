@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	// BurntSushi/toml is used instead of go-toml/v2 (referenced in the design
 	// spec) because it exposes MetaData.Undecoded() for strict decoding — i.e.,
@@ -38,6 +39,10 @@ const (
 
 	// LetsEncryptProductionURL is the default ACME directory URL.
 	LetsEncryptProductionURL = "https://acme-v02.api.letsencrypt.org/directory"
+
+	// DefaultHookTimeout is the default maximum duration for a single hook
+	// execution when neither the hook nor [hooks] default_timeout set one.
+	DefaultHookTimeout = 30 * time.Second
 )
 
 // Config is the top-level server configuration, loaded from TOML.
@@ -148,16 +153,70 @@ func (r *RetentionConfig) Validate() error {
 	return nil
 }
 
-// HookDefinition is a named shell command executed on events.
+// HookDefinition is a named shell command executed on events. Timeout is the
+// maximum duration a single execution of this hook is allowed to run; zero
+// means "inherit the resolved default" (see LoadServerConfig and
+// HooksConfig.DefaultTimeout).
 type HookDefinition struct {
-	Name    string `toml:"name"`
-	Command string `toml:"command"`
+	Name    string        `toml:"name"`
+	Command string        `toml:"command"`
+	Timeout time.Duration `toml:"timeout"`
 }
 
 // HooksConfig holds on-success and on-failure hook definitions.
 type HooksConfig struct {
 	OnSuccess []HookDefinition `toml:"on_success"`
 	OnFailure []HookDefinition `toml:"on_failure"`
+	// DefaultTimeout is the server-level fallback timeout applied to any hook
+	// whose own Timeout is unset. Zero means "use config.DefaultHookTimeout".
+	// Resolved by resolveTimeouts(), called from LoadServerConfig.
+	DefaultTimeout time.Duration `toml:"default_timeout"`
+}
+
+// resolveTimeouts resolves the effective timeout for every hook in h,
+// following the three-link chain: per-hook Timeout -> HooksConfig.DefaultTimeout
+// -> DefaultHookTimeout. A zero value at any link means "inherit the next
+// link" and is never an error; this is the single place that chain is
+// encoded. After resolveTimeouts returns nil, h.DefaultTimeout and every
+// hook's Timeout in both OnSuccess and OnFailure are guaranteed strictly
+// positive — the enforcement point for that invariant. It does not reject a
+// bare zero (that's "inherit"); HookDefinition.validate/HooksConfig.validate
+// separately reject only negative values, as a backstop for hand-constructed
+// Config values that never went through this method.
+func (h *HooksConfig) resolveTimeouts() error {
+	if h.DefaultTimeout == 0 {
+		h.DefaultTimeout = DefaultHookTimeout
+	}
+	if h.DefaultTimeout <= 0 {
+		return oops.Code(domain.CodeValidation).Errorf(
+			"config: hooks.default_timeout must resolve to a positive duration (got %s)", h.DefaultTimeout)
+	}
+
+	for i := range h.OnSuccess {
+		if h.OnSuccess[i].Timeout == 0 {
+			h.OnSuccess[i].Timeout = h.DefaultTimeout
+		}
+	}
+	for i := range h.OnFailure {
+		if h.OnFailure[i].Timeout == 0 {
+			h.OnFailure[i].Timeout = h.DefaultTimeout
+		}
+	}
+
+	for _, hook := range h.OnSuccess {
+		if hook.Timeout <= 0 {
+			return oops.Code(domain.CodeValidation).Errorf(
+				"config: hook %q timeout must resolve to a positive duration (got %s)", hook.Name, hook.Timeout)
+		}
+	}
+	for _, hook := range h.OnFailure {
+		if hook.Timeout <= 0 {
+			return oops.Code(domain.CodeValidation).Errorf(
+				"config: hook %q timeout must resolve to a positive duration (got %s)", hook.Name, hook.Timeout)
+		}
+	}
+
+	return nil
 }
 
 // OTelConfig holds OpenTelemetry exporter settings.
@@ -244,6 +303,13 @@ func LoadServerConfig(path string) (*Config, error) {
 	}
 	if cfg.Retention.MaxAgeDays == 0 {
 		cfg.Retention.MaxAgeDays = DefaultMaxAgeDays
+	}
+
+	// Resolve the hook timeout chain: per-hook timeout -> [hooks] default_timeout
+	// -> DefaultHookTimeout. Must run after the strict-key check and before
+	// cfg.validate(), or a zero/negative timeout could reach the executor.
+	if err := cfg.Hooks.resolveTimeouts(); err != nil {
+		return nil, err
 	}
 
 	// Apply ACME defaults
@@ -341,6 +407,11 @@ func (t *TLSConfig) validateACME() error {
 
 // validate checks all hook definitions for correctness.
 func (h *HooksConfig) validate() error {
+	if h.DefaultTimeout < 0 {
+		return oops.Code(domain.CodeValidation).Errorf(
+			"config: hooks.default_timeout must not be negative (got %s)", h.DefaultTimeout)
+	}
+
 	seen := make(map[string]struct{})
 	for _, hook := range h.OnSuccess {
 		if err := hook.validate(); err != nil {
@@ -379,6 +450,9 @@ func (h *HookDefinition) validate() error {
 	}
 	if strings.TrimSpace(h.Command) == "" {
 		return oops.Code(domain.CodeValidation).Errorf("config: hook %q has empty or whitespace-only command", h.Name)
+	}
+	if h.Timeout < 0 {
+		return oops.Code(domain.CodeValidation).Errorf("config: hook %q timeout must not be negative (got %s)", h.Name, h.Timeout)
 	}
 	return nil
 }

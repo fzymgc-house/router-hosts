@@ -11,17 +11,48 @@ host mutation, so hooks fire in both cases:
 - `on_success` hooks - after every configured generator succeeds (e.g., reload dnsmasq)
 - `on_failure` hooks - after any generator fails (e.g., alerting)
 - Hooks fire only when at least one output path is configured (they react to writes)
-- Hooks run with 30s timeout, failures logged but don't fail operation
+- Each hook runs with its own timeout: the hook's own `timeout`, else the
+  server-level `[hooks] default_timeout`, else 30 seconds. Failures are
+  logged but don't fail the operation.
+- Hooks run detached from the write path: a write RPC (`host add`, `host
+  update`, `host delete`, import, rollback, etc.) returns as soon as the
+  output files are written, *before* its hooks have completed. A successful
+  RPC no longer implies the reload hook finished — read hook outcomes from
+  `router_hosts_hook_executions_total` and the server log, not from RPC
+  success.
 - Environment variables provide context (event type, entry count, error message)
+
+### Coalescing
+
+At most one hook batch runs at a time, and at most one further run is
+pending behind it. If a regeneration fires while a batch is still running
+*and* another run is already pending, the older pending run is dropped and
+counted on `router_hosts_hook_runs_coalesced_total` instead of being queued.
+
+This is correct, not a bug: hooks react to the current contents of the
+output files, so a superseded run would only re-read the same state the
+newer run is about to write. A persistently non-zero coalesced rate means
+hooks are running slower than writes arrive and is worth alerting on.
+
+### Shutdown
+
+In-flight hooks are given the graceful-shutdown window (30s) to finish. If
+they haven't finished by then, their context is cancelled and the
+subprocess is killed.
 
 ### Configuration Example
 
-Each hook requires a `name` and `command`:
+Each hook requires a `name` and `command`. Timeouts are optional Go duration
+strings (quoted):
 
 ```toml
+[hooks]
+default_timeout = "20s"
+
 [[hooks.on_success]]
 name = "reload-dns"
 command = "systemctl reload dnsmasq"
+timeout = "10s"
 
 [[hooks.on_success]]
 name = "notify-slack"
@@ -373,8 +404,9 @@ All metrics recorded via the OpenTelemetry Go SDK are exported to the OTEL colle
 | `router_hosts_request_duration_seconds` | Histogram | `method` | Request latency |
 | `router_hosts_storage_operations_total` | Counter | `operation`, `status` | DB operations count |
 | `router_hosts_storage_duration_seconds` | Histogram | `operation` | DB operation latency |
-| `router_hosts_hook_executions_total` | Counter | `name`, `type`, `status` | Hook execution count |
-| `router_hosts_hook_duration_seconds` | Histogram | `name`, `type` | Hook execution time |
+| `router_hosts_hook_executions_total` | Counter | `name`, `type`, `status` | Hook execution count; `status` is `success`, `failure`, or `timeout` (a hook killed by its own deadline records `timeout`, never `failure`) |
+| `router_hosts_hook_duration_seconds` | Histogram | `name`, `type` | Hook execution time (no `status` label, to bound cardinality) |
+| `router_hosts_hook_runs_coalesced_total` | Counter | `type` | Hook runs superseded before executing |
 | `router_hosts_hosts_entries` | Gauge | - | Current host entry count |
 
 ### Prometheus Scraping via OTEL Collector

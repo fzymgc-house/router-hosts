@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
 )
@@ -66,6 +67,83 @@ func TestHookExecutor_Timeout(t *testing.T) {
 
 	// Should complete without panic; failure is logged internally.
 	executor.RunSuccess(context.Background(), 0)
+}
+
+// router-hosts HOOK-01 / T-09-10: a hook killed by its own deadline must
+// record status="timeout", never status="failure" — os/exec surfaces a
+// deadline kill as an ordinary *exec.ExitError, so the classifier must
+// inspect hookCtx.Err() before the process error (RESEARCH.md Pitfall 3).
+func TestHookExecutor_RecordsTimeoutStatus(t *testing.T) {
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "slow-hook", Command: "sleep 10"}},
+		nil,
+		100*time.Millisecond,
+		slog.Default(),
+		WithMetrics(m),
+	)
+
+	executor.RunSuccess(context.Background(), 0)
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter, "hook_executions_total metric not found")
+
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 1)
+
+	attrs := extractAttrs(sum.DataPoints[0])
+	assert.Equal(t, "timeout", attrs["status"], "deadline kill must record status=timeout")
+	assert.NotEqual(t, "failure", attrs["status"], "deadline kill must NOT record status=failure")
+	assert.Equal(t, "success", attrs["type"])
+	assert.Equal(t, "slow-hook", attrs["name"])
+	assert.Len(t, attrs, 3, "counter attribute key set must be exactly {name, type, status}")
+
+	histogram := findMetric(rm, "router_hosts_hook_duration_seconds")
+	require.NotNil(t, histogram, "hook_duration_seconds metric not found")
+	histData, ok := histogram.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64] data type")
+	require.Len(t, histData.DataPoints, 1)
+	histAttrs := make(map[string]string)
+	for _, attr := range histData.DataPoints[0].Attributes.ToSlice() {
+		histAttrs[string(attr.Key)] = attr.Value.AsString()
+	}
+	assert.Equal(t, "slow-hook", histAttrs["name"])
+	assert.Equal(t, "success", histAttrs["type"])
+	_, hasStatus := histAttrs["status"]
+	assert.False(t, hasStatus, "duration histogram must not carry a status attribute")
+}
+
+// router-hosts HOOK-01 / T-09-10: a hook that exits non-zero well within its
+// resolved timeout must record status="failure".
+func TestHookExecutor_RecordsFailureStatus(t *testing.T) {
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "bad-hook", Command: "exit 1"}},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(m),
+	)
+
+	executor.RunSuccess(context.Background(), 0)
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter, "hook_executions_total metric not found")
+
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 1)
+
+	attrs := extractAttrs(sum.DataPoints[0])
+	assert.Equal(t, "failure", attrs["status"])
+	assert.Equal(t, "success", attrs["type"])
+	assert.Equal(t, "bad-hook", attrs["name"])
+	assert.Len(t, attrs, 3, "counter attribute key set must be exactly {name, type, status}")
 }
 
 func TestHookExecutor_Empty(t *testing.T) {
@@ -260,6 +338,190 @@ func TestHookExecutor_HookNames(t *testing.T) {
 
 	names := executor.HookNames()
 	assert.Equal(t, []string{"reload-dns", "notify", "alert"}, names)
+}
+
+// router-hosts HOOK-01: an executor built without WithMetrics, and one built
+// with WithMetrics(nil), must both record without panicking — both hold a
+// non-nil DisabledMetrics().
+func TestNewHookExecutor_DefaultsToDisabledMetrics(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran-default")
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "touch-file", Command: "touch " + marker}},
+		nil,
+		5*time.Second,
+		slog.Default(),
+	)
+	// No panic recording against the default DisabledMetrics().
+	executor.RunSuccess(context.Background(), 1)
+	assert.FileExists(t, marker)
+
+	dir2 := t.TempDir()
+	marker2 := filepath.Join(dir2, "ran-nil-metrics")
+	executorNilMetrics := NewHookExecutor(
+		[]config.HookDefinition{{Name: "touch-file", Command: "touch " + marker2}},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(nil),
+	)
+	// WithMetrics(nil) must be a no-op, not a nil metrics pointer.
+	executorNilMetrics.RunSuccess(context.Background(), 1)
+	assert.FileExists(t, marker2)
+}
+
+// IN-01 regression: a non-positive defaultTimeout passed to NewHookExecutor
+// must fall back to config.DefaultHookTimeout rather than leaving an
+// unset-Timeout hook at 0. A 0 hook.Timeout produces an already-expired
+// context.WithTimeout deadline, so without the guard this hook would be
+// classified "timeout" on its very first run despite doing real, fast work.
+func TestNewHookExecutor_NonPositiveDefaultTimeoutFallsBack(t *testing.T) {
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "instant", Command: "true"}}, // Timeout unset (0)
+		nil,
+		0, // non-positive defaultTimeout — must not leave the hook's Timeout at 0
+		slog.Default(),
+		WithMetrics(m),
+	)
+	require.Equal(t, config.DefaultHookTimeout, executor.onSuccess[0].Timeout,
+		"non-positive defaultTimeout must fall back to config.DefaultHookTimeout")
+
+	executor.RunSuccess(context.Background(), 1)
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter)
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok)
+	require.Len(t, sum.DataPoints, 1)
+	assert.Equal(t, "success", extractAttrs(sum.DataPoints[0])["status"],
+		"hook must run to completion, not be pre-expired by a 0-duration deadline")
+}
+
+// router-hosts HOOK-01: a hook whose command returns essentially immediately
+// must still record exactly one executions_total increment and exactly one
+// duration_seconds observation with a positive-but-sub-second Sum — no
+// sub-millisecond sample is dropped, and duration is float64 seconds rather
+// than truncated to an integer. histogramBuckets' first boundary is 0.001s,
+// so a fast hook lands in the first bucket rather than being discarded; the
+// assertion here is on Count/Sum, not on bucket index.
+func TestHookExecutor_SubMillisecondDurationRecorded(t *testing.T) {
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "instant-hook", Command: "true"}},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(m),
+	)
+
+	executor.RunSuccess(context.Background(), 0)
+
+	rm := collectMetrics(t, reader)
+
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter, "hook_executions_total metric not found")
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 1)
+	assert.Equal(t, int64(1), sum.DataPoints[0].Value)
+
+	histogram := findMetric(rm, "router_hosts_hook_duration_seconds")
+	require.NotNil(t, histogram, "hook_duration_seconds metric not found")
+	histData, ok := histogram.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64] data type")
+	require.Len(t, histData.DataPoints, 1)
+	dp := histData.DataPoints[0]
+	assert.Equal(t, uint64(1), dp.Count, "exactly one duration observation")
+	assert.GreaterOrEqual(t, dp.Sum, 0.0, "duration sum must not be negative")
+	assert.Less(t, dp.Sum, 1.0, "duration sum must be sub-second float seconds, not truncated")
+}
+
+// router-hosts HOOK-01: HooksConfig.validate allocates a FRESH
+// duplicate-detection map per list (see
+// TestLoadServerConfig_SameNameDifferentHookTypesAllowed in
+// internal/config/server_test.go), so the same hook name may legally appear
+// in both on_success and on_failure. The two series must stay distinct,
+// keyed by the type attribute — never merge into one datapoint of value 2.
+func TestHookExecutor_SameNameDistinctTypeSeries(t *testing.T) {
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "reload-dns", Command: "true"}},
+		[]config.HookDefinition{{Name: "reload-dns", Command: "true"}},
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(m),
+	)
+
+	executor.RunSuccess(context.Background(), 0)
+	executor.RunFailure(context.Background(), 0, "boom")
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter, "hook_executions_total metric not found")
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 2, "same-named hooks in two types must produce two distinct datapoints")
+
+	byType := make(map[string]int64)
+	for _, dp := range sum.DataPoints {
+		attrs := extractAttrs(dp)
+		assert.Equal(t, "reload-dns", attrs["name"])
+		byType[attrs["type"]] = dp.Value
+	}
+	assert.Equal(t, int64(1), byType["success"])
+	assert.Equal(t, int64(1), byType["failure"])
+}
+
+// router-hosts HOOK-01/HOOK-02: hooks within one batch execute and record
+// metrics in declaration order, and each hook records exactly one execution
+// datapoint per batch.
+func TestHookExecutor_BatchRecordsOneDatapointPerHookInOrder(t *testing.T) {
+	dir := t.TempDir()
+	orderFile := filepath.Join(dir, "batch-order.txt")
+
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{
+			{Name: "first", Command: "echo first >> " + orderFile},
+			{Name: "second", Command: "echo second >> " + orderFile},
+			{Name: "third", Command: "echo third >> " + orderFile},
+		},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(m),
+	)
+
+	executor.RunSuccess(context.Background(), 0)
+
+	data, err := os.ReadFile(orderFile)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	require.Len(t, lines, 3)
+	assert.Equal(t, []string{"first", "second", "third"}, lines)
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter, "hook_executions_total metric not found")
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 3, "one datapoint per hook name")
+
+	byName := make(map[string]int64)
+	for _, dp := range sum.DataPoints {
+		attrs := extractAttrs(dp)
+		byName[attrs["name"]] = dp.Value
+	}
+	assert.Equal(t, int64(1), byName["first"])
+	assert.Equal(t, int64(1), byName["second"])
+	assert.Equal(t, int64(1), byName["third"])
 }
 
 func TestHookExecutor_HookCount(t *testing.T) {

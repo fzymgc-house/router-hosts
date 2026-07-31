@@ -1,20 +1,20 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.11.0
-milestone_name: K8s-Native Automation
+milestone: v0.12.0
+milestone_name: Hook Reliability & Metrics
 current_phase: 9
-current_phase_name: Hook Reliability & Metrics
-status: planning
-stopped_at: Completed 08-04-PLAN.md (final plan of phase 08)
-last_updated: "2026-07-31T03:32:42.417Z"
-last_activity: 2026-07-30
-last_activity_desc: Phase 8 complete, transitioned to Phase 9
+status: completed
+stopped_at: Completed 09-05-PLAN.md
+last_updated: "2026-07-31T17:24:46.494Z"
+last_activity: 2026-07-31
+last_activity_desc: Phase 9 complete; milestone labels realigned to release boundaries
 progress:
-  total_phases: 3
-  completed_phases: 2
-  total_plans: 11
-  completed_plans: 11
-  percent: 67
+  total_phases: 1
+  completed_phases: 1
+  total_plans: 5
+  completed_plans: 5
+  percent: 100
+current_phase_name: Hook Reliability & Metrics
 ---
 
 # Project State
@@ -24,22 +24,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-26)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Phase 9 — Hook Reliability & Metrics (Phase 8 shipped in PR #381)
+**Current focus:** Milestone v0.12.0 (Phase 9) complete and verified, shipping via PR #389; next milestone is v0.13.0 (Phase 10, Consumer-Rendered Output)
 
 ## Current Position
 
-Phase: 9 — Hook Reliability & Metrics
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-07-30 — Phase 8 complete, transitioned to Phase 9
+Phase: 9 — Hook Reliability & Metrics (complete, unmerged)
+Plan: 5/5 complete
+Status: Phase complete and verified; branch `feat/hook-reliability-metrics` not yet merged to main
+Last activity: 2026-07-31 — Phase 9 complete (verified 24/25 must-haves, code review fixed, `task ci` green)
 
-Progress: [███████░░░] 67%
+Progress: [██████████] 100%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 11 phases shipped pre-GSD (no per-plan timing captured)
+- Total plans completed: 16 phases shipped pre-GSD (no per-plan timing captured)
 - Average duration: n/a (retrospective baseline)
 - Total execution time: n/a
 
@@ -50,6 +50,7 @@ Progress: [███████░░░] 67%
 | 1–6 (shipped) | shipped | - | - |
 | 7 | 6 | - | - |
 | 8 | 5 | - | - |
+| 9 | 5 | - | - |
 
 **Recent Trend:**
 
@@ -72,6 +73,11 @@ Progress: [███████░░░] 67%
 | Phase 08-kubernetes-service-controller P03 | 50min | 3 tasks | 2 files |
 | Phase 08 P05 | ~40min | 3 tasks | 4 files |
 | Phase 08 P04 | 70min | 3 tasks | 2 files |
+| Phase 09 P01 | 3min | 3 tasks | 8 files |
+| Phase 09 P02 | 15min | 2 tasks | 2 files |
+| Phase 09 P03 | 12min | 3 tasks | 4 files |
+| Phase 09 P04 | 6min | 3 tasks | 2 files |
+| Phase 09 P05 | 25min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -104,6 +110,13 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: Both required negative controls for task test:chart's new Service RBAC assertions were run manually (widened services verbs, deleted events rule), each proven to fail loudly, then reverted and re-verified green
 - [Phase ?]: syncService restructured around a switch-computed desired set with no early return, so all four D-17 stop-managing transitions delete through one code path
 - [Phase ?]: addOrAdoptService gates adoption on BOTH existing.Comment == k8s-service:<ns>/<name> AND hasServiceProvenance(tags) — refusing a foreign entry on either half
+- [Phase ?]: HooksConfig.DefaultTimeout field added ahead of Plan 09-02's TOML wiring so serve.go could compile against cfg.Hooks.DefaultTimeout; field carries no resolution/validation logic yet
+- [Phase ?]: executeHook records metrics against the caller's (runner) ctx, not the per-hook hookCtx, since hookCtx may already be Done() at recording time
+- [Phase ?]: resolveTimeouts() is the primary positivity-enforcement point for hook timeouts; validate() negative-checks are a backstop for hand-constructed configs bypassing LoadServerConfig
+- [Phase ?]: Timeout classification checks hookCtx.Err() before the process error; coalesced-run counter carries only {type}, no name attribute
+- [Phase ?]: hookRunner.Trigger records router_hosts_hook_runs_coalesced_total exactly once per superseded request via context.Background(); adds a stopped-flag check closing a latent phantom-coalesce bug on repeated post-Stop triggers
+- [Phase ?]: Phase 9 hook docs (09-05): reverted docs/reference/api.md and docs/reference/cli.md after every task docs:build run — stale generated files unrelated to this plan's scope
+- [Phase ?]: Phase 9 (09-05): checkpoint Task 3 closed on documentation review only; live OTel scrape explicitly deferred, recorded in 09-VALIDATION.md as not-run rather than claimed done
 
 ### Pending Todos
 
@@ -132,6 +145,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-27T21:31:10.542Z
-Stopped at: Completed 08-04-PLAN.md (final plan of phase 08)
+Last session: 2026-07-31T16:19:20.896Z
+Stopped at: Completed 09-05-PLAN.md
 Resume file: None
