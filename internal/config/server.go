@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	// BurntSushi/toml is used instead of go-toml/v2 (referenced in the design
 	// spec) because it exposes MetaData.Undecoded() for strict decoding — i.e.,
@@ -38,6 +39,10 @@ const (
 
 	// LetsEncryptProductionURL is the default ACME directory URL.
 	LetsEncryptProductionURL = "https://acme-v02.api.letsencrypt.org/directory"
+
+	// DefaultHookTimeout is the default maximum duration for a single hook
+	// execution when neither the hook nor [hooks] default_timeout set one.
+	DefaultHookTimeout = 30 * time.Second
 )
 
 // Config is the top-level server configuration, loaded from TOML.
@@ -148,16 +153,25 @@ func (r *RetentionConfig) Validate() error {
 	return nil
 }
 
-// HookDefinition is a named shell command executed on events.
+// HookDefinition is a named shell command executed on events. Timeout is the
+// maximum duration a single execution of this hook is allowed to run; zero
+// means "inherit the resolved default" (see LoadServerConfig and
+// HooksConfig.DefaultTimeout).
 type HookDefinition struct {
-	Name    string `toml:"name"`
-	Command string `toml:"command"`
+	Name    string        `toml:"name"`
+	Command string        `toml:"command"`
+	Timeout time.Duration `toml:"timeout"`
 }
 
 // HooksConfig holds on-success and on-failure hook definitions.
 type HooksConfig struct {
 	OnSuccess []HookDefinition `toml:"on_success"`
 	OnFailure []HookDefinition `toml:"on_failure"`
+	// DefaultTimeout is the server-level fallback timeout applied to any hook
+	// whose own Timeout is unset. Zero means "use config.DefaultHookTimeout".
+	// TOML decoding/resolution of this key lands in Plan 09-02; the field
+	// exists now only so internal/client/commands/serve.go can address it.
+	DefaultTimeout time.Duration `toml:"default_timeout"`
 }
 
 // OTelConfig holds OpenTelemetry exporter settings.
@@ -244,6 +258,19 @@ func LoadServerConfig(path string) (*Config, error) {
 	}
 	if cfg.Retention.MaxAgeDays == 0 {
 		cfg.Retention.MaxAgeDays = DefaultMaxAgeDays
+	}
+
+	// Apply per-hook timeout defaults if zero-valued. Plan 09-02 inserts the
+	// [hooks] default_timeout middle link into this same pass.
+	for i := range cfg.Hooks.OnSuccess {
+		if cfg.Hooks.OnSuccess[i].Timeout == 0 {
+			cfg.Hooks.OnSuccess[i].Timeout = DefaultHookTimeout
+		}
+	}
+	for i := range cfg.Hooks.OnFailure {
+		if cfg.Hooks.OnFailure[i].Timeout == 0 {
+			cfg.Hooks.OnFailure[i].Timeout = DefaultHookTimeout
+		}
 	}
 
 	// Apply ACME defaults
