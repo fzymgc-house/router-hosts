@@ -8,6 +8,7 @@ type HostEntry struct {
 	ID       string
 	IP       string
 	Hostname string
+	Comment  string
 	Aliases  []string
 	Tags     []string
 	Version  string

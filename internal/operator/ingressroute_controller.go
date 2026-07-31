@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -275,8 +276,36 @@ func (r *IngressRouteReconciler) addOrAdopt(ctx context.Context, log *slog.Logge
 		// so the reconcile requeues and retries.
 		return "", oops.Errorf("host %s reported AlreadyExists but was not found for adoption", hostname)
 	}
+	// T-07-02: adopt ONLY an entry this exact object previously created.
+	// FindHost matches on (ip, hostname) alone, which is not proof of ownership:
+	// the server enforces uniqueness on that pair, so the conflicting entry may
+	// belong to a Gateway API route, a HostMapping, or another IngressRoute.
+	// Adopting it would put a foreign ID in this object's host-ids annotation,
+	// after which stale-cleanup and reconcileDelete would DeleteHost it and
+	// destroy another owner's live DNS entry. --default-ingress-ip is shared
+	// across the operator's controllers, so these collisions arise in ordinary
+	// use, not just under attack.
+	//
+	// The comment carries per-object identity ("k8s-ingress:<namespace>/<name>",
+	// prefix-disjoint from "k8s:" and "k8s-gateway:"); the tags carry the
+	// controller. Both are operator-derived here — unlike HostMapping, an
+	// IngressRoute's tags never come from user spec — so both are checked.
+	if existing.Comment != comment || !hasIngressProvenance(existing.Tags) {
+		return "", oops.Errorf(
+			"refusing to adopt host %s (id %s): owned by another object (comment %q tags %v, want comment %q with traefik + ingress)",
+			hostname, existing.ID, existing.Comment, existing.Tags, comment,
+		)
+	}
 	log.Info("adopted existing host entry from IngressRoute", "hostname", hostname, "hostId", existing.ID)
 	return existing.ID, nil
+}
+
+// hasIngressProvenance reports whether tags identify a host entry created by
+// the IngressRoute controller. syncHost stamps every entry it writes with
+// "traefik" and "ingress", so requiring both excludes Gateway route entries
+// ("gateway" + kind) and HostMapping entries (user-supplied Spec.Tags).
+func hasIngressProvenance(tags []string) bool {
+	return slices.Contains(tags, "traefik") && slices.Contains(tags, "ingress")
 }
 
 // reconcileDelete removes all host entries associated with this IngressRoute.
@@ -387,7 +416,7 @@ func appendRegexMatches(dst []string, re *regexp.Regexp, s string) []string {
 // object's annotations. It returns an error if the annotation is present
 // but contains corrupt JSON, preventing callers from proceeding with an
 // incomplete view of existing host IDs.
-func getHostIDsAnnotation(log *slog.Logger, obj *unstructured.Unstructured) (map[string]string, error) {
+func getHostIDsAnnotation(log *slog.Logger, obj client.Object) (map[string]string, error) {
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		return nil, nil
@@ -407,7 +436,7 @@ func getHostIDsAnnotation(log *slog.Logger, obj *unstructured.Unstructured) (map
 
 // setHostIDsAnnotation stores the hostname -> hostID mapping as a JSON
 // annotation on the object.
-func setHostIDsAnnotation(obj *unstructured.Unstructured, ids map[string]string) error {
+func setHostIDsAnnotation(obj client.Object, ids map[string]string) error {
 	if len(ids) == 0 {
 		annotations := obj.GetAnnotations()
 		delete(annotations, hostIDsAnnotation)
@@ -430,9 +459,11 @@ func setHostIDsAnnotation(obj *unstructured.Unstructured, ids map[string]string)
 // ingressHostInSync reports whether a server-side host entry already matches the
 // desired IngressRoute-derived state. Tags are compared order-insensitively
 // (reusing equalStringSetsIgnoreOrder from the hostmapping controller). The
-// comment is excluded — it is operator-derived and not carried on HostEntry —
-// and aliases are excluded because the operator never sets aliases for
-// IngressRoute-derived hosts.
+// comment is excluded — it is operator-derived, so a difference there does not
+// mean the entry is out of sync (HostEntry does carry Comment as of the phase 7
+// adoption-provenance gate; it is deliberately not compared here) — and aliases
+// are excluded because the operator never sets aliases for IngressRoute-derived
+// hosts.
 func ingressHostInSync(entry *HostEntry, ip, hostname string, tags []string) bool {
 	return entry.IP == ip &&
 		entry.Hostname == hostname &&

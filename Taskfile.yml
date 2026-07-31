@@ -19,9 +19,11 @@ tasks:
       - go build -trimpath -ldflags="-s -w" -o bin/router-hosts ./cmd/router-hosts
       - go build -trimpath -ldflags="-s -w" -o bin/operator ./cmd/operator
   test:
-    desc: Run all unit and integration tests
+    desc: Run all unit and integration tests. Pass extra go test args after "--" (e.g. `task test -- -run TestFoo ./internal/operator/`).
+    vars:
+      TEST_ARGS: '{{.CLI_ARGS | default "./..."}}'
     cmds:
-      - go test ./... -race -count=1
+      - go test -race -count=1 {{.TEST_ARGS}}
   test:e2e:
     desc: Run E2E tests with real mTLS (in-process)
     cmds:
@@ -50,6 +52,99 @@ tasks:
           echo "FAIL: Coverage ${COVERAGE}% is below 80% threshold"
           exit 1
         fi
+  test:chart:
+    desc: Verify the operator Helm chart renders correctly (requires helm)
+    cmds:
+      - |
+        set -e
+        command -v helm >/dev/null 2>&1 || { echo "SKIP: helm not installed"; exit 0; }
+        CHART=charts/router-hosts-operator
+        helm lint "$CHART"
+
+        # Gateway API support is opt-in: the flag must be absent by default and
+        # present only under gateway.enabled, so a chart upgrade cannot silently
+        # start writing router DNS entries (threat T-07-17).
+        if helm template "$CHART" | grep -q -- '--enable-gateway'; then
+          echo "FAIL: --enable-gateway rendered with default values" >&2; exit 1
+        fi
+        if ! helm template "$CHART" --set gateway.enabled=true | grep -q -- '--enable-gateway'; then
+          echo "FAIL: --enable-gateway missing when gateway.enabled=true" >&2; exit 1
+        fi
+
+        # RBAC must stay least-privilege: write verbs on the route kinds only,
+        # gateways read-only, and no ClusterRole at all when rbac.create=false
+        # (threats T-07-03, T-07-16).
+        RENDERED=$(helm template "$CHART" --set gateway.enabled=true)
+        echo "$RENDERED" | grep -q 'gateway.networking.k8s.io' \
+          || { echo "FAIL: Gateway API RBAC rules not rendered" >&2; exit 1; }
+        echo "$RENDERED" | grep -qE 'resources: \["gateways"\]' \
+          || { echo "FAIL: gateways rule not rendered" >&2; exit 1; }
+        if echo "$RENDERED" | grep -q 'gateways/status'; then
+          echo "FAIL: gateways/status granted; the operator only reads Gateway status" >&2; exit 1
+        fi
+        if helm template "$CHART" --set gateway.enabled=true --set rbac.create=false | grep -q 'kind: ClusterRole'; then
+          echo "FAIL: ClusterRole rendered despite rbac.create=false" >&2; exit 1
+        fi
+
+        # Kubernetes Service controller support is opt-in the same way Gateway
+        # API is: the flag must be absent by default and present only under
+        # serviceController.enabled, so a chart upgrade cannot silently start
+        # watching Services and writing DNS entries (threat T-08-08). Every
+        # assertion below captures rendered content into a variable and
+        # compares or counts it, rather than resting on grep -q exit status
+        # alone (08-VALIDATION.md Command Discipline) — a stale assertion that
+        # stops matching anything must fail loudly, not exit 0.
+        SVC_DEFAULT_COUNT=$(helm template "$CHART" | grep -c -- '--enable-service' || true)
+        if [ "$SVC_DEFAULT_COUNT" != "0" ]; then
+          echo "FAIL: --enable-service rendered $SVC_DEFAULT_COUNT time(s) with default values, want 0" >&2; exit 1
+        fi
+        SVC_ENABLED_COUNT=$(helm template "$CHART" --set serviceController.enabled=true | grep -c -- '--enable-service' || true)
+        if [ "$SVC_ENABLED_COUNT" != "1" ]; then
+          echo "FAIL: --enable-service rendered $SVC_ENABLED_COUNT time(s) with serviceController.enabled=true, want 1" >&2; exit 1
+        fi
+
+        # services RBAC verbs must be exactly this set, in this order — no
+        # more, no less (threat T-08-05). Exact string comparison, not a
+        # substring grep, so a widened grant (delete, create, *) is a hard
+        # failure rather than something a reviewer must notice.
+        SVC_RENDERED=$(helm template "$CHART" --set serviceController.enabled=true --show-only templates/clusterrole.yaml)
+        EXPECTED_SERVICES_VERBS='    verbs: ["get", "list", "watch", "update", "patch"]'
+        SERVICES_VERBS_LINE=$(echo "$SVC_RENDERED" | awk '/resources: \["services"\]/{f=1; next} f && /verbs:/{print; exit}')
+        if [ "$SERVICES_VERBS_LINE" != "$EXPECTED_SERVICES_VERBS" ]; then
+          echo "FAIL: services verbs line is [$SERVICES_VERBS_LINE], want [$EXPECTED_SERVICES_VERBS]" >&2; exit 1
+        fi
+
+        # Cluster-scoped events rule must exist exactly once with both create
+        # and patch (D-13, threat T-08-04). Checked independently so a missing
+        # verb names itself unambiguously in the failure message rather than
+        # silently disappearing from a live cluster with nobody noticing.
+        EVENTS_RULE_COUNT=$(echo "$SVC_RENDERED" | grep -c 'resources: \["events"\]' || true)
+        if [ "$EVENTS_RULE_COUNT" != "1" ]; then
+          echo "FAIL: events rule rendered $EVENTS_RULE_COUNT time(s), want exactly 1" >&2; exit 1
+        fi
+        EVENTS_VERBS_LINE=$(echo "$SVC_RENDERED" | awk '/resources: \["events"\]/{f=1; next} f && /verbs:/{print; exit}')
+        if ! echo "$EVENTS_VERBS_LINE" | grep -q 'create'; then
+          echo "FAIL: events verbs line [$EVENTS_VERBS_LINE] missing create" >&2; exit 1
+        fi
+        if ! echo "$EVENTS_VERBS_LINE" | grep -q 'patch'; then
+          echo "FAIL: events verbs line [$EVENTS_VERBS_LINE] missing patch" >&2; exit 1
+        fi
+
+        # No Service status subresource: this controller never writes Service
+        # status, Kubernetes Events are the signalling channel instead.
+        SERVICES_STATUS_LINE=$(echo "$SVC_RENDERED" | grep 'resources: \["services/status"\]' || true)
+        if [ -n "$SERVICES_STATUS_LINE" ]; then
+          echo "FAIL: services/status subresource granted: $SERVICES_STATUS_LINE" >&2; exit 1
+        fi
+
+        # rbac.create=false must suppress the ClusterRole even with the
+        # Service controller enabled.
+        SVC_CLUSTERROLE_COUNT=$(helm template "$CHART" --set serviceController.enabled=true --set rbac.create=false | grep -c 'kind: ClusterRole' || true)
+        if [ "$SVC_CLUSTERROLE_COUNT" != "0" ]; then
+          echo "FAIL: ClusterRole rendered $SVC_CLUSTERROLE_COUNT time(s) despite rbac.create=false" >&2; exit 1
+        fi
+
+        echo "Chart verification passed."
   lint:
     desc: Run all linters (Go + protobuf) and verify generated manifests
     cmds:

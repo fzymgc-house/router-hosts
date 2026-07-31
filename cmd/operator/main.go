@@ -8,6 +8,8 @@ import (
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -32,6 +34,8 @@ func run() error {
 		keyPath              string
 		caCertPath           string
 		defaultIngressIP     string
+		enableGateway        bool
+		enableService        bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "Address the metrics endpoint binds to")
@@ -41,7 +45,9 @@ func run() error {
 	flag.StringVar(&certPath, "tls-cert", "", "Path to client TLS certificate for mTLS")
 	flag.StringVar(&keyPath, "tls-key", "", "Path to client TLS private key for mTLS")
 	flag.StringVar(&caCertPath, "tls-ca", "", "Path to CA certificate for server verification")
-	flag.StringVar(&defaultIngressIP, "default-ingress-ip", "", "Default IP for hosts extracted from IngressRoutes")
+	flag.StringVar(&defaultIngressIP, "default-ingress-ip", "", "Default IP for hosts extracted from IngressRoutes and Gateway API routes")
+	flag.BoolVar(&enableGateway, "enable-gateway", false, "Enable Gateway API HTTPRoute/GRPCRoute/TLSRoute controllers")
+	flag.BoolVar(&enableService, "enable-service", false, "Enable the Kubernetes Service controller")
 	flag.Parse()
 
 	// Set up structured slog logging and bridge to controller-runtime's logr.
@@ -61,6 +67,10 @@ func run() error {
 		logger.Error("failed to add operator scheme", "error", err)
 		return err
 	}
+	if err := gatewayv1.Install(scheme); err != nil {
+		logger.Error("failed to add gateway-api scheme", "error", err)
+		return err
+	}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
@@ -77,7 +87,7 @@ func run() error {
 	}
 
 	if defaultIngressIP == "" {
-		logger.Warn("--default-ingress-ip is empty; IngressRoute controller will create hosts with no IP")
+		logger.Warn(defaultIngressIPWarning(enableGateway))
 	}
 
 	// Create gRPC client for communicating with router-hosts server.
@@ -116,6 +126,29 @@ func run() error {
 		return err
 	}
 
+	// Register Gateway API controllers (HTTPRoute/GRPCRoute/TLSRoute), opt-in only.
+	if enableGateway {
+		if err := operator.SetupGatewayControllers(mgr, logger.With("controller", "gateway"),
+			hostClient, defaultIngressIP, []string{"kubernetes"}); err != nil {
+			logger.Error("unable to create Gateway API controllers", "error", err)
+			return err
+		}
+	}
+
+	// Register Service controller, opt-in only (D-03).
+	if enableService {
+		if err := (&operator.ServiceReconciler{
+			Client:      mgr.GetClient(),
+			HostClient:  hostClient,
+			Log:         logger.With("controller", "service"),
+			DefaultTags: []string{"kubernetes"},
+			Recorder:    mgr.GetEventRecorder("service-controller"),
+		}).SetupWithManager(mgr); err != nil {
+			logger.Error("unable to create Service controller", "error", err)
+			return err
+		}
+	}
+
 	// Health probes.
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		logger.Error("unable to set up health check", "error", err)
@@ -126,7 +159,8 @@ func run() error {
 		return err
 	}
 
-	logger.Info("starting operator",
+	logger.Info(
+		"starting operator",
 		"metricsAddr", metricsAddr,
 		"healthProbeAddr", healthProbeAddr,
 		"leaderElection", enableLeaderElection,
@@ -137,4 +171,18 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// defaultIngressIPWarning returns the message logged when
+// --default-ingress-ip is empty, naming only the controllers actually
+// registered (WR-01). The Gateway API controllers are opt-in via
+// --enable-gateway; naming them in the warning when that flag is unset
+// (the default) misleads an operator running only the IngressRoute
+// controller, who never enabled Gateway API support, into thinking the
+// warning references a feature they turned on.
+func defaultIngressIPWarning(enableGateway bool) string {
+	if enableGateway {
+		return "--default-ingress-ip is empty; IngressRoute and Gateway API controllers will create hosts with no IP"
+	}
+	return "--default-ingress-ip is empty; IngressRoute controller will create hosts with no IP"
 }

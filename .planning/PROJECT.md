@@ -28,13 +28,13 @@ Shipped and running in the Go codebase at v0.10.13.
 - ✓ OpenTelemetry metrics + trace-context propagation — Phase 4
 - ✓ Split-horizon DNS output: dnsmasq + unbound (ECH/AAAA-leak-free per-name `static` zones) — Phase 5
 - ✓ Operator-driven aggregate compaction (manual CompactAggregates RPC + gauges) — Phase 6
+- ✓ Gateway API support: operator reconciles HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS, IPs resolved from the parent Gateway's `status.addresses`, opt-in via `--enable-gateway` — Validated in Phase 7: Gateway API Support (GW-01, GW-02, GW-03)
+- ✓ Kubernetes Service controller: annotated LoadBalancer/NodePort Services register their hostnames, IPs resolved from `status.loadBalancer.ingress[]` or the `ip-address` annotation, opt-in via `--enable-service` — Validated in Phase 8: Kubernetes Service Controller (SVC-01, SVC-02). **Not yet deployed** — see the rollout note under Context.
 
 ### Active
 
 Open forward work toward the north star. Building toward these.
 
-- [ ] Gateway API support: operator reconciles HTTPRoute/GRPCRoute/TLSRoute hostnames (Phase 7)
-- [ ] Kubernetes Service controller: DNS entries for LoadBalancer/NodePort Services (Phase 8)
 - [ ] Hook reliability: emit hook execution metrics + configurable timeout/concurrency (Phase 9)
 
 ### Out of Scope
@@ -49,7 +49,7 @@ Open forward work toward the north star. Building toward these.
 
 - **Stack transition (history):** The system was originally implemented in Rust (crates, kube-rs, instant-acme). The 2026-02-22 Go migration superseded that stack; the current codebase is Go 1.26, SQLite-only via `zombiezen.com/go/sqlite` (no CGo), with a Go `cmd/operator`. Rust-era design/plan docs (sqlite-default-\*, acme-pebble-testing, operator-impl, service-controller-impl) are historical intent, not current architecture.
 - **Requirements provenance:** No PRDs exist. Requirements are reconstructed from 10 SPEC design docs and inferred from the mapped Go codebase, gated by four locked ADRs.
-- **Operator reality (v0.10.13):** Only HostMapping and IngressRoute controllers are registered; only the HostMapping CRD ships. Service controller (designed in the Rust era, never ported) and Gateway API support (design status: Draft) are the concrete north-star gaps.
+- **Operator reality (after Phase 7):** Three controller families are registered — HostMapping, IngressRoute/IngressRouteTCP, and Gateway API routes (one `GatewayRouteReconciler` per kind for HTTPRoute/GRPCRoute/TLSRoute, sharing one `syncRoute` core and the single `router-hosts.fzymgc.house/gateway-cleanup` finalizer). Only the HostMapping CRD ships; Gateway API CRDs are a documented cluster prerequisite the chart deliberately does not bundle, and each kind is gated on RESTMapper presence so absent CRDs skip cleanly instead of crash-looping the manager. The Service controller (designed in the Rust era, never ported) is now the remaining concrete north-star gap.
 - **Known refinement areas** (from codebase concerns): oversized `service.go`/`commands.go`; in-tree Rust-era `legacy_migration.go`; pre-release protobuf pseudo-version pin.
 
 ## Constraints
@@ -100,4 +100,4 @@ Deliver only a manual `CompactAggregates` gRPC RPC + CLI and two aggregate-level
 
 ---
 
-*Last updated: 2026-07-07 after ingest-driven project bootstrap (retrospective + forward)*
+*Last updated: 2026-07-26 — Phase 7 complete (Gateway API Support); GW-01/GW-02/GW-03 validated*

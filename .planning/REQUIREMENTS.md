@@ -45,14 +45,14 @@
 
 ### Gateway API Support (Phase 7, active)
 
-- [ ] **GW-01**: Operator reconciles Gateway API HTTPRoute / GRPCRoute / TLSRoute hostnames into router DNS entries
-- [ ] **GW-02**: Operator resolves route IPs from the parent Gateway's `status.addresses`
-- [ ] **GW-03**: Helm chart and RBAC grant the operator watch/list access to Gateway API route resources
+- [x] **GW-01**: Operator reconciles Gateway API HTTPRoute / GRPCRoute / TLSRoute hostnames into router DNS entries
+- [x] **GW-02**: Operator resolves route IPs from the parent Gateway's `status.addresses`
+- [x] **GW-03**: Helm chart and RBAC grant the operator watch/list access to Gateway API route resources
 
 ### Kubernetes Service Controller (Phase 8, active)
 
-- [ ] **SVC-01**: Operator creates router DNS entries for LoadBalancer and NodePort Services from configured annotations
-- [ ] **SVC-02**: Operator resolves Service IPs and removes entries when the Service is deleted
+- [x] **SVC-01**: Operator creates router DNS entries for LoadBalancer and NodePort Services from configured annotations
+- [x] **SVC-02**: Operator resolves Service IPs and removes entries when the Service is deleted
 
 ### Hook Reliability & Metrics (Phase 9, active)
 
@@ -116,11 +116,11 @@ Acknowledged but deferred; not in the current roadmap.
 | DNSOUT-02 | Phase 5 | Complete |
 | COMP-01 | Phase 6 | Complete |
 | COMP-02 | Phase 6 | Complete |
-| GW-01 | Phase 7 | Pending |
-| GW-02 | Phase 7 | Pending |
-| GW-03 | Phase 7 | Pending |
-| SVC-01 | Phase 8 | Pending |
-| SVC-02 | Phase 8 | Pending |
+| GW-01 | Phase 7 | Complete |
+| GW-02 | Phase 7 | Complete |
+| GW-03 | Phase 7 | Complete |
+| SVC-01 | Phase 8 | Complete |
+| SVC-02 | Phase 8 | Complete |
 | HOOK-01 | Phase 9 | Pending |
 | HOOK-02 | Phase 9 | Pending |
 | TMPL-01 | Phase 10 | Pending |

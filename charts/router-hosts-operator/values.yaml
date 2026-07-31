@@ -44,6 +44,34 @@ rbac:
   # Specifies whether RBAC resources should be created
   create: true
 
+# Gateway API support (HTTPRoute/GRPCRoute/TLSRoute controllers).
+# When enabled, the operator additionally watches Gateway API route resources
+# and syncs their hostnames the same way it syncs Traefik IngressRoutes. A
+# controller is only started for a route kind whose CRD is actually installed
+# in the cluster at gateway.networking.k8s.io/v1 — enabling this value on a
+# cluster with only some route kinds installed is safe.
+# The Gateway API CRDs themselves are a cluster prerequisite this chart does
+# not bundle; install them separately before enabling this value.
+gateway:
+  enabled: false
+
+# Kubernetes v1/Service controller support. When enabled, the operator
+# additionally watches Services and syncs annotated LoadBalancer/NodePort
+# Services the same way it syncs Traefik IngressRoutes (per-Service opt-in via
+# the router-hosts.fzymgc.house/enabled annotation — this value alone does not
+# register any Service).
+# Deliberately NOT named `service:` — that key is the near-universal Helm
+# convention for a chart's own Service resource, and claiming it here would
+# permanently block ever adding a real Service to this chart. This is an
+# intentional asymmetry with the gateway.enabled key above; see the chart
+# README for the rationale.
+# NOTE: the operator's shared informer caches every Service in the cluster
+# once this is enabled, regardless of the per-object opt-in annotation — a
+# cache selector can filter on a label but not on an annotation. See the
+# README for the memory-footprint tradeoff.
+serviceController:
+  enabled: false
+
 # Pod annotations
 podAnnotations: {}
 
@@ -63,12 +91,12 @@ securityContext:
 
 # Resource limits and requests
 resources: {}
-  # limits:
-  #   cpu: 200m
-  #   memory: 256Mi
-  # requests:
-  #   cpu: 100m
-  #   memory: 128Mi
+# limits:
+#   cpu: 200m
+#   memory: 256Mi
+# requests:
+#   cpu: 100m
+#   memory: 128Mi
 
 # Node selector
 nodeSelector: {}
@@ -111,7 +139,8 @@ routerHosts:
   # gRPC server address (--server-address), host:port
   serverAddress: router.lan:50051
 
-  # Default IP assigned to hosts extracted from IngressRoutes
+  # Default IP assigned to hosts extracted from IngressRoutes and, when
+  # gateway.enabled is true, Gateway API routes with no parent Gateway address
   # (--default-ingress-ip). Required for the IngressRoute controller to create
   # usable entries; leave empty only if you exclusively use HostMappings.
   defaultIngressIP: ""

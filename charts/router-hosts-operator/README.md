@@ -13,6 +13,9 @@ command-line flags (there is no `RouterHostsConfig` CRD).
 - Helm 3.0+
 - router-hosts server with mTLS enabled
 - Traefik CRDs installed (for `IngressRoute`/`IngressRouteTCP` syncing)
+- Gateway API CRDs (`gateway.networking.k8s.io`) installed in the cluster —
+  required only when `gateway.enabled` is `true`. This chart does **not**
+  bundle these CRDs; install them separately before enabling the value.
 
 ## Installation
 
@@ -113,11 +116,27 @@ helm install router-hosts-operator charts/router-hosts-operator \
 | `healthCheck.startupProbe.*` | Startup probe timing settings | See values.yaml |
 | `serviceAccount.create` | Create ServiceAccount | `true` |
 | `rbac.create` | Create RBAC resources | `true` |
+| `gateway.enabled` | Enable the HTTPRoute/GRPCRoute/TLSRoute controllers (`--enable-gateway`) | `false` |
+| `serviceController.enabled` | Enable the Kubernetes Service controller (`--enable-service`) | `false` |
+
+A controller is started only for a route kind whose CRD is actually installed
+in the cluster at `gateway.networking.k8s.io/v1`; enabling `gateway.enabled`
+on a cluster with only some route kinds installed is safe.
+
+The Service controller's values key is deliberately `serviceController`, not
+the bare `service` key. `service:` is a near-universal Helm convention
+reserved for a chart's own Service resource, and claiming it here would
+permanently block ever adding one to this chart. This asymmetry with
+`gateway.enabled` above is intentional, not an oversight.
 
 > Tagging is fixed in the binary and not configurable via this chart:
 > IngressRoute-derived hosts get `kubernetes`, `traefik`, and `ingress`;
-> `HostMapping` entries get only the `tags` from their spec. The log level
-> (`info`, JSON) is also fixed.
+> Gateway-derived hosts get `kubernetes`, `gateway`, and the lowercase kind
+> name (`httproute`, `grpcroute`, or `tlsroute`), with a
+> `k8s-gateway:<namespace>/<name>` provenance comment; Service-derived hosts
+> get `kubernetes` and `service`, with a `k8s-service:<namespace>/<name>`
+> provenance comment; `HostMapping` entries get only the `tags` from their
+> spec. The log level (`info`, JSON) is also fixed.
 
 ### Health Check Endpoints
 
@@ -136,8 +155,22 @@ controllers actually use:
 - **IngressRoutes / IngressRouteTCP** (`traefik.io/v1alpha1`): get, list, watch,
   update, patch — the controller writes a finalizer and the host-id annotation
   back to the object.
+- **HTTPRoutes / GRPCRoutes / TLSRoutes** (`gateway.networking.k8s.io/v1`):
+  get, list, watch, update, patch — the controller writes the same cleanup
+  finalizer and a host-ids annotation back to the route object.
+- **Gateways** (`gateway.networking.k8s.io/v1`): get, list, watch only — the
+  operator only reads `status.addresses` to resolve an IP and never writes a
+  Gateway.
 - **HostMappings** (`router-hosts.fzymgc.house/v1alpha1`): get, list, watch,
   update, patch, plus the `status` and `finalizers` subresources.
+- **Services** (`""`): get, list, watch, update, patch — the controller writes
+  the cleanup finalizer and the host-ids annotation back to the Service. No
+  `delete`, and no Service status subresource.
+- **Events** (`""`): create, patch, cluster-wide — the controller reports
+  configuration problems on the Service itself so its owner can see them with
+  `kubectl describe service`. This also fixes `HostMapping`'s event reporting
+  outside the operator's own namespace, which previously only had the
+  namespace-scoped leader-election grant below.
 
 When leader election is enabled (including auto-enabled for `replicaCount >= 2`),
 a namespaced Role additionally grants:
@@ -185,6 +218,124 @@ spec:
         - name: myapp
           port: 80
 ```
+
+### Sync Gateway API Routes
+
+With `gateway.enabled: true` and the Gateway API CRDs installed, the operator
+watches `HTTPRoute`, `GRPCRoute`, and `TLSRoute` resources and creates a host
+entry for each hostname in `spec.hostnames`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: myapp
+  namespace: default
+spec:
+  parentRefs:
+    - name: my-gateway
+  hostnames:
+    - myapp.example.com
+  rules:
+    - backendRefs:
+        - name: myapp
+          port: 80
+```
+
+Behavioral notes:
+
+- **IP resolution**: the entry IP comes from the first `IPAddress`-typed
+  address of the first parent Gateway (in `parentRefs` declaration order) that
+  has one. `Hostname`-typed addresses are skipped.
+- **Fallback**: `routerHosts.defaultIngressIP` is used when no parent Gateway
+  supplies an address. With no fallback configured, the route is requeued and
+  retried rather than given an IP-less entry.
+- **Wildcard hostnames** (`*.example.com`) are skipped — they cannot become a
+  concrete DNS entry.
+
+### Sync Kubernetes Services
+
+With `serviceController.enabled: true`, the operator additionally watches
+`v1/Service` resources and creates a host entry for each `LoadBalancer` or
+`NodePort` Service that explicitly opts in via annotation:
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp
+  namespace: default
+  annotations:
+    router-hosts.fzymgc.house/enabled: "true"
+    router-hosts.fzymgc.house/hostname: myapp.example.com
+    router-hosts.fzymgc.house/aliases: myapp.local,myapp-internal.example.com
+spec:
+  type: LoadBalancer
+  selector:
+    app: myapp
+  ports:
+    - port: 443
+```
+
+There are two independent gates, and neither substitutes for the other: the
+chart-level `serviceController.enabled: true` toggle, and the per-Service
+`router-hosts.fzymgc.house/enabled: "true"` annotation. A Service without the
+annotation is never touched, even with the controller enabled cluster-wide.
+
+**Annotation reference:**
+
+| Annotation | Required | Purpose |
+|------------|----------|---------|
+| `router-hosts.fzymgc.house/enabled` | Yes | `"true"` to opt this Service in. |
+| `router-hosts.fzymgc.house/hostname` | Yes | The single hostname to register. A Service has no hostname in its spec, so this is always explicit. |
+| `router-hosts.fzymgc.house/aliases` | No | Comma-separated aliases, mapped to the host entry's native `Aliases` field. Invalid aliases are dropped with a warning, never fatal. Capped at 50 aliases per entry; exceeding the cap produces an `InvalidConfiguration` warning Event and freezes the entry rather than truncating it. |
+| `router-hosts.fzymgc.house/ip-address` | Required for `NodePort`; optional override for `LoadBalancer` | The IP to publish. |
+
+**Supported types**: only `LoadBalancer` and `NodePort`. `ClusterIP`,
+`ExternalName`, and headless Services are unsupported — annotating one
+produces an `InvalidServiceType` warning Event and no entry.
+
+**IP resolution**: for `LoadBalancer`, the first
+`status.loadBalancer.ingress[]` entry with a non-empty `ip`, in declaration
+order; entries carrying only a `hostname` (AWS ELB style) are skipped,
+because a CNAME target is not a host entry IP. While no IP is available the
+Service is retried and no IP-less entry is ever created. For `NodePort` the
+IP comes only from the `ip-address` annotation, because a NodePort is
+exposed on every node and which address to publish is topology-dependent.
+The `ip-address` annotation overrides `LoadBalancer` status when both are
+present.
+
+**No default fallback**: `routerHosts.defaultIngressIP` is **not** used for
+Service-derived entries, unlike IngressRoute- and Gateway-derived ones. A
+Service's IP is knowable from the object itself, so a default would be a
+guess rather than a fallback — and sharing that IP across controllers is
+what makes cross-controller hostname collisions routine.
+
+**Events**: a Service owner may see five reasons via
+`kubectl describe service`: `InvalidServiceType`, `MissingHostname`,
+`MissingIPAddress`, and `InvalidConfiguration` (all `Warning`), and
+`PendingLoadBalancer` (`Normal`, while an IP is still provisioning).
+`InvalidConfiguration` fires when the `ip-address` annotation is present but
+fails IP validation, or when `aliases` exceeds the 50-alias-per-entry cap —
+distinct from `MissingIPAddress`/absent annotations, so a typo is never
+indistinguishable from an omission. Success is logged by the operator
+rather than evented, to keep the event stream usable.
+
+**Cleanup**: the operator adds a
+`router-hosts.fzymgc.house/service-cleanup` finalizer and removes the DNS
+entry when the Service is deleted, when it is opted out (`enabled`
+annotation removed or set to a non-`"true"` value), when its type changes to
+an unsupported one, or when its hostname annotation changes.
+
+**Cache footprint**: once enabled, the operator's shared informer caches
+every Service in the cluster, not only the annotated ones — a cache
+selector can filter on a label but not on an annotation. This is fine at
+homelab and small-cluster scale; a label-based opt-in is the change to make
+if the operator ever runs against a cluster with thousands of Services.
+
+**Not supported in this release**: multi-IP / dual-stack (AAAA) entries,
+hostname-typed `LoadBalancer` ingress, deletion grace periods, and a
+user-supplied tags annotation.
 
 ### Create Explicit Host Mappings
 
@@ -248,6 +399,12 @@ kubectl describe hostmapping <name> -n <namespace>
 - **IngressRoute hosts created with no IP**: set `routerHosts.defaultIngressIP`.
 - **`forbidden` errors in logs**: ensure `rbac.create: true` (or that equivalent
   RBAC exists) so the controllers can write finalizers/annotations.
+- **Gateway API routes not producing entries**: check, in order, whether
+  `gateway.enabled` is `false`; whether the route kind's CRD is not installed
+  at `gateway.networking.k8s.io/v1` (the operator only starts a controller for
+  kinds whose CRD is present); or whether neither a parent Gateway address nor
+  `routerHosts.defaultIngressIP` yields an IP. The operator's startup log lines
+  name each skipped route kind and the required apiVersion.
 
 ## Development
 

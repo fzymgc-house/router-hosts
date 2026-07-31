@@ -47,7 +47,9 @@ pre-commit:
       stage_fixed: true
     check-yaml:
       glob: "*.{yaml,yml}"
-      exclude: "charts/.*templates/.*|mkdocs\\.yml"
+      exclude:
+        - "charts/**/templates/**"
+        - "mkdocs.yml"
       run: yamlfmt -lint {staged_files}
 commit-msg:
   commands:
