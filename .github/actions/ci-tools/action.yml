@@ -5,7 +5,7 @@ runs:
   using: 'composite'
   steps:
     - name: Install Task
-      uses: arduino/setup-task@v2
+      uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
 
     - name: Install cargo-nextest
       uses: taiki-e/install-action@6a1bd70eaac3c8bdf093356838d7ee09fda951cf # v2
