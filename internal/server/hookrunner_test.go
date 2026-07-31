@@ -491,6 +491,44 @@ func TestHookRunner_StopIsIdempotent(t *testing.T) {
 	})
 }
 
+// WR-01 regression: Stop on a runner whose Start was never called must
+// return promptly and honor ctx's deadline, not block forever on <-r.done
+// (there is no loop() goroutine to ever close it). Uses a short deadline as
+// a liveness bound proving Stop returns, not as a timing-equality
+// assertion — the outer watchdog is the actual failure signal.
+func TestHookRunner_StopBeforeStartReturnsPromptly(t *testing.T) {
+	hooks := NewHookExecutor(nil, nil, 5*time.Second, slog.Default())
+	// Start deliberately never called.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	stopReturned := make(chan struct{})
+	go func() {
+		hooks.Stop(ctx)
+		close(stopReturned)
+	}()
+
+	select {
+	case <-stopReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop before Start did not return — it ignored ctx's deadline and blocked forever")
+	}
+}
+
+// WR-02 regression: calling Start twice must not launch a second loop()
+// goroutine that races the first to close r.done — the second Start call is
+// a no-op, and the subsequent Stop must not panic.
+func TestHookRunner_StartIsIdempotent(t *testing.T) {
+	hooks := NewHookExecutor(nil, nil, 5*time.Second, slog.Default())
+
+	require.NotPanics(t, func() {
+		hooks.Start()
+		hooks.Start() // second call — must be a no-op, not a second loop() goroutine
+		hooks.Stop(context.Background())
+	})
+}
+
 // router-hosts HOOK-02: three hooks in one batch execute and record output
 // in declaration order — through the runner's detached background loop, not
 // just via a direct RunSuccess call.

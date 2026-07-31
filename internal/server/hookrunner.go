@@ -24,6 +24,7 @@ type hookRunner struct {
 
 	mu      sync.Mutex
 	pending *hookRunRequest
+	started bool
 	stopped bool
 
 	trigger chan struct{}
@@ -49,8 +50,19 @@ func newHookRunner(exec *HookExecutor, logger *slog.Logger) *hookRunner {
 	}
 }
 
-// Start launches the processing goroutine.
+// Start launches the processing goroutine. Safe to call more than once —
+// only the first call launches loop(); later calls are a no-op. Without this
+// guard, a second call would launch a second loop() goroutine; both would
+// observe the same r.quit close and each run its own deferred close(r.done),
+// and the second close on the already-closed channel would panic (WR-02).
 func (r *hookRunner) Start() {
+	r.mu.Lock()
+	if r.started {
+		r.mu.Unlock()
+		return
+	}
+	r.started = true
+	r.mu.Unlock()
 	go r.loop()
 }
 
@@ -88,9 +100,18 @@ func (r *hookRunner) Trigger(req hookRunRequest) {
 // waits for the goroutine to fully exit, up to ctx's deadline; if the
 // deadline fires first, it cancels the runner's base context (killing any
 // still-running hook subprocess) and then waits for exit. Safe to call more
-// than once.
+// than once. If Start was never called, there is no loop() goroutine to
+// close r.done, so Stop returns immediately instead of blocking forever on
+// <-r.done (WR-01) — this always honors ctx's deadline, trivially, since it
+// never needs to wait on it.
 func (r *hookRunner) Stop(ctx context.Context) {
 	r.mu.Lock()
+	if !r.started {
+		r.stopped = true
+		r.mu.Unlock()
+		r.cancel()
+		return
+	}
 	if !r.stopped {
 		r.stopped = true
 		close(r.quit)
