@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/fzymgc-house/router-hosts/compare/v0.10.13...v0.11.0) (2026-07-31)
+
+
+### Features
+
+* **operator:** record Phase 7/8 work and release as 0.11.0 ([#382](https://github.com/fzymgc-house/router-hosts/issues/382)) ([74e2c88](https://github.com/fzymgc-house/router-hosts/commit/74e2c886f80b744b885dddb851dd3c67319f5f4c))
+
+
+### Documentation
+
+* add GSD-aligned issue/PR templates and enable claude_orchestration ([#362](https://github.com/fzymgc-house/router-hosts/issues/362)) ([89ad990](https://github.com/fzymgc-house/router-hosts/commit/89ad99092749dcaefd8789e5e0324973480ae535))
+* align CLAUDE.md with GSD workflow ([#360](https://github.com/fzymgc-house/router-hosts/issues/360)) ([1ff2f16](https://github.com/fzymgc-house/router-hosts/commit/1ff2f1673ba26f230f13f20500185135e0507c9d))
+* bootstrap .planning/ from ingested docs ([#357](https://github.com/fzymgc-house/router-hosts/issues/357)) ([672cdab](https://github.com/fzymgc-house/router-hosts/commit/672cdab80d75b85b19546b060cebdcc9b4ca05ad))
+* fold [#38](https://github.com/fzymgc-house/router-hosts/issues/38) into phase 10 as TMPL-07 ([#368](https://github.com/fzymgc-house/router-hosts/issues/368)) ([bd3d368](https://github.com/fzymgc-house/router-hosts/commit/bd3d368ac21d0e6a0e6a63fc0ff2af2c2a1f50df))
+* record inbox triage and phase 10 approval ([#366](https://github.com/fzymgc-house/router-hosts/issues/366)) ([5f32b5e](https://github.com/fzymgc-house/router-hosts/commit/5f32b5ec7a4b195ea210e1d7b5624be2ec984f60))
+
+
+### Build System
+
+* **deps:** bump x/text and Go toolchain to fix govulncheck ([#363](https://github.com/fzymgc-house/router-hosts/issues/363)) ([b5b1152](https://github.com/fzymgc-house/router-hosts/commit/b5b11527cf8889542bf12cc9b3c5db65b43e3a9b))
+* **deps:** update all non-major dependencies ([#378](https://github.com/fzymgc-house/router-hosts/issues/378)) ([ffb6a41](https://github.com/fzymgc-house/router-hosts/commit/ffb6a413d9c0c0387be9a8feb3e4887a5acb8f66))
+* **deps:** update all non-major dependencies ([#379](https://github.com/fzymgc-house/router-hosts/issues/379)) ([3ef50ea](https://github.com/fzymgc-house/router-hosts/commit/3ef50ea159cf501a576716ef05a34db28537c757))
+* **deps:** update gcr.io/distroless/static:nonroot docker digest to f7f8f72 ([#369](https://github.com/fzymgc-house/router-hosts/issues/369)) ([df110d2](https://github.com/fzymgc-house/router-hosts/commit/df110d27b1f18168e9b402c14b4b459f92eec5ff))
+* **deps:** update ghcr.io/fzymgc-house/router-hosts:latest docker digest to 97ed468 ([#370](https://github.com/fzymgc-house/router-hosts/issues/370)) ([2bedbd6](https://github.com/fzymgc-house/router-hosts/commit/2bedbd625cf33ea4bb84f5fd1722b061e2cc7d27))
+* **deps:** update github action actions/checkout to d23441a ([#371](https://github.com/fzymgc-house/router-hosts/issues/371)) ([cb0e370](https://github.com/fzymgc-house/router-hosts/commit/cb0e3709144b1c46270edef2f93e28a73d722589))
+* **deps:** update github action actions/checkout to v7 ([#380](https://github.com/fzymgc-house/router-hosts/issues/380)) ([5268951](https://github.com/fzymgc-house/router-hosts/commit/5268951a415792de74818a5f15a979593a8d12e4))
+* **deps:** update github action actions/setup-go to 924ae3a ([#372](https://github.com/fzymgc-house/router-hosts/issues/372)) ([404a8c5](https://github.com/fzymgc-house/router-hosts/commit/404a8c517ee03b6931ef22ecfa3397f0fde19a3d))
+* **deps:** update github action docker/login-action to 371161b ([#373](https://github.com/fzymgc-house/router-hosts/issues/373)) ([6303324](https://github.com/fzymgc-house/router-hosts/commit/6303324fe055cb75c37cdf8b2e18ff98b52a227a))
+* **deps:** update github action dtolnay/rust-toolchain to 4cda84d ([#374](https://github.com/fzymgc-house/router-hosts/issues/374)) ([35ffbb6](https://github.com/fzymgc-house/router-hosts/commit/35ffbb61d2ae725ae3e308ed9ffd547131a8675f))
+* **deps:** update github action namespacelabs/nscloud-cache-action to c5f8dab ([#375](https://github.com/fzymgc-house/router-hosts/issues/375)) ([41cd14a](https://github.com/fzymgc-house/router-hosts/commit/41cd14a14a58df511445148b0499e9bdb46280e5))
+* **deps:** update github action taiki-e/install-action to 18b1216 ([#376](https://github.com/fzymgc-house/router-hosts/issues/376)) ([c931748](https://github.com/fzymgc-house/router-hosts/commit/c931748a3d06900bb39f0a9397ef849c03117947))
+* **deps:** update golang:1.26-alpine docker digest to 0178a64 ([#377](https://github.com/fzymgc-house/router-hosts/issues/377)) ([f61f7ac](https://github.com/fzymgc-house/router-hosts/commit/f61f7ac1f34a2b096077bb8db062712c02addab4))
+* **deps:** update module google.golang.org/grpc to v1.82.1 [security] ([#361](https://github.com/fzymgc-house/router-hosts/issues/361)) ([cf87312](https://github.com/fzymgc-house/router-hosts/commit/cf87312ee75a0bd24c083d7f997a5940ce3b49cc))
+
 ## [0.10.13](https://github.com/fzymgc-house/router-hosts/compare/v0.10.12...v0.10.13) (2026-07-08)
 
 
