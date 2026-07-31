@@ -1,10 +1,19 @@
 ---
 phase: 08-kubernetes-service-controller
 verified: 2026-07-27T22:05:00Z
-status: human_needed
+status: passed
 score: 2/2 must-haves verified
 behavior_unverified: 0
-overrides_applied: 0
+overrides_applied: 1
+overrides:
+  - item: "D11 — operator ServiceAccount can create Kubernetes Events in a live cluster"
+    original_status: human_needed
+    overridden_by: user
+    date: 2026-07-30
+    measured_result: "FAILS as of 2026-07-30 — `kubectl auth can-i create events --as=system:serviceaccount:router-hosts-operator:router-hosts-operator` returns `no`; the deployed ClusterRole (chart 0.10.11) contains zero `events` rules and zero `services` rules."
+    rationale: "Circular gate, resolved in the correct order. D11 measures a DEPLOYMENT, not the code. The mitigation exists in the chart artifact and is regression-gated in `task test:chart`, but it cannot become effective until the chart ships — and the chart cannot ship until this PR merges. Overriding unblocks the merge; the item is then closed honestly by re-running /gsd-verify-work 8 against the deployed chart."
+    residual_risk: "T-08-04 remains LIVE IN PRODUCTION until v0.11.0 is released and the ArgoCD pin is bumped from 0.10.11. HostMapping Events have been silently dropped since 2025-12-31. Tracked in 08-SECURITY.md § Deployment Caveat."
+    closes_when: "Post-deploy: `kubectl auth can-i create events --as=<operator-sa>` returns `yes`, then re-run /gsd-verify-work 8."
 human_verification:
   - test: "Confirm the operator ServiceAccount can actually create/patch Kubernetes Events in a live cluster (D-13)"
     expected: "`kubectl auth can-i create events --as=system:serviceaccount:<ns>:<operator-sa>` returns `yes`; annotating a ClusterIP Service with `router-hosts.fzymgc.house/enabled: \"true\"` and `.../hostname` produces an `InvalidServiceType` Warning event visible via `kubectl describe svc`"
