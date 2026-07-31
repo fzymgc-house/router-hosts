@@ -1,3 +1,19 @@
+// BACKSTOP (T-09-02 finish-instant edge, 09-VALIDATION.md §Determinism
+// Contract, 09-04-PLAN.md must_haves): a Trigger arriving at the exact
+// instant a batch finishes must either start a new batch or increment the
+// coalesced counter — it must never vanish. The conservation law is
+// asserted deterministically by TestHookRunner_CoalescesSupersededRuns and
+// sampled under the race detector by TestHookRunner_ConcurrentTriggersConserve.
+// The precise interleaving at the finish instant itself — Trigger's
+// mutex-guarded pending-overwrite racing runPending's mutex-guarded
+// pending-take at the exact moment a batch returns — is not reproducible on
+// demand. It is covered by argument (the shared mutex totally orders the two
+// operations: either the Trigger's request becomes the next pending batch,
+// or runPending has already cleared pending and the Trigger starts a fresh
+// one; there is no interleaving in which the request is dropped by neither
+// path) rather than by a targeted test. This is a known, intentional
+// verification limit, not an untested behavior.
+
 package server
 
 import (
@@ -473,4 +489,80 @@ func TestHookRunner_StopIsIdempotent(t *testing.T) {
 		hooks.Stop(context.Background())
 		hooks.Stop(context.Background())
 	})
+}
+
+// router-hosts HOOK-02: three hooks in one batch execute and record output
+// in declaration order — through the runner's detached background loop, not
+// just via a direct RunSuccess call.
+func TestHookRunner_BatchOrderIsDeclarationOrder(t *testing.T) {
+	dir := t.TempDir()
+	orderLog := filepath.Join(dir, "order.log")
+
+	appendNameHook := func(name string) config.HookDefinition {
+		return config.HookDefinition{
+			Name:    name,
+			Command: fmt.Sprintf(`echo %q >> %q`, name, orderLog),
+		}
+	}
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{
+			appendNameHook("first"),
+			appendNameHook("second"),
+			appendNameHook("third"),
+		},
+		nil,
+		5*time.Second,
+		slog.Default(),
+	)
+	hooks.Start()
+
+	hooks.TriggerSuccess(1)
+	hooks.Stop(context.Background())
+
+	logBytes, err := os.ReadFile(orderLog)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+	assert.Equal(t, []string{"first", "second", "third"}, lines,
+		"detachment to a background goroutine must not reorder in-batch hook execution")
+}
+
+// router-hosts HOOK-02 (T-09-02): the across-batch ordering contract stated
+// as an ordering property rather than a count — a superseded request's
+// payload never appears in the runs-log at any position, not merely "never
+// after" the superseding request's payload.
+func TestHookRunner_SupersededNeverRunsAfterSuperseder(t *testing.T) {
+	dir := t.TempDir()
+	runsLog := filepath.Join(dir, "runs.log")
+	started := filepath.Join(dir, "started")
+	unblock := filepath.Join(dir, "unblock")
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{blockingRunsLogHook("ordering", runsLog, started, unblock)},
+		nil,
+		5*time.Second,
+		slog.Default(),
+	)
+	hooks.Start()
+
+	hooks.TriggerSuccess(1) // A — starts immediately, in flight
+	waitForFile(t, started)
+
+	hooks.TriggerSuccess(2) // B — pending, not yet superseded
+	hooks.TriggerSuccess(3) // C — supersedes B; B must never execute at any position
+
+	f, err := os.Create(unblock)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	hooks.Stop(context.Background())
+
+	logBytes, err := os.ReadFile(runsLog)
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+
+	assert.NotContains(t, lines, "2", "a superseded request's payload must never appear in the runs-log at any position")
+	require.Len(t, lines, 2)
+	assert.Equal(t, "1", lines[0], "the batch already in flight when the supersede happened must run first")
+	assert.Equal(t, "3", lines[1], "the superseding request must run — and never before the in-flight batch it did not supersede")
 }
