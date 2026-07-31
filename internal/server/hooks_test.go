@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
 )
@@ -66,6 +67,83 @@ func TestHookExecutor_Timeout(t *testing.T) {
 
 	// Should complete without panic; failure is logged internally.
 	executor.RunSuccess(context.Background(), 0)
+}
+
+// router-hosts HOOK-01 / T-09-10: a hook killed by its own deadline must
+// record status="timeout", never status="failure" — os/exec surfaces a
+// deadline kill as an ordinary *exec.ExitError, so the classifier must
+// inspect hookCtx.Err() before the process error (RESEARCH.md Pitfall 3).
+func TestHookExecutor_RecordsTimeoutStatus(t *testing.T) {
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "slow-hook", Command: "sleep 10"}},
+		nil,
+		100*time.Millisecond,
+		slog.Default(),
+		WithMetrics(m),
+	)
+
+	executor.RunSuccess(context.Background(), 0)
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter, "hook_executions_total metric not found")
+
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 1)
+
+	attrs := extractAttrs(sum.DataPoints[0])
+	assert.Equal(t, "timeout", attrs["status"], "deadline kill must record status=timeout")
+	assert.NotEqual(t, "failure", attrs["status"], "deadline kill must NOT record status=failure")
+	assert.Equal(t, "success", attrs["type"])
+	assert.Equal(t, "slow-hook", attrs["name"])
+	assert.Len(t, attrs, 3, "counter attribute key set must be exactly {name, type, status}")
+
+	histogram := findMetric(rm, "router_hosts_hook_duration_seconds")
+	require.NotNil(t, histogram, "hook_duration_seconds metric not found")
+	histData, ok := histogram.Data.(metricdata.Histogram[float64])
+	require.True(t, ok, "expected Histogram[float64] data type")
+	require.Len(t, histData.DataPoints, 1)
+	histAttrs := make(map[string]string)
+	for _, attr := range histData.DataPoints[0].Attributes.ToSlice() {
+		histAttrs[string(attr.Key)] = attr.Value.AsString()
+	}
+	assert.Equal(t, "slow-hook", histAttrs["name"])
+	assert.Equal(t, "success", histAttrs["type"])
+	_, hasStatus := histAttrs["status"]
+	assert.False(t, hasStatus, "duration histogram must not carry a status attribute")
+}
+
+// router-hosts HOOK-01 / T-09-10: a hook that exits non-zero well within its
+// resolved timeout must record status="failure".
+func TestHookExecutor_RecordsFailureStatus(t *testing.T) {
+	m, reader := newTestMetrics(t)
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "bad-hook", Command: "exit 1"}},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(m),
+	)
+
+	executor.RunSuccess(context.Background(), 0)
+
+	rm := collectMetrics(t, reader)
+	counter := findMetric(rm, "router_hosts_hook_executions_total")
+	require.NotNil(t, counter, "hook_executions_total metric not found")
+
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 1)
+
+	attrs := extractAttrs(sum.DataPoints[0])
+	assert.Equal(t, "failure", attrs["status"])
+	assert.Equal(t, "success", attrs["type"])
+	assert.Equal(t, "bad-hook", attrs["name"])
+	assert.Len(t, attrs, 3, "counter attribute key set must be exactly {name, type, status}")
 }
 
 func TestHookExecutor_Empty(t *testing.T) {

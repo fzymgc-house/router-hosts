@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os/exec"
 	"strconv"
@@ -12,6 +13,16 @@ import (
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+)
+
+// Hook execution outcome status values recorded on
+// router_hosts_hook_executions_total. timeout is a first-class outcome,
+// distinct from failure, so a deadline kill is never misreported as a
+// self-inflicted non-zero exit.
+const (
+	hookStatusSuccess = "success"
+	hookStatusFailure = "failure"
+	hookStatusTimeout = "timeout"
 )
 
 // HookExecutor runs post-edit shell hooks sequentially, either synchronously
@@ -174,9 +185,20 @@ func (h *HookExecutor) executeHook(ctx context.Context, hook config.HookDefiniti
 
 	output, err := cmd.CombinedOutput()
 
-	status := "success"
-	if err != nil {
-		status = "failure"
+	// Classify the outcome by inspecting the hook's own context FIRST. When
+	// context.WithTimeout kills the subprocess, exec.CommandContext reports
+	// an ordinary *exec.ExitError indistinguishable from a hook that failed
+	// on its own merits — checking hookCtx.Err() before the process error is
+	// the only reliable way to tell a deadline kill from a self-inflicted
+	// non-zero exit.
+	var status string
+	switch {
+	case errors.Is(hookCtx.Err(), context.DeadlineExceeded):
+		status = hookStatusTimeout
+	case err != nil:
+		status = hookStatusFailure
+	default:
+		status = hookStatusSuccess
 	}
 	h.metrics.RecordHookExecution(ctx, hook.Name, event, status, time.Since(start))
 
