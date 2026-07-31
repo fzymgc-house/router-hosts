@@ -2,7 +2,21 @@
 
 ## What This Is
 
-router-hosts is a Go control plane for managing DNS host entries on Linux router hosts. It combines an event-sourced gRPC/mTLS server (with a Cobra CLI and Bubble Tea TUI) and a Kubernetes operator, so that both humans and cluster resources can register hostnames that are rendered into `hosts(5)`, `dnsmasq`, and `unbound` output. It is a mature, in-production project shipped at **v0.10.13**, not a greenfield effort.
+router-hosts is a Go control plane for managing DNS host entries on Linux router hosts. It combines an event-sourced gRPC/mTLS server (with a Cobra CLI and Bubble Tea TUI) and a Kubernetes operator, so that both humans and cluster resources can register hostnames that are rendered into `hosts(5)`, `dnsmasq`, and `unbound` output. It is a mature, in-production project, not a greenfield effort.
+
+## Current State
+
+**Shipped:** v0.12.0 (2026-07-31)
+
+| Milestone | Phases | Delivered |
+|-----------|--------|-----------|
+| v0.10.13 — v1 Shipped Baseline | 1–6 | Event-sourced core, cert lifecycle, K8s operator, OTel, split-horizon DNS output, aggregate compaction |
+| v0.11.0 — K8s-Native Automation | 7–8 | Gateway API routes (HTTPRoute/GRPCRoute/TLSRoute) and LoadBalancer/NodePort Services auto-populate router DNS |
+| v0.12.0 — Hook Reliability & Metrics | 9 | Post-edit hooks emit metrics and no longer block the write path; per-hook configurable timeouts |
+
+**Next:** v0.13.0 — Consumer-Owned Output (Phase 10). Moves output rendering from
+the server to the consumer, so one stateful server can feed N independent
+consumers without accreting a per-resolver format for each.
 
 ## Core Value
 

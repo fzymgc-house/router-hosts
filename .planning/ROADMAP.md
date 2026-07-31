@@ -15,12 +15,11 @@ Phases 1–6. Shipped pre-GSD; reconstructed retrospectively at bootstrap (2026-
 Phases 7–8. Shipped 2026-07-30 in PR #381; released as v0.11.0 (version bump
 corrected by the follow-up `Release-As:` PR #382). Operator / Gateway-API parity.
 
-### 🚧 v0.12.0 — Hook Reliability & Metrics
+### ✅ v0.12.0 — Hook Reliability & Metrics
 
-Phase 9. Complete and verified 2026-07-31; shipping via PR #389. Split out of
-the K8s-Native Automation milestone once v0.11.0 was cut after phase 8 — hook
-reliability is server-side observability, not operator parity, and it releases
-on its own.
+Phase 9. Shipped 2026-07-31 in PR #389. Hook metrics wired (were dead code) and
+hook execution detached from the write path with configurable per-hook timeouts.
+Archived: [`milestones/v0.12.0-ROADMAP.md`](milestones/v0.12.0-ROADMAP.md).
 
 ### 📋 v0.13.0 — Consumer-Owned Output
 
@@ -200,29 +199,13 @@ Plans:
 
 **Status**: Complete (2026-07-30) — 5 plans across 4 waves; 2/2 success criteria verified. Deep code review found 2 Critical + 2 Warning, all fixed and re-verified; security audit closed 20/21 threats with `threats_open: 0`; UAT 39/40 (1 blocked on deployment). Shipped in PR #381. **Deployment caveat:** T-08-04 (Events RBAC) remains live in production until v0.11.0 is released and the ArgoCD pin is bumped — see `08-SECURITY.md` § Deployment Caveat.
 
-## 🚧 v0.12.0 — Hook Reliability & Metrics (Phase Details)
+## ✅ v0.12.0 — Hook Reliability & Metrics (Phase Details)
 
-### Phase 9: Hook Reliability & Metrics
+Archived — see [`milestones/v0.12.0-ROADMAP.md`](milestones/v0.12.0-ROADMAP.md)
+for full phase detail, plans, stats, and carried-forward items.
 
-**Goal**: Post-edit hooks are observable and cannot stall the write path.
-**Depends on**: Phase 1
-**Requirements**: HOOK-01, HOOK-02
-**Success Criteria** (what must be TRUE):
-
-1. Each `on_success` / `on_failure` hook execution emits count, duration, and outcome metrics (closes the dead-metrics gap, router-hosts-0ed)
-2. A per-hook timeout is configurable (no longer a fixed 30s) and hook execution is bounded so a slow hook cannot block write processing (router-hosts-ee0)
-
-**Plans**: 5/5 plans executed
-
-Plans:
-
-- [x] 09-01-PLAN.md — Tracer: end-to-end detached hook run with a config-resolved timeout and a recorded execution metric (wave 1)
-- [x] 09-02-PLAN.md — Config: `[hooks] default_timeout` resolution chain, positivity invariant, validation and TOML encoding edges (wave 2)
-- [x] 09-03-PLAN.md — Metrics: timeout-vs-failure status classification and the `router_hosts_hook_runs_coalesced_total` instrument (wave 2)
-- [x] 09-04-PLAN.md — Runner: coalescing accounting, conservation law, bounded drain-then-cancel shutdown (wave 3)
-- [x] 09-05-PLAN.md — Docs: operations guide, configuration reference, and the phase CI gate (wave 4)
-
-**Status**: Complete (2026-07-31) — 5 plans across 4 waves; 2/2 success criteria verified, 24/25 must-haves (1 backstop accepted on a documented mutex-ordering argument). Code review found 0 Critical + 3 Warning + 3 Info; all 3 Warnings and 1 Info fixed and re-verified, 2 Info consciously skipped (shutdown-cancel status classification tradeoff; plan-ID commit scopes, unfixable without rewriting history). `task ci` green at 85.8% coverage. **Deferred:** the live OTel/Prometheus scrape was never run (no collector available) — recorded as deferred, not passed, in `09-VALIDATION.md`.
+- [x] **Phase 9: Hook Reliability & Metrics** — 5/5 plans, complete 2026-07-31,
+  shipped in PR #389. Requirements HOOK-01, HOOK-02.
 
 ## 📋 v0.13.0 — Consumer-Owned Output (Phase Details)
 

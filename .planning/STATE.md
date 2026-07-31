@@ -3,11 +3,11 @@ gsd_state_version: 1.0
 milestone: v0.12.0
 milestone_name: Hook Reliability & Metrics
 current_phase: 9
-status: completed
+status: milestone_complete
 stopped_at: Completed 09-05-PLAN.md
 last_updated: "2026-07-31T17:24:46.494Z"
 last_activity: 2026-07-31
-last_activity_desc: Phase 9 complete; milestone labels realigned to release boundaries
+last_activity_desc: Milestone v0.12.0 archived; ready for v0.13.0
 progress:
   total_phases: 1
   completed_phases: 1
@@ -24,13 +24,13 @@ current_phase_name: Hook Reliability & Metrics
 See: .planning/PROJECT.md (updated 2026-07-26)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Milestone v0.12.0 (Phase 9) complete and verified, shipping via PR #389; next milestone is v0.13.0 (Phase 10, Consumer-Rendered Output)
+**Current focus:** Milestone v0.12.0 shipped and archived. Next: v0.13.0 — Consumer-Owned Output (Phase 10). Start with `/gsd-new-milestone`.
 
 ## Current Position
 
 Phase: 9 — Hook Reliability & Metrics (complete, unmerged)
 Plan: 5/5 complete
-Status: Phase complete and verified; branch `feat/hook-reliability-metrics` not yet merged to main
+Status: Milestone v0.12.0 archived; PR #389 merged as d9f609e; release PR #384 open
 Last activity: 2026-07-31 — Phase 9 complete (verified 24/25 must-haves, code review fixed, `task ci` green)
 
 Progress: [██████████] 100%

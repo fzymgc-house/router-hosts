@@ -40,7 +40,7 @@
     "sub_repos": []
   },
   "git": {
-    "create_tag": true,
+    "create_tag": false,
     "branching_strategy": "none"
   },
   "parallelization": {
