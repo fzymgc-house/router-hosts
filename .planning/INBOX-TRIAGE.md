@@ -1,162 +1,137 @@
-# GSD Inbox Triage — fzymgc-house/router-hosts
+# GSD Inbox Triage — fzymgc-house/router-hosts — 2026-07-31
 
-Generated: 2026-07-25 · Open issues at scan: 36 · Open PRs: 1 · **After actions: 29 open**
+Open issues at scan: 32 · Open PRs: 1 · **After actions: 23 open**
+Previous run archived at `.planning/INBOX-TRIAGE-2026-07-25.md`.
 
 ## Actions taken
 
-Applied after the scan below, in the same session.
+Applied after the scan, in the same session. Every closure was verified against
+the Go tree first — no issue was closed on a stale file reference alone.
 
 | Action | Items |
 |---|---|
-| Added `confirmed-bug` | #330, #323, #322, #348 (#348 also got `bug`, `high`) |
-| Added type labels | #324 `dependencies`, #236 `enhancement`, #157 `enhancement` |
-| Closed — moot after Rust → Go migration | #29, #41, #131, #132, #218 |
-| Closed — already implemented in Go | #34, #66 |
-| Kept open, annotated with live Go locations | #23, #38 |
-| Approved as Phase 10 | #364 (`approved-feature`, `needs-review` removed) |
-
-Verification behind the closures is in "Nine Rust-era leftovers" below — each was
-checked against the Go tree rather than closed on the stale file reference alone.
-Two of the nine turned out to be live defects and were **not** closed.
+| Closed — **already fixed** | #322 (SIGHUP cert reload shipped in Phase 2) |
+| Closed `wontfix` — premise removed by the Rust → Go port | #134, #140, #157, #136, #186 |
+| Closed `wontfix` — low or negative value | #216, #135, #20 |
+| Re-graded enhancement → **bug** | #215 (`--filter` accepted then silently discarded) |
+| Labels applied | #392 `maintenance`+`needs-triage`, #249 `needs-triage` |
+| CONTRIBUTING amended | Automated dependency PR carve-out + merge policy |
 
 ## Summary
 
-| Issues | Count | PRs | Count |
-|---|---|---|---|
-| Enhancement-labeled | 20 | Feature PRs | 0 |
-| Bug-labeled | 4 | Enhancement PRs | 0 |
-| Documentation | 6 | Fix PRs | 0 |
-| Maintenance/testing | 1 | Release automation | 1 |
-| No type label | 5 | Gate violations | 0 |
+| Issues (post-action) | n | | PRs | n |
+|---|---|---|---|---|
+| Feature | 1 | | Feature PRs | 0 |
+| Enhancement | 9 | | Enhancement PRs | 0 |
+| Bug | 6 | | Fix PRs | 0 |
+| Chore / docs | 7 | | Renovate | 1 |
+| **Open total** | **23** | | **Open total** | **1** |
 
-## Headline finding: the template baseline starts now
+**Framing that drove every call below:** the issue/PR templates and
+`CONTRIBUTING.md` landed 2026-07-25 (`89ad990`). Only 4 of the 32 issues scanned
+were created after that date. Template-compliance scores for the other 28 measure
+*specification style*, not rule-breaking — so nothing was closed for a low score.
+Everything closed was closed on **evidence from the codebase**.
 
-The issue and PR templates landed **yesterday** (`89ad990`, 2026-07-25). Exactly one
-open issue — **#364** — was filed after they existed, and it scores **100%**.
+## Closed as already fixed
 
-The other 35 issues predate the templates by 28 to 236 days. They score 0–14% against
-the new forms purely because they were written before the forms existed, in a
-consistent maintainer house style (`## Summary` ×22, `## Context` ×15, `## Impact` ×11).
-Those scores measure calendar order, not submission quality.
+**#322** `Server does not reload mTLS cert on change` — carried `high`, `security`,
+`confirmed-bug`, and was fixed some time ago without anyone closing it. Phase 2
+shipped the reload: SIGHUP handler at `internal/server/server.go:133-138`,
+`reloadCert()` at `:222`, `GetCertificate` callback at `:206`. The issue's own
+"Requested fix" listed SIGHUP as an acceptable alternative to file-watching.
 
-**Do not run `/gsd-inbox --close-incomplete` against this backlog.** It would close 35
-legitimate maintainer-authored issues. Template compliance applies to submissions from
-2026-07-25 forward.
+Live caveat recorded on the issue: the renewal pipeline must actually *send*
+the signal — the Vault Agent post-render hook needs `kill -HUP`, not just a file
+write. The operations guide misdescribes this path; #392 tracks the correction.
 
-## Gate violations
+## Closed wontfix — premise removed by the Rust → Go port
 
-**None.** No code PRs are open, so no PR can violate the issue-first rule.
+These did not become obsolete because they were fixed. Their foundations were
+replaced, so the text no longer describes anything that exists.
 
-Note that the approval-gate labels (`needs-review`, `needs-triage`, `approved-feature`,
-`approved-enhancement`, `confirmed-bug`) now all exist on the repo, so the gate is live
-rather than inert.
+| # | Evidence |
+|---|---|
+| #134 | Documents port-80 privilege for an HTTP-01 challenge server. Go has **no HTTP-01** — `internal/acme/` is lego DNS-01 (Cloudflare) only |
+| #140 | Configurable propagation delay for the **webhook DNS provider**. `rg 'webhook' internal/acme/ internal/config/` → no matches; there is no `WebhookConfig` |
+| #157 | Caches a central GC loop (`main.rs:395-470`). Go has no sweep — each controller owns entries via the `host-ids` annotation + finalizer, driven by the informer cache. The O(entries × resources) cost is gone by construction |
+| #136 | Tracks expiry of `tests/pebble-ca.pem`. That file does not exist; Pebble stayed a plan doc (`docs/plans/2025-12-21-acme-pebble-testing-design.md`) |
+| #186 | Benchmarks `test-coverage` against `clippy` on Rust runners. No `clippy` job exists in `ci-go.yml` |
 
-## Issues needing attention
+## Closed wontfix — low or negative value
 
-### #364 — the one real gate decision
+- **#216** short flags — the proposed table assigns `-f` to `--filter`, but `-f`
+  is already bound to `--format` as a global persistent flag in
+  `internal/client/commands/root.go` (alongside `-q`, `-v`; `-o` is taken on
+  import/export). Adopting it either breaks `-f` for existing scripts or makes
+  the same letter mean different things per subcommand.
+- **#135** warn on non-standard ACME directory URL — would fire on every start
+  for step-ca, Pebble, Vault, or an internal Boulder, all legitimate here. A
+  warning that fires on correct configuration teaches operators to ignore
+  warnings. The typo case it targets already fails loudly at account
+  registration, and malformed URLs are rejected in `internal/config`.
+- **#20** document "v1.0 has no compaction" — Phase 6 shipped compaction, so the
+  requested text is now false. The live version of the concern is #330.
 
-`feat: consumer-rendered output templates, one-shot and sink modes`
-Labels: `enhancement`, `needs-review` · Age: 0d · Score: **100%**
+## Re-graded
 
-Every required field of `feature_request.yml` is present and substantive: problem
-statement grounded in a concrete HA-resolver migration, 4 user stories, 9 testable
-acceptance criteria, an honest maintenance-burden section that argues against itself,
-and 6 alternatives with reasons for rejection (including an interim fallback).
+**#215** `--filter for host list` — moved from `enhancement` to `bug`. The Rust
+file refs were stale but the defect ported intact:
 
-The blocker is not completeness — it is **scope**. `ROADMAP.md` has phases 7–9 as
-Gateway API Support, Kubernetes Service Controller, and Hook Reliability & Metrics.
-Consumer-rendered templates plus a streaming sink is a **new north-star surface** that
-is not on the roadmap and is larger than any remaining phase.
+- CLI defines the flag — `internal/client/commands/host.go:283`
+- Client sends it — `req.Filter = &filter` at `host.go:257`
+- Server **ignores it** — `ListHosts` at `internal/server/service.go:319-320`
+  calls `s.handler.ListHosts(stream.Context())` and never reads `req`
 
-Decision required (this is what `needs-review` is holding):
+`--filter` is accepted, marshalled, transmitted, and discarded. The user gets an
+unfiltered list with no error — worse than the flag not existing, because the
+output looks filtered. The capability exists (`domain.SearchFilter` with
+`Query`/`IPPattern`/`HostnamePattern`/`Tags`, used by `SearchHosts` at
+`service.go:337-346`); it is simply not wired into `ListHosts`.
 
-1. Approve as-is → add `approved-feature`, insert as a new phase (10, or 7.1 if urgent)
-2. Approve the narrow interim only → the issue itself offers `ExportHosts --format unbound`
-   as an unblocking fallback; that is enhancement-shaped, not feature-shaped
-3. Defer → leave `needs-review`, revisit after phase 7
+## Renovate — resolved
 
-Related open issue: **#23** (lazy streaming for `ExportHosts`) touches the same export
-path and should be linked or folded in either way.
+`CONTRIBUTING.md` documented **no** bot exemption, so every Renovate PR was a
+standing violation of the repo's own written MUST (`rg -in 'renovate|dependabot|
+bot|automated' CONTRIBUTING.md` → 0 hits). Fixed by amending the document rather
+than the bot:
 
-### Untriaged bugs blocked by the new gate
+- Automated dependency PRs are exempt from issue-first and typed templates,
+  tracked collectively by the Dependency Dashboard (#324)
+- Conventional Commit PR titles still required (`squash_merge_commit_title:
+  PR_TITLE` makes the title the commit subject on `main`)
+- `patch`/`minor` MAY merge on green CI; `major` (`major-update`) requires the
+  maintainer to read the upstream changelog first
 
-These carry no `confirmed-bug` label, so under `CONTRIBUTING.md` **no fix PR can be
-opened for them** until a maintainer triages. Three are high severity.
+**PR #395** (setup-uv v9) is the first PR under the new policy and is
+`major-update`: all 10 checks pass, but v9 flips `prune-cache` to `false`, which
+raises Actions cache usage and cost. Green CI is explicitly not sufficient here.
 
-| Issue | Age | Labels | Needs |
-|---|---|---|---|
-| #348 server 0.10.7 boot crash-loop on Rust-migrated DB | 28d | *(none)* | `bug` + triage |
-| #330 unbounded event-log growth → UpdateHost exceeds deadline | 30d | `bug,high,performance` | `confirmed-bug` |
-| #323 read-model lag wedges aggregate on UPDATE | 30d | `bug,high` | `confirmed-bug` |
-| #322 no mTLS cert reload → serves stale cert until restart | 30d | `bug,high,security` | `confirmed-bug` |
-| #249 operator TLS error diagnostics | 167d | `bug` | `confirmed-bug` |
-| #218 Prometheus recorder tests fail on global state | 205d | *(none)* | type label (likely moot — see below) |
+## Remaining backlog — kept
 
-Sharpest of these is #348: an unlabeled boot crash-loop report sitting 28 days.
+Bugs (6): #386, #392, #348, #330, #323, #249, #215. Of these, `confirmed-bug` is
+carried by #348, #330, #323, and #386. Both #249 and #215 lack it and are
+gate-blocked.
 
-### Rust-era issues, unverified against the Go codebase
+Issue #249 needs a rewrite before it is actionable — the problem (TLS failures
+report as generic "transport error") is real and generic, but the entire analysis
+is Rust (`hyper` → `h2` → `rustls` error chains) and does not transfer to grpc-go.
 
-Nine issues cite Rust source files, Cargo, tokio, or crates. The project is now pure Go
-(`internal/`, `cmd/`), so their file references no longer resolve. The underlying
-concern may or may not survive the migration — each needs revalidation, not blind closure.
+Enhancements now cheap because their infrastructure landed:
 
-Each was verified against the Go tree, not judged on the stale reference alone.
+- **#236** TLS cert expiry metrics — `internal/server/metrics.go` has 8
+  instruments and no cert gauge; the OTel plumbing is already there
+- **#178** access logging — metrics interceptors exist at `metrics.go:417`
+  and `:442`; no access-log interceptor alongside them
 
-| Issue | Verdict | Evidence in the Go tree |
-|---|---|---|
-| #29 add `cargo audit` to CI | **Closed** — satisfied | `govulncheck ./...` runs as the "Vulnerability check" job in `ci-go.yml` |
-| #41 migrate `dirs` → `directories` | **Closed** — moot | Both are Rust crates; Go uses `os.UserConfigDir` |
-| #131 `JoinSet` for challenge connections | **Closed** — moot | Go ACME is DNS-01 only (`acme.go:138-143`); no HTTP-01 server exists |
-| #132 challenge-store TTL sweep | **Closed** — moot | Same: lego holds no local challenge store |
-| #218 Prometheus global recorder | **Closed** — moot | No Prometheus recorder; metrics are OpenTelemetry |
-| #34 batch transaction for import | **Closed** — already done | `AppendEventsBatch` exists at `eventstore.go:93`, with atomicity + rollback tests |
-| #66 batch host ops on rollback | **Closed** — already done | `RollbackToSnapshot` calls `regenerateOutputs` once at `service.go:850`, not per-op |
-| #23 lazy `ExportHosts` streaming | **KEPT — live defect** | `service.go:609` still calls `store.ListAll` and builds the whole payload for all 3 formats |
-| #38 client-side stream limits | **KEPT — live defect** | Unbounded `append` at `host.go:345`/`:363`, same in `snapshot.go`, `importexport.go`; no cap anywhere in `internal/client/` |
+Still open and unchanged: #364 (approved, Phase 10), #38 (approved), #177, #65,
+plus #64, #23 (absorbed into Phase 10 TMPL-06), #16, #18, #19, #133, #188, #388,
+and #324.
 
-The two survivors had stale *file references* but intact *defects* — closing them on
-the Rust citation alone would have discarded two real bugs. #23 is now folded into
-Phase 10 as TMPL-06, since a long-lived sink over a non-lazy export would hold the
-whole zone in memory per connected consumer.
+## Remaining gate gap
 
-### Label gaps
-
-Five issues carry no type label at all: **#348**, **#324**, **#236**, **#218**, **#157**.
-
-**#324** is the Renovate dependency dashboard — a bot-maintained tracker, not a work
-item. It should be excluded from triage counts (pin it, or label it `dependencies`).
-
-## PRs
-
-### Ready to merge
-
-**#358** `chore(main): release 0.10.14` — release-please automation, `autorelease: pending`
-
-All 9 checks green: Lint, Vulnerability check, Test, Build, Buf lint & format, Manifests
-up to date, Docs build (strict), CI (Go) Complete, Octopus Review. `mergeStateStatus: CLEAN`.
-
-Exempt from the typed-PR templates and the issue-first rule — it is generated release
-automation, not a contribution. Merging it ships the template/CLAUDE.md docs work.
-
-Worth noting: the **`Vulnerability check` gate is green again**. It was previously
-failing repo-wide and leaving every PR `BLOCKED`; `b5b1152` (x/text v0.39.0 + Go 1.26.5)
-cleared it.
-
-## Stale items
-
-33 of 36 issues have had no activity in 30+ days. 30 of those have been untouched for
-**5–8 months** (167–236 days).
-
-Only #364 (0d) and #324 (bot, 0d) are active. This is a backlog that has been accumulating
-rather than being worked — the Rust-era cohort above is roughly a third of it.
-
-## Remaining next actions
-
-Everything in the original recommendation list has been done except these.
-
-1. **Merge #358** to ship 0.10.14 — all checks green, `mergeStateStatus: CLEAN`.
-2. **`/gsd-discuss-phase 10`** — #364 is approved and scheduled; planning is the next step.
-3. **#38** has no owner phase. It is a live client-side defense-in-depth gap that fits
-   none of phases 7–10; either fold it into Phase 10 alongside #23 or file it as its own
-   small phase.
-4. **Do not** bulk-close on template score — the baseline starts 2026-07-25.
+11 of the 23 open issues still carry no approval or triage label. The approval
+gate is the merge precondition in CONTRIBUTING, so as long as it sits unpopulated
+the majority of the backlog cannot legally receive a mergeable PR. That is a
+deliberate state now rather than an accident — but it is worth a `needs-review`
+sweep or a `/gsd-review-backlog` pass before the next milestone.
