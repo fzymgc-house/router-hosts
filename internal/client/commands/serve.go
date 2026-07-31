@@ -16,9 +16,6 @@ import (
 	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
 )
 
-// defaultHookTimeout is the maximum duration for a single hook execution.
-const defaultHookTimeout = 30 * time.Second
-
 func newServeCmd() *cobra.Command {
 	var configPath string
 
@@ -77,6 +74,7 @@ func runServe(ctx context.Context, configPath string) error {
 
 	// Build service options
 	var svcOpts []server.ServiceOption
+	var hookExec *server.HookExecutor
 
 	// Hosts file generator (optional)
 	var hostsGen *server.HostsFileGenerator
@@ -97,17 +95,6 @@ func runServe(ctx context.Context, configPath string) error {
 		svcOpts = append(svcOpts, server.WithUnboundGenerator(unboundGen))
 	}
 
-	// Hook executor (optional)
-	if len(cfg.Hooks.OnSuccess) > 0 || len(cfg.Hooks.OnFailure) > 0 {
-		hookExec := server.NewHookExecutor(
-			cfg.Hooks.OnSuccess,
-			cfg.Hooks.OnFailure,
-			defaultHookTimeout,
-			logger,
-		)
-		svcOpts = append(svcOpts, server.WithHookExecutor(hookExec))
-	}
-
 	// Retention policy from config — only wire axes that are explicitly
 	// configured (non-zero). ApplyRetentionPolicy treats nil as "no limit".
 	var maxSnapsPtr, maxAgePtr *int
@@ -122,10 +109,10 @@ func runServe(ctx context.Context, configPath string) error {
 	svcOpts = append(svcOpts, server.WithRetentionConfig(maxSnapsPtr, maxAgePtr))
 	svcOpts = append(svcOpts, server.WithVersion(Version, versionString()))
 
-	// Create gRPC service implementation
-	svc := server.NewHostsServiceImpl(handler, store, svcOpts...)
-
-	// Set up OTel metrics (optional)
+	// Set up OTel metrics (optional). The hook executor is constructed AFTER
+	// this block, not before, so it can be wired to real metrics via
+	// WithMetrics — building it earlier would silently leave it on
+	// DisabledMetrics() forever (the literal HOOK-01 wiring gap).
 	var metrics *server.Metrics
 	var serverOpts []server.Option
 
@@ -151,6 +138,32 @@ func runServe(ctx context.Context, configPath string) error {
 			return oops.Wrapf(rerr, "register aggregate-event gauges")
 		}
 	}
+
+	// Hook executor (optional) — constructed after metrics so WithMetrics
+	// receives the real *server.Metrics (or nil, tolerated as a no-op, when
+	// OTel is unconfigured).
+	if len(cfg.Hooks.OnSuccess) > 0 || len(cfg.Hooks.OnFailure) > 0 {
+		hookExec = server.NewHookExecutor(
+			cfg.Hooks.OnSuccess,
+			cfg.Hooks.OnFailure,
+			cfg.Hooks.DefaultTimeout,
+			logger,
+			server.WithMetrics(metrics),
+		)
+		hookExec.Start()
+		svcOpts = append(svcOpts, server.WithHookExecutor(hookExec))
+	}
+	defer func() {
+		if hookExec == nil {
+			return
+		}
+		shutCtx, cancel := context.WithTimeout(context.Background(), server.GracefulShutdownTimeout)
+		defer cancel()
+		hookExec.Stop(shutCtx)
+	}()
+
+	// Create gRPC service implementation
+	svc := server.NewHostsServiceImpl(handler, store, svcOpts...)
 
 	// Create and configure gRPC server
 	srv, err := server.NewServer(*cfg, store, logger, serverOpts...)
