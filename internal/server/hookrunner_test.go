@@ -113,3 +113,63 @@ func TestHookExecutor_RecordsSuccessMetric(t *testing.T) {
 	require.True(t, ok, "expected Histogram[float64] data type")
 	require.Len(t, histData.DataPoints, 1)
 }
+
+// router-hosts HOOK-02 (Pitfall 2 regression): cancelling the context that
+// was passed into the write path must not kill an already-detached hook —
+// the runner always dispatches against its own server-lifecycle context.
+func TestHookRunner_SurvivesRPCContextCancellation(t *testing.T) {
+	store := hookWiringStore(t)
+	handler := NewCommandHandler(store)
+	seedHosts(t, handler, 1)
+
+	dir := t.TempDir()
+	unblock := filepath.Join(dir, "unblock")
+	marker := filepath.Join(dir, "marker")
+
+	hooks := NewHookExecutor(
+		[]config.HookDefinition{blockingSentinelHook("block-until-unblocked", unblock, marker)},
+		nil,
+		5*time.Second,
+		slog.Default(),
+	)
+	hooks.Start()
+
+	gen := NewHostsFileGenerator(filepath.Join(dir, "hosts"))
+	svc := NewHostsServiceImpl(handler, store, WithHostsGenerator(gen), WithHookExecutor(hooks))
+
+	rpcCtx, cancel := context.WithCancel(context.Background())
+	svc.RegenerateOutputs(rpcCtx)
+	cancel() // simulate a disconnected/timed-out RPC client
+
+	// Hook is still blocked polling for unblock; cancelling rpcCtx above must
+	// not have reached it.
+	assert.NoFileExists(t, marker)
+
+	f, err := os.Create(unblock)
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	hooks.Stop(context.Background())
+	assert.FileExists(t, marker)
+}
+
+// router-hosts HOOK-01: a service with no hook executor at all must emit
+// zero hook datapoints on regeneration — a no-op, not a zero-valued point.
+func TestRegenerateOutputs_NoHooksEmitsNoMetrics(t *testing.T) {
+	ctx := context.Background()
+	store := hookWiringStore(t)
+	handler := NewCommandHandler(store)
+	seedHosts(t, handler, 2)
+
+	dir := t.TempDir()
+	gen := NewHostsFileGenerator(filepath.Join(dir, "hosts"))
+
+	_, reader := newTestMetrics(t)
+	// Constructed WITHOUT WithHookExecutor: s.hooks stays nil.
+	svc := NewHostsServiceImpl(handler, store, WithHostsGenerator(gen))
+
+	svc.RegenerateOutputs(ctx)
+
+	rm := collectMetrics(t, reader)
+	assert.Nil(t, findMetric(rm, "router_hosts_hook_executions_total"))
+}

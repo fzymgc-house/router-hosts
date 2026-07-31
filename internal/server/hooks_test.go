@@ -262,6 +262,37 @@ func TestHookExecutor_HookNames(t *testing.T) {
 	assert.Equal(t, []string{"reload-dns", "notify", "alert"}, names)
 }
 
+// router-hosts HOOK-01: an executor built without WithMetrics, and one built
+// with WithMetrics(nil), must both record without panicking — both hold a
+// non-nil DisabledMetrics().
+func TestNewHookExecutor_DefaultsToDisabledMetrics(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran-default")
+
+	executor := NewHookExecutor(
+		[]config.HookDefinition{{Name: "touch-file", Command: "touch " + marker}},
+		nil,
+		5*time.Second,
+		slog.Default(),
+	)
+	// No panic recording against the default DisabledMetrics().
+	executor.RunSuccess(context.Background(), 1)
+	assert.FileExists(t, marker)
+
+	dir2 := t.TempDir()
+	marker2 := filepath.Join(dir2, "ran-nil-metrics")
+	executorNilMetrics := NewHookExecutor(
+		[]config.HookDefinition{{Name: "touch-file", Command: "touch " + marker2}},
+		nil,
+		5*time.Second,
+		slog.Default(),
+		WithMetrics(nil),
+	)
+	// WithMetrics(nil) must be a no-op, not a nil metrics pointer.
+	executorNilMetrics.RunSuccess(context.Background(), 1)
+	assert.FileExists(t, marker2)
+}
+
 func TestHookExecutor_HookCount(t *testing.T) {
 	executor := NewHookExecutor(
 		[]config.HookDefinition{
