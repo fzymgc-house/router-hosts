@@ -169,9 +169,54 @@ type HooksConfig struct {
 	OnFailure []HookDefinition `toml:"on_failure"`
 	// DefaultTimeout is the server-level fallback timeout applied to any hook
 	// whose own Timeout is unset. Zero means "use config.DefaultHookTimeout".
-	// TOML decoding/resolution of this key lands in Plan 09-02; the field
-	// exists now only so internal/client/commands/serve.go can address it.
+	// Resolved by resolveTimeouts(), called from LoadServerConfig.
 	DefaultTimeout time.Duration `toml:"default_timeout"`
+}
+
+// resolveTimeouts resolves the effective timeout for every hook in h,
+// following the three-link chain: per-hook Timeout -> HooksConfig.DefaultTimeout
+// -> DefaultHookTimeout. A zero value at any link means "inherit the next
+// link" and is never an error; this is the single place that chain is
+// encoded. After resolveTimeouts returns nil, h.DefaultTimeout and every
+// hook's Timeout in both OnSuccess and OnFailure are guaranteed strictly
+// positive — the enforcement point for that invariant. It does not reject a
+// bare zero (that's "inherit"); HookDefinition.validate/HooksConfig.validate
+// separately reject only negative values, as a backstop for hand-constructed
+// Config values that never went through this method.
+func (h *HooksConfig) resolveTimeouts() error {
+	if h.DefaultTimeout == 0 {
+		h.DefaultTimeout = DefaultHookTimeout
+	}
+	if h.DefaultTimeout <= 0 {
+		return oops.Code(domain.CodeValidation).Errorf(
+			"config: hooks.default_timeout must resolve to a positive duration (got %s)", h.DefaultTimeout)
+	}
+
+	for i := range h.OnSuccess {
+		if h.OnSuccess[i].Timeout == 0 {
+			h.OnSuccess[i].Timeout = h.DefaultTimeout
+		}
+	}
+	for i := range h.OnFailure {
+		if h.OnFailure[i].Timeout == 0 {
+			h.OnFailure[i].Timeout = h.DefaultTimeout
+		}
+	}
+
+	for _, hook := range h.OnSuccess {
+		if hook.Timeout <= 0 {
+			return oops.Code(domain.CodeValidation).Errorf(
+				"config: hook %q timeout must resolve to a positive duration (got %s)", hook.Name, hook.Timeout)
+		}
+	}
+	for _, hook := range h.OnFailure {
+		if hook.Timeout <= 0 {
+			return oops.Code(domain.CodeValidation).Errorf(
+				"config: hook %q timeout must resolve to a positive duration (got %s)", hook.Name, hook.Timeout)
+		}
+	}
+
+	return nil
 }
 
 // OTelConfig holds OpenTelemetry exporter settings.
@@ -260,17 +305,11 @@ func LoadServerConfig(path string) (*Config, error) {
 		cfg.Retention.MaxAgeDays = DefaultMaxAgeDays
 	}
 
-	// Apply per-hook timeout defaults if zero-valued. Plan 09-02 inserts the
-	// [hooks] default_timeout middle link into this same pass.
-	for i := range cfg.Hooks.OnSuccess {
-		if cfg.Hooks.OnSuccess[i].Timeout == 0 {
-			cfg.Hooks.OnSuccess[i].Timeout = DefaultHookTimeout
-		}
-	}
-	for i := range cfg.Hooks.OnFailure {
-		if cfg.Hooks.OnFailure[i].Timeout == 0 {
-			cfg.Hooks.OnFailure[i].Timeout = DefaultHookTimeout
-		}
+	// Resolve the hook timeout chain: per-hook timeout -> [hooks] default_timeout
+	// -> DefaultHookTimeout. Must run after the strict-key check and before
+	// cfg.validate(), or a zero/negative timeout could reach the executor.
+	if err := cfg.Hooks.resolveTimeouts(); err != nil {
+		return nil, err
 	}
 
 	// Apply ACME defaults
