@@ -407,6 +407,11 @@ func (t *TLSConfig) validateACME() error {
 
 // validate checks all hook definitions for correctness.
 func (h *HooksConfig) validate() error {
+	if h.DefaultTimeout < 0 {
+		return oops.Code(domain.CodeValidation).Errorf(
+			"config: hooks.default_timeout must not be negative (got %s)", h.DefaultTimeout)
+	}
+
 	seen := make(map[string]struct{})
 	for _, hook := range h.OnSuccess {
 		if err := hook.validate(); err != nil {
@@ -445,6 +450,9 @@ func (h *HookDefinition) validate() error {
 	}
 	if strings.TrimSpace(h.Command) == "" {
 		return oops.Code(domain.CodeValidation).Errorf("config: hook %q has empty or whitespace-only command", h.Name)
+	}
+	if h.Timeout < 0 {
+		return oops.Code(domain.CodeValidation).Errorf("config: hook %q timeout must not be negative (got %s)", h.Name, h.Timeout)
 	}
 	return nil
 }
