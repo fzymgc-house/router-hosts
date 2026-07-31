@@ -41,7 +41,9 @@
     }
   ],
   "vulnerabilityAlerts": {
+    "description": "Security fixes bypass the 24h minimumReleaseAge. The 'Vulnerability check' (govulncheck) job is a required status check on main, so an unpatched advisory blocks every open PR repo-wide until the fix lands — waiting out the stability window would extend that outage by a day.",
     "enabled": true,
-    "labels": ["security", "dependencies"]
+    "labels": ["security", "dependencies"],
+    "minimumReleaseAge": null
   }
 }

@@ -98,17 +98,29 @@ Every other requirement still applies — CI MUST pass, and the PR title MUST be
 a valid Conventional Commit, because `squash_merge_commit_title: PR_TITLE`
 makes it the commit subject on `main`.
 
-Merge policy depends on the size of the update:
+Merge policy depends on the size of the update, and is enforced by
+`.github/renovate.json` rather than by convention:
 
-| Update type | Policy |
-|---|---|
-| `patch` / `minor` | MAY be merged on green CI |
-| `major` (labeled `major-update`) | Maintainer MUST read the upstream changelog first |
+| Update type | Policy | Mechanism |
+|---|---|---|
+| `patch`, `minor`, `digest`, `pin`, lockfile maintenance | Automerges once the release is ≥ 24h old and required checks pass | `automerge: true` + `platformAutomerge: true` |
+| `major` | Never automerges; labeled `major-update` for a human to review | `automerge: false` |
+
+The 24-hour `minimumReleaseAge` exists so that a release yanked or hot-fixed
+shortly after publication does not land here first. Because
+`internalChecksFilter` is `strict`, Renovate does not even open the PR until
+that window has elapsed.
+
+Automerge is safe here only because `main` carries the `protect-main` ruleset
+requiring the `CI (Go) Complete` and `Vulnerability check` status checks —
+GitHub's auto-merge waits for those. **If that ruleset is ever relaxed,
+automerge stops being gated and this policy needs revisiting.**
 
 A `major-update` PR MUST NOT be merged on green CI alone. Green CI proves this
 repository still builds and tests clean; it does not prove the update is free of
-behavior or cost changes. Renovate automerge is disabled by config, so this
-gate is enforced by review rather than by tooling.
+behavior or cost changes. PR #395 (`astral-sh/setup-uv` v9, which flips
+`prune-cache` to `false` and raises Actions cache usage) is the canonical
+example: ten green checks, and a change worth reading the changelog for.
 
 ### Branching
 
