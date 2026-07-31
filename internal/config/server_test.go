@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -467,6 +468,82 @@ default_timeout = "45s"
 	assert.Equal(t, 45*time.Second, cfg.Hooks.DefaultTimeout)
 }
 
+func TestLoadServerConfig_HookTimeoutRejectsNegative(t *testing.T) {
+	tests := []struct {
+		name             string
+		content          string
+		wantErrSubstr    []string
+		wantErrNotSubstr []string
+	}{
+		{
+			name: "negative per-hook timeout",
+			content: minimalConfig + `
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+timeout = "-5s"
+`,
+			wantErrSubstr: []string{"reload-dns", "timeout"},
+		},
+		{
+			name: "negative default_timeout, hook has no explicit timeout",
+			content: minimalConfig + `
+[hooks]
+default_timeout = "-1s"
+
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+`,
+			wantErrSubstr:    []string{"default_timeout"},
+			wantErrNotSubstr: []string{"reload-dns"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfigFile(t, tt.content)
+			_, err := LoadServerConfig(path)
+			require.Error(t, err)
+			for _, substr := range tt.wantErrSubstr {
+				assert.Contains(t, err.Error(), substr)
+			}
+			for _, substr := range tt.wantErrNotSubstr {
+				assert.NotContains(t, err.Error(), substr)
+			}
+		})
+	}
+}
+
+func TestLoadServerConfig_HookTimeoutEncoding(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout string // raw TOML value literal (quoted string or bare integer)
+		want    time.Duration
+	}{
+		{name: "seconds string", timeout: `"10s"`, want: 10 * time.Second},
+		{name: "minutes string", timeout: `"2m"`, want: 2 * time.Minute},
+		{name: "combined string", timeout: `"1m30s"`, want: 90 * time.Second},
+		{name: "bare integer decodes as nanoseconds (accepted, positive)", timeout: `10`, want: 10 * time.Nanosecond},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content := minimalConfig + fmt.Sprintf(`
+[[hooks.on_success]]
+name = "reload-dns"
+command = "systemctl reload dnsmasq"
+timeout = %s
+`, tt.timeout)
+			path := writeConfigFile(t, content)
+			cfg, err := LoadServerConfig(path)
+			require.NoError(t, err)
+			require.Len(t, cfg.Hooks.OnSuccess, 1)
+			assert.Equal(t, tt.want, cfg.Hooks.OnSuccess[0].Timeout)
+		})
+	}
+}
+
 func TestLoadServerConfig_SameNameDifferentHookTypesAllowed(t *testing.T) {
 	content := minimalConfig + `
 [[hooks.on_success]]
@@ -629,6 +706,16 @@ func TestHookDefinition_Validate(t *testing.T) {
 		{
 			name:    "name exactly 50 chars",
 			hook:    HookDefinition{Name: "aaaaaaaaaabbbbbbbbbbccccccccccddddddddddeeeeeeeeee", Command: "echo"},
+			wantErr: "",
+		},
+		{
+			name:    "negative timeout",
+			hook:    HookDefinition{Name: "reload-dns", Command: "systemctl reload dnsmasq", Timeout: -1 * time.Second},
+			wantErr: "timeout",
+		},
+		{
+			name:    "positive timeout",
+			hook:    HookDefinition{Name: "reload-dns", Command: "systemctl reload dnsmasq", Timeout: 5 * time.Second},
 			wantErr: "",
 		},
 	}
