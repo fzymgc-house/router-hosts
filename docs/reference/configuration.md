@@ -84,6 +84,7 @@ Hooks are arrays of hook definitions. Each hook has a `name` (kebab-case identif
 |--------|------|---------|-------------|
 | `on_success` | array of hooks | `[]` | Hooks to run after successful host updates |
 | `on_failure` | array of hooks | `[]` | Hooks to run after failed host updates |
+| `default_timeout` | duration string | `"30s"` | Timeout applied to any hook that does not set its own `timeout` |
 
 Each hook definition:
 
@@ -91,13 +92,44 @@ Each hook definition:
 |-------|------|-------------|
 | `name` | string | Unique kebab-case identifier (used in logs/metrics) |
 | `command` | string | Shell command to execute |
+| `timeout` | duration string | This hook's execution timeout. Omitted or `"0s"` inherits `[hooks] default_timeout`. |
+
+**Duration format and the unquoted-integer footgun:**
+
+- Timeout values are Go duration strings — `"10s"`, `"2m"`, `"1m30s"` — and
+  MUST be quoted.
+- An **unquoted integer is decoded as NANOSECONDS** by the TOML decoder, not
+  seconds. `timeout = 10` is accepted (it is a positive duration) and makes
+  that hook time out effectively immediately — it does not raise a
+  validation error. Always quote:
+
+  ```toml
+  # Correct — ten seconds
+  timeout = "10s"
+
+  # WRONG — decodes to 10 nanoseconds, not ten seconds. Accepted at load
+  # time (it's a positive duration), but the hook will time out instantly.
+  timeout = 10
+  ```
+
+- A negative timeout, at either `default_timeout` or a per-hook `timeout`,
+  is rejected at server start with a configuration error. An omitted or
+  `"0s"` value inherits the default rather than being rejected.
+- There is no upper bound on a hook timeout. Hooks no longer run on the
+  write RPC path, so a slow hook cannot stall a write; the only relevant
+  bound is the coalescing queue (depth 1), not the timeout. An arbitrary
+  ceiling would only break legitimate slow hooks.
 
 Example hooks:
 
 ```toml
+[hooks]
+default_timeout = "20s"
+
 [[hooks.on_success]]
 name = "reload-dnsmasq"
 command = "systemctl reload dnsmasq"
+timeout = "10s"
 
 [[hooks.on_failure]]
 name = "notify-failure"
