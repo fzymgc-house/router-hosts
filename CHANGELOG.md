@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0](https://github.com/fzymgc-house/router-hosts/compare/v0.11.0...v0.12.0) (2026-07-31)
+
+
+### Features
+
+* **server:** hook metrics and bounded execution ([#389](https://github.com/fzymgc-house/router-hosts/issues/389)) ([d9f609e](https://github.com/fzymgc-house/router-hosts/commit/d9f609e1c360d2c7a9315ebde2f78bec0fbcafed))
+
+
+### Documentation
+
+* archive v0.12.0 milestone ([#394](https://github.com/fzymgc-house/router-hosts/issues/394)) ([abfdf77](https://github.com/fzymgc-house/router-hosts/commit/abfdf7705944520a529a2b66a8859ff706371254))
+
+
+### Build System
+
+* **deps:** update ghcr.io/fzymgc-house/router-hosts:latest docker digest to 74a651d ([#390](https://github.com/fzymgc-house/router-hosts/issues/390)) ([4cad5e2](https://github.com/fzymgc-house/router-hosts/commit/4cad5e2aae267f80651b8cd7646bfbaaeb118dac))
+* **deps:** update github action actions/setup-go to v7 ([#387](https://github.com/fzymgc-house/router-hosts/issues/387)) ([3245a28](https://github.com/fzymgc-house/router-hosts/commit/3245a287e8b4413889542acbca25bbd1c2b2d8ef))
+* **deps:** update github action arduino/setup-task to v3 ([#393](https://github.com/fzymgc-house/router-hosts/issues/393)) ([fc72793](https://github.com/fzymgc-house/router-hosts/commit/fc72793d27e7fbe434b8e638de20cff8517a0fa9))
+* **deps:** update github action docker/login-action to dbcb813 ([#383](https://github.com/fzymgc-house/router-hosts/issues/383)) ([26fabd8](https://github.com/fzymgc-house/router-hosts/commit/26fabd83e472926653c3c731e08c5e66d25da463))
+* **deps:** update github action taiki-e/install-action to 6a1bd70 ([#385](https://github.com/fzymgc-house/router-hosts/issues/385)) ([44b91b3](https://github.com/fzymgc-house/router-hosts/commit/44b91b32056afa0d057547fe085eee71addc3c5b))
+* **deps:** update module google.golang.org/grpc to v1.83.0 ([#391](https://github.com/fzymgc-house/router-hosts/issues/391)) ([65b2821](https://github.com/fzymgc-house/router-hosts/commit/65b28219b401d97f35cf5aa630e613b1ab98775e))
+
 ## [0.11.0](https://github.com/fzymgc-house/router-hosts/compare/v0.10.13...v0.11.0) (2026-07-31)
 
 
