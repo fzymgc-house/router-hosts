@@ -152,7 +152,11 @@ The server uses **CQRS (Command Query Responsibility Segregation)** with **Event
 
 - Generate to `.tmp` file -> fsync -> atomic rename
 - Original file unchanged on failure
-- Post-edit hooks run after success/failure
+- Post-edit hooks run after success/failure, detached from the write path: a
+  background hook runner owns its own server-lifecycle context and executes
+  hooks after the RPC has already returned. The runner allows at most one
+  batch in flight and one pending run behind it, coalescing (dropping and
+  counting) any further trigger that arrives while both are occupied.
 
 ### Versioning
 
@@ -175,7 +179,7 @@ All metrics and traces are exported via OpenTelemetry (OTLP/gRPC) to a collector
 - **Request metrics**: `router_hosts_requests_total`, `router_hosts_request_duration_seconds`
 - **Storage metrics**: `router_hosts_storage_operations_total`, `router_hosts_storage_duration_seconds`
 - **Host metrics**: `router_hosts_hosts_entries`
-- **Hook metrics**: `router_hosts_hook_executions_total`, `router_hosts_hook_duration_seconds`
+- **Hook metrics**: `router_hosts_hook_executions_total`, `router_hosts_hook_duration_seconds`, `router_hosts_hook_runs_coalesced_total`
 
 See [Operations Guide](../guides/operations.md#metrics-and-tracing-opentelemetry) for configuration.
 
