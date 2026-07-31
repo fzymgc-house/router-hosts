@@ -4,16 +4,16 @@ milestone: v0.11.0
 milestone_name: K8s-Native Automation
 current_phase: 9
 current_phase_name: Hook Reliability & Metrics
-status: planning
-stopped_at: Completed 08-04-PLAN.md (final plan of phase 08)
-last_updated: "2026-07-31T03:32:42.417Z"
-last_activity: 2026-07-30
-last_activity_desc: Phase 8 complete, transitioned to Phase 9
+status: executing
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-07-31T15:25:36.667Z"
+last_activity: 2026-07-31
+last_activity_desc: Phase 9 execution started
 progress:
   total_phases: 3
   completed_phases: 2
-  total_plans: 11
-  completed_plans: 11
+  total_plans: 16
+  completed_plans: 12
   percent: 67
 ---
 
@@ -24,16 +24,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-26)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Phase 9 — Hook Reliability & Metrics (Phase 8 shipped in PR #381)
+**Current focus:** Phase 9 — Hook Reliability & Metrics
 
 ## Current Position
 
-Phase: 9 — Hook Reliability & Metrics
-Plan: Not started
-Status: Ready to plan
-Last activity: 2026-07-30 — Phase 8 complete, transitioned to Phase 9
+Phase: 9 (Hook Reliability & Metrics) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-07-31 — Phase 9 execution started
 
-Progress: [███████░░░] 67%
+Progress: [████████░░] 75%
 
 ## Performance Metrics
 
@@ -72,6 +72,7 @@ Progress: [███████░░░] 67%
 | Phase 08-kubernetes-service-controller P03 | 50min | 3 tasks | 2 files |
 | Phase 08 P05 | ~40min | 3 tasks | 4 files |
 | Phase 08 P04 | 70min | 3 tasks | 2 files |
+| Phase 09 P01 | 3min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -104,6 +105,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: Both required negative controls for task test:chart's new Service RBAC assertions were run manually (widened services verbs, deleted events rule), each proven to fail loudly, then reverted and re-verified green
 - [Phase ?]: syncService restructured around a switch-computed desired set with no early return, so all four D-17 stop-managing transitions delete through one code path
 - [Phase ?]: addOrAdoptService gates adoption on BOTH existing.Comment == k8s-service:<ns>/<name> AND hasServiceProvenance(tags) — refusing a foreign entry on either half
+- [Phase ?]: HooksConfig.DefaultTimeout field added ahead of Plan 09-02's TOML wiring so serve.go could compile against cfg.Hooks.DefaultTimeout; field carries no resolution/validation logic yet
+- [Phase ?]: executeHook records metrics against the caller's (runner) ctx, not the per-hook hookCtx, since hookCtx may already be Done() at recording time
 
 ### Pending Todos
 
@@ -132,6 +135,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-27T21:31:10.542Z
-Stopped at: Completed 08-04-PLAN.md (final plan of phase 08)
+Last session: 2026-07-31T15:25:36.658Z
+Stopped at: Completed 09-01-PLAN.md
 Resume file: None
