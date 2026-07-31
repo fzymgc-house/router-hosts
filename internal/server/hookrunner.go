@@ -58,9 +58,16 @@ func (r *hookRunner) Start() {
 // (latest-wins). Never blocks and never touches hook I/O; safe to call from
 // the RPC goroutine. When req supersedes an already-pending request, records
 // router_hosts_hook_runs_coalesced_total exactly once — the superseded
-// request is dropped and will never execute.
+// request is dropped and will never execute. A Trigger after Stop is a
+// no-op: it must not park a request nobody will ever drain (which would
+// otherwise leak and be misreported as coalesced by a later post-Stop
+// Trigger) and must not record a coalesce.
 func (r *hookRunner) Trigger(req hookRunRequest) {
 	r.mu.Lock()
+	if r.stopped {
+		r.mu.Unlock()
+		return
+	}
 	coalesced := r.pending != nil
 	r.pending = &req
 	r.mu.Unlock()
@@ -96,6 +103,10 @@ func (r *hookRunner) Stop(ctx context.Context) {
 		r.cancel()
 		<-r.done
 	}
+	// r.cancel is idempotent (safe to call more than once); calling it here
+	// unconditionally ensures the base context is released on the normal
+	// (in-deadline) path too, not just the deadline-expired path.
+	r.cancel()
 }
 
 // loop processes trigger wakeups until quit is closed, then drains any
