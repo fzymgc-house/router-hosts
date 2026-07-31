@@ -5,15 +5,15 @@ milestone_name: K8s-Native Automation
 current_phase: 9
 current_phase_name: Hook Reliability & Metrics
 status: executing
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-07-31T15:25:36.667Z"
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-07-31T15:35:14.642Z"
 last_activity: 2026-07-31
 last_activity_desc: Phase 9 execution started
 progress:
   total_phases: 3
   completed_phases: 2
   total_plans: 16
-  completed_plans: 12
+  completed_plans: 13
   percent: 67
 ---
 
@@ -29,11 +29,11 @@ See: .planning/PROJECT.md (updated 2026-07-26)
 ## Current Position
 
 Phase: 9 (Hook Reliability & Metrics) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-07-31 — Phase 9 execution started
 
-Progress: [████████░░] 75%
+Progress: [████████░░] 81%
 
 ## Performance Metrics
 
@@ -73,6 +73,7 @@ Progress: [████████░░] 75%
 | Phase 08 P05 | ~40min | 3 tasks | 4 files |
 | Phase 08 P04 | 70min | 3 tasks | 2 files |
 | Phase 09 P01 | 3min | 3 tasks | 8 files |
+| Phase 09 P02 | 15min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -107,6 +108,7 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: addOrAdoptService gates adoption on BOTH existing.Comment == k8s-service:<ns>/<name> AND hasServiceProvenance(tags) — refusing a foreign entry on either half
 - [Phase ?]: HooksConfig.DefaultTimeout field added ahead of Plan 09-02's TOML wiring so serve.go could compile against cfg.Hooks.DefaultTimeout; field carries no resolution/validation logic yet
 - [Phase ?]: executeHook records metrics against the caller's (runner) ctx, not the per-hook hookCtx, since hookCtx may already be Done() at recording time
+- [Phase ?]: resolveTimeouts() is the primary positivity-enforcement point for hook timeouts; validate() negative-checks are a backstop for hand-constructed configs bypassing LoadServerConfig
 
 ### Pending Todos
 
@@ -135,6 +137,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-31T15:25:36.658Z
-Stopped at: Completed 09-01-PLAN.md
+Last session: 2026-07-31T15:35:14.634Z
+Stopped at: Completed 09-02-PLAN.md
 Resume file: None
