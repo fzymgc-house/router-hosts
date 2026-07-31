@@ -57,17 +57,29 @@ this repo (Phase 7 and again inside Phase 8's own VALIDATION.md).
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | TBD | HOOK-01 | — | N/A | unit | `task test -- -run '^TestHookExecutor_RecordsSuccessMetric$' ./internal/server/` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HOOK-01 | — | N/A | unit | `task test -- -run '^TestHookExecutor_RecordsTimeoutStatus$' ./internal/server/` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HOOK-01 | — | N/A | unit | `task test -- -run '^TestNewHookExecutor_DefaultsToDisabledMetrics$' ./internal/server/` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HOOK-01 | — | N/A | unit | `task test -- -run '^TestNewMetrics$\|^TestDisabledMetrics$' ./internal/server/` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | HOOK-01 | — | N/A | unit | `task test -- -run '^TestRecordHookRunCoalesced$' ./internal/server/` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HOOK-02 | — | N/A | unit | `task test -- -run '^TestLoadServerConfig_HookTimeout' ./internal/config/` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HOOK-02 | T-09-01 | Non-positive timeout rejected at config load, not silently coerced | unit | `task test -- -run '^TestHookDefinition_Validate$' ./internal/config/` | ✅ extend | ⬜ pending |
-| TBD | TBD | TBD | HOOK-02 | — | N/A | integration | `task test -- -run '^TestRegenerateOutputs_DetachesFromHooks$' ./internal/server/` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HOOK-02 | — | N/A | integration | `task test -- -run '^TestHookRunner_CoalescesSupersededRuns$' ./internal/server/` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HOOK-02 | — | N/A | integration | `task test -- -run '^TestHookRunner_StopDrainsThenCancels$' ./internal/server/` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | HOOK-02 | T-09-02 | A detached hook is not killed by RPC-context cancellation | integration | `task test -- -run '^TestHookRunner_SurvivesRPCContextCancellation$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | HOOK-01 | — | N/A | unit | `task test -- -run '^TestHookExecutor_RecordsSuccessMetric$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | HOOK-02 | — | N/A | integration | `task test -- -run '^TestRegenerateOutputs_DetachesFromHooks$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | HOOK-02 | — | N/A | unit | `task test -- -run '^TestHookExecutor_ResolvesPerHookTimeout$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-01-T1 | 09-01 | 1 | HOOK-01 | T-09-04 | `ROUTER_HOSTS_ERROR` CR/LF/NUL sanitization survives the executor refactor | unit | `task test -- -run '^TestHookExecutor_ErrorMessageSanitization$\|^TestHookExecutor_ErrorMessageSanitizesAllControlChars$' ./internal/server/` | ✅ existing | ⬜ pending |
+| 09-01-T2 | 09-01 | 1 | HOOK-01 | — | N/A | build | `task build` (proves `serve.go` constructs metrics before the hook executor) | ✅ existing | ⬜ pending |
+| 09-01-T3 | 09-01 | 1 | HOOK-02 | T-09-05 | A detached hook is not killed by RPC-context cancellation | integration | `task test -- -run '^TestHookRunner_SurvivesRPCContextCancellation$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-01-T3 | 09-01 | 1 | HOOK-01 | — | N/A | unit | `task test -- -run '^TestNewHookExecutor_DefaultsToDisabledMetrics$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-01-T3 | 09-01 | 1 | HOOK-01 | — | N/A | integration | `task test -- -run '^TestRegenerateOutputs_NoHooksEmitsNoMetrics$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-02-T1 | 09-02 | 2 | HOOK-02 | — | N/A | unit | `task test -- -run '^TestLoadServerConfig_HookTimeoutResolution$\|^TestLoadServerConfig_HookTimeoutExplicitZeroInherits$\|^TestLoadServerConfig_EmptyHooksTable$' ./internal/config/` | ❌ W0 | ⬜ pending |
+| 09-02-T1 | 09-02 | 2 | HOOK-02 | T-09-01 | Every resolved effective timeout is positive after config load, for all key combinations | unit | `task test -- -run '^TestHooksConfig_ResolveTimeouts_Invariant$' ./internal/config/` | ❌ W0 | ⬜ pending |
+| 09-02-T2 | 09-02 | 2 | HOOK-02 | T-09-01 | Negative timeout rejected at config load, not silently coerced | unit | `task test -- -run '^TestLoadServerConfig_HookTimeoutRejectsNegative$\|^TestHookDefinition_Validate$' ./internal/config/` | ✅ extend | ⬜ pending |
+| 09-02-T2 | 09-02 | 2 | HOOK-02 | T-09-14 | Unquoted integer decodes to nanoseconds — pinned by test, mitigated by docs | unit | `task test -- -run '^TestLoadServerConfig_HookTimeoutEncoding$' ./internal/config/` | ❌ W0 | ⬜ pending |
+| 09-03-T1 | 09-03 | 2 | HOOK-01 | T-09-10 | A deadline kill records `status="timeout"`, never `status="failure"` | unit | `task test -- -run '^TestHookExecutor_RecordsTimeoutStatus$\|^TestHookExecutor_RecordsFailureStatus$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-03-T2 | 09-03 | 2 | HOOK-01 | T-09-11 | Coalesced runs use a separate instrument so `executions_total` stays a truthful execution count | unit | `task test -- -run '^TestRecordHookRunCoalesced$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-03-T2 | 09-03 | 2 | HOOK-01 | — | N/A | unit | `task test -- -run '^TestNewMetrics$\|^TestDisabledMetrics$' ./internal/server/` | ✅ extend | ⬜ pending |
+| 09-03-T3 | 09-03 | 2 | HOOK-01 | T-09-06 | Counter attribute key set is exactly `{name, type, status}` — no command output or error text | unit | `task test -- -run '^TestHookExecutor_SubMillisecondDurationRecorded$\|^TestHookExecutor_SameNameDistinctTypeSeries$\|^TestHookExecutor_BatchRecordsOneDatapointPerHookInOrder$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-04-T1 | 09-04 | 3 | HOOK-02 | T-09-02 | Pending work bounded at one; no trigger silently lost (executed + coalesced == triggered) | integration | `task test -- -run '^TestHookRunner_CoalescesSupersededRuns$\|^TestHookRunner_ConcurrentTriggersConserve$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-04-T2 | 09-04 | 3 | HOOK-02 | T-09-03 | Bounded drain then cancel — no hook subprocess outlives `Stop` past its deadline | integration | `task test -- -run '^TestHookRunner_StopDrainsThenCancels$\|^TestHookRunner_StopDrainsInFlightBatch$\|^TestHookRunner_StopDrainsPendingRequest$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-04-T2 | 09-04 | 3 | HOOK-02 | T-09-12 | A post-`Stop` `Trigger` parks no undrainable work | integration | `task test -- -run '^TestHookRunner_TriggerAfterStopIsNoOp$\|^TestHookRunner_StopIsIdempotent$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-04-T3 | 09-04 | 3 | HOOK-02 | — | N/A | integration | `task test -- -run '^TestHookRunner_BatchOrderIsDeclarationOrder$\|^TestHookRunner_SupersededNeverRunsAfterSuperseder$' ./internal/server/` | ❌ W0 | ⬜ pending |
+| 09-05-T1 | 09-05 | 4 | HOOK-01, HOOK-02 | T-09-13 | No stale fixed-30s / synchronous-hook claim survives in operator docs | docs | `rumdl check docs/guides/operations.md docs/contributing/architecture.md && task docs:build` | ✅ existing | ⬜ pending |
+| 09-05-T2 | 09-05 | 4 | HOOK-02 | T-09-14 | Unquoted-integer nanoseconds footgun documented | docs | `rumdl check docs/reference/configuration.md && task ci` | ✅ existing | ⬜ pending |
+| 09-05-T3 | 09-05 | 4 | HOOK-01 | — | N/A | manual | blocking human-verify checkpoint — see Manual-Only Verifications below | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

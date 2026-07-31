@@ -202,8 +202,17 @@ Plans:
 1. Each `on_success` / `on_failure` hook execution emits count, duration, and outcome metrics (closes the dead-metrics gap, router-hosts-0ed)
 2. A per-hook timeout is configurable (no longer a fixed 30s) and hook execution is bounded so a slow hook cannot block write processing (router-hosts-ee0)
 
-**Plans**: TBD
-**Status**: Not started
+**Plans**: 5 plans
+
+Plans:
+
+- [ ] 09-01-PLAN.md — Tracer: end-to-end detached hook run with a config-resolved timeout and a recorded execution metric (wave 1)
+- [ ] 09-02-PLAN.md — Config: `[hooks] default_timeout` resolution chain, positivity invariant, validation and TOML encoding edges (wave 2)
+- [ ] 09-03-PLAN.md — Metrics: timeout-vs-failure status classification and the `router_hosts_hook_runs_coalesced_total` instrument (wave 2)
+- [ ] 09-04-PLAN.md — Runner: coalescing accounting, conservation law, bounded drain-then-cancel shutdown (wave 3)
+- [ ] 09-05-PLAN.md — Docs: operations guide, configuration reference, and the phase CI gate (wave 4)
+
+**Status**: Planned
 
 ## 📋 v0.12.0 — Consumer-Owned Output (Phase Details)
 
