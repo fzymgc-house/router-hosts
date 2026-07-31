@@ -54,10 +54,12 @@
 - [x] **SVC-01**: Operator creates router DNS entries for LoadBalancer and NodePort Services from configured annotations
 - [x] **SVC-02**: Operator resolves Service IPs and removes entries when the Service is deleted
 
-### Hook Reliability & Metrics (Phase 9, active)
+### Hook Reliability & Metrics (Phase 9, shipped v0.12.0)
 
-- [x] **HOOK-01**: Server emits execution metrics (count, duration, outcome) for `on_success` / `on_failure` hooks (currently dead code — tracked as router-hosts-0ed)
-- [x] **HOOK-02**: Hook execution supports a configurable per-hook timeout and a bounded concurrency model so a slow hook cannot block the write path (currently fixed 30s + sequential — tracked as router-hosts-ee0)
+Archived: [`milestones/v0.12.0-REQUIREMENTS.md`](milestones/v0.12.0-REQUIREMENTS.md)
+
+- [x] **HOOK-01**: Server emits execution metrics (count, duration, outcome) for `on_success` / `on_failure` hooks (was dead code — tracked as router-hosts-0ed)
+- [x] **HOOK-02**: Hook execution supports a configurable per-hook timeout and a bounded concurrency model so a slow hook cannot block the write path (was fixed 30s + sequential — tracked as router-hosts-ee0)
 
 ### Consumer-Rendered Output (Phase 10, approved)
 
