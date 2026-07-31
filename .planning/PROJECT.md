@@ -14,9 +14,36 @@ router-hosts is a Go control plane for managing DNS host entries on Linux router
 | v0.11.0 — K8s-Native Automation | 7–8 | Gateway API routes (HTTPRoute/GRPCRoute/TLSRoute) and LoadBalancer/NodePort Services auto-populate router DNS |
 | v0.12.0 — Hook Reliability & Metrics | 9 | Post-edit hooks emit metrics and no longer block the write path; per-hook configurable timeouts |
 
-**Next:** v0.13.0 — Consumer-Owned Output (Phase 10). Moves output rendering from
-the server to the consumer, so one stateful server can feed N independent
-consumers without accreting a per-resolver format for each.
+**Next:** v0.13.0 — Consumer-Owned Output. Moves output rendering from the
+server to the consumer, so one stateful server can feed N independent consumers
+without accreting a per-resolver format for each.
+
+> **Phase numbering restarted at this milestone.** v0.10.13 through v0.12.0 used
+> continuous numbering (phases 1–9). v0.13.0 restarts at Phase 1. When a
+> historical phase number appears in an archived document it refers to the old
+> sequence; phase references in this milestone's live artifacts are v0.13.0-local.
+> Archived phase directories live under `milestones/<version>-phases/`.
+
+## Current Milestone: v0.13.0 Consumer-Owned Output
+
+**Goal:** A consumer defines its own output format and keeps it current, so one
+stateful server feeds N independent consumers and new resolver formats stop
+requiring an upstream release.
+
+**Target features:**
+
+- Template-rendered output — the caller supplies the template, the server renders host data through it
+- Sink mode — a long-lived invocation that holds the rendered artifact current as host data changes, without polling
+- A documented, versioned template data contract, treated as an explicit compatibility surface
+- Fail-loud rendering: an undefined key or a render error never produces a partial, empty, or half-written artifact
+- Lazy streaming end to end, so neither server nor client can be driven out of memory by the other
+
+**Key context:** Approved 2026-07-25 from #364, the only `approved-feature` in
+the backlog. Absorbs #23 (lazy `ExportHosts`) as TMPL-06 and #38 (client-side
+collection bound) as TMPL-07. TMPL-02 is the highest-risk requirement — once
+consumers depend on a template field set, that set becomes a compatibility
+obligation the proto contract does not cover. Explicitly out of scope:
+`unbound_conf_path` behavior (#349) and the existing `ExportHosts` format strings.
 
 ## Core Value
 
@@ -44,12 +71,13 @@ Shipped and running in the Go codebase at v0.10.13.
 - ✓ Operator-driven aggregate compaction (manual CompactAggregates RPC + gauges) — Phase 6
 - ✓ Gateway API support: operator reconciles HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS, IPs resolved from the parent Gateway's `status.addresses`, opt-in via `--enable-gateway` — Validated in Phase 7: Gateway API Support (GW-01, GW-02, GW-03)
 - ✓ Kubernetes Service controller: annotated LoadBalancer/NodePort Services register their hostnames, IPs resolved from `status.loadBalancer.ingress[]` or the `ip-address` annotation, opt-in via `--enable-service` — Validated in Phase 8: Kubernetes Service Controller (SVC-01, SVC-02). **Not yet deployed** — see the rollout note under Context.
+- ✓ Hook reliability: post-edit hooks emit execution metrics (count, duration, outcome), run detached from the write path with per-hook configurable timeouts, bounded concurrency, coalescing, and a bounded-drain shutdown — Validated in v0.12.0 Phase 9: Hook Reliability & Metrics (HOOK-01, HOOK-02)
 
 ### Active
 
 Open forward work toward the north star. Building toward these.
 
-- [ ] Hook reliability: emit hook execution metrics + configurable timeout/concurrency (Phase 9)
+- [ ] Consumer-rendered output: caller-supplied templates, one-shot and as a continuous sink, with a versioned template data contract and lazy streaming on both sides (v0.13.0 Phase 1 — TMPL-01…07)
 
 ### Out of Scope
 
@@ -112,6 +140,25 @@ Deliver only a manual `CompactAggregates` gRPC RPC + CLI and two aggregate-level
 | HostCompacted seed at preserved OCC version (v5b) | O(1) rehydration, OCC intact | ✓ Good (LOCKED) |
 | Manual remediate+observe compaction only (vl8) | YAGNI on auto/snapshots | ✓ Good (LOCKED) |
 
+## Evolution
+
+This document evolves at phase transitions and milestone boundaries.
+
+**After each phase transition** (via `/gsd-transition`):
+
+1. Requirements invalidated? → Move to Out of Scope with reason
+2. Requirements validated? → Move to Validated with phase reference
+3. New requirements emerged? → Add to Active
+4. Decisions to log? → Add to Key Decisions
+5. "What This Is" still accurate? → Update if drifted
+
+**After each milestone** (via `/gsd-complete-milestone`):
+
+1. Full review of all sections
+2. Core Value check — still the right priority?
+3. Audit Out of Scope — reasons still valid?
+4. Update Context with current state
+
 ---
 
-*Last updated: 2026-07-26 — Phase 7 complete (Gateway API Support); GW-01/GW-02/GW-03 validated*
+*Last updated: 2026-07-31 — Milestone v0.13.0 (Consumer-Owned Output) started; phase numbering restarted at 1*

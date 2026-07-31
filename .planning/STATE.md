@@ -1,39 +1,38 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.12.0
-milestone_name: Hook Reliability & Metrics
-current_phase: 9
-status: milestone_complete
-stopped_at: Completed 09-05-PLAN.md
-last_updated: "2026-07-31T17:24:46.494Z"
+milestone: v0.13.0
+milestone_name: Consumer-Owned Output
+status: planning
+last_updated: "2026-07-31T22:12:05.691Z"
 last_activity: 2026-07-31
-last_activity_desc: Milestone v0.12.0 archived; ready for v0.13.0
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
-  percent: 100
-current_phase_name: Hook Reliability & Metrics
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-26)
+See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Milestone v0.12.0 shipped and archived. Next: v0.13.0 — Consumer-Owned Output (Phase 10). Start with `/gsd-new-milestone`.
+**Current focus:** Milestone v0.13.0 — Consumer-Owned Output. Phase 1 (Consumer-Rendered Output: templates + sink) is defined with TMPL-01…07 and approved from #364; next step is `/gsd-discuss-phase 1`.
+
+> **Phase numbering restarted at v0.13.0.** Phases 1–9 belong to the previous
+> continuous sequence (v0.10.13–v0.12.0) and are archived under
+> `milestones/<version>-phases/`. A bare "Phase 1" in this milestone's live
+> artifacts means Consumer-Rendered Output, not the shipped Event-Sourced Host Core.
 
 ## Current Position
 
-Phase: 9 — Hook Reliability & Metrics (complete, unmerged)
-Plan: 5/5 complete
-Status: Milestone v0.12.0 archived; PR #389 merged as d9f609e; release PR #384 open
-Last activity: 2026-07-31 — Phase 9 complete (verified 24/25 must-haves, code review fixed, `task ci` green)
-
-Progress: [██████████] 100%
+Phase: 1 — Consumer-Rendered Output (templates + sink)
+Plan: —
+Status: Requirements defined (TMPL-01…07); phase not yet planned
+Last activity: 2026-07-31 — Milestone v0.13.0 started; phase numbering restarted at 1
 
 ## Performance Metrics
 

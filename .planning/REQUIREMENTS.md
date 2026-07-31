@@ -61,9 +61,10 @@ Archived: [`milestones/v0.12.0-REQUIREMENTS.md`](milestones/v0.12.0-REQUIREMENTS
 - [x] **HOOK-01**: Server emits execution metrics (count, duration, outcome) for `on_success` / `on_failure` hooks (was dead code — tracked as router-hosts-0ed)
 - [x] **HOOK-02**: Hook execution supports a configurable per-hook timeout and a bounded concurrency model so a slow hook cannot block the write path (was fixed 30s + sequential — tracked as router-hosts-ee0)
 
-### Consumer-Rendered Output (Phase 10, approved)
+### Consumer-Rendered Output (v0.13.0 Phase 1, approved)
 
-Approved 2026-07-25 from #364.
+Approved 2026-07-25 from #364. Originally scoped as Phase 10 under the previous
+continuous numbering; renumbered to Phase 1 when v0.13.0 restarted numbering.
 
 - [ ] **TMPL-01**: A caller supplies a template and receives host data rendered through it, without a code change to this project
 - [ ] **TMPL-02**: The field set a template may reference is documented and versioned as an explicit compatibility surface (at minimum `ip_address`, `hostname`, `aliases`, `tags`, `comment`) rather than being whatever the internal struct happens to expose
@@ -98,40 +99,44 @@ Acknowledged but deferred; not in the current roadmap.
 
 ## Traceability
 
-| Requirement | Phase | Status |
-|-------------|-------|--------|
-| CORE-01 | Phase 1 | Complete |
-| CORE-02 | Phase 1 | Complete |
-| CORE-03 | Phase 1 | Complete |
-| CORE-04 | Phase 1 | Complete |
-| CORE-05 | Phase 1 | Complete |
-| ALIAS-01 | Phase 1 | Complete |
-| CERT-01 | Phase 2 | Complete |
-| ACME-01 | Phase 2 | Complete |
-| ACME-02 | Phase 2 | Complete |
-| OPER-01 | Phase 3 | Complete |
-| OPER-02 | Phase 3 | Complete |
-| OPER-03 | Phase 3 | Complete |
-| OBS-01 | Phase 4 | Complete |
-| OBS-02 | Phase 4 | Complete |
-| DNSOUT-01 | Phase 5 | Complete |
-| DNSOUT-02 | Phase 5 | Complete |
-| COMP-01 | Phase 6 | Complete |
-| COMP-02 | Phase 6 | Complete |
-| GW-01 | Phase 7 | Complete |
-| GW-02 | Phase 7 | Complete |
-| GW-03 | Phase 7 | Complete |
-| SVC-01 | Phase 8 | Complete |
-| SVC-02 | Phase 8 | Complete |
-| HOOK-01 | Phase 9 | Complete |
-| HOOK-02 | Phase 9 | Complete |
-| TMPL-01 | Phase 10 | Pending |
-| TMPL-02 | Phase 10 | Pending |
-| TMPL-03 | Phase 10 | Pending |
-| TMPL-04 | Phase 10 | Pending |
-| TMPL-05 | Phase 10 | Pending |
-| TMPL-06 | Phase 10 | Pending |
-| TMPL-07 | Phase 10 | Pending |
+Phase numbering restarted at v0.13.0, so the Milestone column is required to
+read the Phase column unambiguously — v0.10.13 Phase 1 (Event-Sourced Host Core)
+and v0.13.0 Phase 1 (Consumer-Rendered Output) are different phases.
+
+| Requirement | Milestone | Phase | Status |
+|-------------|-----------|-------|--------|
+| CORE-01 | v0.10.13 | Phase 1 | Complete |
+| CORE-02 | v0.10.13 | Phase 1 | Complete |
+| CORE-03 | v0.10.13 | Phase 1 | Complete |
+| CORE-04 | v0.10.13 | Phase 1 | Complete |
+| CORE-05 | v0.10.13 | Phase 1 | Complete |
+| ALIAS-01 | v0.10.13 | Phase 1 | Complete |
+| CERT-01 | v0.10.13 | Phase 2 | Complete |
+| ACME-01 | v0.10.13 | Phase 2 | Complete |
+| ACME-02 | v0.10.13 | Phase 2 | Complete |
+| OPER-01 | v0.10.13 | Phase 3 | Complete |
+| OPER-02 | v0.10.13 | Phase 3 | Complete |
+| OPER-03 | v0.10.13 | Phase 3 | Complete |
+| OBS-01 | v0.10.13 | Phase 4 | Complete |
+| OBS-02 | v0.10.13 | Phase 4 | Complete |
+| DNSOUT-01 | v0.10.13 | Phase 5 | Complete |
+| DNSOUT-02 | v0.10.13 | Phase 5 | Complete |
+| COMP-01 | v0.10.13 | Phase 6 | Complete |
+| COMP-02 | v0.10.13 | Phase 6 | Complete |
+| GW-01 | v0.11.0 | Phase 7 | Complete |
+| GW-02 | v0.11.0 | Phase 7 | Complete |
+| GW-03 | v0.11.0 | Phase 7 | Complete |
+| SVC-01 | v0.11.0 | Phase 8 | Complete |
+| SVC-02 | v0.11.0 | Phase 8 | Complete |
+| HOOK-01 | v0.12.0 | Phase 9 | Complete |
+| HOOK-02 | v0.12.0 | Phase 9 | Complete |
+| TMPL-01 | **v0.13.0** | **Phase 1** | Pending |
+| TMPL-02 | **v0.13.0** | **Phase 1** | Pending |
+| TMPL-03 | **v0.13.0** | **Phase 1** | Pending |
+| TMPL-04 | **v0.13.0** | **Phase 1** | Pending |
+| TMPL-05 | **v0.13.0** | **Phase 1** | Pending |
+| TMPL-06 | **v0.13.0** | **Phase 1** | Pending |
+| TMPL-07 | **v0.13.0** | **Phase 1** | Pending |
 
 **Coverage:**
 
