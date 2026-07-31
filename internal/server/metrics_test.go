@@ -77,6 +77,7 @@ func TestNewMetrics(t *testing.T) {
 	assert.NotNil(t, m.storageDuration)
 	assert.NotNil(t, m.hookExecsTotal)
 	assert.NotNil(t, m.hookDuration)
+	assert.NotNil(t, m.hookRunsCoalescedTotal)
 	assert.NotNil(t, m.hostEntriesGauge)
 	assert.NotNil(t, m.meterProvider)
 }
@@ -92,6 +93,7 @@ func TestDisabledMetrics(t *testing.T) {
 	m.RecordRequest(ctx, "AddHost", "ok", 100*time.Millisecond)
 	m.RecordStorageOperation(ctx, "insert", "ok", 50*time.Millisecond)
 	m.RecordHookExecution(ctx, "notify-slack", "post_create", "ok", 10*time.Millisecond)
+	m.RecordHookRunCoalesced(ctx, "success")
 	m.SetHostEntriesCount(ctx, 42)
 
 	assert.Nil(t, m.meterProvider)
@@ -163,6 +165,38 @@ func TestRecordHookExecution(t *testing.T) {
 
 	histogram := findMetric(rm, "router_hosts_hook_duration_seconds")
 	require.NotNil(t, histogram, "hook_duration_seconds metric not found")
+}
+
+// router-hosts HOOK-01 / T-09-11: coalesced runs must use a dedicated
+// instrument, never a status="skipped" value on hookExecsTotal, so
+// executions_total stays a truthful count of runs that actually executed.
+func TestRecordHookRunCoalesced(t *testing.T) {
+	t.Parallel()
+
+	m, reader := newTestMetrics(t)
+	ctx := context.Background()
+
+	m.RecordHookRunCoalesced(ctx, "success")
+	m.RecordHookRunCoalesced(ctx, "success")
+	m.RecordHookRunCoalesced(ctx, "failure")
+
+	rm := collectMetrics(t, reader)
+
+	counter := findMetric(rm, "router_hosts_hook_runs_coalesced_total")
+	require.NotNil(t, counter, "hook_runs_coalesced_total metric not found")
+
+	sum, ok := counter.Data.(metricdata.Sum[int64])
+	require.True(t, ok, "expected Sum[int64] data type")
+	require.Len(t, sum.DataPoints, 2, "expected 2 data points (one per type)")
+
+	byType := make(map[string]int64)
+	for _, dp := range sum.DataPoints {
+		attrs := extractAttrs(dp)
+		assert.Len(t, attrs, 1, "coalesced counter attribute key set must be exactly {type}")
+		byType[attrs["type"]] = dp.Value
+	}
+	assert.Equal(t, int64(2), byType["success"])
+	assert.Equal(t, int64(1), byType["failure"])
 }
 
 func TestSetHostEntriesCount(t *testing.T) {
