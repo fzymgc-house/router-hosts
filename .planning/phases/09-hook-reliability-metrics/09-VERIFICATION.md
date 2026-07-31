@@ -1,7 +1,7 @@
 ---
 phase: 09-hook-reliability-metrics
 verified: 2026-07-31T16:51:16Z
-status: human_needed
+status: passed
 score: 24/25 must-haves verified
 behavior_unverified: 0
 overrides_applied: 0
@@ -139,3 +139,16 @@ Both are pre-existing, explicitly-acknowledged phase decisions (documented in 09
 
 *Verified: 2026-07-31T16:51:16Z*
 *Verifier: Claude (gsd-verifier)*
+
+## Human Verification Disposition
+
+**Resolved 2026-07-31 — status set to `passed` on explicit developer approval.**
+
+| Item | Disposition |
+|------|-------------|
+| 09-04 backstop — a `Trigger` arriving at the exact instant a batch finishes never vanishes | **Accepted.** The interleaving is not reproducible on demand. Closed by the documented mutex-ordering argument in `internal/server/hookrunner_test.go`, the deterministic conservation-law assertion (`executed + coalesced == triggered`), and a 50-way concurrent `-race` sample. Reasoned argument accepted in place of a direct test. |
+| Live OTel/Prometheus scrape | **Deferred, not run.** No collector available in the execution session. Unit tests prove instrument registration and the recording call sites; end-to-end export to a live collector remains unexercised. Recorded as deferred in `09-VALIDATION.md`, not as passed. |
+
+Both were pre-existing, explicitly-acknowledged phase decisions rather than new
+findings. No blocking gaps were identified. Score at sign-off: 24/25 must-haves
+verified, 1 abstained-then-accepted.

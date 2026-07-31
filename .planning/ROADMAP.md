@@ -32,7 +32,7 @@ Phase 10. Approved 2026-07-25 from #364.
 - [x] **Phase 6: Aggregate Compaction (manual RPC + gauges)** - Operator-driven event-log compaction with observability
 - [x] **Phase 7: Gateway API Support** - Reconcile HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS
 - [x] **Phase 8: Kubernetes Service Controller** - DNS entries for LoadBalancer/NodePort Services
-- [ ] **Phase 9: Hook Reliability & Metrics** - Hook execution metrics + configurable timeout/concurrency
+- [x] **Phase 9: Hook Reliability & Metrics** - Hook execution metrics + configurable timeout/concurrency
 - [ ] **Phase 10: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink
 
 ## ✅ v0.10.13 — v1 Shipped Baseline (Phase Details)
@@ -212,7 +212,7 @@ Plans:
 - [x] 09-04-PLAN.md — Runner: coalescing accounting, conservation law, bounded drain-then-cancel shutdown (wave 3)
 - [x] 09-05-PLAN.md — Docs: operations guide, configuration reference, and the phase CI gate (wave 4)
 
-**Status**: Planned
+**Status**: Complete (2026-07-31) — 5 plans across 4 waves; 2/2 success criteria verified, 24/25 must-haves (1 backstop accepted on a documented mutex-ordering argument). Code review found 0 Critical + 3 Warning + 3 Info; all 3 Warnings and 1 Info fixed and re-verified, 2 Info consciously skipped (shutdown-cancel status classification tradeoff; plan-ID commit scopes, unfixable without rewriting history). `task ci` green at 85.8% coverage. **Deferred:** the live OTel/Prometheus scrape was never run (no collector available) — recorded as deferred, not passed, in `09-VALIDATION.md`.
 
 ## 📋 v0.12.0 — Consumer-Owned Output (Phase Details)
 
@@ -248,5 +248,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 6. Aggregate Compaction | v1 Baseline | shipped | Complete | v0.10.13 |
 | 7. Gateway API Support | K8s-Native Automation | 6/6 | Complete | 2026-07-26 |
 | 8. Service Controller | K8s-Native Automation | 5/5 | Complete | 2026-07-30 |
-| 9. Hook Reliability & Metrics | K8s-Native Automation | 5/5 | In Progress|  |
+| 9. Hook Reliability & Metrics | K8s-Native Automation | 5/5 | Complete | 2026-07-31 |
 | 10. Consumer-Rendered Output | Consumer-Owned Output | 0/TBD | Not started | - |
