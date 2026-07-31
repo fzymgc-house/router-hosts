@@ -31,7 +31,7 @@ Phase 10. Approved 2026-07-25 from #364.
 - [x] **Phase 5: Split-Horizon DNS Output (dnsmasq + unbound)** - Leak-free per-name authoritative resolver config
 - [x] **Phase 6: Aggregate Compaction (manual RPC + gauges)** - Operator-driven event-log compaction with observability
 - [x] **Phase 7: Gateway API Support** - Reconcile HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS
-- [ ] **Phase 8: Kubernetes Service Controller** - DNS entries for LoadBalancer/NodePort Services
+- [x] **Phase 8: Kubernetes Service Controller** - DNS entries for LoadBalancer/NodePort Services
 - [ ] **Phase 9: Hook Reliability & Metrics** - Hook execution metrics + configurable timeout/concurrency
 - [ ] **Phase 10: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink
 
@@ -190,7 +190,7 @@ Plans:
 
 - [x] 08-04-PLAN.md — Desired-set diff, provenance-gated adoption, and finalizer cleanup
 
-**Status**: Planned — Rust-era design (2026-01-02) never ported to the Go operator; north-star parity gap
+**Status**: Complete (2026-07-30) — 5 plans across 4 waves; 2/2 success criteria verified. Deep code review found 2 Critical + 2 Warning, all fixed and re-verified; security audit closed 20/21 threats with `threats_open: 0`; UAT 39/40 (1 blocked on deployment). Shipped in PR #381. **Deployment caveat:** T-08-04 (Events RBAC) remains live in production until v0.11.0 is released and the ArgoCD pin is bumped — see `08-SECURITY.md` § Deployment Caveat.
 
 ### Phase 9: Hook Reliability & Metrics
 
@@ -237,7 +237,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 →
 | 4. Observability | v1 Baseline | shipped | Complete | v0.10.13 |
 | 5. Split-Horizon DNS Output | v1 Baseline | shipped | Complete | v0.10.13 |
 | 6. Aggregate Compaction | v1 Baseline | shipped | Complete | v0.10.13 |
-| 7. Gateway API Support | K8s-Native Automation | 6/6 | In Progress|  |
-| 8. Service Controller | K8s-Native Automation | 5/5 | In Progress|  |
+| 7. Gateway API Support | K8s-Native Automation | 6/6 | Complete | 2026-07-26 |
+| 8. Service Controller | K8s-Native Automation | 5/5 | Complete | 2026-07-30 |
 | 9. Hook Reliability & Metrics | K8s-Native Automation | 0/TBD | Not started | - |
 | 10. Consumer-Rendered Output | Consumer-Owned Output | 0/TBD | Not started | - |

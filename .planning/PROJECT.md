@@ -29,12 +29,12 @@ Shipped and running in the Go codebase at v0.10.13.
 - ✓ Split-horizon DNS output: dnsmasq + unbound (ECH/AAAA-leak-free per-name `static` zones) — Phase 5
 - ✓ Operator-driven aggregate compaction (manual CompactAggregates RPC + gauges) — Phase 6
 - ✓ Gateway API support: operator reconciles HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS, IPs resolved from the parent Gateway's `status.addresses`, opt-in via `--enable-gateway` — Validated in Phase 7: Gateway API Support (GW-01, GW-02, GW-03)
+- ✓ Kubernetes Service controller: annotated LoadBalancer/NodePort Services register their hostnames, IPs resolved from `status.loadBalancer.ingress[]` or the `ip-address` annotation, opt-in via `--enable-service` — Validated in Phase 8: Kubernetes Service Controller (SVC-01, SVC-02). **Not yet deployed** — see the rollout note under Context.
 
 ### Active
 
 Open forward work toward the north star. Building toward these.
 
-- [ ] Kubernetes Service controller: DNS entries for LoadBalancer/NodePort Services (Phase 8)
 - [ ] Hook reliability: emit hook execution metrics + configurable timeout/concurrency (Phase 9)
 
 ### Out of Scope

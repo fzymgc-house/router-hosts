@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.11.0
 milestone_name: K8s-Native Automation
-current_phase: 08
-current_phase_name: Kubernetes Service Controller
-status: "Phase 8 shipped — PR #381"
+current_phase: 9
+current_phase_name: Hook Reliability & Metrics
+status: planning
 stopped_at: Completed 08-04-PLAN.md (final plan of phase 08)
-last_updated: "2026-07-31T03:29:40.817Z"
-last_activity: 2026-07-26
-last_activity_desc: Phase 08 execution started
+last_updated: "2026-07-31T03:32:42.417Z"
+last_activity: 2026-07-30
+last_activity_desc: Phase 8 complete, transitioned to Phase 9
 progress:
   total_phases: 3
   completed_phases: 2
@@ -24,22 +24,22 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-26)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Phase 08 — Kubernetes Service Controller
+**Current focus:** Phase 9 — Hook Reliability & Metrics (Phase 8 shipped in PR #381)
 
 ## Current Position
 
-Phase: 08 (Kubernetes Service Controller) — EXECUTING
-Plan: 5 of 5
-Status: Phase 8 shipped — PR #381
-Last activity: 2026-07-26 — Phase 08 execution started
+Phase: 9 — Hook Reliability & Metrics
+Plan: Not started
+Status: Ready to plan
+Last activity: 2026-07-30 — Phase 8 complete, transitioned to Phase 9
 
-Progress: [██████████] 100%
+Progress: [███████░░░] 67%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 6 phases shipped pre-GSD (no per-plan timing captured)
+- Total plans completed: 11 phases shipped pre-GSD (no per-plan timing captured)
 - Average duration: n/a (retrospective baseline)
 - Total execution time: n/a
 
@@ -48,7 +48,8 @@ Progress: [██████████] 100%
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
 | 1–6 (shipped) | shipped | - | - |
-| 07 | 6 | - | - |
+| 7 | 6 | - | - |
+| 8 | 5 | - | - |
 
 **Recent Trend:**
 
