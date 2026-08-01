@@ -44,7 +44,10 @@ behavior, demonstrated by existing tests still passing.
 ### Template data contract (TMPL-02)
 
 - **D-03:** The template's top-level value is a **struct with `.Entries` plus
-  metadata** (`.Count`, `.GeneratedAt`, `.ContractVersion`), not a bare slice.
+  metadata** (`.Count`, `.GeneratedAt`, `.ContractVersion`, `.ChangeID`), not a
+  bare slice. (`.ChangeID` added 2026-07-31 — see D-18. It absorbed as a pure
+  metadata addition, which is exactly the forward-compatibility this decision
+  was rated one-way to protect.)
   Templates write `{{range .Entries}}`. — **Reversibility:** one-way — with a
   bare slice, `.` is permanently bound to the entry list, so adding any metadata
   field later silently changes what every existing consumer template means.
@@ -92,11 +95,30 @@ behavior, demonstrated by existing tests still passing.
   **server-down** case: when the server is unreachable, server-side metrics are
   unavailable by definition while sinks keep serving their last-good artifacts —
   the local file is then the only health signal.
-- **D-12:** On any failure — connection loss, render error, write error — the
-  previously written artifact is left **byte-identical**. Staleness is surfaced
-  through the marker and metrics, never by truncating or removing the artifact.
-  A silently stale but structurally valid zone is the 0.10.12 failure mode #364
-  was filed over.
+- **D-12:** On a **connection loss, render error, or write error** — every failure
+  that occurs *before* the artifact is replaced — the previously written artifact
+  is left **byte-identical**. Staleness is surfaced through the marker and
+  metrics, never by truncating or removing the artifact. A silently stale but
+  structurally valid zone is the 0.10.12 failure mode #364 was filed over.
+- **D-12a (amended 2026-07-31, cross-AI review H3):** D-12 does **not** extend to
+  a post-write hook failure, and a sink cycle therefore has **three** distinct
+  outcomes, not two. The plans originally claimed hook errors also left the
+  artifact untouched, which is impossible — by the time the hook runs the
+  artifact has already been replaced.
+
+  | Outcome | Artifact on disk | What is actually wrong |
+  |---|---|---|
+  | Render or write failed | **unchanged** (previous artifact) | New data never reached disk |
+  | **Artifact written, hook failed** | **updated and retained** | File is current; the resolver may still be serving the old zone |
+  | Connection lost | **unchanged** (previous artifact) | No new data to write; artifact is stale |
+
+  The artifact is **never rolled back after the hook has run.** The hook is a
+  resolver reload; on failure it is unknown whether the resolver already read the
+  new file, so reverting could leave the on-disk file and the running resolver
+  config actively disagreeing — strictly worse than retaining. The middle row is
+  the operationally important one and must be distinguishable in both the sidecar
+  and the upstream metrics: "your zone file is correct but your resolver did not
+  pick it up" is a different page than "your zone file is old".
 - **D-13:** Metric label cardinality is bounded by mTLS CN, not by
   consumer-supplied names. This repo already treats cardinality as a design
   constraint (Phase 6's compaction gauges were explicitly cardinality-safe).
@@ -122,6 +144,71 @@ behavior, demonstrated by existing tests still passing.
   on the CLI is therefore in scope as part of TMPL-05's "without operator
   intervention" — the consumer needs a way to reload its resolver after a
   successful write.
+
+### Template escaping (added 2026-07-31, cross-AI review M1)
+
+- **D-17:** The contract publishes a **sanitizing template function** in its
+  FuncMap as part of **v1**, and the shipped examples use it wherever they emit
+  `.Comment` or `.Tags`. — **Reversibility:** costly — adding FuncMap entries
+  later is technically backward-compatible, but once examples ship without one,
+  consumers copy the unsafe pattern and there is no way to recall the templates
+  already in the wild.
+
+  Rationale: D-01 moved rendering off the server, which moved escaping with it.
+  All three server generators sanitize today — `sanitizeCommentField`
+  (`internal/server/hostsfile.go:123-129`) collapses CR/LF to spaces, applied at
+  `:106` and `:111` and reached by the unbound generator via `formatSuffix`. It
+  exists because of a real review finding on #349 (`router-hosts-00b.2`), not as
+  speculative hardening. `text/template` performs **no** escaping (that is
+  `html/template`), so a consumer template doing `{{ .Comment }}` reproduces the
+  exact bug #349 closed: a comment containing a newline terminates the `#` line
+  and the following text becomes live resolver directives.
+
+  This is reachable from cluster state, not just from a trusted operator at a
+  CLI — the Kubernetes operator writes host entries from annotations. Leaving
+  escaping to each consumer is precisely the "subtle rule re-derived per
+  consumer, fails silently" outcome #364 was filed to prevent.
+
+### Change identity (added 2026-07-31)
+
+- **D-18:** Every snapshot carries a **change ID** identifying the server state
+  it represents. It is the **ULID of the newest event in the log**
+  (`MAX(event_id)`), not a value minted per transmission.
+- **D-19:** The change ID identifies **state, not transmission.** The same state
+  yields the same ID for every consumer — that is what makes cross-consumer
+  convergence observable ("resolver-a and resolver-b are both at 01K…4F"), which
+  the phase goal implies but nothing else in the design provides. A fresh ID per
+  snapshot would make the field decorative.
+- **D-20:** `MAX(event_id)` is sound **only because event IDs are monotonic**.
+  `CommandHandler` holds a `*ulid.MonotonicEntropy` (`internal/server/commands.go:22`,
+  constructed at `:32`/`:43`) and every append path mints its ID through
+  `newID()` (`:56-61`) into `newEnvelope` (`:77`). With bare `ulid.Make()`, two
+  events in the same millisecond could get suffixes `…FFFF` then `…0001`, leaving
+  `MAX` pinned at the first — **the change ID would not advance even though state
+  changed**, and a deduping client would skip a real update and serve a stale
+  zone silently. Any change to ID generation must preserve monotonicity; the
+  derivation site must carry a comment saying so. `event_id` is `TEXT PRIMARY KEY`
+  (`001_initial.sql:3`), so `MAX()` is an indexed seek, not a scan.
+- **D-21 (boundary — do not cross):** A client records the last change ID it
+  rendered and **may skip a redundant render** when the incoming ID matches.
+  The **server MUST NOT** use a client-reported change ID to decide whether to
+  send. Client-side skip keeps the server stateless; server-side skip requires
+  per-consumer position tracking, which is exactly the resume token D-06 and
+  D-08 reject. These are the same optimization on opposite sides of the wire and
+  only one is permitted — recorded explicitly because the forbidden half is a
+  natural-sounding efficiency win someone will propose later.
+
+  Guard the client-side skip on **ID matches AND the artifact still exists**, so
+  an out-of-band deletion is not skipped into permanence.
+- **D-22:** Known and accepted: compaction advances `MAX(event_id)` without
+  changing host state (`CompactAggregate` replaces the log with a fresh
+  `HostCompacted` seed), costing one redundant render per compaction. Compaction
+  is manual-only under ADR `router-hosts-vl8`, so this is rare. An empty store
+  makes `MAX` return NULL and needs a zero-ULID sentinel.
+
+  Note `RollbackToSnapshot` is safe: it deletes and re-appends, and the
+  re-appended events carry newer ULIDs, so the change ID advances rather than
+  going backward.
 
 ### Claude's Discretion
 

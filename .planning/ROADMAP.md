@@ -63,15 +63,16 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 
 **Goal**: A consumer defines its own output format and keeps it current, so one stateful server feeds N independent consumers and new resolver formats stop requiring an upstream release.
 **Depends on**: Nothing in this milestone. Builds on already-shipped surfaces — the event-sourced host core and `ExportHosts` streaming (v0.10.13, previous-numbering Phase 1) — so it starts from a green baseline rather than waiting on sibling work.
-**Requirements**: TMPL-01, TMPL-02, TMPL-03, TMPL-04, TMPL-05, TMPL-06, TMPL-07
+**Requirements**: TMPL-01, TMPL-02, TMPL-03, TMPL-04, TMPL-05, TMPL-06, TMPL-07, TMPL-08
 **Success Criteria** (what must be TRUE):
 
 1. A caller supplies a template and receives host data rendered through it, with no code change to this project
 2. The field set a template may reference is documented and versioned, and a template referencing an undefined key fails loudly rather than rendering empty
 3. A render or write failure leaves any previously written artifact byte-identical, and a concurrent reader never observes a partially written file
 4. Sink mode reflects a host mutation without operator intervention and recovers on its own after a connection interruption, without emitting a truncated artifact
-5. Neither side of a stream can be driven out of memory by the other: the server yields lazily instead of materializing the full result set, and the client refuses an unbounded response rather than collecting it
-6. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
+5. The client cannot be driven out of memory by the server: wire messages are bounded, the client applies backpressure, and it refuses an unbounded response rather than collecting it. **Server-side materialization is explicitly out of scope for this phase** — see the amended TMPL-06 and follow-up issue #400; `store.ListAll` still folds every aggregate's event log into memory before streaming
+6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
+7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
 **Plans**: 8 plans
 
