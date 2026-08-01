@@ -100,6 +100,139 @@ filled in per task during planning.
 
 ---
 
+## Manual Verification Record (Plan 01-08 Task 3)
+
+Recorded 2026-08-01, at phase close. All four deployment-level behaviors
+below require real infrastructure (a live unbound host, a second machine)
+that this execution environment does not have. Following the precedent
+phase 9 set for its OTel scrape verification, each is recorded explicitly
+as **NOT-RUN** — not claimed as done, and not softened into "covered by
+automated tests" — with the reason, the concrete steps a future operator
+can execute against real infrastructure, and the automated coverage that
+DOES exist stated plainly so the gap is scoped honestly rather than
+looking larger or smaller than it is.
+
+### 1. Resolver reload actually reloads a real resolver (TMPL-05 / D-16)
+
+**Status: NOT-RUN.** Reason: no unbound host / no second machine available
+in this environment.
+
+**Steps for a future operator:**
+
+1. On a host running unbound, start:
+   `router-hosts watch --template ./examples/templates/unbound.tmpl --out /etc/unbound/conf.d/router-hosts.conf --exec 'unbound-control reload'`
+2. From another machine, add a host through the CLI.
+3. Confirm `dig @<that host> <new-name>` answers correctly with no
+   operator action on the sink host.
+4. Confirm the sidecar `.status` file shows a fresh `last_success` and a
+   zero `consecutive_failures`.
+
+**Automated coverage that DOES exist:** `TestPostWriteHook_Success` /
+`TestPostWriteHook_NonZeroExit` / `TestPostWriteHook_Timeout` (unit,
+`internal/client/commands/posthook_test.go`) prove the hook is invoked
+with the right command and its exit/timeout is classified correctly.
+`TestWatch_SuccessRunsPostWriteHook` (unit,
+`internal/client/commands/watch_test.go`) proves the hook runs after a
+successful write. None of these prove a third-party `unbound` process
+actually reloaded and started answering the new record — that is what
+this manual step alone can prove.
+
+### 2. Two independent resolver nodes stay consistent (TMPL-01 / TMPL-08 / phase goal)
+
+**Status: NOT-RUN.** Reason: no unbound host / no second machine available
+in this environment.
+
+**Steps for a future operator:**
+
+1. Point two sinks on two different hosts at the same server with the
+   same template.
+2. Mutate one host entry.
+3. Confirm both artifacts converge to identical bytes.
+4. Confirm both sidecar files report the **same** `rendered_change_id`,
+   matching on both hosts.
+5. Confirm `router_hosts_sink_converged` reads 1 for both CNs.
+6. Confirm both resolvers answer identically.
+
+**Automated coverage that DOES exist:** `TestE2E_WatchSnapshotOverMTLS`
+(e2e, `e2e/e2e_test.go`, plan 01-08) proves that two `Watch` requests over
+unchanged server state return the *same* change ID over a real mTLS
+connection — the single-node half of D-19. Nothing in the automated suite
+runs two independent consumer processes against one server simultaneously;
+that is a genuinely deployment-level property a single-node test cannot
+observe.
+
+### 3. Restart does not trigger a fleet-wide reload; staleness/recovery behave correctly (TMPL-05 / TMPL-08 / D-12 / D-21)
+
+**Status: NOT-RUN.** Reason: no unbound host / no second machine available
+in this environment.
+
+**Steps for a future operator:**
+
+1. With two sinks running, stop the server.
+2. Confirm both artifacts remain byte-identical (compare checksums before
+   and after) and both sidecar files show a rising
+   `consecutive_failures`.
+3. Confirm the server-side sink last-seen metric ages (rather than
+   disappearing) while the server is still up, and that after a server
+   restart the metric's absence correctly reads as "not seen since
+   restart" (D-10).
+4. Restart the server and confirm both sinks reconnect on their own.
+5. Confirm that because the change ID is unchanged, **neither** sink
+   re-runs its reload command — the fleet-wide reload storm the change ID
+   exists to prevent.
+6. Mutate a host and confirm both sinks rewrite and reload.
+
+**Automated coverage that DOES exist:** `TestE2E_WatchSinkSurvivesServerRestart`
+(e2e, `e2e/e2e_test.go`, plan 01-08) proves this exact sequence for a
+**single** sink against a real, genuinely stopped-and-restarted server
+over real mTLS: byte-identical artifact during the outage, a rising
+failure count, automatic reconnect, a rewrite on a post-restart mutation,
+and the failure count returning to zero.
+`TestWatch_SkipsRedundantRenderOnSameChangeID` (unit,
+`internal/client/commands/watch_test.go`, plan 01-07) proves the D-21
+skip fires on an unchanged change ID. What remains genuinely untested
+automatically is the **fleet-wide** absence of a reload storm across
+multiple simultaneous consumers, and the server-side last-seen metric's
+behavior across a real restart under real OTel scraping.
+
+### 4. Reload-failure outcome is diagnosable end to end (D-12a)
+
+**Status: NOT-RUN.** Reason: no unbound host / no second machine available
+in this environment.
+
+**Steps for a future operator:**
+
+1. On one sink host, point `--exec` at a command that exits non-zero (for
+   example `sh -c 'exit 1'`).
+2. Mutate a host entry.
+3. Confirm the artifact **was** updated to the new content (never rolled
+   back).
+4. Confirm the sidecar shows `reload_failed: true` with a fresh
+   `last_success` and a zero `consecutive_failures`.
+5. Confirm `router_hosts_sink_reload_failed` reads 1 for that CN while
+   `router_hosts_sink_last_success_timestamp_seconds` is fresh.
+6. Restore a working reload command, mutate again, and confirm the flag
+   clears.
+
+**Automated coverage that DOES exist:** `TestWatch_HookFailureRetainsNewArtifact`
+and `TestSinkStatus_ReloadFailureKeepsWriteHealth` (unit,
+`internal/client/commands/watch_test.go` /
+`internal/client/commands/sinkstatus_test.go`, plan 01-07) prove the
+client-side half of this contract exactly: the newly rendered artifact is
+retained, `reload_failed` is set, and `consecutive_failures` is left
+untouched. What is not automatically proven is the server-side metric
+(`router_hosts_sink_reload_failed`) reading 1 for a real consumer's CN
+over a real OTel scrape, and a real resolver's actual (non-)reload
+behavior.
+
+### Automated gate re-run at phase close (2026-08-01)
+
+- `task ci` — exit 0
+- `task test:coverage:ci` — 86.2% (>= 80% threshold)
+- `task test:e2e` — exit 0, including `TestE2E_WatchSnapshotOverMTLS`,
+  `TestE2E_WatchPushesOnMutation`, `TestE2E_WatchSinkHealthKeyedByCN`,
+  and `TestE2E_WatchSinkSurvivesServerRestart`
+
 ## Validation Sign-Off
 
 - [ ] All tasks have `<automated>` verify or a Wave 0 dependency

@@ -4,17 +4,17 @@ milestone: v0.13.0
 milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
-status: executing
-stopped_at: Completed 01-07-PLAN.md
-last_updated: "2026-08-01T19:47:42.410Z"
+status: verifying
+stopped_at: Completed 01-08-PLAN.md (phase 01 complete, 9/9 plans)
+last_updated: "2026-08-01T20:51:08.277Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 9
-  completed_plans: 8
-  percent: 0
+  completed_plans: 9
+  percent: 100
 ---
 
 # Project State
@@ -35,7 +35,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
 Plan: 9 of 9
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-01 — Phase 01 execution started
 
 ## Performance Metrics
@@ -89,6 +89,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 01 P03 | ~11min | 3 tasks | 12 files |
 | Phase 01 P06 | 21min | 3 tasks | 7 files |
 | Phase 01 P07 | 23min | 3 tasks | 9 files |
+| Phase 01 P08 | 62min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -154,6 +155,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-07: runWatchSupervised resets backoff on watchSessionResult.SnapshotWritten, not on err == nil, so a session that wrote then later failed still resets (review H5)
 - [Phase ?]: 01-07: --status-interval flag's own default is WatchPolicy.normalized().StatusInterval; Changed() distinguishes an explicit override from Cobra's default (review round-3 M2), verified RED against a literal 30s default
 - [Phase ?]: 01-07: sidecar adopted at startup only when --out artifact still exists; otherwise loaded rendered_change_id is discarded and health starts empty (review M3)
+- [Phase ?]: 01-08: stopServer calls grpc.Server.Stop() directly (not only context cancellation), since Server.Run's gracefulStop drains up to 30s and would keep an open WatchHosts stream alive through the simulated outage
+- [Phase ?]: 01-08: docs/reference/cli.md kept as hand-maintained edit over task docs:build's regenerated output, which fails rumdl (missing code-fence language) — filed as issue #402
+- [Phase ?]: 01-08: all four manual deployment verifications recorded as explicitly NOT-RUN in 01-VALIDATION.md (no unbound host / no second machine in this environment), per operator checkpoint decision, mirroring phase 9's OTel-scrape precedent
 
 ### Pending Todos
 
@@ -182,6 +186,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T19:47:42.402Z
-Stopped at: Completed 01-07-PLAN.md
+Last session: 2026-08-01T20:51:08.269Z
+Stopped at: Completed 01-08-PLAN.md (phase 01 complete, 9/9 plans)
 Resume file: None

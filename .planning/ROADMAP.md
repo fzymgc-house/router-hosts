@@ -74,7 +74,7 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
 7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: 8/9 plans executed
+**Plans**: 9/9 plans executed
 
 Plans:
 **Wave 1**
@@ -102,7 +102,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 01-08-PLAN.md — Real-mTLS e2e with server stop/start, operator guide, manual verification checkpoint (wave 6)
+- [x] 01-08-PLAN.md — Real-mTLS e2e with server stop/start, operator guide, manual verification checkpoint (wave 6)
 
 **Status**: Planned 2026-07-31 — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07. **Replanned 2026-07-31** after cross-AI review (`01-REVIEWS.md`, reviewers codex + pi): all 8 plans revised in place, plan count and wave structure unchanged. TMPL-08 (change identity) added; TMPL-06 rescoped with storage-layer laziness deferred to #400
 
@@ -129,7 +129,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 8/9 | In Progress|  |
+| 1. Consumer-Rendered Output | 9/9 | In Progress|  |
 
 **Shipped (previous continuous numbering):**
 
