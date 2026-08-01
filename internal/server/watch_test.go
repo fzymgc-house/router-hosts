@@ -120,6 +120,54 @@ func TestService_WatchHosts_ChangeIDEmptyStore(t *testing.T) {
 	assert.Equal(t, storage.ZeroChangeID, complete.GetChangeId())
 }
 
+func TestService_WatchHosts_StreamsPerEntry(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	const n = 3
+	for i := range n {
+		_, err := env.handler.AddHost(ctx, "192.168.1.1", "entry"+string(rune('a'+i))+".local", nil, nil, nil)
+		require.NoError(t, err)
+	}
+
+	stream, err := env.client.WatchHosts(ctx)
+	require.NoError(t, err)
+	require.NoError(t, stream.Send(&hostsv1.WatchHostsRequest{Follow: false}))
+	require.NoError(t, stream.CloseSend())
+
+	var entryCount, completeCount int
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		if e := resp.GetEntry(); e != nil {
+			entryCount++
+		}
+		if c := resp.GetComplete(); c != nil {
+			completeCount++
+			assert.EqualValues(t, n, c.GetCount())
+		}
+	}
+
+	assert.Equal(t, n, entryCount, "exactly one message per entry")
+	assert.Equal(t, 1, completeCount, "exactly one terminator")
+	// The oneof makes more than one entry per message structurally
+	// impossible; the message-count relationship is the assertion that
+	// stands in for "every entry-arm message carried exactly one entry".
+	assert.Equal(t, n+1, entryCount+completeCount, "total messages must equal entry count plus one terminator")
+}
+
+func TestService_WatchHosts_EmptyStoreSendsTerminatorOnly(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	entries, complete := oneShotWatch(t, ctx, env.client)
+	assert.Empty(t, entries)
+	assert.EqualValues(t, 0, complete.GetCount())
+}
+
 func TestService_WatchHosts_FollowUnimplemented(t *testing.T) {
 	env := newServiceTestEnv(t)
 	ctx := context.Background()
