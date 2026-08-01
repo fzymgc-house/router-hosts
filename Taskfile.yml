@@ -33,6 +33,11 @@ tasks:
     deps: ['docker:build']
     cmds:
       - go test -tags docker_e2e -count=1 -v -timeout 5m ./e2e/
+  test:e2e:proc:
+    desc: Run real-process E2E tests (both sides of mTLS are real OS processes)
+    deps: ['build']
+    cmds:
+      - go test -tags proc_e2e -count=1 -v -timeout 5m ./e2e/
   test:coverage:
     desc: Run tests with HTML coverage report
     cmds:
