@@ -73,8 +73,20 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 5. Neither side of a stream can be driven out of memory by the other: the server yields lazily instead of materializing the full result set, and the client refuses an unbounded response rather than collecting it
 6. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: TBD
-**Status**: Not started — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07
+**Plans**: 8 plans
+
+Plans:
+
+- [ ] 01-01-PLAN.md — Tracer: end-to-end template render over a new `WatchHosts` RPC, plus the shared atomic writer (wave 1)
+- [ ] 01-02-PLAN.md — Template data contract: version gate, published field set, worked examples (wave 2)
+- [ ] 01-04-PLAN.md — Lazy wire streaming and gRPC keepalive on both sides (wave 2)
+- [ ] 01-05-PLAN.md — Sink health primitives: mTLS CN extraction, health registry, OTel gauges (wave 2)
+- [ ] 01-03-PLAN.md — Bounded, fail-loud client stream collection (wave 3)
+- [ ] 01-06-PLAN.md — Server-side sink streaming: change notification and concurrent follow mode (wave 3)
+- [ ] 01-07-PLAN.md — Client sink CLI: `watch`, sidecar status, post-write hook, reconnect (wave 4)
+- [ ] 01-08-PLAN.md — Real-mTLS e2e, operator guide, and manual verification checkpoint (wave 5)
+
+**Status**: Planned 2026-07-31 — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07
 
 **Highest-risk requirement**: TMPL-02. Once consumers depend on a template field
 set, that set becomes a compatibility surface the proto contract does not cover
@@ -99,7 +111,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 0/TBD | Not started | - |
+| 1. Consumer-Rendered Output | 0/8 | Planned | - |
 
 **Shipped (previous continuous numbering):**
 
