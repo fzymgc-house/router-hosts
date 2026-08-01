@@ -1,0 +1,23 @@
+{{define "contract_version"}}1{{end -}}
+{{/*
+	Worked example: hosts(5) output (TMPL-02).
+	See docs/reference/template-contract.md for the full field/function set.
+
+	One line per entry: address, a tab, the hostname, then any aliases
+	space-separated, then an inline "# comment [tags]" suffix when a
+	comment or tags are present.
+
+	.Comment and each .Tags element are writer-supplied and unescaped
+	without `sanitize` — a value containing a newline would otherwise
+	break out of this "# ..." comment line. See the "Template functions"
+	section of the contract page. Every reference to .Comment below is
+	bound to $comment via sanitize immediately, rather than emitted raw;
+	every tag element is sanitized individually before being joined into
+	the bracketed list.
+*/ -}}
+{{range .Entries -}}
+{{$comment := sanitize .Comment -}}
+{{$tags := .Tags -}}
+{{.IPAddress}}{{"\t"}}{{.Hostname}}{{range .Aliases}} {{.}}{{end -}}
+{{if or $comment $tags}}{{"\t"}}#{{if $comment}} {{$comment}}{{end}}{{if $tags}} [{{range $i, $t := $tags}}{{if $i}}, {{end}}{{sanitize $t}}{{end}}]{{end}}{{end}}
+{{end -}}
