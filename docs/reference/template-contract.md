@@ -22,6 +22,14 @@ itself.
 | `.ContractVersion` | `string` | The contract version this server served this snapshot under. |
 | `.ChangeID` | `string` | A ULID identifying the server state this snapshot represents. See below — its guarantee is narrower than it looks. |
 
+`.GeneratedAt` is a UTC `time.Time` carrying the nanosecond precision of the
+protobuf `Timestamp` it came from. Go's default rendering of a `time.Time`
+(what `{{.GeneratedAt}}` prints unformatted) includes that nanosecond
+component and a monotonic-clock-reading suffix that most consumers do not
+want in a generated config file. Format it explicitly instead, for example
+`{{.GeneratedAt.Format "2006-01-02 15:04:05 UTC"}}`, rather than relying on
+the default `String()` output.
+
 ### Per-entry fields
 
 | Field | Go type | Meaning |
