@@ -97,6 +97,7 @@ func NewRootCmd(opts ...RootOption) *cobra.Command {
 	root.AddCommand(newServerCmd())
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newRenderCmd())
+	root.AddCommand(newWatchCmd(cfg.watchPolicy))
 
 	return root
 }
