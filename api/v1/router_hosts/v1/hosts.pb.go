@@ -7,12 +7,13 @@
 package hostsv1
 
 import (
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
-	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	timestamppb "google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -1213,6 +1214,341 @@ func (x *ExportHostsResponse) GetChunk() []byte {
 	return nil
 }
 
+// Opening (and, in follow mode, only) request on a WatchHosts stream.
+type WatchHostsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Whether to keep the stream open and push a fresh snapshot on every
+	// change (sink mode) instead of closing after one snapshot (one-shot
+	// mode). Read only from the FIRST message on the stream; the server
+	// ignores this field on every later message, so a status-only message
+	// may leave it unset.
+	Follow bool `protobuf:"varint,1,opt,name=follow,proto3" json:"follow,omitempty"`
+	// Sink status. Meaningful on EVERY message including the first: a
+	// reconnecting sink uses the opening message to report the state it
+	// already has on disk, and the server records it.
+	Status        *SinkStatus `protobuf:"bytes,2,opt,name=status,proto3,oneof" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchHostsRequest) Reset() {
+	*x = WatchHostsRequest{}
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchHostsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchHostsRequest) ProtoMessage() {}
+
+func (x *WatchHostsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchHostsRequest.ProtoReflect.Descriptor instead.
+func (*WatchHostsRequest) Descriptor() ([]byte, []int) {
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *WatchHostsRequest) GetFollow() bool {
+	if x != nil {
+		return x.Follow
+	}
+	return false
+}
+
+func (x *WatchHostsRequest) GetStatus() *SinkStatus {
+	if x != nil {
+		return x.Status
+	}
+	return nil
+}
+
+// Upstream health/status a sink reports on its WatchHosts stream.
+type SinkStatus struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Unix seconds of the sink's last successful render+write.
+	LastSuccessUnix int64 `protobuf:"varint,1,opt,name=last_success_unix,json=lastSuccessUnix,proto3" json:"last_success_unix,omitempty"`
+	// Consecutive render/write failures since the last success.
+	ConsecutiveFailures int32 `protobuf:"varint,2,opt,name=consecutive_failures,json=consecutiveFailures,proto3" json:"consecutive_failures,omitempty"`
+	// Template contract version this sink was built against.
+	ContractVersion string `protobuf:"bytes,3,opt,name=contract_version,json=contractVersion,proto3" json:"contract_version,omitempty"`
+	// Change ID (see SnapshotComplete.change_id) this sink last rendered.
+	//
+	// The server records this value and reports it upstream through metrics;
+	// the server never consults it when deciding what to send. Using it to
+	// decide what to send would make it a resume token and break the
+	// stateless-server constraint (D-06, D-08).
+	RenderedChangeId string `protobuf:"bytes,4,opt,name=rendered_change_id,json=renderedChangeId,proto3" json:"rendered_change_id,omitempty"`
+	// Whether the sink's post-write reload hook failed on its last cycle.
+	// Distinguishes "your zone file is correct but your resolver did not
+	// pick it up" (reload_failed = true) from "your zone file is old"
+	// (last_success_unix is stale) — a different page.
+	ReloadFailed bool `protobuf:"varint,5,opt,name=reload_failed,json=reloadFailed,proto3" json:"reload_failed,omitempty"`
+	// Unix seconds of the sink's last successful reload-hook run.
+	LastReloadSuccessUnix int64 `protobuf:"varint,6,opt,name=last_reload_success_unix,json=lastReloadSuccessUnix,proto3" json:"last_reload_success_unix,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *SinkStatus) Reset() {
+	*x = SinkStatus{}
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SinkStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SinkStatus) ProtoMessage() {}
+
+func (x *SinkStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SinkStatus.ProtoReflect.Descriptor instead.
+func (*SinkStatus) Descriptor() ([]byte, []int) {
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *SinkStatus) GetLastSuccessUnix() int64 {
+	if x != nil {
+		return x.LastSuccessUnix
+	}
+	return 0
+}
+
+func (x *SinkStatus) GetConsecutiveFailures() int32 {
+	if x != nil {
+		return x.ConsecutiveFailures
+	}
+	return 0
+}
+
+func (x *SinkStatus) GetContractVersion() string {
+	if x != nil {
+		return x.ContractVersion
+	}
+	return ""
+}
+
+func (x *SinkStatus) GetRenderedChangeId() string {
+	if x != nil {
+		return x.RenderedChangeId
+	}
+	return ""
+}
+
+func (x *SinkStatus) GetReloadFailed() bool {
+	if x != nil {
+		return x.ReloadFailed
+	}
+	return false
+}
+
+func (x *SinkStatus) GetLastReloadSuccessUnix() int64 {
+	if x != nil {
+		return x.LastReloadSuccessUnix
+	}
+	return 0
+}
+
+// Terminates a WatchHosts snapshot: every HostEntry message that precedes
+// it on the stream belongs to the same snapshot.
+type SnapshotComplete struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Number of entries in this snapshot. int32 because the practical
+	// ceiling is the consumer's configured limits.max_stream_entries
+	// (default 50,000) — a server holding more entries than a consumer's
+	// ceiling makes that consumer refuse the snapshot rather than truncate
+	// it, so the two numbers are the same unit. The server validates the
+	// count fits an int32 before setting it and fails the RPC otherwise, so
+	// this field can never carry a wrapped negative value.
+	Count int32 `protobuf:"varint,1,opt,name=count,proto3" json:"count,omitempty"`
+	// When this snapshot was generated.
+	GeneratedAt *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=generated_at,json=generatedAt,proto3" json:"generated_at,omitempty"`
+	// Template data contract version this snapshot was produced under.
+	ContractVersion string `protobuf:"bytes,3,opt,name=contract_version,json=contractVersion,proto3" json:"contract_version,omitempty"`
+	// ULID of the newest event in the server's log as of the moment the
+	// snapshot began — therefore a LOWER BOUND on the state the entries
+	// reflect: the entries may include a mutation that landed after this ID
+	// was read, never the reverse. The same server state yields the same
+	// value for every consumer. An empty log yields the zero ULID. A
+	// consumer comparing change IDs uses exact string equality — never a
+	// prefix, ordering, or numeric comparison.
+	ChangeId      string `protobuf:"bytes,4,opt,name=change_id,json=changeId,proto3" json:"change_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SnapshotComplete) Reset() {
+	*x = SnapshotComplete{}
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SnapshotComplete) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SnapshotComplete) ProtoMessage() {}
+
+func (x *SnapshotComplete) ProtoReflect() protoreflect.Message {
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SnapshotComplete.ProtoReflect.Descriptor instead.
+func (*SnapshotComplete) Descriptor() ([]byte, []int) {
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *SnapshotComplete) GetCount() int32 {
+	if x != nil {
+		return x.Count
+	}
+	return 0
+}
+
+func (x *SnapshotComplete) GetGeneratedAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.GeneratedAt
+	}
+	return nil
+}
+
+func (x *SnapshotComplete) GetContractVersion() string {
+	if x != nil {
+		return x.ContractVersion
+	}
+	return ""
+}
+
+func (x *SnapshotComplete) GetChangeId() string {
+	if x != nil {
+		return x.ChangeId
+	}
+	return ""
+}
+
+// One message on a WatchHosts response stream: either one host entry, or
+// the terminator for the snapshot that preceded it.
+type WatchHostsResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exactly one of entry (one per host, zero or more messages) or complete
+	// (exactly one, terminating the snapshot) is set per message.
+	//
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*WatchHostsResponse_Entry
+	//	*WatchHostsResponse_Complete
+	Payload       isWatchHostsResponse_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *WatchHostsResponse) Reset() {
+	*x = WatchHostsResponse{}
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchHostsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchHostsResponse) ProtoMessage() {}
+
+func (x *WatchHostsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchHostsResponse.ProtoReflect.Descriptor instead.
+func (*WatchHostsResponse) Descriptor() ([]byte, []int) {
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *WatchHostsResponse) GetPayload() isWatchHostsResponse_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *WatchHostsResponse) GetEntry() *HostEntry {
+	if x != nil {
+		if x, ok := x.Payload.(*WatchHostsResponse_Entry); ok {
+			return x.Entry
+		}
+	}
+	return nil
+}
+
+func (x *WatchHostsResponse) GetComplete() *SnapshotComplete {
+	if x != nil {
+		if x, ok := x.Payload.(*WatchHostsResponse_Complete); ok {
+			return x.Complete
+		}
+	}
+	return nil
+}
+
+type isWatchHostsResponse_Payload interface {
+	isWatchHostsResponse_Payload()
+}
+
+type WatchHostsResponse_Entry struct {
+	// A single host entry belonging to the in-progress snapshot.
+	Entry *HostEntry `protobuf:"bytes,1,opt,name=entry,proto3,oneof"`
+}
+
+type WatchHostsResponse_Complete struct {
+	// Terminator for the in-progress snapshot.
+	Complete *SnapshotComplete `protobuf:"bytes,2,opt,name=complete,proto3,oneof"`
+}
+
+func (*WatchHostsResponse_Entry) isWatchHostsResponse_Payload() {}
+
+func (*WatchHostsResponse_Complete) isWatchHostsResponse_Payload() {}
+
 // Request to create a snapshot of the current hosts database state
 type CreateSnapshotRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -1226,7 +1562,7 @@ type CreateSnapshotRequest struct {
 
 func (x *CreateSnapshotRequest) Reset() {
 	*x = CreateSnapshotRequest{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[19]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1238,7 +1574,7 @@ func (x *CreateSnapshotRequest) String() string {
 func (*CreateSnapshotRequest) ProtoMessage() {}
 
 func (x *CreateSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[19]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1251,7 +1587,7 @@ func (x *CreateSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*CreateSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{19}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *CreateSnapshotRequest) GetName() string {
@@ -1283,7 +1619,7 @@ type CreateSnapshotResponse struct {
 
 func (x *CreateSnapshotResponse) Reset() {
 	*x = CreateSnapshotResponse{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[20]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1295,7 +1631,7 @@ func (x *CreateSnapshotResponse) String() string {
 func (*CreateSnapshotResponse) ProtoMessage() {}
 
 func (x *CreateSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[20]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1308,7 +1644,7 @@ func (x *CreateSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*CreateSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{20}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *CreateSnapshotResponse) GetSnapshotId() string {
@@ -1351,7 +1687,7 @@ type Snapshot struct {
 
 func (x *Snapshot) Reset() {
 	*x = Snapshot{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[21]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1363,7 +1699,7 @@ func (x *Snapshot) String() string {
 func (*Snapshot) ProtoMessage() {}
 
 func (x *Snapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[21]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1376,7 +1712,7 @@ func (x *Snapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Snapshot.ProtoReflect.Descriptor instead.
 func (*Snapshot) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{21}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *Snapshot) GetSnapshotId() string {
@@ -1427,7 +1763,7 @@ type ListSnapshotsRequest struct {
 
 func (x *ListSnapshotsRequest) Reset() {
 	*x = ListSnapshotsRequest{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[22]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1439,7 +1775,7 @@ func (x *ListSnapshotsRequest) String() string {
 func (*ListSnapshotsRequest) ProtoMessage() {}
 
 func (x *ListSnapshotsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[22]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1452,7 +1788,7 @@ func (x *ListSnapshotsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSnapshotsRequest.ProtoReflect.Descriptor instead.
 func (*ListSnapshotsRequest) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{22}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListSnapshotsRequest) GetLimit() uint32 {
@@ -1480,7 +1816,7 @@ type ListSnapshotsResponse struct {
 
 func (x *ListSnapshotsResponse) Reset() {
 	*x = ListSnapshotsResponse{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[23]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1492,7 +1828,7 @@ func (x *ListSnapshotsResponse) String() string {
 func (*ListSnapshotsResponse) ProtoMessage() {}
 
 func (x *ListSnapshotsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[23]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1505,7 +1841,7 @@ func (x *ListSnapshotsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSnapshotsResponse.ProtoReflect.Descriptor instead.
 func (*ListSnapshotsResponse) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{23}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *ListSnapshotsResponse) GetSnapshot() *Snapshot {
@@ -1526,7 +1862,7 @@ type RollbackToSnapshotRequest struct {
 
 func (x *RollbackToSnapshotRequest) Reset() {
 	*x = RollbackToSnapshotRequest{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[24]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1538,7 +1874,7 @@ func (x *RollbackToSnapshotRequest) String() string {
 func (*RollbackToSnapshotRequest) ProtoMessage() {}
 
 func (x *RollbackToSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[24]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1551,7 +1887,7 @@ func (x *RollbackToSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackToSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*RollbackToSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{24}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RollbackToSnapshotRequest) GetSnapshotId() string {
@@ -1576,7 +1912,7 @@ type RollbackToSnapshotResponse struct {
 
 func (x *RollbackToSnapshotResponse) Reset() {
 	*x = RollbackToSnapshotResponse{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[25]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1588,7 +1924,7 @@ func (x *RollbackToSnapshotResponse) String() string {
 func (*RollbackToSnapshotResponse) ProtoMessage() {}
 
 func (x *RollbackToSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[25]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1601,7 +1937,7 @@ func (x *RollbackToSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RollbackToSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*RollbackToSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{25}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *RollbackToSnapshotResponse) GetSuccess() bool {
@@ -1636,7 +1972,7 @@ type DeleteSnapshotRequest struct {
 
 func (x *DeleteSnapshotRequest) Reset() {
 	*x = DeleteSnapshotRequest{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[26]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1648,7 +1984,7 @@ func (x *DeleteSnapshotRequest) String() string {
 func (*DeleteSnapshotRequest) ProtoMessage() {}
 
 func (x *DeleteSnapshotRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[26]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1661,7 +1997,7 @@ func (x *DeleteSnapshotRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSnapshotRequest.ProtoReflect.Descriptor instead.
 func (*DeleteSnapshotRequest) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{26}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *DeleteSnapshotRequest) GetSnapshotId() string {
@@ -1682,7 +2018,7 @@ type DeleteSnapshotResponse struct {
 
 func (x *DeleteSnapshotResponse) Reset() {
 	*x = DeleteSnapshotResponse{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[27]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1694,7 +2030,7 @@ func (x *DeleteSnapshotResponse) String() string {
 func (*DeleteSnapshotResponse) ProtoMessage() {}
 
 func (x *DeleteSnapshotResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[27]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1707,7 +2043,7 @@ func (x *DeleteSnapshotResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSnapshotResponse.ProtoReflect.Descriptor instead.
 func (*DeleteSnapshotResponse) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{27}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *DeleteSnapshotResponse) GetSuccess() bool {
@@ -1735,7 +2071,7 @@ type CompactAggregatesRequest struct {
 
 func (x *CompactAggregatesRequest) Reset() {
 	*x = CompactAggregatesRequest{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[28]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1747,7 +2083,7 @@ func (x *CompactAggregatesRequest) String() string {
 func (*CompactAggregatesRequest) ProtoMessage() {}
 
 func (x *CompactAggregatesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[28]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1760,7 +2096,7 @@ func (x *CompactAggregatesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactAggregatesRequest.ProtoReflect.Descriptor instead.
 func (*CompactAggregatesRequest) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{28}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CompactAggregatesRequest) GetTarget() isCompactAggregatesRequest_Target {
@@ -1830,7 +2166,7 @@ type CompactedAggregate struct {
 
 func (x *CompactedAggregate) Reset() {
 	*x = CompactedAggregate{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[29]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1842,7 +2178,7 @@ func (x *CompactedAggregate) String() string {
 func (*CompactedAggregate) ProtoMessage() {}
 
 func (x *CompactedAggregate) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[29]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1855,7 +2191,7 @@ func (x *CompactedAggregate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactedAggregate.ProtoReflect.Descriptor instead.
 func (*CompactedAggregate) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{29}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *CompactedAggregate) GetAggregateId() string {
@@ -1899,7 +2235,7 @@ type CompactAggregatesResponse struct {
 
 func (x *CompactAggregatesResponse) Reset() {
 	*x = CompactAggregatesResponse{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[30]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1911,7 +2247,7 @@ func (x *CompactAggregatesResponse) String() string {
 func (*CompactAggregatesResponse) ProtoMessage() {}
 
 func (x *CompactAggregatesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[30]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1924,7 +2260,7 @@ func (x *CompactAggregatesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompactAggregatesResponse.ProtoReflect.Descriptor instead.
 func (*CompactAggregatesResponse) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{30}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *CompactAggregatesResponse) GetCompacted() []*CompactedAggregate {
@@ -1950,7 +2286,7 @@ type LivenessRequest struct {
 
 func (x *LivenessRequest) Reset() {
 	*x = LivenessRequest{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[31]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1962,7 +2298,7 @@ func (x *LivenessRequest) String() string {
 func (*LivenessRequest) ProtoMessage() {}
 
 func (x *LivenessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[31]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1975,7 +2311,7 @@ func (x *LivenessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LivenessRequest.ProtoReflect.Descriptor instead.
 func (*LivenessRequest) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{31}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{35}
 }
 
 // Response for liveness check
@@ -1989,7 +2325,7 @@ type LivenessResponse struct {
 
 func (x *LivenessResponse) Reset() {
 	*x = LivenessResponse{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[32]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2001,7 +2337,7 @@ func (x *LivenessResponse) String() string {
 func (*LivenessResponse) ProtoMessage() {}
 
 func (x *LivenessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[32]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2014,7 +2350,7 @@ func (x *LivenessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LivenessResponse.ProtoReflect.Descriptor instead.
 func (*LivenessResponse) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{32}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *LivenessResponse) GetAlive() bool {
@@ -2033,7 +2369,7 @@ type ReadinessRequest struct {
 
 func (x *ReadinessRequest) Reset() {
 	*x = ReadinessRequest{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[33]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2045,7 +2381,7 @@ func (x *ReadinessRequest) String() string {
 func (*ReadinessRequest) ProtoMessage() {}
 
 func (x *ReadinessRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[33]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2058,7 +2394,7 @@ func (x *ReadinessRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadinessRequest.ProtoReflect.Descriptor instead.
 func (*ReadinessRequest) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{33}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{37}
 }
 
 // Response for readiness check
@@ -2074,7 +2410,7 @@ type ReadinessResponse struct {
 
 func (x *ReadinessResponse) Reset() {
 	*x = ReadinessResponse{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[34]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2086,7 +2422,7 @@ func (x *ReadinessResponse) String() string {
 func (*ReadinessResponse) ProtoMessage() {}
 
 func (x *ReadinessResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[34]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2099,7 +2435,7 @@ func (x *ReadinessResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReadinessResponse.ProtoReflect.Descriptor instead.
 func (*ReadinessResponse) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{34}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *ReadinessResponse) GetReady() bool {
@@ -2125,7 +2461,7 @@ type HealthRequest struct {
 
 func (x *HealthRequest) Reset() {
 	*x = HealthRequest{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[35]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2137,7 +2473,7 @@ func (x *HealthRequest) String() string {
 func (*HealthRequest) ProtoMessage() {}
 
 func (x *HealthRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[35]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2150,7 +2486,7 @@ func (x *HealthRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthRequest.ProtoReflect.Descriptor instead.
 func (*HealthRequest) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{35}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{39}
 }
 
 // Response containing detailed health status of all components
@@ -2172,7 +2508,7 @@ type HealthResponse struct {
 
 func (x *HealthResponse) Reset() {
 	*x = HealthResponse{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[36]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2184,7 +2520,7 @@ func (x *HealthResponse) String() string {
 func (*HealthResponse) ProtoMessage() {}
 
 func (x *HealthResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[36]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2197,7 +2533,7 @@ func (x *HealthResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthResponse.ProtoReflect.Descriptor instead.
 func (*HealthResponse) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{36}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *HealthResponse) GetHealthy() bool {
@@ -2250,7 +2586,7 @@ type ServerInfo struct {
 
 func (x *ServerInfo) Reset() {
 	*x = ServerInfo{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[37]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2262,7 +2598,7 @@ func (x *ServerInfo) String() string {
 func (*ServerInfo) ProtoMessage() {}
 
 func (x *ServerInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[37]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2275,7 +2611,7 @@ func (x *ServerInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ServerInfo.ProtoReflect.Descriptor instead.
 func (*ServerInfo) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{37}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ServerInfo) GetVersion() string {
@@ -2316,7 +2652,7 @@ type DatabaseHealth struct {
 
 func (x *DatabaseHealth) Reset() {
 	*x = DatabaseHealth{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[38]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2328,7 +2664,7 @@ func (x *DatabaseHealth) String() string {
 func (*DatabaseHealth) ProtoMessage() {}
 
 func (x *DatabaseHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[38]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2341,7 +2677,7 @@ func (x *DatabaseHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DatabaseHealth.ProtoReflect.Descriptor instead.
 func (*DatabaseHealth) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{38}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *DatabaseHealth) GetConnected() bool {
@@ -2389,7 +2725,7 @@ type AcmeHealth struct {
 
 func (x *AcmeHealth) Reset() {
 	*x = AcmeHealth{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[39]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2401,7 +2737,7 @@ func (x *AcmeHealth) String() string {
 func (*AcmeHealth) ProtoMessage() {}
 
 func (x *AcmeHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[39]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2414,7 +2750,7 @@ func (x *AcmeHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcmeHealth.ProtoReflect.Descriptor instead.
 func (*AcmeHealth) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{39}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *AcmeHealth) GetEnabled() bool {
@@ -2458,7 +2794,7 @@ type HooksHealth struct {
 
 func (x *HooksHealth) Reset() {
 	*x = HooksHealth{}
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[40]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2470,7 +2806,7 @@ func (x *HooksHealth) String() string {
 func (*HooksHealth) ProtoMessage() {}
 
 func (x *HooksHealth) ProtoReflect() protoreflect.Message {
-	mi := &file_router_hosts_v1_hosts_proto_msgTypes[40]
+	mi := &file_router_hosts_v1_hosts_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2483,7 +2819,7 @@ func (x *HooksHealth) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HooksHealth.ProtoReflect.Descriptor instead.
 func (*HooksHealth) Descriptor() ([]byte, []int) {
-	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{40}
+	return file_router_hosts_v1_hosts_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *HooksHealth) GetConfiguredCount() int32 {
@@ -2598,7 +2934,28 @@ const file_router_hosts_v1_hosts_proto_rawDesc = "" +
 	"\x12ExportHostsRequest\x12\x16\n" +
 	"\x06format\x18\x01 \x01(\tR\x06format\"+\n" +
 	"\x13ExportHostsResponse\x12\x14\n" +
-	"\x05chunk\x18\x01 \x01(\fR\x05chunk\"E\n" +
+	"\x05chunk\x18\x01 \x01(\fR\x05chunk\"p\n" +
+	"\x11WatchHostsRequest\x12\x16\n" +
+	"\x06follow\x18\x01 \x01(\bR\x06follow\x128\n" +
+	"\x06status\x18\x02 \x01(\v2\x1b.router_hosts.v1.SinkStatusH\x00R\x06status\x88\x01\x01B\t\n" +
+	"\a_status\"\xa2\x02\n" +
+	"\n" +
+	"SinkStatus\x12*\n" +
+	"\x11last_success_unix\x18\x01 \x01(\x03R\x0flastSuccessUnix\x121\n" +
+	"\x14consecutive_failures\x18\x02 \x01(\x05R\x13consecutiveFailures\x12)\n" +
+	"\x10contract_version\x18\x03 \x01(\tR\x0fcontractVersion\x12,\n" +
+	"\x12rendered_change_id\x18\x04 \x01(\tR\x10renderedChangeId\x12#\n" +
+	"\rreload_failed\x18\x05 \x01(\bR\freloadFailed\x127\n" +
+	"\x18last_reload_success_unix\x18\x06 \x01(\x03R\x15lastReloadSuccessUnix\"\xaf\x01\n" +
+	"\x10SnapshotComplete\x12\x14\n" +
+	"\x05count\x18\x01 \x01(\x05R\x05count\x12=\n" +
+	"\fgenerated_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\vgeneratedAt\x12)\n" +
+	"\x10contract_version\x18\x03 \x01(\tR\x0fcontractVersion\x12\x1b\n" +
+	"\tchange_id\x18\x04 \x01(\tR\bchangeId\"\x94\x01\n" +
+	"\x12WatchHostsResponse\x122\n" +
+	"\x05entry\x18\x01 \x01(\v2\x1a.router_hosts.v1.HostEntryH\x00R\x05entry\x12?\n" +
+	"\bcomplete\x18\x02 \x01(\v2!.router_hosts.v1.SnapshotCompleteH\x00R\bcompleteB\t\n" +
+	"\apayload\"E\n" +
 	"\x15CreateSnapshotRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\atrigger\x18\x02 \x01(\tR\atrigger\"\x95\x01\n" +
@@ -2684,7 +3041,7 @@ const file_router_hosts_v1_hosts_proto_rawDesc = "" +
 	"\vHooksHealth\x12)\n" +
 	"\x10configured_count\x18\x01 \x01(\x05R\x0fconfiguredCount\x12\x1d\n" +
 	"\n" +
-	"hook_names\x18\x02 \x03(\tR\thookNames2\xb7\v\n" +
+	"hook_names\x18\x02 \x03(\tR\thookNames2\x92\f\n" +
 	"\fHostsService\x12L\n" +
 	"\aAddHost\x12\x1f.router_hosts.v1.AddHostRequest\x1a .router_hosts.v1.AddHostResponse\x12L\n" +
 	"\aGetHost\x12\x1f.router_hosts.v1.GetHostRequest\x1a .router_hosts.v1.GetHostResponse\x12U\n" +
@@ -2695,7 +3052,9 @@ const file_router_hosts_v1_hosts_proto_rawDesc = "" +
 	"\tListHosts\x12!.router_hosts.v1.ListHostsRequest\x1a\".router_hosts.v1.ListHostsResponse0\x01\x12Z\n" +
 	"\vSearchHosts\x12#.router_hosts.v1.SearchHostsRequest\x1a$.router_hosts.v1.SearchHostsResponse0\x01\x12\\\n" +
 	"\vImportHosts\x12#.router_hosts.v1.ImportHostsRequest\x1a$.router_hosts.v1.ImportHostsResponse(\x010\x01\x12Z\n" +
-	"\vExportHosts\x12#.router_hosts.v1.ExportHostsRequest\x1a$.router_hosts.v1.ExportHostsResponse0\x01\x12a\n" +
+	"\vExportHosts\x12#.router_hosts.v1.ExportHostsRequest\x1a$.router_hosts.v1.ExportHostsResponse0\x01\x12Y\n" +
+	"\n" +
+	"WatchHosts\x12\".router_hosts.v1.WatchHostsRequest\x1a#.router_hosts.v1.WatchHostsResponse(\x010\x01\x12a\n" +
 	"\x0eCreateSnapshot\x12&.router_hosts.v1.CreateSnapshotRequest\x1a'.router_hosts.v1.CreateSnapshotResponse\x12`\n" +
 	"\rListSnapshots\x12%.router_hosts.v1.ListSnapshotsRequest\x1a&.router_hosts.v1.ListSnapshotsResponse0\x01\x12m\n" +
 	"\x12RollbackToSnapshot\x12*.router_hosts.v1.RollbackToSnapshotRequest\x1a+.router_hosts.v1.RollbackToSnapshotResponse\x12a\n" +
@@ -2717,54 +3076,61 @@ func file_router_hosts_v1_hosts_proto_rawDescGZIP() []byte {
 	return file_router_hosts_v1_hosts_proto_rawDescData
 }
 
-var file_router_hosts_v1_hosts_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
-var file_router_hosts_v1_hosts_proto_goTypes = []any{
-	(*HostEntry)(nil),                  // 0: router_hosts.v1.HostEntry
-	(*AliasesUpdate)(nil),              // 1: router_hosts.v1.AliasesUpdate
-	(*TagsUpdate)(nil),                 // 2: router_hosts.v1.TagsUpdate
-	(*AddHostRequest)(nil),             // 3: router_hosts.v1.AddHostRequest
-	(*AddHostResponse)(nil),            // 4: router_hosts.v1.AddHostResponse
-	(*GetHostRequest)(nil),             // 5: router_hosts.v1.GetHostRequest
-	(*GetHostResponse)(nil),            // 6: router_hosts.v1.GetHostResponse
-	(*UpdateHostRequest)(nil),          // 7: router_hosts.v1.UpdateHostRequest
-	(*UpdateHostResponse)(nil),         // 8: router_hosts.v1.UpdateHostResponse
-	(*DeleteHostRequest)(nil),          // 9: router_hosts.v1.DeleteHostRequest
-	(*DeleteHostResponse)(nil),         // 10: router_hosts.v1.DeleteHostResponse
-	(*ListHostsRequest)(nil),           // 11: router_hosts.v1.ListHostsRequest
-	(*ListHostsResponse)(nil),          // 12: router_hosts.v1.ListHostsResponse
-	(*SearchHostsRequest)(nil),         // 13: router_hosts.v1.SearchHostsRequest
-	(*SearchHostsResponse)(nil),        // 14: router_hosts.v1.SearchHostsResponse
-	(*ImportHostsRequest)(nil),         // 15: router_hosts.v1.ImportHostsRequest
-	(*ImportHostsResponse)(nil),        // 16: router_hosts.v1.ImportHostsResponse
-	(*ExportHostsRequest)(nil),         // 17: router_hosts.v1.ExportHostsRequest
-	(*ExportHostsResponse)(nil),        // 18: router_hosts.v1.ExportHostsResponse
-	(*CreateSnapshotRequest)(nil),      // 19: router_hosts.v1.CreateSnapshotRequest
-	(*CreateSnapshotResponse)(nil),     // 20: router_hosts.v1.CreateSnapshotResponse
-	(*Snapshot)(nil),                   // 21: router_hosts.v1.Snapshot
-	(*ListSnapshotsRequest)(nil),       // 22: router_hosts.v1.ListSnapshotsRequest
-	(*ListSnapshotsResponse)(nil),      // 23: router_hosts.v1.ListSnapshotsResponse
-	(*RollbackToSnapshotRequest)(nil),  // 24: router_hosts.v1.RollbackToSnapshotRequest
-	(*RollbackToSnapshotResponse)(nil), // 25: router_hosts.v1.RollbackToSnapshotResponse
-	(*DeleteSnapshotRequest)(nil),      // 26: router_hosts.v1.DeleteSnapshotRequest
-	(*DeleteSnapshotResponse)(nil),     // 27: router_hosts.v1.DeleteSnapshotResponse
-	(*CompactAggregatesRequest)(nil),   // 28: router_hosts.v1.CompactAggregatesRequest
-	(*CompactedAggregate)(nil),         // 29: router_hosts.v1.CompactedAggregate
-	(*CompactAggregatesResponse)(nil),  // 30: router_hosts.v1.CompactAggregatesResponse
-	(*LivenessRequest)(nil),            // 31: router_hosts.v1.LivenessRequest
-	(*LivenessResponse)(nil),           // 32: router_hosts.v1.LivenessResponse
-	(*ReadinessRequest)(nil),           // 33: router_hosts.v1.ReadinessRequest
-	(*ReadinessResponse)(nil),          // 34: router_hosts.v1.ReadinessResponse
-	(*HealthRequest)(nil),              // 35: router_hosts.v1.HealthRequest
-	(*HealthResponse)(nil),             // 36: router_hosts.v1.HealthResponse
-	(*ServerInfo)(nil),                 // 37: router_hosts.v1.ServerInfo
-	(*DatabaseHealth)(nil),             // 38: router_hosts.v1.DatabaseHealth
-	(*AcmeHealth)(nil),                 // 39: router_hosts.v1.AcmeHealth
-	(*HooksHealth)(nil),                // 40: router_hosts.v1.HooksHealth
-	(*timestamppb.Timestamp)(nil),      // 41: google.protobuf.Timestamp
-}
+var (
+	file_router_hosts_v1_hosts_proto_msgTypes = make([]protoimpl.MessageInfo, 45)
+	file_router_hosts_v1_hosts_proto_goTypes  = []any{
+		(*HostEntry)(nil),                  // 0: router_hosts.v1.HostEntry
+		(*AliasesUpdate)(nil),              // 1: router_hosts.v1.AliasesUpdate
+		(*TagsUpdate)(nil),                 // 2: router_hosts.v1.TagsUpdate
+		(*AddHostRequest)(nil),             // 3: router_hosts.v1.AddHostRequest
+		(*AddHostResponse)(nil),            // 4: router_hosts.v1.AddHostResponse
+		(*GetHostRequest)(nil),             // 5: router_hosts.v1.GetHostRequest
+		(*GetHostResponse)(nil),            // 6: router_hosts.v1.GetHostResponse
+		(*UpdateHostRequest)(nil),          // 7: router_hosts.v1.UpdateHostRequest
+		(*UpdateHostResponse)(nil),         // 8: router_hosts.v1.UpdateHostResponse
+		(*DeleteHostRequest)(nil),          // 9: router_hosts.v1.DeleteHostRequest
+		(*DeleteHostResponse)(nil),         // 10: router_hosts.v1.DeleteHostResponse
+		(*ListHostsRequest)(nil),           // 11: router_hosts.v1.ListHostsRequest
+		(*ListHostsResponse)(nil),          // 12: router_hosts.v1.ListHostsResponse
+		(*SearchHostsRequest)(nil),         // 13: router_hosts.v1.SearchHostsRequest
+		(*SearchHostsResponse)(nil),        // 14: router_hosts.v1.SearchHostsResponse
+		(*ImportHostsRequest)(nil),         // 15: router_hosts.v1.ImportHostsRequest
+		(*ImportHostsResponse)(nil),        // 16: router_hosts.v1.ImportHostsResponse
+		(*ExportHostsRequest)(nil),         // 17: router_hosts.v1.ExportHostsRequest
+		(*ExportHostsResponse)(nil),        // 18: router_hosts.v1.ExportHostsResponse
+		(*WatchHostsRequest)(nil),          // 19: router_hosts.v1.WatchHostsRequest
+		(*SinkStatus)(nil),                 // 20: router_hosts.v1.SinkStatus
+		(*SnapshotComplete)(nil),           // 21: router_hosts.v1.SnapshotComplete
+		(*WatchHostsResponse)(nil),         // 22: router_hosts.v1.WatchHostsResponse
+		(*CreateSnapshotRequest)(nil),      // 23: router_hosts.v1.CreateSnapshotRequest
+		(*CreateSnapshotResponse)(nil),     // 24: router_hosts.v1.CreateSnapshotResponse
+		(*Snapshot)(nil),                   // 25: router_hosts.v1.Snapshot
+		(*ListSnapshotsRequest)(nil),       // 26: router_hosts.v1.ListSnapshotsRequest
+		(*ListSnapshotsResponse)(nil),      // 27: router_hosts.v1.ListSnapshotsResponse
+		(*RollbackToSnapshotRequest)(nil),  // 28: router_hosts.v1.RollbackToSnapshotRequest
+		(*RollbackToSnapshotResponse)(nil), // 29: router_hosts.v1.RollbackToSnapshotResponse
+		(*DeleteSnapshotRequest)(nil),      // 30: router_hosts.v1.DeleteSnapshotRequest
+		(*DeleteSnapshotResponse)(nil),     // 31: router_hosts.v1.DeleteSnapshotResponse
+		(*CompactAggregatesRequest)(nil),   // 32: router_hosts.v1.CompactAggregatesRequest
+		(*CompactedAggregate)(nil),         // 33: router_hosts.v1.CompactedAggregate
+		(*CompactAggregatesResponse)(nil),  // 34: router_hosts.v1.CompactAggregatesResponse
+		(*LivenessRequest)(nil),            // 35: router_hosts.v1.LivenessRequest
+		(*LivenessResponse)(nil),           // 36: router_hosts.v1.LivenessResponse
+		(*ReadinessRequest)(nil),           // 37: router_hosts.v1.ReadinessRequest
+		(*ReadinessResponse)(nil),          // 38: router_hosts.v1.ReadinessResponse
+		(*HealthRequest)(nil),              // 39: router_hosts.v1.HealthRequest
+		(*HealthResponse)(nil),             // 40: router_hosts.v1.HealthResponse
+		(*ServerInfo)(nil),                 // 41: router_hosts.v1.ServerInfo
+		(*DatabaseHealth)(nil),             // 42: router_hosts.v1.DatabaseHealth
+		(*AcmeHealth)(nil),                 // 43: router_hosts.v1.AcmeHealth
+		(*HooksHealth)(nil),                // 44: router_hosts.v1.HooksHealth
+		(*timestamppb.Timestamp)(nil),      // 45: google.protobuf.Timestamp
+	}
+)
+
 var file_router_hosts_v1_hosts_proto_depIdxs = []int32{
-	41, // 0: router_hosts.v1.HostEntry.created_at:type_name -> google.protobuf.Timestamp
-	41, // 1: router_hosts.v1.HostEntry.updated_at:type_name -> google.protobuf.Timestamp
+	45, // 0: router_hosts.v1.HostEntry.created_at:type_name -> google.protobuf.Timestamp
+	45, // 1: router_hosts.v1.HostEntry.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: router_hosts.v1.AddHostResponse.entry:type_name -> router_hosts.v1.HostEntry
 	0,  // 3: router_hosts.v1.GetHostResponse.entry:type_name -> router_hosts.v1.HostEntry
 	1,  // 4: router_hosts.v1.UpdateHostRequest.aliases:type_name -> router_hosts.v1.AliasesUpdate
@@ -2772,51 +3138,57 @@ var file_router_hosts_v1_hosts_proto_depIdxs = []int32{
 	0,  // 6: router_hosts.v1.UpdateHostResponse.entry:type_name -> router_hosts.v1.HostEntry
 	0,  // 7: router_hosts.v1.ListHostsResponse.entry:type_name -> router_hosts.v1.HostEntry
 	0,  // 8: router_hosts.v1.SearchHostsResponse.entry:type_name -> router_hosts.v1.HostEntry
-	41, // 9: router_hosts.v1.CreateSnapshotResponse.created_at:type_name -> google.protobuf.Timestamp
-	41, // 10: router_hosts.v1.Snapshot.created_at:type_name -> google.protobuf.Timestamp
-	21, // 11: router_hosts.v1.ListSnapshotsResponse.snapshot:type_name -> router_hosts.v1.Snapshot
-	29, // 12: router_hosts.v1.CompactAggregatesResponse.compacted:type_name -> router_hosts.v1.CompactedAggregate
-	37, // 13: router_hosts.v1.HealthResponse.server:type_name -> router_hosts.v1.ServerInfo
-	38, // 14: router_hosts.v1.HealthResponse.database:type_name -> router_hosts.v1.DatabaseHealth
-	39, // 15: router_hosts.v1.HealthResponse.acme:type_name -> router_hosts.v1.AcmeHealth
-	40, // 16: router_hosts.v1.HealthResponse.hooks:type_name -> router_hosts.v1.HooksHealth
-	3,  // 17: router_hosts.v1.HostsService.AddHost:input_type -> router_hosts.v1.AddHostRequest
-	5,  // 18: router_hosts.v1.HostsService.GetHost:input_type -> router_hosts.v1.GetHostRequest
-	7,  // 19: router_hosts.v1.HostsService.UpdateHost:input_type -> router_hosts.v1.UpdateHostRequest
-	9,  // 20: router_hosts.v1.HostsService.DeleteHost:input_type -> router_hosts.v1.DeleteHostRequest
-	11, // 21: router_hosts.v1.HostsService.ListHosts:input_type -> router_hosts.v1.ListHostsRequest
-	13, // 22: router_hosts.v1.HostsService.SearchHosts:input_type -> router_hosts.v1.SearchHostsRequest
-	15, // 23: router_hosts.v1.HostsService.ImportHosts:input_type -> router_hosts.v1.ImportHostsRequest
-	17, // 24: router_hosts.v1.HostsService.ExportHosts:input_type -> router_hosts.v1.ExportHostsRequest
-	19, // 25: router_hosts.v1.HostsService.CreateSnapshot:input_type -> router_hosts.v1.CreateSnapshotRequest
-	22, // 26: router_hosts.v1.HostsService.ListSnapshots:input_type -> router_hosts.v1.ListSnapshotsRequest
-	24, // 27: router_hosts.v1.HostsService.RollbackToSnapshot:input_type -> router_hosts.v1.RollbackToSnapshotRequest
-	26, // 28: router_hosts.v1.HostsService.DeleteSnapshot:input_type -> router_hosts.v1.DeleteSnapshotRequest
-	28, // 29: router_hosts.v1.HostsService.CompactAggregates:input_type -> router_hosts.v1.CompactAggregatesRequest
-	31, // 30: router_hosts.v1.HostsService.Liveness:input_type -> router_hosts.v1.LivenessRequest
-	33, // 31: router_hosts.v1.HostsService.Readiness:input_type -> router_hosts.v1.ReadinessRequest
-	35, // 32: router_hosts.v1.HostsService.Health:input_type -> router_hosts.v1.HealthRequest
-	4,  // 33: router_hosts.v1.HostsService.AddHost:output_type -> router_hosts.v1.AddHostResponse
-	6,  // 34: router_hosts.v1.HostsService.GetHost:output_type -> router_hosts.v1.GetHostResponse
-	8,  // 35: router_hosts.v1.HostsService.UpdateHost:output_type -> router_hosts.v1.UpdateHostResponse
-	10, // 36: router_hosts.v1.HostsService.DeleteHost:output_type -> router_hosts.v1.DeleteHostResponse
-	12, // 37: router_hosts.v1.HostsService.ListHosts:output_type -> router_hosts.v1.ListHostsResponse
-	14, // 38: router_hosts.v1.HostsService.SearchHosts:output_type -> router_hosts.v1.SearchHostsResponse
-	16, // 39: router_hosts.v1.HostsService.ImportHosts:output_type -> router_hosts.v1.ImportHostsResponse
-	18, // 40: router_hosts.v1.HostsService.ExportHosts:output_type -> router_hosts.v1.ExportHostsResponse
-	20, // 41: router_hosts.v1.HostsService.CreateSnapshot:output_type -> router_hosts.v1.CreateSnapshotResponse
-	23, // 42: router_hosts.v1.HostsService.ListSnapshots:output_type -> router_hosts.v1.ListSnapshotsResponse
-	25, // 43: router_hosts.v1.HostsService.RollbackToSnapshot:output_type -> router_hosts.v1.RollbackToSnapshotResponse
-	27, // 44: router_hosts.v1.HostsService.DeleteSnapshot:output_type -> router_hosts.v1.DeleteSnapshotResponse
-	30, // 45: router_hosts.v1.HostsService.CompactAggregates:output_type -> router_hosts.v1.CompactAggregatesResponse
-	32, // 46: router_hosts.v1.HostsService.Liveness:output_type -> router_hosts.v1.LivenessResponse
-	34, // 47: router_hosts.v1.HostsService.Readiness:output_type -> router_hosts.v1.ReadinessResponse
-	36, // 48: router_hosts.v1.HostsService.Health:output_type -> router_hosts.v1.HealthResponse
-	33, // [33:49] is the sub-list for method output_type
-	17, // [17:33] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	20, // 9: router_hosts.v1.WatchHostsRequest.status:type_name -> router_hosts.v1.SinkStatus
+	45, // 10: router_hosts.v1.SnapshotComplete.generated_at:type_name -> google.protobuf.Timestamp
+	0,  // 11: router_hosts.v1.WatchHostsResponse.entry:type_name -> router_hosts.v1.HostEntry
+	21, // 12: router_hosts.v1.WatchHostsResponse.complete:type_name -> router_hosts.v1.SnapshotComplete
+	45, // 13: router_hosts.v1.CreateSnapshotResponse.created_at:type_name -> google.protobuf.Timestamp
+	45, // 14: router_hosts.v1.Snapshot.created_at:type_name -> google.protobuf.Timestamp
+	25, // 15: router_hosts.v1.ListSnapshotsResponse.snapshot:type_name -> router_hosts.v1.Snapshot
+	33, // 16: router_hosts.v1.CompactAggregatesResponse.compacted:type_name -> router_hosts.v1.CompactedAggregate
+	41, // 17: router_hosts.v1.HealthResponse.server:type_name -> router_hosts.v1.ServerInfo
+	42, // 18: router_hosts.v1.HealthResponse.database:type_name -> router_hosts.v1.DatabaseHealth
+	43, // 19: router_hosts.v1.HealthResponse.acme:type_name -> router_hosts.v1.AcmeHealth
+	44, // 20: router_hosts.v1.HealthResponse.hooks:type_name -> router_hosts.v1.HooksHealth
+	3,  // 21: router_hosts.v1.HostsService.AddHost:input_type -> router_hosts.v1.AddHostRequest
+	5,  // 22: router_hosts.v1.HostsService.GetHost:input_type -> router_hosts.v1.GetHostRequest
+	7,  // 23: router_hosts.v1.HostsService.UpdateHost:input_type -> router_hosts.v1.UpdateHostRequest
+	9,  // 24: router_hosts.v1.HostsService.DeleteHost:input_type -> router_hosts.v1.DeleteHostRequest
+	11, // 25: router_hosts.v1.HostsService.ListHosts:input_type -> router_hosts.v1.ListHostsRequest
+	13, // 26: router_hosts.v1.HostsService.SearchHosts:input_type -> router_hosts.v1.SearchHostsRequest
+	15, // 27: router_hosts.v1.HostsService.ImportHosts:input_type -> router_hosts.v1.ImportHostsRequest
+	17, // 28: router_hosts.v1.HostsService.ExportHosts:input_type -> router_hosts.v1.ExportHostsRequest
+	19, // 29: router_hosts.v1.HostsService.WatchHosts:input_type -> router_hosts.v1.WatchHostsRequest
+	23, // 30: router_hosts.v1.HostsService.CreateSnapshot:input_type -> router_hosts.v1.CreateSnapshotRequest
+	26, // 31: router_hosts.v1.HostsService.ListSnapshots:input_type -> router_hosts.v1.ListSnapshotsRequest
+	28, // 32: router_hosts.v1.HostsService.RollbackToSnapshot:input_type -> router_hosts.v1.RollbackToSnapshotRequest
+	30, // 33: router_hosts.v1.HostsService.DeleteSnapshot:input_type -> router_hosts.v1.DeleteSnapshotRequest
+	32, // 34: router_hosts.v1.HostsService.CompactAggregates:input_type -> router_hosts.v1.CompactAggregatesRequest
+	35, // 35: router_hosts.v1.HostsService.Liveness:input_type -> router_hosts.v1.LivenessRequest
+	37, // 36: router_hosts.v1.HostsService.Readiness:input_type -> router_hosts.v1.ReadinessRequest
+	39, // 37: router_hosts.v1.HostsService.Health:input_type -> router_hosts.v1.HealthRequest
+	4,  // 38: router_hosts.v1.HostsService.AddHost:output_type -> router_hosts.v1.AddHostResponse
+	6,  // 39: router_hosts.v1.HostsService.GetHost:output_type -> router_hosts.v1.GetHostResponse
+	8,  // 40: router_hosts.v1.HostsService.UpdateHost:output_type -> router_hosts.v1.UpdateHostResponse
+	10, // 41: router_hosts.v1.HostsService.DeleteHost:output_type -> router_hosts.v1.DeleteHostResponse
+	12, // 42: router_hosts.v1.HostsService.ListHosts:output_type -> router_hosts.v1.ListHostsResponse
+	14, // 43: router_hosts.v1.HostsService.SearchHosts:output_type -> router_hosts.v1.SearchHostsResponse
+	16, // 44: router_hosts.v1.HostsService.ImportHosts:output_type -> router_hosts.v1.ImportHostsResponse
+	18, // 45: router_hosts.v1.HostsService.ExportHosts:output_type -> router_hosts.v1.ExportHostsResponse
+	22, // 46: router_hosts.v1.HostsService.WatchHosts:output_type -> router_hosts.v1.WatchHostsResponse
+	24, // 47: router_hosts.v1.HostsService.CreateSnapshot:output_type -> router_hosts.v1.CreateSnapshotResponse
+	27, // 48: router_hosts.v1.HostsService.ListSnapshots:output_type -> router_hosts.v1.ListSnapshotsResponse
+	29, // 49: router_hosts.v1.HostsService.RollbackToSnapshot:output_type -> router_hosts.v1.RollbackToSnapshotResponse
+	31, // 50: router_hosts.v1.HostsService.DeleteSnapshot:output_type -> router_hosts.v1.DeleteSnapshotResponse
+	34, // 51: router_hosts.v1.HostsService.CompactAggregates:output_type -> router_hosts.v1.CompactAggregatesResponse
+	36, // 52: router_hosts.v1.HostsService.Liveness:output_type -> router_hosts.v1.LivenessResponse
+	38, // 53: router_hosts.v1.HostsService.Readiness:output_type -> router_hosts.v1.ReadinessResponse
+	40, // 54: router_hosts.v1.HostsService.Health:output_type -> router_hosts.v1.HealthResponse
+	38, // [38:55] is the sub-list for method output_type
+	21, // [21:38] is the sub-list for method input_type
+	21, // [21:21] is the sub-list for extension type_name
+	21, // [21:21] is the sub-list for extension extendee
+	0,  // [0:21] is the sub-list for field type_name
 }
 
 func init() { file_router_hosts_v1_hosts_proto_init() }
@@ -2831,7 +3203,12 @@ func file_router_hosts_v1_hosts_proto_init() {
 	file_router_hosts_v1_hosts_proto_msgTypes[11].OneofWrappers = []any{}
 	file_router_hosts_v1_hosts_proto_msgTypes[15].OneofWrappers = []any{}
 	file_router_hosts_v1_hosts_proto_msgTypes[16].OneofWrappers = []any{}
-	file_router_hosts_v1_hosts_proto_msgTypes[28].OneofWrappers = []any{
+	file_router_hosts_v1_hosts_proto_msgTypes[19].OneofWrappers = []any{}
+	file_router_hosts_v1_hosts_proto_msgTypes[22].OneofWrappers = []any{
+		(*WatchHostsResponse_Entry)(nil),
+		(*WatchHostsResponse_Complete)(nil),
+	}
+	file_router_hosts_v1_hosts_proto_msgTypes[32].OneofWrappers = []any{
 		(*CompactAggregatesRequest_AggregateId)(nil),
 		(*CompactAggregatesRequest_OverThreshold)(nil),
 	}
@@ -2841,7 +3218,7 @@ func file_router_hosts_v1_hosts_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_router_hosts_v1_hosts_proto_rawDesc), len(file_router_hosts_v1_hosts_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   41,
+			NumMessages:   45,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
