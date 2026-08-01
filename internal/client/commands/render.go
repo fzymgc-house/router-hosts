@@ -26,7 +26,10 @@ var renderDrainLimit = 50_000
 // newRenderCmd creates the "render" command: it renders host data through a
 // caller-supplied text/template (TMPL-01), entirely client-side (D-01).
 func newRenderCmd() *cobra.Command {
-	var templatePath string
+	var (
+		templatePath string
+		outPath      string
+	)
 
 	cmd := &cobra.Command{
 		Use:   "render",
@@ -98,12 +101,16 @@ func newRenderCmd() *cobra.Command {
 				return err
 			}
 
-			_, err = cmd.OutOrStdout().Write(rendered)
-			return err
+			if outPath == "" {
+				_, err = cmd.OutOrStdout().Write(rendered)
+				return err
+			}
+			return oops.Errorf("not implemented")
 		},
 	}
 
 	cmd.Flags().StringVar(&templatePath, "template", "", "path to a text/template file (required)")
+	cmd.Flags().StringVar(&outPath, "out", "", "artifact output path (default: stdout)")
 	_ = cmd.MarkFlagRequired("template")
 
 	return cmd
