@@ -647,16 +647,18 @@ func TestService_WatchHosts_FollowRecvEOFReturnsWhileSendBlocked(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 
-	sendBlock := make(chan struct{}) // never closed: Send blocks "on flow control" forever
+	// sendBlock is deliberately never closed: a real stalled Send responds
+	// only to the underlying stream tearing down, not to any child context
+	// this handler derives and cancels itself (that is the whole H1 point),
+	// so this fake must not give Send a ctx.Done() escape hatch either — it
+	// would make this test pass even under the pre-review teardown it is
+	// meant to catch.
+	sendBlock := make(chan struct{})
 	stream := &fakeWatchHostsStream{
 		ctx: ctx,
 		sendFn: func(*hostsv1.WatchHostsResponse) error {
-			select {
-			case <-sendBlock:
-				return nil
-			case <-ctx.Done():
-				return ctx.Err()
-			}
+			<-sendBlock
+			return nil
 		},
 		recvFn: func() (*hostsv1.WatchHostsRequest, error) {
 			return nil, io.EOF

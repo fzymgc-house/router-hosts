@@ -37,6 +37,7 @@ type HostsServiceImpl struct {
 	unboundGen        *UnboundConfGenerator
 	hooks             *HookExecutor
 	changes           *changeNotifier
+	sinkHealth        *SinkHealth
 	startTime         time.Time
 	retentionMaxSnaps *int
 	retentionMaxAge   *int
@@ -65,6 +66,15 @@ func WithUnboundGenerator(gen *UnboundConfGenerator) ServiceOption {
 // WithHookExecutor sets the hook executor.
 func WithHookExecutor(hooks *HookExecutor) ServiceOption {
 	return func(s *HostsServiceImpl) { s.hooks = hooks }
+}
+
+// WithSinkHealth sets the per-consumer sink health registry that WatchHosts
+// follow mode records identity, status, and convergence state into. Every
+// use site checks for nil: the bufconn test harnesses construct the service
+// without this option, and a nil registry disables per-consumer recording
+// without disabling streaming itself.
+func WithSinkHealth(health *SinkHealth) ServiceOption {
+	return func(s *HostsServiceImpl) { s.sinkHealth = health }
 }
 
 // WithVersion sets the version and build info strings returned by the Health RPC.
