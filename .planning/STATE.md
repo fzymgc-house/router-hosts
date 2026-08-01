@@ -5,15 +5,15 @@ milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
 status: executing
-stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-08-01T18:41:07.993Z"
+stopped_at: Completed 01-06-PLAN.md
+last_updated: "2026-08-01T19:11:25.873Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 6
+  completed_plans: 7
   percent: 0
 ---
 
@@ -34,7 +34,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
-Plan: 7 of 9
+Plan: 8 of 9
 Status: Ready to execute
 Last activity: 2026-08-01 — Phase 01 execution started
 
@@ -87,6 +87,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 01 P02 | 70min | 3 tasks | 13 files |
 | Phase 01 P04 | 45min | 2 tasks | 8 files |
 | Phase 01 P03 | ~11min | 3 tasks | 12 files |
+| Phase 01 P06 | 21min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -143,6 +144,10 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-03: LoadClientConfig now distinguishes benign absent-file from fatal present-but-invalid file, making the strict unknown-key rejection reachable (review H3)
 - [Phase ?]: 01-03: ClientLimitsConfig (max_stream_entries/max_stream_bytes) with 50k/64MiB defaults, both bounds checked independently at every collecting call site (D-14, review L1)
 - [Phase ?]: 01-03: client.Option (WithMaxStreamEntries/WithMaxStreamBytes) is the pinned test seam replacing plan 01's renderDrainLimit var; setupCmdTest made variadic (review L6/M8)
+- [Phase ?]: watchFollow's handler owns neither Send nor Recv and never joins its two goroutines (review H1); enforced by negative grep + two teardown tests each verified RED against a reintroduced wg.Wait()
+- [Phase ?]: changeNotifier promises AT MOST one additional wake per busy subscriber during a burst, never a strict lower bound (review M2)
+- [Phase ?]: Notify() is the first statement of regenerateOutputs; CompactAggregates gets its own second notify site gated on a real non-dry-run shrink (review round-3 H1)
+- [Phase ?]: TMPL-05 is NOT marked complete by this plan — plan 07's client-side sink CLI completes it, mirroring plan 05's precedent
 
 ### Pending Todos
 
@@ -171,6 +176,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T18:41:07.984Z
-Stopped at: Completed 01-03-PLAN.md
+Last session: 2026-08-01T19:11:25.866Z
+Stopped at: Completed 01-06-PLAN.md
 Resume file: None
