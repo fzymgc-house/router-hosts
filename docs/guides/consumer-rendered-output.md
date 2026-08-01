@@ -89,6 +89,16 @@ These commands read the same global connection flags as the rest of the
 CLI (`--server`, `--cert`, `--key`, `--ca`, `--config`) — see the
 [CLI Reference](../reference/cli.md).
 
+### Running more than one sink on a host
+
+The supported way to run N `watch` sinks on one host is one config file
+per sink, each selected explicitly with its own `--config <path>`, and
+each with its own client certificate CN (see "One certificate common
+name per consumer" above — sink health is keyed by CN, so two sinks
+sharing one collapse into a single health record). `--config` always
+selects that exact file; it never falls back to a different file if the
+named one is missing or invalid.
+
 `watch` writes its artifact once immediately on startup and again on every
 mutation, with no operator action required. `SIGINT`/`SIGTERM` end the
 process cleanly. On restart, it loads its own sidecar status file and
