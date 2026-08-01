@@ -3,6 +3,7 @@ package commands
 import (
 	"bytes"
 	"errors"
+	"os"
 	"testing"
 
 	"github.com/fzymgc-house/router-hosts/internal/client"
@@ -60,6 +61,39 @@ func TestDefaultNewClientFromFlags_NoServerAddress(t *testing.T) {
 	_, err := defaultNewClientFromFlags()
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "loading client config")
+}
+
+// ---------------------------------------------------------------------------
+// Explicit --config path resolution (gap G-01-1).
+// ---------------------------------------------------------------------------
+
+func TestDefaultNewClientFromFlags_ConfigFlagSelectsFile(t *testing.T) {
+	origFlags := Flags
+	t.Cleanup(func() { Flags = origFlags })
+
+	xdgDir := t.TempDir()
+	cfgDir := xdgDir + "/router-hosts"
+	require.NoError(t, os.MkdirAll(cfgDir, 0o700))
+	require.NoError(t, os.WriteFile(cfgDir+"/client.toml", []byte("[server]\naddress = \"decoy.invalid:59999\"\n"), 0o600))
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	// The dial is lazy, so an unroutable address alone would not prove which
+	// file was loaded. Point the explicit file at an empty server address
+	// instead: only the "server address is required" validation error is
+	// reachable if the explicit file (not the decoy) was the one loaded.
+	explicitDir := t.TempDir()
+	explicitPath := explicitDir + "/explicit.toml"
+	require.NoError(t, os.WriteFile(explicitPath, []byte("[server]\naddress = \"\"\n"), 0o600))
+
+	Flags = GlobalFlags{Config: explicitPath}
+
+	_, err := defaultNewClientFromFlags()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "server address is required")
 }
 
 // ---------------------------------------------------------------------------

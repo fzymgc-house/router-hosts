@@ -314,6 +314,30 @@ func TestLoadClientConfig_UnreadableFileErrors(t *testing.T) {
 	assert.Contains(t, err.Error(), "read client config")
 }
 
+// ---------------------------------------------------------------------------
+// Explicit --config path resolution (gap G-01-1). An explicit path must be
+// loaded directly and must win over the XDG search, which must not run at
+// all when a path is supplied.
+// ---------------------------------------------------------------------------
+
+func TestLoadClientConfig_ExplicitPathBeatsXDG(t *testing.T) {
+	xdgDir := t.TempDir()
+	writeClientConfig(t, xdgDir, "[server]\naddress = \"decoy.invalid:59999\"\n")
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "explicit.toml")
+	require.NoError(t, os.WriteFile(explicitPath, []byte("[server]\naddress = \"explicit.example:18443\"\n"), 0o600))
+
+	cfg, err := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &explicitPath})
+	require.NoError(t, err)
+	assert.Equal(t, "explicit.example:18443", cfg.Server.Address)
+}
+
 func TestLoadClientConfig_EnvDoesNotMaskFileError(t *testing.T) {
 	dir := t.TempDir()
 	writeClientConfig(t, dir, "{{invalid")

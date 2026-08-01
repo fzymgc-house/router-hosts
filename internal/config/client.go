@@ -80,6 +80,13 @@ type ClientConfigOverrides struct {
 	CACertPath       *string
 	MaxStreamEntries *int
 	MaxStreamBytes   *int64
+
+	// ConfigPath is not like the fields above: it does not override a
+	// resolved value, it selects which file the lowest (layer 1) resolution
+	// layer reads. Nil or empty means today's XDG auto-discovery via
+	// findClientConfigFile. Non-nil and non-empty means LoadClientConfig
+	// reads exactly that file and does not consult the XDG search at all.
+	ConfigPath *string
 }
 
 // Client env var names.
@@ -110,7 +117,22 @@ func LoadClientConfig(overrides *ClientConfigOverrides) (*ClientConfig, error) {
 	// or otherwise fails to load is an operator error, not an absent file,
 	// and silently falling back to defaults would make loadClientConfigFile's
 	// strict meta.Undecoded() unknown-key rejection unreachable.
-	if path, findErr := findClientConfigFile(); findErr == nil {
+	//
+	// An explicit path (overrides.ConfigPath) replaces this whole layer: it
+	// is loaded directly, the XDG search is never consulted, and a failure
+	// to load it is never a benign "no file found" — it is an operator
+	// error naming the exact path that was supplied (G-01-1). This must
+	// stay in layer 1: handling it inside applyClientOverrides (layer 3,
+	// after env) would silently promote an explicit file above environment
+	// variables and invert the documented precedence.
+	if overrides != nil && overrides.ConfigPath != nil && *overrides.ConfigPath != "" {
+		path := expandTilde(*overrides.ConfigPath)
+		fileCfg, loadErr := loadClientConfigFile(path)
+		if loadErr != nil {
+			return nil, oops.Wrapf(loadErr, "loading client config %s", path)
+		}
+		*cfg = *fileCfg
+	} else if path, findErr := findClientConfigFile(); findErr == nil {
 		fileCfg, loadErr := loadClientConfigFile(path)
 		if loadErr != nil {
 			return nil, oops.Wrapf(loadErr, "loading client config %s", path)

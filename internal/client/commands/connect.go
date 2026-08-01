@@ -26,6 +26,9 @@ func defaultNewClientFromFlags() (*client.Client, error) {
 	if Flags.CA != "" {
 		overrides.CACertPath = &Flags.CA
 	}
+	if Flags.Config != "" {
+		overrides.ConfigPath = &Flags.Config
+	}
 
 	cfg, err := config.LoadClientConfig(overrides)
 	if err != nil {
