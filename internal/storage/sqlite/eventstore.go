@@ -12,6 +12,7 @@ import (
 	"github.com/samber/oops"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/eventid"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
@@ -254,8 +255,23 @@ func (s *Storage) CompactAggregate(ctx context.Context, aggregateID ulid.ULID) (
 		if evErr != nil {
 			return oops.Wrapf(evErr, "build compacted seed")
 		}
+		// The replacement seed must be minted through the shared generator
+		// (internal/eventid), not a bare ulid.Make(): MAX(event_id) is the
+		// server's change ID, and a bare ULID minted here can sort below the
+		// maximum this compaction just deleted, which would make the change
+		// ID fail to advance or move backward.
+		//
+		// This function deletes the aggregate's rows (see deleteEventsForAggregate
+		// below) BEFORE calling insertEvent, so if the deleted aggregate happened
+		// to hold the global maximum, insertEvent's in-transaction MAX(event_id)
+		// read sees only the remaining log and has no knowledge of the value
+		// that was just removed. What covers that difference is the generator's
+		// floor, which sqlite.Storage.Initialize seeded from the persisted
+		// maximum and which every prior mint has already raised past the
+		// deleted value. Seeding, floor and the in-transaction guard are
+		// load-bearing together here; each alone leaves a hole.
 		seed := domain.EventEnvelope{
-			EventID:     ulid.Make(),
+			EventID:     eventid.New(),
 			AggregateID: aggregateID,
 			Event:       he,
 			Version:     highWater,
