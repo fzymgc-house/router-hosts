@@ -79,7 +79,7 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 Plans:
 **Wave 1**
 
-- [ ] 01-09-PLAN.md — Change-ID storage foundation: monotonic event IDs and `LatestEventID` (wave 1)
+- [ ] 01-09-PLAN.md — Change-ID storage foundation: commit-ordered event IDs, in-transaction ordering guard, and `LatestEventID` (wave 1)
 - [ ] 01-05-PLAN.md — Sink health primitives: mTLS CN extraction, health registry, OTel gauges (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
