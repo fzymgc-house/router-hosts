@@ -74,13 +74,13 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
 7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: 1/9 plans executed
+**Plans**: 2/9 plans executed
 
 Plans:
 **Wave 1**
 
 - [x] 01-09-PLAN.md — Change-ID storage foundation: commit-ordered event IDs, in-transaction ordering guard, and `LatestEventID` (wave 1)
-- [ ] 01-05-PLAN.md — Sink health primitives: mTLS CN extraction, health registry, OTel gauges (wave 1)
+- [x] 01-05-PLAN.md — Sink health primitives: mTLS CN extraction, health registry, OTel gauges (wave 1)
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -129,7 +129,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 1/9 | In Progress|  |
+| 1. Consumer-Rendered Output | 2/9 | In Progress|  |
 
 **Shipped (previous continuous numbering):**
 

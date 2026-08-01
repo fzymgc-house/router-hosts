@@ -5,15 +5,15 @@ milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
 status: executing
-stopped_at: Completed 01-09-PLAN.md
-last_updated: "2026-08-01T16:42:40.746Z"
+stopped_at: Completed 01-05-PLAN.md
+last_updated: "2026-08-01T17:14:53.700Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -34,7 +34,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
-Plan: 2 of 9
+Plan: 3 of 9
 Status: Ready to execute
 Last activity: 2026-08-01 — Phase 01 execution started
 
@@ -82,6 +82,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 09 P04 | 6min | 3 tasks | 2 files |
 | Phase 09 P05 | 25min | 3 tasks | 4 files |
 | Phase 01 P09 | 55min | 3 tasks | 12 files |
+| Phase 01 P05 | 35min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -123,6 +124,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: Phase 9 (09-05): checkpoint Task 3 closed on documentation review only; live OTel scrape explicitly deferred, recorded in 09-VALIDATION.md as not-run rather than claimed done
 - [Phase ?]: 01-09: Generator value type + package singleton + SwapDefault escape hatch established as the pattern for any future process-wide monotonic-ID need
 - [Phase ?]: 01-09: In-transaction ordering guard re-mints (never rejects) a non-advancing event ID at the single insertEvent funnel, unconditionally (no emptiness branch) to prevent zero-ULID collision with storage.ZeroChangeID
+- [Phase ?]: 01-05: RecordStatus/RecordSeen fully overwrite SinkState on write (last-writer-wins for duplicate CNs), pinned by TestSinkHealth_DuplicateCNCollapsesLastWriterWins per review M6
+- [Phase ?]: 01-05: MaxTrackedSinks is a package var (not const) so tests can shrink the eviction ceiling instead of seeding 1000+ entries
+- [Phase ?]: 01-05: TMPL-05 not marked complete in REQUIREMENTS.md by this plan — only identity/registry/gauge primitives built, WatchHosts wiring deferred to plan 06
 
 ### Pending Todos
 
@@ -151,6 +155,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T16:42:40.739Z
-Stopped at: Completed 01-09-PLAN.md
+Last session: 2026-08-01T17:14:53.692Z
+Stopped at: Completed 01-05-PLAN.md
 Resume file: None
