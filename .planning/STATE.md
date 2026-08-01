@@ -5,15 +5,15 @@ milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-08-01T18:09:50.573Z"
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-08-01T18:26:48.373Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 4
+  completed_plans: 5
   percent: 0
 ---
 
@@ -34,7 +34,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
-Plan: 5 of 9
+Plan: 6 of 9
 Status: Ready to execute
 Last activity: 2026-08-01 — Phase 01 execution started
 
@@ -85,6 +85,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 01 P05 | 35min | 3 tasks | 6 files |
 | Phase 01 P01 | ~75min | 3 tasks | 17 files |
 | Phase 01 P02 | 70min | 3 tasks | 13 files |
+| Phase 01 P04 | 45min | 2 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -135,6 +136,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-02: commentLineBreakReplacer moved to internal/sanitize.CommentField, shared by server generators and client template FuncMap
 - [Phase ?]: 01-02: RequireVersion is exact string equality only (no semver/prefix); .Comment sanitize binding uses a single $comment := sanitize .Comment reference so a grep count-equality gate can prove no unsanitized emission path
 - [Phase ?]: 01-02: .ChangeID's eventual-convergence claim scoped to sink/follow mode; one-shot render given its own weaker sentence (review round-3 M5)
+- [Phase ?]: 01-04: ExportHosts chunks its already-formatted payload via sendExportChunks (exportChunkSize=64KiB); empty payload still sends exactly one message (review L14)
+- [Phase ?]: 01-04: gRPC keepalive constructors renamed from plan's suggested Server-/Client-prefixed names to KeepaliveParams/KeepaliveEnforcementPolicy per package to fix a revive stutter lint finding (no acceptance grep depended on the original names)
+- [Phase ?]: 01-04: Server keepalive 30s/10s ping with 15s min client interval, no connection-lifetime limits; client keepalive 20s/10s applied fleet-wide via NewClient, not sink-specific
 
 ### Pending Todos
 
@@ -163,6 +167,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T18:09:50.564Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-08-01T18:26:48.364Z
+Stopped at: Completed 01-04-PLAN.md
 Resume file: None
