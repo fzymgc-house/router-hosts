@@ -3,11 +3,13 @@ package commands
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	texttemplate "text/template"
 	"time"
@@ -726,4 +728,387 @@ func TestWatch_ExplicitStatusIntervalFlagOverridesPolicy(t *testing.T) {
 	got, err := watchCmd.Flags().GetDuration("status-interval")
 	require.NoError(t, err)
 	assert.Equal(t, 5*time.Second, got)
+}
+
+// --- Task 3: reconnect with bounded backoff ---
+
+// callRecorder timestamps each WatchHosts dial attempt, so a test can assert
+// on the WAIT between sessions (the observable proxy for the supervising
+// loop's un-exported backoff variable) rather than needing a package-level
+// test seam.
+type callRecorder struct {
+	mu    sync.Mutex
+	times []time.Time
+}
+
+func (c *callRecorder) record() {
+	c.mu.Lock()
+	c.times = append(c.times, time.Now())
+	c.mu.Unlock()
+}
+
+func (c *callRecorder) gaps() []time.Duration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	gaps := make([]time.Duration, 0, len(c.times))
+	for i := 1; i < len(c.times); i++ {
+		gaps = append(gaps, c.times[i].Sub(c.times[i-1]))
+	}
+	return gaps
+}
+
+func waitForCallCount(t *testing.T, counter *int32, want int32, bound time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(bound)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(counter) >= want {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d WatchHosts dial attempts, got %d", want, atomic.LoadInt32(counter))
+}
+
+// alwaysFailStream returns a fakeWatchStream whose Recv always fails
+// immediately (never writes an artifact) with msg.
+func alwaysFailStream(ctx context.Context, msg string) *fakeWatchStream {
+	return &fakeWatchStream{ctx: ctx, recvFn: func() (*hostsv1.WatchHostsResponse, error) {
+		return nil, errors.New(msg)
+	}}
+}
+
+func TestWatch_ReconnectsAfterStreamError(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out.txt")
+
+	var calls int32
+	fakeHosts := &fakeHostsServiceClient{
+		watchFn: func(ctx context.Context, _ ...grpc.CallOption) (hostsv1.HostsService_WatchHostsClient, error) {
+			n := atomic.AddInt32(&calls, 1)
+			if n == 1 {
+				return alwaysFailStream(ctx, "connection reset"), nil
+			}
+			return &fakeWatchStream{ctx: ctx, toRecv: []*hostsv1.WatchHostsResponse{
+				completeResp("01RECONNECT", 0, contract.TemplateVersion),
+			}}, nil
+		},
+	}
+
+	p := watchParams{
+		client:          &client.Client{Hosts: fakeHosts},
+		tmpl:            mustParseTestTemplate(t, `{{.Count}}`),
+		declaredVersion: contract.TemplateVersion,
+		outPath:         outPath,
+		statusPath:      outPath + ".status",
+		policy: WatchPolicy{
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     10 * time.Millisecond,
+			StatusInterval: time.Second,
+			Jitter:         func(d time.Duration) time.Duration { return d },
+		}.normalized(),
+		health: &sinkHealthState{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runWatchSupervised(ctx, p)
+	}()
+
+	waitForFileContent(t, outPath, "0", 2*time.Second)
+	assert.GreaterOrEqual(t, atomic.LoadInt32(&calls), int32(2))
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runWatchSupervised did not return")
+	}
+}
+
+func TestWatch_ReconnectNoTruncation(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out.txt")
+
+	fakeHosts := &fakeHostsServiceClient{
+		watchFn: func(ctx context.Context, _ ...grpc.CallOption) (hostsv1.HostsService_WatchHostsClient, error) {
+			// Every dial delivers the SAME change ID: a reconnect (D-06) is
+			// simply the next snapshot, and repeating the same state must
+			// never touch the artifact once it is already current.
+			return &fakeWatchStream{ctx: ctx, toRecv: []*hostsv1.WatchHostsResponse{
+				completeResp("01SAME", 0, contract.TemplateVersion),
+			}}, nil
+		},
+	}
+
+	p := watchParams{
+		client:          &client.Client{Hosts: fakeHosts},
+		tmpl:            mustParseTestTemplate(t, `{{.Count}}`),
+		declaredVersion: contract.TemplateVersion,
+		outPath:         outPath,
+		statusPath:      outPath + ".status",
+		policy: WatchPolicy{
+			InitialBackoff: time.Millisecond,
+			MaxBackoff:     5 * time.Millisecond,
+			StatusInterval: time.Second,
+			Jitter:         func(d time.Duration) time.Duration { return d },
+		}.normalized(),
+		health: &sinkHealthState{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runWatchSupervised(ctx, p)
+	}()
+
+	waitForFileContent(t, outPath, "0", 2*time.Second)
+	before, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+
+	// Let several reconnect cycles run — each after the first is a no-op
+	// past the change-ID skip.
+	time.Sleep(50 * time.Millisecond)
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runWatchSupervised did not return")
+	}
+
+	after, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+	assert.Equal(t, string(before), string(after))
+}
+
+func TestWatch_BackoffResetsAfterSuccess(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out.txt")
+
+	rec := &callRecorder{}
+	var calls int32
+	fakeHosts := &fakeHostsServiceClient{
+		watchFn: func(ctx context.Context, _ ...grpc.CallOption) (hostsv1.HostsService_WatchHostsClient, error) {
+			rec.record()
+			n := atomic.AddInt32(&calls, 1)
+			switch n {
+			case 3:
+				// A session that writes a snapshot: resets the backoff for
+				// the wait that follows it.
+				return &fakeWatchStream{ctx: ctx, toRecv: []*hostsv1.WatchHostsResponse{
+					completeResp("01RESET", 0, contract.TemplateVersion),
+				}}, nil
+			default:
+				return alwaysFailStream(ctx, "no data"), nil
+			}
+		},
+	}
+
+	p := watchParams{
+		client:          &client.Client{Hosts: fakeHosts},
+		tmpl:            mustParseTestTemplate(t, `{{.Count}}`),
+		declaredVersion: contract.TemplateVersion,
+		outPath:         outPath,
+		statusPath:      outPath + ".status",
+		policy: WatchPolicy{
+			InitialBackoff: 20 * time.Millisecond,
+			MaxBackoff:     500 * time.Millisecond,
+			StatusInterval: time.Second,
+			Jitter:         func(d time.Duration) time.Duration { return d },
+		}.normalized(),
+		health: &sinkHealthState{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runWatchSupervised(ctx, p)
+	}()
+
+	waitForCallCount(t, &calls, 4, 3*time.Second)
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runWatchSupervised did not return")
+	}
+
+	gaps := rec.gaps()
+	require.GreaterOrEqual(t, len(gaps), 3)
+	// gaps[0]: wait after session 1 (failed, no write) — backoff doubled
+	//          from InitialBackoff.
+	// gaps[1]: wait after session 2 (failed, no write) — doubled again.
+	// gaps[2]: wait after session 3 (SUCCEEDED) — reset to InitialBackoff.
+	assert.Greater(t, gaps[1], gaps[0]*3/2, "backoff should have doubled after the second consecutive failure")
+	assert.Less(t, gaps[2], gaps[1]*3/4, "backoff should reset after a session that wrote a snapshot")
+}
+
+func TestWatch_BackoffResetsAfterSuccessfulWriteEvenIfSessionLaterFails(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out.txt")
+
+	rec := &callRecorder{}
+	var calls int32
+	fakeHosts := &fakeHostsServiceClient{
+		watchFn: func(ctx context.Context, _ ...grpc.CallOption) (hostsv1.HostsService_WatchHostsClient, error) {
+			rec.record()
+			n := atomic.AddInt32(&calls, 1)
+			switch n {
+			case 3:
+				// Writes a snapshot, THEN the stream fails — the exact case
+				// an error-only return cannot express (review H5): the
+				// session worked before it ended in error.
+				var recvCount int32
+				return &fakeWatchStream{ctx: ctx, recvFn: func() (*hostsv1.WatchHostsResponse, error) {
+					c := atomic.AddInt32(&recvCount, 1)
+					if c == 1 {
+						return completeResp("01H5", 0, contract.TemplateVersion), nil
+					}
+					return nil, errors.New("stream broke after a successful write")
+				}}, nil
+			default:
+				return alwaysFailStream(ctx, "no data"), nil
+			}
+		},
+	}
+
+	p := watchParams{
+		client:          &client.Client{Hosts: fakeHosts},
+		tmpl:            mustParseTestTemplate(t, `{{.Count}}`),
+		declaredVersion: contract.TemplateVersion,
+		outPath:         outPath,
+		statusPath:      outPath + ".status",
+		policy: WatchPolicy{
+			InitialBackoff: 20 * time.Millisecond,
+			MaxBackoff:     500 * time.Millisecond,
+			StatusInterval: time.Second,
+			Jitter:         func(d time.Duration) time.Duration { return d },
+		}.normalized(),
+		health: &sinkHealthState{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runWatchSupervised(ctx, p)
+	}()
+
+	waitForCallCount(t, &calls, 4, 3*time.Second)
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runWatchSupervised did not return")
+	}
+
+	gaps := rec.gaps()
+	require.GreaterOrEqual(t, len(gaps), 3)
+	assert.Greater(t, gaps[1], gaps[0]*3/2, "backoff should have doubled after the second consecutive failure")
+	// gaps[2] follows session 3, which wrote a snapshot and THEN failed.
+	// It must be close to InitialBackoff, not a further doubling of
+	// gaps[1] — the reset keys on the session RESULT, not on err == nil.
+	assert.Less(t, gaps[2], gaps[1]*3/4,
+		"backoff must reset after a session that wrote a snapshot, even though that session ended in error")
+
+	data, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+	assert.Equal(t, "0", string(data))
+}
+
+func TestWatch_ReconnectResetsConsecutiveFailures(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out.txt")
+
+	var calls int32
+	fakeHosts := &fakeHostsServiceClient{
+		watchFn: func(ctx context.Context, _ ...grpc.CallOption) (hostsv1.HostsService_WatchHostsClient, error) {
+			n := atomic.AddInt32(&calls, 1)
+			if n <= 2 {
+				return alwaysFailStream(ctx, "disconnected"), nil
+			}
+			return &fakeWatchStream{ctx: ctx, toRecv: []*hostsv1.WatchHostsResponse{
+				completeResp("01RECOVER", 0, contract.TemplateVersion),
+			}}, nil
+		},
+	}
+
+	health := &sinkHealthState{}
+	p := watchParams{
+		client:          &client.Client{Hosts: fakeHosts},
+		tmpl:            mustParseTestTemplate(t, `{{.Count}}`),
+		declaredVersion: contract.TemplateVersion,
+		outPath:         outPath,
+		statusPath:      outPath + ".status",
+		policy: WatchPolicy{
+			InitialBackoff: 5 * time.Millisecond,
+			MaxBackoff:     50 * time.Millisecond,
+			StatusInterval: time.Second,
+			Jitter:         func(d time.Duration) time.Duration { return d },
+		}.normalized(),
+		health: health,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runWatchSupervised(ctx, p)
+	}()
+
+	waitForCallCount(t, &calls, 2, 2*time.Second)
+	assert.Positive(t, health.snapshot().ConsecutiveFailures)
+
+	waitForFileContent(t, outPath, "0", 2*time.Second)
+	assert.Zero(t, health.snapshot().ConsecutiveFailures)
+
+	cancel()
+	select {
+	case <-errCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("runWatchSupervised did not return")
+	}
+}
+
+func TestWatch_CancelDuringBackoffReturnsPromptly(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out.txt")
+
+	fakeHosts := &fakeHostsServiceClient{
+		watchFn: func(ctx context.Context, _ ...grpc.CallOption) (hostsv1.HostsService_WatchHostsClient, error) {
+			return alwaysFailStream(ctx, "always fails"), nil
+		},
+	}
+
+	p := watchParams{
+		client:          &client.Client{Hosts: fakeHosts},
+		tmpl:            mustParseTestTemplate(t, `{{.Count}}`),
+		declaredVersion: contract.TemplateVersion,
+		outPath:         outPath,
+		statusPath:      outPath + ".status",
+		policy: WatchPolicy{
+			InitialBackoff: 5 * time.Second,
+			MaxBackoff:     60 * time.Second,
+			StatusInterval: time.Second,
+			Jitter:         func(d time.Duration) time.Duration { return d },
+		}.normalized(),
+		health: &sinkHealthState{},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	start := time.Now()
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- runWatchSupervised(ctx, p)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-errCh:
+		assert.Less(t, time.Since(start), time.Second,
+			"cancel during backoff must return promptly, not after the full multi-second wait")
+	case <-time.After(2 * time.Second):
+		t.Fatal("runWatchSupervised did not return promptly after cancel")
+	}
 }
