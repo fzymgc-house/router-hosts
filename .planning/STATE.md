@@ -3,18 +3,18 @@ gsd_state_version: 1.0
 milestone: v0.13.0
 milestone_name: Consumer-Owned Output
 current_phase: 01
-status: completed
-stopped_at: Completed 01-08-PLAN.md (phase 01 complete, 9/9 plans)
-last_updated: "2026-08-01T21:03:11.675Z"
+current_phase_name: consumer-rendered-output-templates-sink
+status: executing
+stopped_at: Completed 01-10-PLAN.md (gap closure G-01-1 plumbing)
+last_updated: "2026-08-01T23:08:27.677Z"
 last_activity: 2026-08-01
-last_activity_desc: Phase 01 complete
+last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
-  completed_phases: 1
-  total_plans: 9
-  completed_plans: 9
-  percent: 100
-current_phase_name: consumer-rendered-output-templates-sink
+  completed_phases: 0
+  total_plans: 11
+  completed_plans: 10
+  percent: 0
 ---
 
 # Project State
@@ -33,10 +33,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: 01
-Plan: Not started
-Status: All phases complete
-Last activity: 2026-08-01 — Phase 01 complete
+Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
+Plan: 2 of 11
+Status: Ready to execute
+Last activity: 2026-08-01 — Phase 01 execution started
 
 ## Performance Metrics
 
@@ -91,6 +91,7 @@ Last activity: 2026-08-01 — Phase 01 complete
 | Phase 01 P06 | 21min | 3 tasks | 7 files |
 | Phase 01 P07 | 23min | 3 tasks | 9 files |
 | Phase 01 P08 | 62min | 3 tasks | 6 files |
+| Phase 01 P10 | 15min | 3 tasks | 6 files |
 
 ## Accumulated Context
 
@@ -159,6 +160,7 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-08: stopServer calls grpc.Server.Stop() directly (not only context cancellation), since Server.Run's gracefulStop drains up to 30s and would keep an open WatchHosts stream alive through the simulated outage
 - [Phase ?]: 01-08: docs/reference/cli.md kept as hand-maintained edit over task docs:build's regenerated output, which fails rumdl (missing code-fence language) — filed as issue #402
 - [Phase ?]: 01-08: all four manual deployment verifications recorded as explicitly NOT-RUN in 01-VALIDATION.md (no unbound host / no second machine in this environment), per operator checkpoint decision, mirroring phase 9's OTel-scrape precedent
+- [Phase ?]: 01-10: Explicit --config path branch placed in LoadClientConfig layer 1 (not applyClientOverrides layer 3), preserving file < env < flag precedence; fixes G-01-1 silent-fallback-to-XDG defect
 
 ### Pending Todos
 
@@ -187,6 +189,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T20:51:08.269Z
-Stopped at: Completed 01-08-PLAN.md (phase 01 complete, 9/9 plans)
+Last session: 2026-08-01T23:08:27.668Z
+Stopped at: Completed 01-10-PLAN.md (gap closure G-01-1 plumbing)
 Resume file: None

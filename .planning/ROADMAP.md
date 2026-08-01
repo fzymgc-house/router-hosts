@@ -74,7 +74,7 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
 7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: 9/9 plans executed; 2 gap-closure plans added 2026-08-01 (11 total)
+**Plans**: 10/11 plans executed; 2 gap-closure plans added 2026-08-01 (11 total)
 
 Plans:
 **Wave 1**
@@ -106,7 +106,7 @@ Plans:
 
 **Gap closure** *(added 2026-08-01 after UAT; closes G-01-1)*
 
-- [ ] 01-10-PLAN.md — Honor explicit `--config` in the client: plumb `Flags.Config` into the config loader, fail loudly on an unreadable path, never merge an XDG-discovered config (wave 1)
+- [x] 01-10-PLAN.md — Honor explicit `--config` in the client: plumb `Flags.Config` into the config loader, fail loudly on an unreadable path, never merge an XDG-discovered config (wave 1)
 - [ ] 01-11-PLAN.md — Real-process cold-start e2e (`proc_e2e` tag): launch the built binary as OS processes and prove `watch --config` targets the named server (wave 2, depends on 01-10)
 
 **Status**: Planned 2026-07-31 — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07. **Replanned 2026-07-31** after cross-AI review (`01-REVIEWS.md`, reviewers codex + pi): all 8 plans revised in place, plan count and wave structure unchanged. TMPL-08 (change identity) added; TMPL-06 rescoped with storage-layer laziness deferred to #400. **Gap closure planned 2026-08-01** after UAT found G-01-1 (blocker): `--config` was registered but never read by the client, so `watch --config <path>` silently dialed whatever the XDG search found. Plans 01-10 (fix) and 01-11 (real-process e2e that can observe it) added; no TMPL requirement status changes
@@ -134,7 +134,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 9/9 | Complete    | 2026-08-01 |
+| 1. Consumer-Rendered Output | 10/11 | In Progress|  |
 
 **Shipped (previous continuous numbering):**
 
