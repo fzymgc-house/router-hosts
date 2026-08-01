@@ -23,9 +23,13 @@ func TestPostWriteHook_NonZeroExit(t *testing.T) {
 func TestPostWriteHook_Timeout(t *testing.T) {
 	err := runPostWriteHook(context.Background(), "sleep 5", 50*time.Millisecond)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "timeout")
+	assert.Contains(t, err.Error(), "timed out")
 }
 
 func TestPostWriteHook_EmptyCommandIsNoop(t *testing.T) {
 	require.NoError(t, runPostWriteHook(context.Background(), "", time.Second))
+}
+
+func TestPostWriteHook_DefaultTimeoutConstant(t *testing.T) {
+	assert.Equal(t, 30*time.Second, defaultPostWriteHookTimeout)
 }

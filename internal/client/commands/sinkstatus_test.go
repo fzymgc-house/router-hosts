@@ -123,6 +123,34 @@ func TestSinkStatus_ReadCorruptFileErrors(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSinkStatus_Adopt(t *testing.T) {
+	var s sinkHealthState
+	s.recordFailure(assert.AnError)
+
+	loaded := sinkStatus{
+		LastSuccess:      time.Now().UTC().Truncate(time.Second),
+		RenderedChangeID: "01LOADED",
+		ContractVersion:  "1",
+	}
+	s.adopt(loaded)
+
+	got := s.snapshot()
+	assert.Equal(t, loaded.RenderedChangeID, got.RenderedChangeID)
+	assert.True(t, loaded.LastSuccess.Equal(got.LastSuccess))
+	assert.Zero(t, got.ConsecutiveFailures)
+}
+
+func TestSinkStatus_SetContractVersion(t *testing.T) {
+	var s sinkHealthState
+	s.recordSuccess("01CHANGE", time.Now().UTC())
+
+	s.setContractVersion("2")
+
+	got := s.snapshot()
+	assert.Equal(t, "2", got.ContractVersion)
+	assert.Equal(t, "01CHANGE", got.RenderedChangeID)
+}
+
 func TestSinkStatus_ConcurrentAccess(t *testing.T) {
 	var s sinkHealthState
 	var wg sync.WaitGroup
