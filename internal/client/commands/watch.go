@@ -148,7 +148,7 @@ func newWatchCmd(policy WatchPolicy) *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
-			_, err = runWatch(ctx, watchParams{
+			return runWatchSupervised(ctx, watchParams{
 				client:          c,
 				tmpl:            tmpl,
 				declaredVersion: declaredVersion,
@@ -159,10 +159,6 @@ func newWatchCmd(policy WatchPolicy) *cobra.Command {
 				policy:          effectivePolicy,
 				health:          health,
 			})
-			if ctx.Err() != nil {
-				return nil
-			}
-			return err
 		},
 	}
 
@@ -428,4 +424,67 @@ func sinkStatusToProto(st sinkStatus) *hostsv1.SinkStatus {
 		out.LastReloadSuccessUnix = st.LastReloadSuccess.Unix()
 	}
 	return out
+}
+
+// runWatchSupervised wraps runWatch in a reconnect loop with bounded
+// exponential backoff. All timing comes from p.policy — no package-level
+// backoff variables exist (review H4, L13); the policy is the only source.
+//
+// A reconnect sends nothing but a fresh follow request: the server keeps no
+// per-stream position by design (D-06, D-08), so the next snapshot IS the
+// complete current state. Do not add a resume token or cursor here — a
+// future reader will be tempted to, and it would reintroduce exactly the
+// per-consumer server state D-06/D-08 reject.
+func runWatchSupervised(ctx context.Context, p watchParams) error {
+	backoff := p.policy.InitialBackoff
+
+	for {
+		result, err := runWatch(ctx, p)
+
+		select {
+		case <-ctx.Done():
+			// The caller is shutting down (SIGINT/SIGTERM or test
+			// cancellation); whatever runWatch returned is a byproduct of
+			// that, not a real connection failure, so it is not recorded
+			// as one.
+			return nil
+		default:
+		}
+
+		if err != nil {
+			// D-12a's third outcome: connection loss. The artifact is
+			// unchanged and stale; recordFailure preserves last_success and
+			// rendered_change_id while incrementing the failure count.
+			p.health.recordFailure(err)
+			writeWatchStatus(p)
+			slog.Warn("watch: session ended, reconnecting", "error", err)
+		}
+
+		// The reset keys on the SESSION RESULT, not the error (review H5):
+		// a session that connected, wrote successfully, and only later lost
+		// its stream must not be treated as a failing endpoint and backed
+		// off as though it had never worked. An error-only return cannot
+		// express that distinction, because such a session still returns a
+		// non-nil error here.
+		if result.SnapshotWritten {
+			backoff = p.policy.InitialBackoff
+		} else {
+			backoff *= 2
+			if backoff > p.policy.MaxBackoff {
+				backoff = p.policy.MaxBackoff
+			}
+		}
+
+		// Do not clear reload health here: a connection loss says nothing
+		// about whether the resolver reloaded, and overwriting
+		// reload_failed on reconnect would erase D-12a's middle outcome and
+		// suppress the hook retry that flag enables in runWatchCycle.
+
+		wait := p.policy.Jitter(backoff)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(wait):
+		}
+	}
 }
