@@ -74,18 +74,19 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
 7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: 8 plans
+**Plans**: 9 plans
 
 Plans:
 
-- [ ] 01-01-PLAN.md — Tracer: end-to-end template render over a new `WatchHosts` RPC, change-ID derivation, shared atomic writer (wave 1)
-- [ ] 01-02-PLAN.md — Template data contract: version gate, sanitizing FuncMap, published field set, worked examples (wave 2)
-- [ ] 01-04-PLAN.md — Bounded wire messages and gRPC keepalive on both sides (wave 2)
-- [ ] 01-05-PLAN.md — Sink health primitives: mTLS CN extraction, health registry, OTel gauges (wave 2)
-- [ ] 01-03-PLAN.md — Bounded, fail-loud client stream collection (entries and bytes) (wave 3)
-- [ ] 01-06-PLAN.md — Server-side sink streaming: change notification and concurrent follow mode (wave 3)
-- [ ] 01-07-PLAN.md — Client sink CLI: `watch`, sidecar status, post-write hook, reconnect (wave 4)
-- [ ] 01-08-PLAN.md — Real-mTLS e2e with server restart, operator guide, manual verification checkpoint (wave 5)
+- [ ] 01-09-PLAN.md — Change-ID storage foundation: monotonic event IDs and `LatestEventID` (wave 1)
+- [ ] 01-05-PLAN.md — Sink health primitives: mTLS CN extraction, health registry, OTel gauges (wave 1)
+- [ ] 01-01-PLAN.md — Tracer: end-to-end template render over a new `WatchHosts` RPC, shared atomic writer (wave 2)
+- [ ] 01-02-PLAN.md — Template data contract: version gate, sanitizing FuncMap, published field set, worked examples (wave 3)
+- [ ] 01-04-PLAN.md — Bounded wire messages and gRPC keepalive on both sides (wave 3)
+- [ ] 01-03-PLAN.md — Client config error propagation, then bounded fail-loud stream collection (entries and bytes) (wave 4)
+- [ ] 01-06-PLAN.md — Server-side sink streaming: change notification and concurrent follow mode (wave 4)
+- [ ] 01-07-PLAN.md — Client sink CLI: `watch`, injectable runtime policy, sidecar status, post-write hook, reconnect (wave 5)
+- [ ] 01-08-PLAN.md — Real-mTLS e2e with server stop/start, operator guide, manual verification checkpoint (wave 6)
 
 **Status**: Planned 2026-07-31 — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07. **Replanned 2026-07-31** after cross-AI review (`01-REVIEWS.md`, reviewers codex + pi): all 8 plans revised in place, plan count and wave structure unchanged. TMPL-08 (change identity) added; TMPL-06 rescoped with storage-layer laziness deferred to #400
 
