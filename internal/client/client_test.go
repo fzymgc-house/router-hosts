@@ -212,3 +212,56 @@ func TestKeepalive_ClientIntervalRespectsServerMinTime(t *testing.T) {
 	serverMinTime := server.KeepaliveEnforcementPolicy().MinTime
 	assert.GreaterOrEqual(t, clientTime, serverMinTime)
 }
+
+// ---------------------------------------------------------------------------
+// Stream collection limits (D-14, TMPL-07, review L1/L6).
+// ---------------------------------------------------------------------------
+
+func TestClient_MaxStreamEntriesFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile, caFile := generateTestCerts(t, dir)
+	cfg := &config.ClientConfig{
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CertPath: certFile, KeyPath: keyFile, CACertPath: caFile},
+		Limits: config.ClientLimitsConfig{MaxStreamEntries: 42},
+	}
+
+	c, err := NewClient(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, 42, c.MaxStreamEntries())
+}
+
+func TestClient_MaxStreamEntriesDefaultsFromConn(t *testing.T) {
+	c := NewClientFromConn(nil)
+	assert.Equal(t, config.DefaultMaxStreamEntries, c.MaxStreamEntries())
+	assert.Equal(t, int64(config.DefaultMaxStreamBytes), c.MaxStreamBytes())
+}
+
+func TestClient_MaxStreamBytesFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile, caFile := generateTestCerts(t, dir)
+	cfg := &config.ClientConfig{
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CertPath: certFile, KeyPath: keyFile, CACertPath: caFile},
+		Limits: config.ClientLimitsConfig{MaxStreamBytes: 8192},
+	}
+
+	c, err := NewClient(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, int64(8192), c.MaxStreamBytes())
+}
+
+func TestClient_OptionOverridesConfiguredLimit(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile, caFile := generateTestCerts(t, dir)
+	cfg := &config.ClientConfig{
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CertPath: certFile, KeyPath: keyFile, CACertPath: caFile},
+		Limits: config.ClientLimitsConfig{MaxStreamEntries: 42, MaxStreamBytes: 8192},
+	}
+
+	c, err := NewClient(cfg, WithMaxStreamEntries(3), WithMaxStreamBytes(100))
+	require.NoError(t, err)
+	assert.Equal(t, 3, c.MaxStreamEntries())
+	assert.Equal(t, int64(100), c.MaxStreamBytes())
+}

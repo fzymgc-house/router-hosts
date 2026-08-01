@@ -252,7 +252,7 @@ func TestApplyClientEnv(t *testing.T) {
 	cfg := &ClientConfig{
 		Server: ClientServerConfig{Address: "file-server"},
 	}
-	applyClientEnv(cfg)
+	require.NoError(t, applyClientEnv(cfg))
 
 	assert.Equal(t, "env-server", cfg.Server.Address)
 	assert.Equal(t, "/env/cert", cfg.TLS.CertPath)
@@ -323,6 +323,84 @@ func TestLoadClientConfig_EnvDoesNotMaskFileError(t *testing.T) {
 	_, err := LoadClientConfig(nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "parse client config")
+}
+
+// ---------------------------------------------------------------------------
+// Stream collection limits (D-14, TMPL-07, review L1/L6).
+// ---------------------------------------------------------------------------
+
+func TestLoadClientConfig_LimitsFromFile(t *testing.T) {
+	dir := t.TempDir()
+	writeClientConfig(t, dir, `
+[server]
+address = "localhost:50051"
+
+[limits]
+max_stream_entries = 10
+`)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, 10, cfg.Limits.MaxStreamEntries)
+}
+
+func TestLoadClientConfig_LimitsBytesFromFile(t *testing.T) {
+	dir := t.TempDir()
+	writeClientConfig(t, dir, `
+[server]
+address = "localhost:50051"
+
+[limits]
+max_stream_bytes = 4096
+`)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4096), cfg.Limits.MaxStreamBytes)
+}
+
+func TestLoadClientConfig_LimitsDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "localhost:50051")
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultMaxStreamEntries, cfg.Limits.MaxStreamEntries)
+	assert.Equal(t, int64(DefaultMaxStreamBytes), cfg.Limits.MaxStreamBytes)
+}
+
+func TestLoadClientConfig_LimitsFromEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "localhost:50051")
+	t.Setenv("ROUTER_HOSTS_MAX_STREAM_ENTRIES", "25")
+	t.Setenv("ROUTER_HOSTS_MAX_STREAM_BYTES", "4096")
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, 25, cfg.Limits.MaxStreamEntries)
+	assert.Equal(t, int64(4096), cfg.Limits.MaxStreamBytes)
+}
+
+func TestLoadClientConfig_LimitsInvalid(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "localhost:50051")
+	t.Setenv("ROUTER_HOSTS_MAX_STREAM_ENTRIES", "not-a-number")
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ROUTER_HOSTS_MAX_STREAM_ENTRIES")
+}
+
+func TestLoadClientConfig_LimitsBytesInvalid(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "localhost:50051")
+	t.Setenv("ROUTER_HOSTS_MAX_STREAM_BYTES", "not-a-number")
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ROUTER_HOSTS_MAX_STREAM_BYTES")
 }
 
 func TestApplyClientOverrides(t *testing.T) {

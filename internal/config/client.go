@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -12,10 +13,50 @@ import (
 	"github.com/fzymgc-house/router-hosts/internal/domain"
 )
 
+// Default values for client-side stream collection bounds (D-14, TMPL-07).
+const (
+	// DefaultMaxStreamEntries bounds the number of entries a single
+	// collecting call site (host list, host search, snapshot list, render)
+	// accumulates before refusing the whole response. It is an entry count
+	// rather than a byte budget because Data.Count is a first-class
+	// template-contract field (D-03): the client already needs the full
+	// entry count to render, so an entry ceiling is a natural first bound.
+	// A deployment with a larger inventory raises it through the
+	// [limits] config table or ROUTER_HOSTS_MAX_STREAM_ENTRIES rather than
+	// being blocked by a compiled-in ceiling — D-14 rejected a fixed
+	// constant for exactly that reason.
+	DefaultMaxStreamEntries = 50_000
+
+	// DefaultMaxStreamBytes bounds the total serialized size of every
+	// message a single collecting call site accumulates, independent of
+	// DefaultMaxStreamEntries. An entry count alone does not bound memory:
+	// hostnames are capped at 253 bytes and aliases at 50
+	// (internal/validation/validation.go:32,:82), but comment and tag text
+	// carry no equivalent limit, so a hostile or buggy server can exhaust a
+	// client with far fewer than 50,000 entries by making each one
+	// enormous (review L1). The two bounds are independent; either one
+	// refuses. This budget counts serialized protobuf bytes as reported by
+	// proto.Size on the received message — exactly what crossed the wire —
+	// and is a conservative operational bound on wire volume received, NOT
+	// an exact Go heap ceiling: slice headers, string headers, and the
+	// converted domain objects all sit outside it (review M7).
+	DefaultMaxStreamBytes = 64 << 20 // 64 MiB
+)
+
+// ClientLimitsConfig holds client-side stream collection bounds (D-14,
+// TMPL-07). Both bounds are enforced independently at every collecting call
+// site: a stream can trip the byte budget while under the entry cap, and the
+// reverse.
+type ClientLimitsConfig struct {
+	MaxStreamEntries int   `toml:"max_stream_entries"`
+	MaxStreamBytes   int64 `toml:"max_stream_bytes"`
+}
+
 // ClientConfig holds the client connection settings.
 type ClientConfig struct {
 	Server ClientServerConfig `toml:"server"`
 	TLS    ClientTLSConfig    `toml:"tls"`
+	Limits ClientLimitsConfig `toml:"limits"`
 }
 
 // ClientServerConfig holds the server connection settings.
@@ -33,10 +74,12 @@ type ClientTLSConfig struct {
 // ClientConfigOverrides holds optional CLI arg overrides.
 // Non-nil fields override env vars and config file values.
 type ClientConfigOverrides struct {
-	ServerAddress *string
-	CertPath      *string
-	KeyPath       *string
-	CACertPath    *string
+	ServerAddress    *string
+	CertPath         *string
+	KeyPath          *string
+	CACertPath       *string
+	MaxStreamEntries *int
+	MaxStreamBytes   *int64
 }
 
 // Client env var names.
@@ -45,6 +88,11 @@ const (
 	EnvCert   = "ROUTER_HOSTS_CERT"
 	EnvKey    = "ROUTER_HOSTS_KEY"
 	EnvCA     = "ROUTER_HOSTS_CA"
+
+	// EnvMaxStreamEntries and EnvMaxStreamBytes override the [limits]
+	// stream-collection bounds (D-14, TMPL-07).
+	EnvMaxStreamEntries = "ROUTER_HOSTS_MAX_STREAM_ENTRIES"
+	EnvMaxStreamBytes   = "ROUTER_HOSTS_MAX_STREAM_BYTES"
 )
 
 // LoadClientConfig loads client configuration with precedence:
@@ -71,7 +119,9 @@ func LoadClientConfig(overrides *ClientConfigOverrides) (*ClientConfig, error) {
 	}
 
 	// Layer 2: environment variables
-	applyClientEnv(cfg)
+	if err := applyClientEnv(cfg); err != nil {
+		return nil, err
+	}
 
 	// Layer 3: CLI overrides (highest priority)
 	if overrides != nil {
@@ -82,6 +132,17 @@ func LoadClientConfig(overrides *ClientConfigOverrides) (*ClientConfig, error) {
 	cfg.TLS.CertPath = expandTilde(cfg.TLS.CertPath)
 	cfg.TLS.KeyPath = expandTilde(cfg.TLS.KeyPath)
 	cfg.TLS.CACertPath = expandTilde(cfg.TLS.CACertPath)
+
+	// Substitute safe defaults for the stream collection bounds when
+	// nothing (file, env, or override) set them, so a zero configured value
+	// resolves to the protective default rather than to "unlimited"
+	// (T-1-09). This runs after every layer and before validate.
+	if cfg.Limits.MaxStreamEntries == 0 {
+		cfg.Limits.MaxStreamEntries = DefaultMaxStreamEntries
+	}
+	if cfg.Limits.MaxStreamBytes == 0 {
+		cfg.Limits.MaxStreamBytes = DefaultMaxStreamBytes
+	}
 
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -94,6 +155,14 @@ func LoadClientConfig(overrides *ClientConfigOverrides) (*ClientConfig, error) {
 func (c *ClientConfig) validate() error {
 	if c.Server.Address == "" {
 		return oops.Code(domain.CodeValidation).Errorf("client config: server address is required")
+	}
+	if c.Limits.MaxStreamEntries < 0 {
+		return oops.Code(domain.CodeValidation).Errorf(
+			"client config: limits.max_stream_entries must not be negative (got %d)", c.Limits.MaxStreamEntries)
+	}
+	if c.Limits.MaxStreamBytes < 0 {
+		return oops.Code(domain.CodeValidation).Errorf(
+			"client config: limits.max_stream_bytes must not be negative (got %d)", c.Limits.MaxStreamBytes)
 	}
 	return nil
 }
@@ -169,8 +238,11 @@ func clientConfigSearchPaths() []string {
 	return paths
 }
 
-// applyClientEnv overrides config fields with environment variable values when set.
-func applyClientEnv(cfg *ClientConfig) {
+// applyClientEnv overrides config fields with environment variable values
+// when set. A malformed (non-numeric) EnvMaxStreamEntries/EnvMaxStreamBytes
+// value returns an error immediately rather than being silently ignored or
+// left to fall back to a default that would mask the operator's mistake.
+func applyClientEnv(cfg *ClientConfig) error {
 	if v := os.Getenv(EnvServer); v != "" {
 		cfg.Server.Address = v
 	}
@@ -183,6 +255,23 @@ func applyClientEnv(cfg *ClientConfig) {
 	if v := os.Getenv(EnvCA); v != "" {
 		cfg.TLS.CACertPath = v
 	}
+	if v := os.Getenv(EnvMaxStreamEntries); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			return oops.Code(domain.CodeValidation).Wrapf(
+				err, "client config: %s must be a valid integer (got %q)", EnvMaxStreamEntries, v)
+		}
+		cfg.Limits.MaxStreamEntries = n
+	}
+	if v := os.Getenv(EnvMaxStreamBytes); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return oops.Code(domain.CodeValidation).Wrapf(
+				err, "client config: %s must be a valid integer (got %q)", EnvMaxStreamBytes, v)
+		}
+		cfg.Limits.MaxStreamBytes = n
+	}
+	return nil
 }
 
 // applyClientOverrides applies CLI arg overrides to config fields.
@@ -198,6 +287,12 @@ func applyClientOverrides(cfg *ClientConfig, o *ClientConfigOverrides) {
 	}
 	if o.CACertPath != nil {
 		cfg.TLS.CACertPath = *o.CACertPath
+	}
+	if o.MaxStreamEntries != nil {
+		cfg.Limits.MaxStreamEntries = *o.MaxStreamEntries
+	}
+	if o.MaxStreamBytes != nil {
+		cfg.Limits.MaxStreamBytes = *o.MaxStreamBytes
 	}
 }
 
