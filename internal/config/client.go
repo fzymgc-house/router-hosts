@@ -52,11 +52,22 @@ const (
 func LoadClientConfig(overrides *ClientConfigOverrides) (*ClientConfig, error) {
 	cfg := &ClientConfig{}
 
-	// Layer 1: config file (lowest priority)
-	if path, err := findClientConfigFile(); err == nil {
-		if fileCfg, err := loadClientConfigFile(path); err == nil {
-			*cfg = *fileCfg
+	// Layer 1: config file (lowest priority).
+	//
+	// findClientConfigFile's error is benign: no config file on any search
+	// path is a fully supported deployment (env vars and flags alone), so we
+	// skip the file layer and continue. Once a path is found, however,
+	// loadClientConfigFile's error is NOT benign and must reach the caller —
+	// a config file that exists but cannot be parsed, carries an unknown key,
+	// or otherwise fails to load is an operator error, not an absent file,
+	// and silently falling back to defaults would make loadClientConfigFile's
+	// strict meta.Undecoded() unknown-key rejection unreachable.
+	if path, findErr := findClientConfigFile(); findErr == nil {
+		fileCfg, loadErr := loadClientConfigFile(path)
+		if loadErr != nil {
+			return nil, oops.Wrapf(loadErr, "loading client config %s", path)
 		}
+		*cfg = *fileCfg
 	}
 
 	// Layer 2: environment variables

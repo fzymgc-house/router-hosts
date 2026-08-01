@@ -151,3 +151,14 @@ command = "notify-send 'router-hosts update failed'"
 | `cert_path` | path | required | Client certificate file |
 | `key_path` | path | required | Client private key file |
 | `ca_cert_path` | path | required | CA certificate for server verification |
+
+### Invalid config file handling
+
+The client refuses to start when a config file is *found but unusable*: the
+TOML does not parse, it contains an unknown key, or it fails validation. The
+error names the offending file path and the specific problem (parse failure,
+the unknown key, or the validation message).
+
+An *absent* config file is not an error — running on environment variables
+and/or CLI flags alone remains fully supported. Only a config file that
+exists and is wrong is treated as an operator error.

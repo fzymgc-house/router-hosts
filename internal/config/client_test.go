@@ -260,6 +260,71 @@ func TestApplyClientEnv(t *testing.T) {
 	assert.Equal(t, "/env/ca", cfg.TLS.CACertPath)
 }
 
+// ---------------------------------------------------------------------------
+// Invalid client config file must be a startup error, not a silent fallback
+// (review round-2 H3; internal/config/client.go:55-59 used to shadow and
+// discard both inner errors).
+// ---------------------------------------------------------------------------
+
+func TestLoadClientConfig_NoFileIsNotAnError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // empty dir, no file on any search path
+	t.Setenv("ROUTER_HOSTS_SERVER", "env-only:50051")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "env-only:50051", cfg.Server.Address)
+}
+
+func TestLoadClientConfig_MalformedFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := writeClientConfig(t, dir, "{{invalid")
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), "parse client config")
+}
+
+func TestLoadClientConfig_UnknownKeyErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeClientConfig(t, dir, "[server]\naddress = \"localhost:50051\"\nbogus_key = \"x\"\n")
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus_key")
+}
+
+func TestLoadClientConfig_UnreadableFileErrors(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root can read files regardless of mode")
+	}
+	dir := t.TempDir()
+	path := writeClientConfig(t, dir, clientConfigContent)
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read client config")
+}
+
+func TestLoadClientConfig_EnvDoesNotMaskFileError(t *testing.T) {
+	dir := t.TempDir()
+	writeClientConfig(t, dir, "{{invalid")
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "env-server:9090")
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse client config")
+}
+
 func TestApplyClientOverrides(t *testing.T) {
 	server := "override-server"
 	cert := "/override/cert"
