@@ -5,8 +5,11 @@
 package template
 
 import (
+	"bytes"
 	texttemplate "text/template"
 	"time"
+
+	"github.com/samber/oops"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 )
@@ -47,18 +50,42 @@ type Data struct {
 // struct typing itself is what makes an undefined field a compile-time-like
 // parse/execute error rather than a silent miss.
 func Parse(name, src string) (*texttemplate.Template, error) {
-	panic("not implemented")
+	tmpl, err := texttemplate.New(name).Option("missingkey=error").Parse(src)
+	if err != nil {
+		return nil, oops.Wrapf(err, "parse template")
+	}
+	return tmpl, nil
 }
 
 // Render executes tmpl against data and returns the rendered bytes. It never
 // writes to a destination file (D-12): the caller is responsible for taking
 // the returned bytes and writing them atomically.
 func Render(tmpl *texttemplate.Template, data Data) ([]byte, error) {
-	panic("not implemented")
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return nil, oops.Wrapf(err, "execute template")
+	}
+	return buf.Bytes(), nil
 }
 
 // FromProto maps a WatchHosts response's host entries plus its snapshot
 // terminator into a Data value ready to render.
 func FromProto(entries []*hostsv1.HostEntry, complete *hostsv1.SnapshotComplete) Data {
-	panic("not implemented")
+	out := make([]Entry, len(entries))
+	for i, e := range entries {
+		out[i] = Entry{
+			IPAddress: e.GetIpAddress(),
+			Hostname:  e.GetHostname(),
+			Aliases:   e.GetAliases(),
+			Tags:      e.GetTags(),
+			Comment:   e.GetComment(),
+		}
+	}
+	return Data{
+		Entries:         out,
+		Count:           int(complete.GetCount()),
+		GeneratedAt:     complete.GetGeneratedAt().AsTime(),
+		ContractVersion: complete.GetContractVersion(),
+		ChangeID:        complete.GetChangeId(),
+	}
 }
