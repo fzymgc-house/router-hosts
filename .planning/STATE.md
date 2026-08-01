@@ -5,15 +5,15 @@ milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
 status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-08-01T18:26:48.373Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-08-01T18:41:07.993Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 5
+  completed_plans: 6
   percent: 0
 ---
 
@@ -34,7 +34,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
-Plan: 6 of 9
+Plan: 7 of 9
 Status: Ready to execute
 Last activity: 2026-08-01 — Phase 01 execution started
 
@@ -86,6 +86,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 01 P01 | ~75min | 3 tasks | 17 files |
 | Phase 01 P02 | 70min | 3 tasks | 13 files |
 | Phase 01 P04 | 45min | 2 tasks | 8 files |
+| Phase 01 P03 | ~11min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -139,6 +140,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-04: ExportHosts chunks its already-formatted payload via sendExportChunks (exportChunkSize=64KiB); empty payload still sends exactly one message (review L14)
 - [Phase ?]: 01-04: gRPC keepalive constructors renamed from plan's suggested Server-/Client-prefixed names to KeepaliveParams/KeepaliveEnforcementPolicy per package to fix a revive stutter lint finding (no acceptance grep depended on the original names)
 - [Phase ?]: 01-04: Server keepalive 30s/10s ping with 15s min client interval, no connection-lifetime limits; client keepalive 20s/10s applied fleet-wide via NewClient, not sink-specific
+- [Phase ?]: 01-03: LoadClientConfig now distinguishes benign absent-file from fatal present-but-invalid file, making the strict unknown-key rejection reachable (review H3)
+- [Phase ?]: 01-03: ClientLimitsConfig (max_stream_entries/max_stream_bytes) with 50k/64MiB defaults, both bounds checked independently at every collecting call site (D-14, review L1)
+- [Phase ?]: 01-03: client.Option (WithMaxStreamEntries/WithMaxStreamBytes) is the pinned test seam replacing plan 01's renderDrainLimit var; setupCmdTest made variadic (review L6/M8)
 
 ### Pending Todos
 
@@ -167,6 +171,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T18:26:48.364Z
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-08-01T18:41:07.984Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None

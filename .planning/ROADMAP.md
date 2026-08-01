@@ -74,7 +74,7 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
 7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: 5/9 plans executed
+**Plans**: 6/9 plans executed
 
 Plans:
 **Wave 1**
@@ -93,7 +93,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 01-03-PLAN.md — Client config error propagation, then bounded fail-loud stream collection (entries and bytes) (wave 4)
+- [x] 01-03-PLAN.md — Client config error propagation, then bounded fail-loud stream collection (entries and bytes) (wave 4)
 - [ ] 01-06-PLAN.md — Server-side sink streaming: change notification and concurrent follow mode (wave 4)
 
 **Wave 5** *(blocked on Wave 4 completion)*
@@ -129,7 +129,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 5/9 | In Progress|  |
+| 1. Consumer-Rendered Output | 6/9 | In Progress|  |
 
 **Shipped (previous continuous numbering):**
 
