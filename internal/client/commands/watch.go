@@ -141,10 +141,11 @@ func newWatchCmd(policy WatchPolicy) *cobra.Command {
 			}
 			health.setContractVersion(declaredVersion)
 
-			// signal.NotifyContext, not commandContext(): this is a
-			// long-lived command, and commandContext()'s fixed 30 second
-			// one-shot deadline would tear down the stream out from under
-			// it. SIGINT/SIGTERM end the command cleanly instead.
+			// This is a long-lived command: render.go's fixed 30 second
+			// one-shot RPC deadline helper would tear down the stream out
+			// from under it, so the lifetime context comes from the
+			// process's own termination signals instead. SIGINT/SIGTERM end
+			// the command cleanly.
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
