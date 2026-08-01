@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/fzymgc-house/router-hosts/internal/client"
 	"github.com/fzymgc-house/router-hosts/internal/contract"
 )
 
@@ -39,12 +40,8 @@ func TestRender_TemplateEndToEnd(t *testing.T) {
 	assert.Equal(t, "192.168.1.10 server.local\n", out.String())
 }
 
-func TestRender_DrainLimitRefusesSnapshot(t *testing.T) {
-	setupCmdTest(t)
-
-	orig := renderDrainLimit
-	renderDrainLimit = 1
-	t.Cleanup(func() { renderDrainLimit = orig })
+func TestRender_CapExceededPreservesArtifact(t *testing.T) {
+	setupCmdTest(t, client.WithMaxStreamEntries(1))
 
 	root := NewRootCmd()
 	var addOut bytes.Buffer
@@ -60,15 +57,21 @@ func TestRender_DrainLimitRefusesSnapshot(t *testing.T) {
 
 	tmplPath := filepath.Join(t.TempDir(), "test.tmpl")
 	require.NoError(t, os.WriteFile(tmplPath, []byte(testContractVersionBlock+`{{.Count}}`), 0o644))
+	outPath := filepath.Join(t.TempDir(), "out.txt")
+	require.NoError(t, os.WriteFile(outPath, []byte("pre-existing artifact"), 0o644))
 
 	root = NewRootCmd()
 	var out bytes.Buffer
 	root.SetOut(&out)
-	root.SetArgs([]string{"render", "--template", tmplPath})
+	root.SetArgs([]string{"render", "--template", tmplPath, "--out", outPath})
 	err := root.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "1")
 	assert.Empty(t, out.String())
+
+	data, err := os.ReadFile(outPath)
+	require.NoError(t, err)
+	assert.Equal(t, "pre-existing artifact", string(data))
 }
 
 func TestRender_WritesArtifactToOut(t *testing.T) {

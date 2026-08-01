@@ -9,10 +9,13 @@ import (
 	"strings"
 	"time"
 
-	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
-	"github.com/fzymgc-house/router-hosts/internal/client/output"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
+
+	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
+	"github.com/fzymgc-house/router-hosts/internal/client"
+	"github.com/fzymgc-house/router-hosts/internal/client/output"
 )
 
 // addHostSubcommands attaches all host CRUD subcommands to the parent.
@@ -271,7 +274,7 @@ func newHostListCmd() *cobra.Command {
 				return oops.Wrapf(err, "listing hosts")
 			}
 
-			entries, err := collectHostStream(stream)
+			entries, err := collectHostStream(stream, limitsFrom(c))
 			if err != nil {
 				return err
 			}
@@ -315,7 +318,7 @@ func newHostSearchCmd() *cobra.Command {
 				return oops.Wrapf(err, "searching hosts")
 			}
 
-			entries, err := collectSearchStream(stream)
+			entries, err := collectSearchStream(stream, limitsFrom(c))
 			if err != nil {
 				return err
 			}
@@ -340,9 +343,52 @@ func resolveFormat() string {
 	return output.DetectFormat()
 }
 
-// collectHostStream drains a ListHosts server stream into a slice.
-func collectHostStream(stream hostsv1.HostsService_ListHostsClient) ([]*hostsv1.HostEntry, error) {
+// streamLimits carries the entry-count and byte-size ceilings a collecting
+// call site enforces, sourced from a single *client.Client so no call site
+// can pass one bound and forget the other (D-14, TMPL-07, review L1).
+type streamLimits struct {
+	entries int
+	bytes   int64
+}
+
+// limitsFrom packages the stream-collection ceilings c carries (see
+// client.Client.MaxStreamEntries/MaxStreamBytes) for a collecting call site.
+func limitsFrom(c *client.Client) streamLimits {
+	return streamLimits{entries: c.MaxStreamEntries(), bytes: c.MaxStreamBytes()}
+}
+
+// streamLimitError reports that a stream's entry count reached limit before
+// its terminator arrived. The response is refused outright — never
+// truncated (D-14) — and the message names both ways to raise the bound.
+func streamLimitError(limit int) error {
+	return oops.Errorf(
+		"server response exceeds the client entry limit of %d entries; refusing "+
+			"the result rather than returning a truncated one — raise the limit "+
+			"via the client config file's limits.max_stream_entries key or the "+
+			"ROUTER_HOSTS_MAX_STREAM_ENTRIES environment variable",
+		limit)
+}
+
+// streamByteLimitError reports that a stream's accumulated serialized size
+// (proto.Size summed across received messages) crossed the byte budget
+// before its terminator arrived. Independent of streamLimitError: a stream
+// can trip this bound while its entry count stays far below limits.entries,
+// because comment and tag text carry no length validation (review L1).
+func streamByteLimitError(limit int64) error {
+	return oops.Errorf(
+		"server response exceeds the client byte limit of %d bytes; refusing "+
+			"the result rather than returning a truncated one — raise the limit "+
+			"via the client config file's limits.max_stream_bytes key or the "+
+			"ROUTER_HOSTS_MAX_STREAM_BYTES environment variable",
+		limit)
+}
+
+// collectHostStream drains a ListHosts server stream into a slice, refusing
+// (nil slice, non-nil error) before the offending append if either bound in
+// limits is crossed.
+func collectHostStream(stream hostsv1.HostsService_ListHostsClient, limits streamLimits) ([]*hostsv1.HostEntry, error) {
 	var entries []*hostsv1.HostEntry
+	var totalBytes int64
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -352,15 +398,26 @@ func collectHostStream(stream hostsv1.HostsService_ListHostsClient) ([]*hostsv1.
 			return nil, oops.Wrapf(err, "receiving host entry")
 		}
 		if resp.GetEntry() != nil {
+			if len(entries) >= limits.entries {
+				return nil, streamLimitError(limits.entries)
+			}
+			size := int64(proto.Size(resp))
+			if totalBytes+size > limits.bytes {
+				return nil, streamByteLimitError(limits.bytes)
+			}
+			totalBytes += size
 			entries = append(entries, resp.GetEntry())
 		}
 	}
 	return entries, nil
 }
 
-// collectSearchStream drains a SearchHosts server stream into a slice.
-func collectSearchStream(stream hostsv1.HostsService_SearchHostsClient) ([]*hostsv1.HostEntry, error) {
+// collectSearchStream drains a SearchHosts server stream into a slice,
+// refusing (nil slice, non-nil error) before the offending append if either
+// bound in limits is crossed.
+func collectSearchStream(stream hostsv1.HostsService_SearchHostsClient, limits streamLimits) ([]*hostsv1.HostEntry, error) {
 	var entries []*hostsv1.HostEntry
+	var totalBytes int64
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -370,6 +427,14 @@ func collectSearchStream(stream hostsv1.HostsService_SearchHostsClient) ([]*host
 			return nil, oops.Wrapf(err, "receiving search result")
 		}
 		if resp.GetEntry() != nil {
+			if len(entries) >= limits.entries {
+				return nil, streamLimitError(limits.entries)
+			}
+			size := int64(proto.Size(resp))
+			if totalBytes+size > limits.bytes {
+				return nil, streamByteLimitError(limits.bytes)
+			}
+			totalBytes += size
 			entries = append(entries, resp.GetEntry())
 		}
 	}

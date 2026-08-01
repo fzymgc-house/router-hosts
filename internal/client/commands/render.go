@@ -8,21 +8,12 @@ import (
 
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/atomicfile"
 	"github.com/fzymgc-house/router-hosts/internal/client/template"
 )
-
-// renderDrainLimit bounds how many entries the render command's WatchHosts
-// drain loop will accumulate before refusing the whole snapshot. It is a
-// package-level VARIABLE, not a const, so a test can lower it to drive the
-// refusal path instead of seeding 50,000 host entries — a Go const cannot be
-// lowered at runtime (review L1). It is a floor: plan 03 replaces it with
-// the configurable limits.max_stream_entries ceiling. It exists so render is
-// never exposed to unbounded accumulation in the waves between this plan
-// and plan 03 (review L8).
-var renderDrainLimit = 50_000
 
 // newRenderCmd creates the "render" command: it renders host data through a
 // caller-supplied text/template (TMPL-01), entirely client-side (D-01).
@@ -76,8 +67,10 @@ func newRenderCmd() *cobra.Command {
 				return oops.Wrapf(err, "closing WatchHosts send side")
 			}
 
+			limits := limitsFrom(c)
 			var entries []*hostsv1.HostEntry
 			var complete *hostsv1.SnapshotComplete
+			var totalBytes int64
 			for {
 				resp, err := stream.Recv()
 				if errors.Is(err, io.EOF) {
@@ -87,13 +80,18 @@ func newRenderCmd() *cobra.Command {
 					return oops.Wrapf(err, "receiving WatchHosts response")
 				}
 				if e := resp.GetEntry(); e != nil {
-					if len(entries) >= renderDrainLimit {
-						return oops.Errorf("snapshot exceeds render drain limit of %d entries", renderDrainLimit)
+					if len(entries) >= limits.entries {
+						return streamLimitError(limits.entries)
 					}
+					size := int64(proto.Size(resp))
+					if totalBytes+size > limits.bytes {
+						return streamByteLimitError(limits.bytes)
+					}
+					totalBytes += size
 					entries = append(entries, e)
 				}
-				if c := resp.GetComplete(); c != nil {
-					complete = c
+				if comp := resp.GetComplete(); comp != nil {
+					complete = comp
 				}
 			}
 			if complete == nil {
