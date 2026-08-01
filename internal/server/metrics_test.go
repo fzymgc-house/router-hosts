@@ -693,3 +693,134 @@ func TestRegisterAggregateEventGaugesEmptyStore(t *testing.T) {
 	require.Len(t, overData.DataPoints, 1)
 	assert.Equal(t, int64(0), overData.DataPoints[0].Value, "empty store: over should be 0")
 }
+
+func TestRegisterSinkGauges_RealProvider(t *testing.T) {
+	t.Parallel()
+
+	health := NewSinkHealth()
+	health.RecordServerChange("01CHANGE")
+	health.RecordStatus("sink-a", SinkState{
+		LastSuccess:      time.Unix(1700000000, 0).UTC(),
+		RenderedChangeID: "01CHANGE",
+	})
+	health.Connect()
+
+	m, reader := newTestMetrics(t)
+	require.NoError(t, m.RegisterSinkGauges(health))
+
+	rm := collectMetrics(t, reader)
+
+	for _, name := range []string{
+		"router_hosts_sink_last_seen_timestamp_seconds",
+		"router_hosts_sink_last_success_timestamp_seconds",
+		"router_hosts_sink_consecutive_failures",
+		"router_hosts_sink_reload_failed",
+		"router_hosts_sink_converged",
+		"router_hosts_sinks_connected",
+		"router_hosts_sink_identity_failures",
+	} {
+		metric := findMetric(rm, name)
+		require.NotNil(t, metric, "%s not found", name)
+	}
+
+	connectedMetric := findMetric(rm, "router_hosts_sinks_connected")
+	connectedData, ok := connectedMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64] for sinks_connected, got %T", connectedMetric.Data)
+	require.Len(t, connectedData.DataPoints, 1)
+	assert.Equal(t, int64(1), connectedData.DataPoints[0].Value)
+}
+
+func TestRegisterSinkGauges_NilProviderNoop(t *testing.T) {
+	t.Parallel()
+
+	m := DisabledMetrics()
+	err := m.RegisterSinkGauges(NewSinkHealth())
+	require.NoError(t, err)
+}
+
+func TestRegisterSinkGauges_NilHealthNoop(t *testing.T) {
+	t.Parallel()
+
+	m, _ := newTestMetrics(t)
+	err := m.RegisterSinkGauges(nil)
+	require.NoError(t, err)
+}
+
+func TestRegisterSinkGauges_ConvergedReflectsChangeID(t *testing.T) {
+	t.Parallel()
+
+	health := NewSinkHealth()
+	health.RecordServerChange("01CHANGE")
+	health.RecordStatus("sink-converged", SinkState{RenderedChangeID: "01CHANGE"})
+	health.RecordStatus("sink-behind", SinkState{RenderedChangeID: "01STALE"})
+	health.RecordStatus("sink-unreported", SinkState{})
+
+	m, reader := newTestMetrics(t)
+	require.NoError(t, m.RegisterSinkGauges(health))
+
+	rm := collectMetrics(t, reader)
+	convergedMetric := findMetric(rm, "router_hosts_sink_converged")
+	require.NotNil(t, convergedMetric)
+	data, ok := convergedMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64], got %T", convergedMetric.Data)
+	require.Len(t, data.DataPoints, 3)
+
+	byCN := make(map[string]int64)
+	for _, dp := range data.DataPoints {
+		byCN[extractAttrs(dp)["cn"]] = dp.Value
+	}
+	assert.Equal(t, int64(1), byCN["sink-converged"])
+	assert.Equal(t, int64(0), byCN["sink-behind"])
+	assert.Equal(t, int64(0), byCN["sink-unreported"])
+}
+
+func TestRegisterSinkGauges_ReloadFailedIsIndependentOfLastSuccess(t *testing.T) {
+	t.Parallel()
+
+	health := NewSinkHealth()
+	writeTime := time.Unix(1700000100, 0).UTC()
+	health.RecordStatus("sink-a", SinkState{
+		LastSuccess:  writeTime,
+		ReloadFailed: true,
+	})
+
+	m, reader := newTestMetrics(t)
+	require.NoError(t, m.RegisterSinkGauges(health))
+
+	rm := collectMetrics(t, reader)
+
+	reloadMetric := findMetric(rm, "router_hosts_sink_reload_failed")
+	require.NotNil(t, reloadMetric)
+	reloadData, ok := reloadMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64], got %T", reloadMetric.Data)
+	require.Len(t, reloadData.DataPoints, 1)
+	assert.Equal(t, int64(1), reloadData.DataPoints[0].Value)
+
+	lastSuccessMetric := findMetric(rm, "router_hosts_sink_last_success_timestamp_seconds")
+	require.NotNil(t, lastSuccessMetric)
+	lastSuccessData, ok := lastSuccessMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64], got %T", lastSuccessMetric.Data)
+	require.Len(t, lastSuccessData.DataPoints, 1)
+	assert.Equal(t, writeTime.Unix(), lastSuccessData.DataPoints[0].Value)
+}
+
+func TestRegisterSinkGauges_IdentityFailuresObservedWithoutAttributes(t *testing.T) {
+	t.Parallel()
+
+	health := NewSinkHealth()
+	health.RecordIdentityFailure()
+	health.RecordIdentityFailure()
+
+	m, reader := newTestMetrics(t)
+	require.NoError(t, m.RegisterSinkGauges(health))
+
+	rm := collectMetrics(t, reader)
+
+	identityMetric := findMetric(rm, "router_hosts_sink_identity_failures")
+	require.NotNil(t, identityMetric)
+	data, ok := identityMetric.Data.(metricdata.Gauge[int64])
+	require.True(t, ok, "expected Gauge[int64], got %T", identityMetric.Data)
+	require.Len(t, data.DataPoints, 1)
+	assert.Equal(t, int64(2), data.DataPoints[0].Value)
+	assert.Empty(t, extractAttrs(data.DataPoints[0]), "identity failure gauge must carry no attributes")
+}
