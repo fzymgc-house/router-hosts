@@ -5,15 +5,15 @@ milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-08-01T17:40:14.560Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-08-01T18:09:50.573Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -34,7 +34,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
-Plan: 4 of 9
+Plan: 5 of 9
 Status: Ready to execute
 Last activity: 2026-08-01 — Phase 01 execution started
 
@@ -84,6 +84,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 01 P09 | 55min | 3 tasks | 12 files |
 | Phase 01 P05 | 35min | 3 tasks | 6 files |
 | Phase 01 P01 | ~75min | 3 tasks | 17 files |
+| Phase 01 P02 | 70min | 3 tasks | 13 files |
 
 ## Accumulated Context
 
@@ -131,6 +132,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-01: Change ID (LatestEventID) read strictly before ListAll in WatchHosts (H1); reversed order verified RED before rejection
 - [Phase ?]: 01-01: Atomic {entries, latestEventID} single-transaction read deferred; filed as GitHub issue #401 alongside #400
 - [Phase ?]: 01-01: renderDrainLimit is a package-level var (not const) so a test can lower it without seeding 50,000 entries
+- [Phase ?]: 01-02: commentLineBreakReplacer moved to internal/sanitize.CommentField, shared by server generators and client template FuncMap
+- [Phase ?]: 01-02: RequireVersion is exact string equality only (no semver/prefix); .Comment sanitize binding uses a single $comment := sanitize .Comment reference so a grep count-equality gate can prove no unsanitized emission path
+- [Phase ?]: 01-02: .ChangeID's eventual-convergence claim scoped to sink/follow mode; one-shot render given its own weaker sentence (review round-3 M5)
 
 ### Pending Todos
 
@@ -159,6 +163,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T17:40:14.552Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-08-01T18:09:50.564Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None

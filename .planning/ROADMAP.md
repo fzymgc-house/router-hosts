@@ -74,7 +74,7 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
 7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: 3/9 plans executed
+**Plans**: 4/9 plans executed
 
 Plans:
 **Wave 1**
@@ -88,7 +88,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-02-PLAN.md — Template data contract: version gate, sanitizing FuncMap, published field set, worked examples (wave 3)
+- [x] 01-02-PLAN.md — Template data contract: version gate, sanitizing FuncMap, published field set, worked examples (wave 3)
 - [ ] 01-04-PLAN.md — Bounded wire messages and gRPC keepalive on both sides (wave 3)
 
 **Wave 4** *(blocked on Wave 3 completion)*
@@ -129,7 +129,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 3/9 | In Progress|  |
+| 1. Consumer-Rendered Output | 4/9 | In Progress|  |
 
 **Shipped (previous continuous numbering):**
 
