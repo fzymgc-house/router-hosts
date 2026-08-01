@@ -3,14 +3,13 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/samber/oops"
 
+	"github.com/fzymgc-house/router-hosts/internal/atomicfile"
 	"github.com/fzymgc-house/router-hosts/internal/domain"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
@@ -34,7 +33,7 @@ func (g *HostsFileGenerator) Regenerate(ctx context.Context, store storage.Stora
 	}
 
 	content := g.FormatHostsFile(entries)
-	if err := atomicWriteFile(g.path, content); err != nil {
+	if err := atomicfile.Write(g.path, []byte(content)); err != nil {
 		return 0, err
 	}
 	return len(entries), nil
@@ -126,39 +125,4 @@ var commentLineBreakReplacer = strings.NewReplacer("\n", " ", "\r", " ")
 // hosts/dnsmasq/unbound output. See GH #349 review finding router-hosts-00b.2.
 func sanitizeCommentField(s string) string {
 	return commentLineBreakReplacer.Replace(s)
-}
-
-// atomicWriteFile writes content to a temp file in the target directory,
-// fsyncs, then renames into place. Shared by all output-file generators.
-func atomicWriteFile(path, content string) error {
-	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp.*")
-	if err != nil {
-		return oops.Wrapf(err, "create temp file")
-	}
-	tmpPath := f.Name()
-
-	_, writeErr := f.WriteString(content)
-	if writeErr != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return oops.Wrapf(writeErr, "write file")
-	}
-
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "fsync file")
-	}
-
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "close file")
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "rename file")
-	}
-
-	return nil
 }

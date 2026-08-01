@@ -9,6 +9,7 @@ import (
 
 	"github.com/samber/oops"
 
+	"github.com/fzymgc-house/router-hosts/internal/atomicfile"
 	"github.com/fzymgc-house/router-hosts/internal/domain"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
@@ -48,7 +49,7 @@ func (g *DnsmasqConfGenerator) Regenerate(ctx context.Context, store storage.Sto
 	}
 
 	content := g.FormatConf(entries)
-	if err := atomicWriteFile(g.path, content); err != nil {
+	if err := atomicfile.Write(g.path, []byte(content)); err != nil {
 		return 0, err
 	}
 	return len(entries), nil
