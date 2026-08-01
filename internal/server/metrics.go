@@ -348,6 +348,137 @@ func (m *Metrics) RegisterAggregateEventGauges(store storage.EventStore, warnThr
 	return nil
 }
 
+// RegisterSinkGauges registers seven observable gauges that project a
+// SinkHealth registry's per-consumer state through the server's existing
+// OTel pipeline, pulled at scrape time — mirroring
+// RegisterAggregateEventGauges's shape. No-op when metrics are disabled
+// (nil meter provider) or when health is nil. The callback only reads from
+// health; it never mutates the registry, which is what makes D-10's
+// survives-close retention compatible with OTel's pull model.
+//
+// Every instrument this function registers has a real observation point in
+// the callback below — none is created and left permanently unobserved.
+// router_hosts_sink_consecutive_failures is a gauge, not a counter,
+// specifically because it carries consumer-reported standing state:
+// re-reporting the same failure count on every status tick must not
+// double-count.
+func (m *Metrics) RegisterSinkGauges(health *SinkHealth) error {
+	if m.meterProvider == nil || health == nil {
+		return nil
+	}
+	meter := m.meterProvider.Meter("router-hosts")
+
+	lastSeenGauge, err := meter.Int64ObservableGauge("router_hosts_sink_last_seen_timestamp_seconds",
+		otelmetric.WithDescription("Unix timestamp (seconds) of the last time this consumer's stream was seen"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create sink_last_seen_timestamp_seconds gauge")
+	}
+	lastSuccessGauge, err := meter.Int64ObservableGauge("router_hosts_sink_last_success_timestamp_seconds",
+		otelmetric.WithDescription("Unix timestamp (seconds) of this consumer's last successful artifact write"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create sink_last_success_timestamp_seconds gauge")
+	}
+	consecutiveFailuresGauge, err := meter.Int64ObservableGauge("router_hosts_sink_consecutive_failures",
+		otelmetric.WithDescription("Consumer-reported count of consecutive render/write failures since its last success"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create sink_consecutive_failures gauge")
+	}
+	// D-12a: 1 when the consumer's last post-write reload hook failed. The
+	// artifact on that consumer is current while its resolver may not be —
+	// a different alert from a stale artifact, which is why this is a
+	// field separate from the last-success timestamp above.
+	reloadFailedGauge, err := meter.Int64ObservableGauge("router_hosts_sink_reload_failed",
+		otelmetric.WithDescription("1 when the consumer's last post-write reload hook failed; the artifact is current but its resolver may not be (D-12a)"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create sink_reload_failed gauge")
+	}
+	convergedGauge, err := meter.Int64ObservableGauge("router_hosts_sink_converged",
+		otelmetric.WithDescription("1 when the consumer's last rendered change ID equals the server's current change ID"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create sink_converged gauge")
+	}
+	connectedGauge, err := meter.Int64ObservableGauge("router_hosts_sinks_connected",
+		otelmetric.WithDescription("Current number of connected sink streams"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create sinks_connected gauge")
+	}
+	// review L11: a stream whose peer certificate identity could not be
+	// extracted still counts toward sinks_connected (deliberately — see
+	// SinkHealth.Connect), which means a broken authentication path can
+	// otherwise hide behind a healthy-looking connection count. This gauge
+	// carries no attributes because there is no verified identity to
+	// attribute the failure to — attributing it to caller-supplied data
+	// would be the exact substitution D-13 forbids. A non-zero value means
+	// connections are being accepted and counted while no per-consumer
+	// health record can be created for them, so sinks_connected will
+	// exceed the number of tracked identities.
+	identityFailuresGauge, err := meter.Int64ObservableGauge("router_hosts_sink_identity_failures",
+		otelmetric.WithDescription("Number of streams whose peer certificate identity could not be extracted since process start; no attributes, since there is no verified identity to attribute it to"),
+	)
+	if err != nil {
+		return oops.Wrapf(err, "create sink_identity_failures gauge")
+	}
+
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, o otelmetric.Observer) error {
+			snap := health.Snapshot()
+			for cn, st := range snap.States {
+				// Observing nothing for a zero time rather than reporting
+				// a 1970 timestamp.
+				if !st.LastSeen.IsZero() {
+					o.ObserveInt64(lastSeenGauge, st.LastSeen.Unix(),
+						otelmetric.WithAttributes(attribute.String("cn", cn)))
+				}
+				if !st.LastSuccess.IsZero() {
+					o.ObserveInt64(lastSuccessGauge, st.LastSuccess.Unix(),
+						otelmetric.WithAttributes(attribute.String("cn", cn)))
+				}
+				o.ObserveInt64(consecutiveFailuresGauge, st.ConsecutiveFailures,
+					otelmetric.WithAttributes(attribute.String("cn", cn)))
+
+				reloadFailed := int64(0)
+				if st.ReloadFailed {
+					reloadFailed = 1
+				}
+				o.ObserveInt64(reloadFailedGauge, reloadFailed,
+					otelmetric.WithAttributes(attribute.String("cn", cn)))
+
+				// The change ID itself is never emitted as a label (D-13,
+				// review M6): a value that changes on every mutation
+				// would be unbounded cardinality by construction, which
+				// is the opposite of D-13. It is compared here only to
+				// produce a bounded 0/1 gauge. Operators who need the
+				// exact ULID read it from the consumer's sidecar status
+				// file or the server's structured logs, neither of which
+				// has a cardinality budget.
+				converged := int64(0)
+				if st.RenderedChangeID != "" && st.RenderedChangeID == snap.ServerChangeID {
+					converged = 1
+				}
+				o.ObserveInt64(convergedGauge, converged,
+					otelmetric.WithAttributes(attribute.String("cn", cn)))
+			}
+			// Label-free: no identity is attached to a connection count or
+			// an identity-extraction failure count.
+			o.ObserveInt64(connectedGauge, snap.Connected)
+			o.ObserveInt64(identityFailuresGauge, snap.IdentityFailures)
+			return nil
+		},
+		lastSeenGauge, lastSuccessGauge, consecutiveFailuresGauge, reloadFailedGauge,
+		convergedGauge, connectedGauge, identityFailuresGauge,
+	)
+	if err != nil {
+		return oops.Wrapf(err, "register sink gauge callback")
+	}
+	return nil
+}
+
 // Shutdown gracefully shuts down the meter provider, flushing any pending
 // metric exports. Returns nil if the provider is nil (disabled metrics).
 func (m *Metrics) Shutdown(ctx context.Context) error {
