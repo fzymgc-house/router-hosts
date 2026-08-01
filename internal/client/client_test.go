@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
+	"github.com/fzymgc-house/router-hosts/internal/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -190,4 +191,24 @@ func generateTestCerts(t *testing.T, dir string) (certPath, keyPath, caPath stri
 	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
 
 	return certPath, keyPath, caPath
+}
+
+// ---------------------------------------------------------------------------
+// gRPC keepalive (TMPL-06 amended plan, review L14/D-09/T-1-13)
+// ---------------------------------------------------------------------------
+
+func TestKeepalive_ClientParams(t *testing.T) {
+	params := ClientKeepaliveParams()
+	assert.Equal(t, 20*time.Second, params.Time, "client ping interval")
+	assert.Equal(t, 10*time.Second, params.Timeout, "client ping timeout")
+	assert.True(t, params.PermitWithoutStream, "pings must continue with no active RPC")
+}
+
+// TestKeepalive_ClientIntervalRespectsServerMinTime pins the invariant that
+// silently produces GOAWAY storms when violated: a client pinging more often
+// than the server's enforcement minimum gets disconnected.
+func TestKeepalive_ClientIntervalRespectsServerMinTime(t *testing.T) {
+	clientTime := ClientKeepaliveParams().Time
+	serverMinTime := server.ServerKeepaliveEnforcementPolicy().MinTime
+	assert.GreaterOrEqual(t, clientTime, serverMinTime)
 }
