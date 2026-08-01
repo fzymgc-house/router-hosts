@@ -372,6 +372,69 @@ func TestEventStoreCompactAggregateDeleted(t *testing.T, store storage.EventStor
 	require.Equal(t, int64(2), seed.FoldedEventCount)
 }
 
+// ---------- EventStore change-ID compliance ----------
+
+// TestEventStoreLatestEventID verifies the storage-level change-ID contract
+// (TMPL-08, D-18): an empty log reports the zero ULID with no error, the
+// returned value equals the greatest appended EventID, and a further append
+// advances it.
+func TestEventStoreLatestEventID(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+
+	empty, err := store.LatestEventID(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ulid.ULID{}, empty, "an empty log must report the zero ULID, never an error")
+
+	id := ulid.Make()
+	env := hostCreatedEnvelope(id, "10.5.0.1", "latest-id.example.com", time.Now().UTC().Truncate(time.Millisecond))
+	require.NoError(t, store.AppendEvent(ctx, id, env, 0))
+
+	max, err := store.LatestEventID(ctx)
+	require.NoError(t, err)
+	require.Equal(t, env.EventID, max, "LatestEventID must equal the greatest appended EventID")
+
+	update := makeEnvelope(id, domain.IPAddressChanged{
+		OldIP:     "10.5.0.1",
+		NewIP:     "10.5.0.2",
+		ChangedAt: time.Now().UTC(),
+	}, 2, time.Now().UTC())
+	require.NoError(t, store.AppendEvent(ctx, id, update, 1))
+
+	after, err := store.LatestEventID(ctx)
+	require.NoError(t, err)
+	require.Equal(t, update.EventID, after, "a further append must advance LatestEventID to its own EventID")
+	require.Positive(t, after.Compare(max), "LatestEventID must strictly advance across a real append")
+}
+
+// TestEventStoreCompactionAdvancesLatestEventID is the storage-level mirror
+// of the sqlite package's own compaction regression test (T-1-38), lifted to
+// the level every EventStore backend must satisfy: compacting an aggregate
+// must leave LatestEventID strictly greater than it was before, never
+// pinned and never regressed.
+func TestEventStoreCompactionAdvancesLatestEventID(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+	id := ulid.Make()
+
+	mustAppendCreated(t, store, id, "10.5.1.1", "compact-latest.example.com")
+	for i := 0; i < 3; i++ {
+		ev, _ := domain.NewHostEvent(domain.IPAddressChanged{NewIP: fmt.Sprintf("10.5.1.%d", i+2), ChangedAt: time.Now().UTC()})
+		env := domain.EventEnvelope{EventID: ulid.Make(), AggregateID: id, Event: ev, Version: int64(i + 2), CreatedAt: time.Now().UTC()}
+		require.NoError(t, store.AppendEvent(ctx, id, env, int64(i+1)))
+	}
+
+	before, err := store.LatestEventID(ctx)
+	require.NoError(t, err)
+
+	_, err = store.CompactAggregate(ctx, id)
+	require.NoError(t, err)
+
+	after, err := store.LatestEventID(ctx)
+	require.NoError(t, err)
+	require.Positive(t, after.Compare(before), "compaction must leave LatestEventID strictly greater than before, never pinned or regressed")
+}
+
 // ---------- HostProjection compliance ----------
 
 // TestHostProjectionListAll verifies that creating hosts via events causes them
@@ -692,6 +755,12 @@ func RunAll(t *testing.T, factory func(t *testing.T) storage.Storage) {
 	})
 	t.Run("EventStoreCompactAggregateDeleted", func(t *testing.T) {
 		TestEventStoreCompactAggregateDeleted(t, factory(t))
+	})
+	t.Run("EventStoreLatestEventID", func(t *testing.T) {
+		TestEventStoreLatestEventID(t, factory(t))
+	})
+	t.Run("EventStoreCompactionAdvancesLatestEventID", func(t *testing.T) {
+		TestEventStoreCompactionAdvancesLatestEventID(t, factory(t))
 	})
 
 	// HostProjection

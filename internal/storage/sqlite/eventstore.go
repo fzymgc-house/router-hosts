@@ -206,6 +206,50 @@ func (s *Storage) ListAggregateIDs(ctx context.Context) ([]ulid.ULID, error) {
 	return ids, nil
 }
 
+// LatestEventID returns the greatest event_id in the log (the server's
+// change ID, TMPL-08/D-18), or the zero ULID when the log is empty.
+func (s *Storage) LatestEventID(ctx context.Context) (ulid.ULID, error) {
+	var max ulid.ULID
+	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
+		var innerErr error
+		max, innerErr = selectLatestEventID(conn)
+		return innerErr
+	})
+	if err != nil {
+		return ulid.ULID{}, oops.Wrapf(err, "latest event id")
+	}
+	return max, nil
+}
+
+// selectLatestEventID reads MAX(event_id) over the events table. event_id is
+// TEXT PRIMARY KEY (migrations/001_initial.sql:3), so this is an indexed
+// seek rather than a table scan. Takes a *sqlite.Conn directly (rather than
+// doing its own withConn) so Task 3's in-transaction append guard can call
+// it from inside an already-open transaction. A NULL result (an empty
+// events table) is reported as the zero ULID, never an error.
+func selectLatestEventID(conn *sqlite.Conn) (ulid.ULID, error) {
+	var max ulid.ULID
+	err := sqlitex.Execute(conn,
+		`SELECT MAX(event_id) FROM events`,
+		&sqlitex.ExecOptions{
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				if stmt.ColumnType(0) == sqlite.TypeNull {
+					return nil
+				}
+				parsed, parseErr := ulid.Parse(stmt.ColumnText(0))
+				if parseErr != nil {
+					return oops.Wrapf(parseErr, "parse max event_id")
+				}
+				max = parsed
+				return nil
+			},
+		})
+	if err != nil {
+		return ulid.ULID{}, err
+	}
+	return max, nil
+}
+
 // CompactAggregate collapses an aggregate's event log to a single HostCompacted
 // seed event at the preserved high-water version, atomically.
 func (s *Storage) CompactAggregate(ctx context.Context, aggregateID ulid.ULID) (storage.CompactResult, error) {
