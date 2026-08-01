@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
+	"github.com/fzymgc-house/router-hosts/internal/atomicfile"
 	"github.com/fzymgc-house/router-hosts/internal/client/template"
 )
 
@@ -101,11 +102,18 @@ func newRenderCmd() *cobra.Command {
 				return err
 			}
 
+			// Rendering completed into a buffer before any write is
+			// attempted, so a render failure above returns before this
+			// point — a pre-existing artifact at outPath is never touched
+			// on that path (D-12).
 			if outPath == "" {
 				_, err = cmd.OutOrStdout().Write(rendered)
 				return err
 			}
-			return oops.Errorf("not implemented")
+			if err := atomicfile.Write(outPath, rendered); err != nil {
+				return oops.Wrapf(err, "writing artifact %s", outPath)
+			}
+			return nil
 		},
 	}
 
