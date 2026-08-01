@@ -11,6 +11,7 @@ import (
 
 	"github.com/fzymgc-house/router-hosts/internal/atomicfile"
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/sanitize"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
@@ -115,14 +116,13 @@ func formatSuffix(comment *string, tags []string) string {
 	return "# " + strings.Join(parts, " ")
 }
 
-// commentLineBreakReplacer collapses CR and LF to spaces so user-supplied
-// comment/tag text stays on a single line in generated config files.
-var commentLineBreakReplacer = strings.NewReplacer("\n", " ", "\r", " ")
-
 // sanitizeCommentField strips line breaks from comment/tag text emitted as a
 // "# ..." comment. Without it, a Comment or Tag containing a newline would break
 // out of the comment line and inject active directives into the generated
 // hosts/dnsmasq/unbound output. See GH #349 review finding router-hosts-00b.2.
+// Delegates to internal/sanitize.CommentField, the single shared
+// implementation also reachable from the client-side template FuncMap
+// (D-17, contract v1) — see internal/client/template.FuncMap.
 func sanitizeCommentField(s string) string {
-	return commentLineBreakReplacer.Replace(s)
+	return sanitize.CommentField(s)
 }
