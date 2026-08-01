@@ -103,3 +103,66 @@ func TestConfigureMetricsAndHooks_NoHooksConfigured(t *testing.T) {
 
 	assert.Nil(t, wired.hookExec)
 }
+
+// A server configured with OTel metrics gets a sink health registry and its
+// sink gauges registered (registration failure would surface as a non-nil
+// err here, per RegisterSinkGauges's error-wrapping shape).
+func TestConfigureMetricsAndHooks_SinkHealthWithMetrics(t *testing.T) {
+	store := wiringTestStore(t)
+	logger := slog.Default()
+
+	cfg := &config.Config{
+		Metrics: &config.MetricsConfig{
+			OTel: &config.OTelConfig{
+				Endpoint: "localhost:4317",
+				Insecure: true,
+			},
+		},
+	}
+
+	wired, err := configureMetricsAndHooks(cfg, store, logger)
+	require.NoError(t, err)
+	require.NotNil(t, wired.cleanup)
+	defer wired.cleanup()
+
+	require.NotNil(t, wired.metrics, "OTel is configured — metrics must be constructed")
+	require.NotNil(t, wired.sinkHealth, "sink health registry must always be constructed")
+}
+
+// A server configured WITHOUT OTel metrics still gets a sink health
+// registry, so status reporting works even though gauge export is absent.
+func TestConfigureMetricsAndHooks_SinkHealthWithoutMetrics(t *testing.T) {
+	store := wiringTestStore(t)
+	logger := slog.Default()
+
+	cfg := &config.Config{
+		// Metrics left nil — OTel unconfigured.
+	}
+
+	wired, err := configureMetricsAndHooks(cfg, store, logger)
+	require.NoError(t, err)
+	require.NotNil(t, wired.cleanup)
+	defer wired.cleanup()
+
+	assert.Nil(t, wired.metrics, "no OTel config — metrics must not be constructed")
+	require.NotNil(t, wired.sinkHealth, "sink health registry must be constructed even without OTel")
+}
+
+// WithSinkHealth must be appended to svcOpts unconditionally — even with no
+// hooks and no metrics configured, the service still gets the option so a
+// deployment without OTel still benefits from status recording.
+func TestConfigureMetricsAndHooks_SinkOptionAlwaysPresent(t *testing.T) {
+	store := wiringTestStore(t)
+	logger := slog.Default()
+
+	cfg := &config.Config{} // no hooks, no metrics
+
+	wired, err := configureMetricsAndHooks(cfg, store, logger)
+	require.NoError(t, err)
+	require.NotNil(t, wired.cleanup)
+	defer wired.cleanup()
+
+	require.NotNil(t, wired.sinkHealth)
+	assert.Len(t, wired.svcOpts, 1,
+		"WithSinkHealth must be appended to svcOpts even with no hooks and no metrics configured")
+}
