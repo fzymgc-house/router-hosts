@@ -5,15 +5,15 @@ milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
 status: executing
-stopped_at: Completed 01-05-PLAN.md
-last_updated: "2026-08-01T17:14:53.700Z"
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-08-01T17:40:14.560Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -34,7 +34,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
-Plan: 3 of 9
+Plan: 4 of 9
 Status: Ready to execute
 Last activity: 2026-08-01 — Phase 01 execution started
 
@@ -83,6 +83,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 09 P05 | 25min | 3 tasks | 4 files |
 | Phase 01 P09 | 55min | 3 tasks | 12 files |
 | Phase 01 P05 | 35min | 3 tasks | 6 files |
+| Phase 01 P01 | ~75min | 3 tasks | 17 files |
 
 ## Accumulated Context
 
@@ -127,6 +128,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-05: RecordStatus/RecordSeen fully overwrite SinkState on write (last-writer-wins for duplicate CNs), pinned by TestSinkHealth_DuplicateCNCollapsesLastWriterWins per review M6
 - [Phase ?]: 01-05: MaxTrackedSinks is a package var (not const) so tests can shrink the eviction ceiling instead of seeding 1000+ entries
 - [Phase ?]: 01-05: TMPL-05 not marked complete in REQUIREMENTS.md by this plan — only identity/registry/gauge primitives built, WatchHosts wiring deferred to plan 06
+- [Phase ?]: 01-01: Change ID (LatestEventID) read strictly before ListAll in WatchHosts (H1); reversed order verified RED before rejection
+- [Phase ?]: 01-01: Atomic {entries, latestEventID} single-transaction read deferred; filed as GitHub issue #401 alongside #400
+- [Phase ?]: 01-01: renderDrainLimit is a package-level var (not const) so a test can lower it without seeding 50,000 entries
 
 ### Pending Todos
 
@@ -155,6 +159,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T17:14:53.692Z
-Stopped at: Completed 01-05-PLAN.md
+Last session: 2026-08-01T17:40:14.552Z
+Stopped at: Completed 01-01-PLAN.md
 Resume file: None

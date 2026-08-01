@@ -74,7 +74,7 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
 7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: 2/9 plans executed
+**Plans**: 3/9 plans executed
 
 Plans:
 **Wave 1**
@@ -84,7 +84,7 @@ Plans:
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-01-PLAN.md — Tracer: end-to-end template render over a new `WatchHosts` RPC, shared atomic writer (wave 2)
+- [x] 01-01-PLAN.md — Tracer: end-to-end template render over a new `WatchHosts` RPC, shared atomic writer (wave 2)
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
@@ -129,7 +129,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 2/9 | In Progress|  |
+| 1. Consumer-Rendered Output | 3/9 | In Progress|  |
 
 **Shipped (previous continuous numbering):**
 

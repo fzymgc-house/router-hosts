@@ -66,10 +66,10 @@ Archived: [`milestones/v0.12.0-REQUIREMENTS.md`](milestones/v0.12.0-REQUIREMENTS
 Approved 2026-07-25 from #364. Originally scoped as Phase 10 under the previous
 continuous numbering; renumbered to Phase 1 when v0.13.0 restarted numbering.
 
-- [ ] **TMPL-01**: A caller supplies a template and receives host data rendered through it, without a code change to this project
-- [ ] **TMPL-02**: The field set a template may reference is documented and versioned as an explicit compatibility surface (at minimum `ip_address`, `hostname`, `aliases`, `tags`, `comment` per entry, plus `.Count`, `.GeneratedAt`, `.ContractVersion` and `.ChangeID` metadata) rather than being whatever the internal struct happens to expose. The contract also publishes a **sanitizing template function** so a consumer template can emit comment/tag text without reopening the newline-injection class closed in #349 (`internal/server/hostsfile.go:123`)
-- [ ] **TMPL-03**: A template referencing an undefined key fails loudly; a render failure never emits a partial or empty artifact and leaves any previous artifact byte-identical
-- [ ] **TMPL-04**: Writes to a path are atomic (write-and-rename), so a consumer watching the file never observes a partial write
+- [x] **TMPL-01**: A caller supplies a template and receives host data rendered through it, without a code change to this project
+- [x] **TMPL-02**: The field set a template may reference is documented and versioned as an explicit compatibility surface (at minimum `ip_address`, `hostname`, `aliases`, `tags`, `comment` per entry, plus `.Count`, `.GeneratedAt`, `.ContractVersion` and `.ChangeID` metadata) rather than being whatever the internal struct happens to expose. The contract also publishes a **sanitizing template function** so a consumer template can emit comment/tag text without reopening the newline-injection class closed in #349 (`internal/server/hostsfile.go:123`)
+- [x] **TMPL-03**: A template referencing an undefined key fails loudly; a render failure never emits a partial or empty artifact and leaves any previous artifact byte-identical
+- [x] **TMPL-04**: Writes to a path are atomic (write-and-rename), so a consumer watching the file never observes a partial write
 - [ ] **TMPL-05**: Sink mode holds the rendered artifact current as host data changes without polling, and recovers after a connection interruption without emitting a truncated artifact
 - [ ] **TMPL-06**: `ExportHosts` and sink streaming emit **bounded wire messages with client backpressure** — the client is never handed an unbounded single response and can apply backpressure. **Storage-layer laziness is explicitly deferred**: `store.ListAll` (`internal/storage/sqlite/projection.go:19`) enumerates every aggregate and replays its full event log, so the server still materializes the result set in memory before the first byte is sent. Amended 2026-07-31 after cross-AI review (`01-REVIEWS.md` H2) — the original wording said "O(1) memory", which chunked sends do not deliver. True server-side laziness needs a cursor-based `storage.HostProjection` method and is tracked separately in #400 (absorbs #23's wire-layer half)
 - [ ] **TMPL-07**: Client-side stream collection is bounded and fails with a clear error past the limit, so a malicious or buggy server cannot exhaust client memory — currently `internal/client/commands/host.go:345`/`:363`, `snapshot.go`, and `importexport.go` all `append` without a cap (absorbs #38)
@@ -131,10 +131,10 @@ and v0.13.0 Phase 1 (Consumer-Rendered Output) are different phases.
 | SVC-02 | v0.11.0 | Phase 8 | Complete |
 | HOOK-01 | v0.12.0 | Phase 9 | Complete |
 | HOOK-02 | v0.12.0 | Phase 9 | Complete |
-| TMPL-01 | **v0.13.0** | **Phase 1** | Pending |
-| TMPL-02 | **v0.13.0** | **Phase 1** | Pending |
-| TMPL-03 | **v0.13.0** | **Phase 1** | Pending |
-| TMPL-04 | **v0.13.0** | **Phase 1** | Pending |
+| TMPL-01 | **v0.13.0** | **Phase 1** | Complete |
+| TMPL-02 | **v0.13.0** | **Phase 1** | Complete |
+| TMPL-03 | **v0.13.0** | **Phase 1** | Complete |
+| TMPL-04 | **v0.13.0** | **Phase 1** | Complete |
 | TMPL-05 | **v0.13.0** | **Phase 1** | Pending |
 | TMPL-06 | **v0.13.0** | **Phase 1** | Pending |
 | TMPL-07 | **v0.13.0** | **Phase 1** | Pending |
