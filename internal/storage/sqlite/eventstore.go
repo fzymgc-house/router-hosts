@@ -371,6 +371,83 @@ func checkVersion(conn *sqlite.Conn, aggregateID ulid.ULID, expectedVersion int6
 
 // insertEvent persists a single event envelope to the events table.
 func insertEvent(conn *sqlite.Conn, env domain.EventEnvelope) error {
+	// Ordering guard: no commit may land an event ID at or below the log's
+	// current maximum (T-1-33, T-1-51, T-1-55). Read the maximum inside this
+	// transaction and re-mint above it whenever the proposed ID does not
+	// already sort strictly greater. insertEvent receives env by value, so
+	// this replacement is local — no caller observes a mutated struct.
+	//
+	// The comparison is UNCONDITIONAL — there is no emptiness branch, and
+	// that is the point (review round-4 H1). Gating this on "the log is
+	// non-empty" was the bug: it let a caller-supplied zero ULID insert
+	// verbatim into an empty store, making MAX(event_id) equal the zero
+	// ULID — indistinguishable from storage.ZeroChangeID, so LatestEventID
+	// would report "empty" for a log holding one real event, and the
+	// empty-store sentinel would go out on the wire for a non-empty store.
+	// selectLatestEventID already returns the zero ULID for a NULL MAX, so
+	// an empty log IS a zero maximum: a proposed zero ID compares equal to
+	// it, fails the strictly-greater test, and is re-minted like any other
+	// non-advancing proposal, with no special case needed. Do not add a
+	// `found bool` return to selectLatestEventID, and do not add a separate
+	// `env.EventID == ulid.ULID{}` check — both are redundant against this
+	// unconditional comparison, and a redundant branch here invites a future
+	// "simplification" that keeps the branch and drops the comparison, which
+	// is exactly how this defect was introduced the first time. This also
+	// establishes a standing invariant two other things rest on: the zero
+	// ULID is never a committed event ID, which is what keeps
+	// storage.ZeroChangeID an unambiguous empty-store sentinel.
+	//
+	// Re-mint rather than reject: rejecting would turn a benign concurrent
+	// race (T-1-51 — mint order need not equal commit order) into a
+	// user-visible write failure on a perfectly legitimate AddHost, and
+	// there is no retry loop above insertEvent that would absorb it.
+	// Re-minting keeps the write successful while making the log maximum
+	// advance, which is the property the change ID actually needs. The ID a
+	// caller proposes is therefore advisory: the invariant enforced is "no
+	// commit lands an ID at or below the log maximum", NOT "every ID is
+	// minted monotonically", which is not achievable for an interface that
+	// accepts caller-constructed envelopes (storage.go:51).
+	//
+	// The read is safe inside the transaction: every caller of insertEvent
+	// holds a sqlitex.ImmediateTransaction, which takes SQLite's write lock
+	// up front, so no other writer can commit between this read and this
+	// insert; and within one transaction the MAX read sees this
+	// transaction's own earlier inserts, which is what makes a multi-event
+	// batch correct (AppendEventsBatch) without any extra bookkeeping.
+	// event_id is TEXT PRIMARY KEY, so the extra read per insert is an
+	// indexed seek, and ULID strings are fixed-length Crockford base-32, so
+	// lexical string comparison is the same ordering as ulid.ULID.Compare.
+	//
+	// This is not the only INSERT INTO events statement in the tree
+	// (review round-4 M1 — a naive `rg -c 'INSERT INTO events'` expecting 1
+	// will fail; read this comment before loosening that gate).
+	// legacy_migration.go:183 writes preserved Rust-era event IDs directly,
+	// bypassing insertEvent and this guard entirely. That is safe, not by
+	// accident: it runs inside Initialize's withConn body, behind
+	// isMigrationApplied(conn, legacyMigrationVersion), which is strictly
+	// before the eventid.Seed(LatestEventID) call sqlite.go's Initialize
+	// adds at the end — so whatever IDs it inserted are already inside the
+	// maximum that seeding reads, and the generator's floor lands above
+	// them. It is one-shot (recordMigrationVersion marks it applied, so a
+	// second Initialize skips it) and it skips entirely when events is
+	// already non-empty (legacy_migration.go:43-49), so it can never
+	// interleave with live appends. A preserved Rust-era ID whose embedded
+	// timestamp is far in the future would pin MAX(event_id) above
+	// wall-clock time; that is harmless for new mints precisely because the
+	// seeding runs after the migration, so the floor inherits the future
+	// value and next() carries past it — the ordering of those two steps is
+	// not incidental and must not be swapped. DEBT-01
+	// (.planning/REQUIREMENTS.md:89) removes legacy_migration.go outright
+	// once all deployments are known-migrated, at which point the
+	// single-funnel claim becomes unqualified and this note can go with it.
+	max, err := selectLatestEventID(conn)
+	if err != nil {
+		return oops.Wrapf(err, "read latest event id for ordering guard")
+	}
+	if env.EventID.Compare(max) <= 0 {
+		env.EventID = eventid.NewAfter(max)
+	}
+
 	eventData, err := json.Marshal(env.Event)
 	if err != nil {
 		return oops.Wrapf(err, "marshal event")

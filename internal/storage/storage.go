@@ -49,10 +49,24 @@ type CompactResult struct {
 //     aggregateID parameter. This aligns with typical access patterns (counting events for a
 //     specific host/aggregate) and allows for efficient scoped queries on large datasets.
 type EventStore interface {
+	// AppendEvent appends a single event with optimistic concurrency control.
+	//
+	// An implementation MUST NOT commit an event whose EventID sorts at or
+	// below the store's current maximum (see LatestEventID) — it MAY
+	// therefore replace a proposed EventID that does not. A caller must not
+	// assume the ID it supplied is the ID persisted; read the event back
+	// (LoadEvents) if the actual persisted ID matters.
 	AppendEvent(ctx context.Context, aggregateID ulid.ULID, event domain.EventEnvelope, expectedVersion int64) error
+	// AppendEvents appends multiple events atomically with optimistic
+	// concurrency control. The same ordering obligation as AppendEvent
+	// applies to every event in the slice: an implementation MUST NOT
+	// commit any of them at or below the store's running maximum as of its
+	// own insert, and MAY replace a proposed EventID accordingly.
 	AppendEvents(ctx context.Context, aggregateID ulid.ULID, events []domain.EventEnvelope, expectedVersion int64) error
 	// AppendEventsBatch writes events for multiple aggregates atomically in a
-	// single transaction. If any write fails, no events are persisted.
+	// single transaction. If any write fails, no events are persisted. The
+	// same ordering obligation as AppendEvent applies to every event across
+	// every aggregate in the batch.
 	AppendEventsBatch(ctx context.Context, batch []AggregateEvents) error
 	LoadEvents(ctx context.Context, aggregateID ulid.ULID) ([]domain.EventEnvelope, error)
 	GetCurrentVersion(ctx context.Context, aggregateID ulid.ULID) (int64, error)

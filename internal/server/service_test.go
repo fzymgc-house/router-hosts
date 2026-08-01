@@ -781,8 +781,14 @@ func TestService_Readiness_Healthy(t *testing.T) {
 func TestService_Readiness_Unhealthy(t *testing.T) {
 	ctx := context.Background()
 
-	// Create a store and close it to make HealthCheck fail
-	store, err := sqlite.New("file::memory:?mode=memory", slog.Default())
+	// Create a store and close it to make HealthCheck fail. cache=shared is
+	// required (matching every other in-memory DSN in this codebase):
+	// without it, each pooled connection gets its own private in-memory
+	// database, so Initialize's post-migration LatestEventID seeding read
+	// (plan 01-09 task 3) can land on a connection that never saw the
+	// migrations run on a different connection, and fail with "no such
+	// table: events".
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
 	require.NoError(t, err)
 	require.NoError(t, store.Initialize(ctx))
 	handler := NewCommandHandler(store)

@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/eventid"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
@@ -23,8 +24,12 @@ func makeEnvelope(aggregateID ulid.ULID, event any, version int64, createdAt tim
 	if err != nil {
 		panic(fmt.Sprintf("storagetest.makeEnvelope: NewHostEvent: %v", err))
 	}
+	// Minted through the shared generator so the store never has cause to
+	// replace it: callers of this helper assert env.EventID == the
+	// read-back ID, which only holds unconditionally when the proposed ID
+	// already sorts above the log's maximum.
 	return domain.EventEnvelope{
-		EventID:     ulid.Make(),
+		EventID:     eventid.New(),
 		AggregateID: aggregateID,
 		Event:       he,
 		Version:     version,
@@ -291,7 +296,7 @@ func TestEventStoreCompactAggregate(t *testing.T, store storage.Storage) {
 	for i := 0; i < 20; i++ {
 		ip := fmt.Sprintf("10.0.0.%d", i+2)
 		ev, _ := domain.NewHostEvent(domain.IPAddressChanged{NewIP: ip, ChangedAt: time.Now().UTC()})
-		env := domain.EventEnvelope{EventID: ulid.Make(), AggregateID: id, Event: ev, Version: int64(i + 2), CreatedAt: time.Now().UTC()}
+		env := domain.EventEnvelope{EventID: eventid.New(), AggregateID: id, Event: ev, Version: int64(i + 2), CreatedAt: time.Now().UTC()}
 		require.NoError(t, store.AppendEvent(ctx, id, env, int64(i+1)))
 	}
 	before, err := store.GetByID(ctx, id)
@@ -420,7 +425,7 @@ func TestEventStoreCompactionAdvancesLatestEventID(t *testing.T, store storage.S
 	mustAppendCreated(t, store, id, "10.5.1.1", "compact-latest.example.com")
 	for i := 0; i < 3; i++ {
 		ev, _ := domain.NewHostEvent(domain.IPAddressChanged{NewIP: fmt.Sprintf("10.5.1.%d", i+2), ChangedAt: time.Now().UTC()})
-		env := domain.EventEnvelope{EventID: ulid.Make(), AggregateID: id, Event: ev, Version: int64(i + 2), CreatedAt: time.Now().UTC()}
+		env := domain.EventEnvelope{EventID: eventid.New(), AggregateID: id, Event: ev, Version: int64(i + 2), CreatedAt: time.Now().UTC()}
 		require.NoError(t, store.AppendEvent(ctx, id, env, int64(i+1)))
 	}
 
@@ -433,6 +438,109 @@ func TestEventStoreCompactionAdvancesLatestEventID(t *testing.T, store storage.S
 	after, err := store.LatestEventID(ctx)
 	require.NoError(t, err)
 	require.Positive(t, after.Compare(before), "compaction must leave LatestEventID strictly greater than before, never pinned or regressed")
+}
+
+// TestEventStoreAppendNeverLowersLatestEventID pins the in-transaction
+// ordering guard (T-1-33, T-1-51, T-1-55) at the level every EventStore
+// backend must satisfy: no commit may ever leave LatestEventID at or below
+// its pre-append value.
+//
+// A caller-supplied EventID that sorts below the current maximum admits
+// exactly two acceptable outcomes, not one — the append returned an error
+// and LatestEventID is unchanged, or the append succeeded and LatestEventID
+// is strictly greater than the recorded value. sqlite re-mints (the second
+// branch); a future backend may legitimately choose to reject instead (the
+// first branch). Neither may leave a committed event below the maximum,
+// which is the one thing this case actually asserts.
+//
+// The zero-ID-into-empty-store sub-case (review round-4 H1) runs FIRST, on
+// the store exactly as RunAll's factory hands it in — genuinely empty,
+// having appended nothing yet. Appending a zero-value EventID into a store
+// that has never held an event must not leave LatestEventID at the zero
+// ULID. A backend that stored the zero ID verbatim would make LatestEventID
+// indistinguishable from storage.ZeroChangeID, reporting an empty log while
+// actually holding one committed event. No production path mints a zero
+// EventID — the interface's caller-constructed envelopes
+// (storage.go AppendEvent doc comment) are the only way a zero ID reaches an
+// implementation, which is exactly why this compliance case, not a
+// production code path, is where a future backend meets this the first time
+// someone forgets to mint one. The lower-caller-supplied-ID sub-case runs
+// SECOND, reusing the same store — by then it holds the zero-ID sub-case's
+// event, which is exactly the non-empty precondition that sub-case needs,
+// so this one function needs only the one store RunAll already constructs.
+func TestEventStoreAppendNeverLowersLatestEventID(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+
+	// Sub-case 1 (review round-4 H1): a zero EventID into a store that has
+	// never held any event — a zero-value domain.EventEnvelope carries a
+	// zero EventID, so this is exactly what a caller-constructed envelope
+	// looks like when nobody minted one. Must run before anything else
+	// appends, since the property under test ("never held an event") is
+	// process-wide over the whole events table, not per-aggregate.
+	beforeEmpty, err := store.LatestEventID(ctx)
+	require.NoError(t, err)
+	require.Equal(t, ulid.ULID{}, beforeEmpty, "the store handed to this compliance case must start genuinely empty")
+
+	zeroHostEvent, err := domain.NewHostEvent(domain.HostCreated{
+		IPAddress: "10.5.2.9",
+		Hostname:  "zero-id.example.com",
+		Aliases:   []string{},
+		Tags:      []string{},
+		CreatedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	zeroAggID := ulid.Make()
+	zeroEnv := domain.EventEnvelope{
+		EventID:     ulid.ULID{}, // zero value, deliberately not minted
+		AggregateID: zeroAggID,
+		Event:       zeroHostEvent,
+		Version:     1,
+		CreatedAt:   time.Now().UTC(),
+	}
+	zeroAppendErr := store.AppendEvent(ctx, zeroAggID, zeroEnv, 0)
+	if zeroAppendErr != nil {
+		afterZero, latestErr := store.LatestEventID(ctx)
+		require.NoError(t, latestErr)
+		require.Equal(t, ulid.ULID{}, afterZero, "a rejected zero-ID append must leave the store empty")
+	} else {
+		afterZero, latestErr := store.LatestEventID(ctx)
+		require.NoError(t, latestErr)
+		require.NotEqual(t, ulid.ULID{}, afterZero, "an accepted zero-ID append must not leave LatestEventID at the zero ULID")
+		require.NotEqual(t, storage.ZeroChangeID, afterZero.String(),
+			"LatestEventID must not collide with storage.ZeroChangeID after accepting a real event")
+	}
+
+	// Sub-case 2: a caller-supplied ID that sorts below the current maximum.
+	// The store is non-empty by now (sub-case 1 above), satisfying this
+	// sub-case's own precondition for free.
+	id := ulid.Make()
+	mustAppendCreated(t, store, id, "10.5.2.1", "never-lowers.example.com")
+	recorded, err := store.LatestEventID(ctx)
+	require.NoError(t, err)
+
+	lowerHostEvent, err := domain.NewHostEvent(domain.IPAddressChanged{
+		OldIP: "10.5.2.1", NewIP: "10.5.2.2", ChangedAt: time.Now().UTC(),
+	})
+	require.NoError(t, err)
+	pastID := ulid.MustNew(ulid.Timestamp(time.Now().Add(-time.Hour)), nil)
+	lowerEnv := domain.EventEnvelope{
+		EventID:     pastID,
+		AggregateID: id,
+		Event:       lowerHostEvent,
+		Version:     2,
+		CreatedAt:   time.Now().UTC(),
+	}
+	appendErr := store.AppendEvent(ctx, id, lowerEnv, 1)
+	if appendErr != nil {
+		after, latestErr := store.LatestEventID(ctx)
+		require.NoError(t, latestErr)
+		require.Equal(t, recorded, after, "a rejected lower-ID append must leave LatestEventID unchanged")
+	} else {
+		after, latestErr := store.LatestEventID(ctx)
+		require.NoError(t, latestErr)
+		require.Positive(t, after.Compare(recorded), "an accepted lower-ID append must still advance LatestEventID")
+	}
 }
 
 // ---------- HostProjection compliance ----------
@@ -761,6 +869,9 @@ func RunAll(t *testing.T, factory func(t *testing.T) storage.Storage) {
 	})
 	t.Run("EventStoreCompactionAdvancesLatestEventID", func(t *testing.T) {
 		TestEventStoreCompactionAdvancesLatestEventID(t, factory(t))
+	})
+	t.Run("EventStoreAppendNeverLowersLatestEventID", func(t *testing.T) {
+		TestEventStoreAppendNeverLowersLatestEventID(t, factory(t))
 	})
 
 	// HostProjection
