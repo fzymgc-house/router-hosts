@@ -44,6 +44,23 @@ type testEnv struct {
 	serverKeyPath  string
 	clientCertPath string
 	clientKeyPath  string
+
+	// Per-start lifecycle state (review round-2 H6, M10). Replaced on every
+	// startServer call; stopServer relies on these rather than any local in
+	// setupTestEnv, so a second stop/start cycle cannot hang on a stale
+	// cancel or a consumed channel.
+	addr       string
+	sinkHealth *server.SinkHealth
+	srvErrCh   chan error
+	running    bool
+
+	// Construction inputs, retained so startServer can actually build a
+	// fresh server and service over the SAME store after a stop (review
+	// round-3 H5). Lifecycle state alone is not enough: nothing else on this
+	// struct lets a second server be constructed at all.
+	store  *sqlite.Storage
+	cfg    config.Config
+	logger *slog.Logger
 }
 
 // setupTestEnv creates a full mTLS test environment with a running gRPC server
@@ -93,60 +110,140 @@ func setupTestEnv(t *testing.T) *testEnv {
 		},
 	}
 
-	// Create a listener on a random port so we know the address
-	lis, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err, "listen on random port")
-	addr := lis.Addr().String()
-
-	// Create server
-	handler := server.NewCommandHandler(store)
-	svc := server.NewHostsServiceImpl(handler, store)
-
-	srv, err := server.NewServer(cfg, store, logger, server.WithListener(lis))
-	require.NoError(t, err, "create server")
-
-	hostsv1.RegisterHostsServiceServer(srv.GRPCServer(), svc)
-
-	// Start server in background
-	ctx, cancel := context.WithCancel(context.Background())
-	srvErrCh := make(chan error, 1)
-	go func() {
-		srvErrCh <- srv.Run(ctx)
-	}()
-
-	// Wait for server to be ready
-	waitForServer(t, addr, caCertPath, clientCertPath, clientKeyPath)
-
-	// Create client connection
-	conn := dialGRPC(t, addr, caCertPath, clientCertPath, clientKeyPath)
-	client := hostsv1.NewHostsServiceClient(conn)
-
 	env := &testEnv{
-		client:         client,
-		conn:           conn,
-		srv:            srv,
-		cancel:         cancel,
 		tmpDir:         tmpDir,
 		caCertPath:     caCertPath,
 		serverCertPath: serverCertPath,
 		serverKeyPath:  serverKeyPath,
 		clientCertPath: clientCertPath,
 		clientKeyPath:  clientKeyPath,
+		sinkHealth:     server.NewSinkHealth(),
+		store:          store,
+		cfg:            cfg,
+		logger:         logger,
 	}
 
+	// startServer does the listen-build-run-dial sequence exactly once here
+	// (env.addr is empty, so it binds to a fresh random port), and again on
+	// every later restart in a test — proving startServer is genuinely the
+	// shared path rather than a description of one.
+	startServer(t, env)
+
 	t.Cleanup(func() {
-		cancel()
-		// Wait for server to fully shut down before closing resources
-		select {
-		case <-srvErrCh:
-		case <-time.After(5 * time.Second):
-			t.Log("server shutdown timed out")
-		}
-		_ = conn.Close()
+		// stopServer is idempotent, so this is correct whether a test left
+		// the server running or already stopped it itself.
+		stopServer(t, env)
 		_ = store.Close()
 	})
 
 	return env
+}
+
+// stopServer tears down the running server and closes the client
+// connection, leaving a real, externally observable outage until
+// startServer is called again (reviews M4, M10). Idempotent: a call when
+// env.running is already false returns immediately, so t.Cleanup can call it
+// unconditionally regardless of what a test already did.
+func stopServer(t *testing.T, env *testEnv) {
+	t.Helper()
+
+	if !env.running {
+		return
+	}
+
+	// Stop immediately rather than relying on context cancellation alone:
+	// Server.Run's ctx.Done() path calls gracefulStop, which drains for up
+	// to GracefulShutdownTimeout (30s) before forcing anything, keeping
+	// this test's open WatchHosts stream alive for the whole grace window —
+	// exactly the "restart returns already-healthy" failure mode reviews
+	// M4/M10 rejected, just delayed rather than absent. A real server
+	// process going down does not wait for existing streams to finish
+	// either, so Stop() (grpc.Server.Stop, immediate) is the accurate
+	// simulation; env.cancel() still runs so Run's own goroutine unwinds
+	// promptly once its Serve call returns.
+	env.srv.Stop()
+	env.cancel()
+	select {
+	case <-env.srvErrCh:
+	case <-time.After(5 * time.Second):
+		t.Log("server shutdown timed out")
+	}
+
+	// Close and nil the client connection here (review round-3 M6): a
+	// helper call made against a stopped server must fail loudly rather
+	// than block in gRPC's transparent-reconnect backoff.
+	if env.conn != nil {
+		_ = env.conn.Close()
+		env.conn = nil
+		env.client = nil
+	}
+
+	env.running = false
+}
+
+// startServer (re)binds env.addr (choosing a fresh random port only the
+// first time it is empty; every later call rebinds the SAME address so a
+// restart is a genuine redial target), builds a fresh server and service
+// over the RETAINED store, config, logger and sink-health registry (review
+// round-3 H5) — never a new store, which would defeat the whole point of a
+// restart test — registers the service, starts it, waits for readiness,
+// and finally redials the client connection (review round-3 M6). The harness
+// redials on every start as its own stated contract; the real
+// `router-hosts watch` process under test is deliberately NOT touched here
+// and is left to reconnect using its own transparent-retry policy, which is
+// exactly what TestE2E_WatchSinkSurvivesServerRestart exists to verify.
+func startServer(t *testing.T, env *testEnv) {
+	t.Helper()
+
+	bindAddr := env.addr
+	if bindAddr == "" {
+		bindAddr = "127.0.0.1:0"
+	}
+
+	// Rebinding an address whose previous connections may still be in
+	// TIME_WAIT can transiently fail on some platforms (review L4), so this
+	// retries a bounded number of times rather than asserting on the first
+	// attempt.
+	const maxBindAttempts = 20
+	const bindRetryDelay = 100 * time.Millisecond
+	var lis net.Listener
+	var err error
+	for attempt := 0; attempt < maxBindAttempts; attempt++ {
+		lis, err = net.Listen("tcp", bindAddr)
+		if err == nil {
+			break
+		}
+		time.Sleep(bindRetryDelay)
+	}
+	require.NoError(t, err, "listen on %s after %d attempts", bindAddr, maxBindAttempts)
+	env.addr = lis.Addr().String()
+
+	handler := server.NewCommandHandler(env.store)
+	svc := server.NewHostsServiceImpl(handler, env.store, server.WithSinkHealth(env.sinkHealth))
+
+	srv, err := server.NewServer(env.cfg, env.store, env.logger, server.WithListener(lis))
+	require.NoError(t, err, "create server")
+
+	hostsv1.RegisterHostsServiceServer(srv.GRPCServer(), svc)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	srvErrCh := make(chan error, 1)
+	go func() {
+		srvErrCh <- srv.Run(ctx)
+	}()
+
+	waitForServer(t, env.addr, env.caCertPath, env.clientCertPath, env.clientKeyPath)
+
+	env.srv = srv
+	env.cancel = cancel
+	env.srvErrCh = srvErrCh
+
+	// Redial per start (review round-3 M6): closes over no prior conn since
+	// stopServer already nil'd it (or this is the first start).
+	env.conn = dialGRPC(t, env.addr, env.caCertPath, env.clientCertPath, env.clientKeyPath)
+	env.client = hostsv1.NewHostsServiceClient(env.conn)
+
+	env.running = true
 }
 
 // generateCA creates a self-signed CA certificate and private key.
@@ -258,7 +355,11 @@ func buildClientTLSConfig(t *testing.T, caCertPath, clientCertPath, clientKeyPat
 	return &tls.Config{
 		Certificates: []tls.Certificate{clientCert},
 		RootCAs:      caPool,
-		MinVersion:   tls.VersionTLS12,
+		// TLS 1.3, matching what production client credentials enforce
+		// (internal/client/client.go), so a direct harness dial exercises
+		// the same policy any real client uses rather than a weaker one
+		// (review L10).
+		MinVersion: tls.VersionTLS13,
 	}
 }
 
@@ -342,6 +443,31 @@ func collectListSnapshots(t *testing.T, stream grpc.ServerStreamingClient[hostsv
 	return snapshots
 }
 
+// collectWatchSnapshot drains a WatchHosts client stream, mirroring
+// collectListHosts's shape, and returns as soon as a SnapshotComplete
+// terminator arrives (or the stream ends first, in which case the
+// terminator return is nil). Calling it again on the same still-open
+// follow-mode stream collects the NEXT snapshot's entries and terminator,
+// which is how the follow-mode tests observe a push after a mutation.
+func collectWatchSnapshot(t *testing.T, stream grpc.BidiStreamingClient[hostsv1.WatchHostsRequest, hostsv1.WatchHostsResponse]) ([]*hostsv1.HostEntry, *hostsv1.SnapshotComplete) {
+	t.Helper()
+	var entries []*hostsv1.HostEntry
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			return entries, nil
+		}
+		require.NoError(t, err, "recv WatchHosts")
+		if e := resp.GetEntry(); e != nil {
+			entries = append(entries, e)
+			continue
+		}
+		if comp := resp.GetComplete(); comp != nil {
+			return entries, comp
+		}
+	}
+}
+
 // ptr returns a pointer to v.
 func ptr[T any](v T) *T {
 	return &v
@@ -366,7 +492,7 @@ func dialGRPCWithCerts(t *testing.T, addr string, caCertPEM, clientCertPEM, clie
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{clientCert},
 		RootCAs:      caPool,
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 	}
 
 	conn, err := grpc.NewClient(
