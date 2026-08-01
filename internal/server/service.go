@@ -36,6 +36,7 @@ type HostsServiceImpl struct {
 	dnsmasqGen        *DnsmasqConfGenerator
 	unboundGen        *UnboundConfGenerator
 	hooks             *HookExecutor
+	changes           *changeNotifier
 	startTime         time.Time
 	retentionMaxSnaps *int
 	retentionMaxAge   *int
@@ -88,6 +89,7 @@ func NewHostsServiceImpl(handler *CommandHandler, store storage.Storage, opts ..
 	svc := &HostsServiceImpl{
 		handler:   handler,
 		store:     store,
+		changes:   newChangeNotifier(),
 		startTime: time.Now(),
 		version:   "dev",
 		buildInfo: "dev",
@@ -120,6 +122,35 @@ func (s *HostsServiceImpl) RegenerateOutputs(ctx context.Context) {
 // (there is nothing to react to). This runs on every regeneration — startup and
 // after each host mutation — so downstream reloads (e.g. dnsmasq) stay in sync.
 func (s *HostsServiceImpl) regenerateOutputs(ctx context.Context, op string) {
+	// Notify every open WatchHosts follow-mode watcher FIRST, before any
+	// generator runs and before the nil/no-op early return below. Two
+	// independent reasons, either of which alone would tempt a later reader
+	// to move this call, so both are recorded here.
+	//
+	// Independence: the three generators below are server-owned filesystem
+	// writes (hosts file, dnsmasq conf, unbound conf) that have nothing to do
+	// with consumer-rendered output. Notifying after them would make every
+	// sink's snapshot latency wait on them, and an unrelated write failure
+	// would delay consumer updates — the opposite of this phase's goal of
+	// independent, consumer-owned rendering.
+	//
+	// Coverage: a deployment with no generator and no hook executor returns
+	// early below (s.hooks == nil || !ran), so any notify placed lower would
+	// be skipped entirely on that configuration, and a generator-less sink
+	// deployment would never be woken by a mutation.
+	//
+	// Notifying first is correct because the write is already durable by the
+	// time this function is entered: regenerateOutputs is called from
+	// AddHost, UpdateHost, DeleteHost, ImportHosts and RollbackToSnapshot,
+	// and in every one of those the command has committed before the call —
+	// a woken watcher reads the projection and sees the mutation. The sixth
+	// caller is startup (RegenerateOutputs), which has no immediately
+	// preceding write; notifying there is safe (an initial broadcast to
+	// whatever subscribers exist, which at startup is none), but this call
+	// site is "after a successful mutation" — the startup call is an initial
+	// broadcast, not a post-commit notify.
+	s.changes.Notify()
+
 	var (
 		ran     bool
 		errMsgs []string
@@ -1007,6 +1038,7 @@ func (s *HostsServiceImpl) CompactAggregates(ctx context.Context, req *hostsv1.C
 
 	resp := &hostsv1.CompactAggregatesResponse{}
 	var reclaimed int64
+	var shrunk bool
 	for _, r := range results {
 		resp.Compacted = append(resp.Compacted, &hostsv1.CompactedAggregate{
 			AggregateId:  r.AggregateID.String(),
@@ -1015,8 +1047,28 @@ func (s *HostsServiceImpl) CompactAggregates(ctx context.Context, req *hostsv1.C
 			Version:      r.Version,
 		})
 		reclaimed += r.EventsBefore - r.EventsAfter
+		if r.EventsBefore > r.EventsAfter {
+			shrunk = true
+		}
 	}
 	resp.TotalEventsReclaimed = reclaimed
+
+	// Second and last notify call expression in this package (review
+	// round-3 H1). CompactAggregates never calls regenerateOutputs —
+	// compaction changes the event log without changing host state, so
+	// there is nothing for the hosts-file, dnsmasq or unbound generators to
+	// regenerate — but a real compaction still advances MAX(event_id), and
+	// without this call every consumer's change ID would go stale until an
+	// unrelated mutation happened to land. This is D-22's accepted one
+	// redundant render per compaction; this call is what makes that render
+	// actually happen. Gated on !dryRun (a dry run mutates nothing) AND
+	// shrunk (a no-op compaction of an aggregate with <=1 event changes
+	// nothing either) so a preview or a trivial compaction does not produce
+	// a spurious wake.
+	if !req.GetDryRun() && shrunk {
+		s.changes.Notify()
+	}
+
 	return resp, nil
 }
 
