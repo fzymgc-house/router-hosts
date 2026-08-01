@@ -74,7 +74,7 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
 7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: 7/9 plans executed
+**Plans**: 8/9 plans executed
 
 Plans:
 **Wave 1**
@@ -98,7 +98,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 01-07-PLAN.md — Client sink CLI: `watch`, injectable runtime policy, sidecar status, post-write hook, reconnect (wave 5)
+- [x] 01-07-PLAN.md — Client sink CLI: `watch`, injectable runtime policy, sidecar status, post-write hook, reconnect (wave 5)
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
@@ -129,7 +129,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 7/9 | In Progress|  |
+| 1. Consumer-Rendered Output | 8/9 | In Progress|  |
 
 **Shipped (previous continuous numbering):**
 

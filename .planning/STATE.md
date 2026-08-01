@@ -5,15 +5,15 @@ milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
 status: executing
-stopped_at: Completed 01-06-PLAN.md
-last_updated: "2026-08-01T19:11:25.873Z"
+stopped_at: Completed 01-07-PLAN.md
+last_updated: "2026-08-01T19:47:42.410Z"
 last_activity: 2026-08-01
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 7
+  completed_plans: 8
   percent: 0
 ---
 
@@ -34,7 +34,7 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 ## Current Position
 
 Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
-Plan: 8 of 9
+Plan: 9 of 9
 Status: Ready to execute
 Last activity: 2026-08-01 — Phase 01 execution started
 
@@ -88,6 +88,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 01 P04 | 45min | 2 tasks | 8 files |
 | Phase 01 P03 | ~11min | 3 tasks | 12 files |
 | Phase 01 P06 | 21min | 3 tasks | 7 files |
+| Phase 01 P07 | 23min | 3 tasks | 9 files |
 
 ## Accumulated Context
 
@@ -148,6 +149,11 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: changeNotifier promises AT MOST one additional wake per busy subscriber during a burst, never a strict lower bound (review M2)
 - [Phase ?]: Notify() is the first statement of regenerateOutputs; CompactAggregates gets its own second notify site gated on a real non-dry-run shrink (review round-3 H1)
 - [Phase ?]: TMPL-05 is NOT marked complete by this plan — plan 07's client-side sink CLI completes it, mirroring plan 05's precedent
+- [Phase ?]: 01-07: recordReloadFailure never touches ConsecutiveFailures — D-12a's middle outcome keeps write health and reload health fully separate fields
+- [Phase ?]: 01-07: D-21 change-ID skip guarded on ID match AND artifact-exists AND reload-health-not-failed in one expression, so no future edit can silently drop a guard (review M4)
+- [Phase ?]: 01-07: runWatchSupervised resets backoff on watchSessionResult.SnapshotWritten, not on err == nil, so a session that wrote then later failed still resets (review H5)
+- [Phase ?]: 01-07: --status-interval flag's own default is WatchPolicy.normalized().StatusInterval; Changed() distinguishes an explicit override from Cobra's default (review round-3 M2), verified RED against a literal 30s default
+- [Phase ?]: 01-07: sidecar adopted at startup only when --out artifact still exists; otherwise loaded rendered_change_id is discarded and health starts empty (review M3)
 
 ### Pending Todos
 
@@ -176,6 +182,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T19:11:25.866Z
-Stopped at: Completed 01-06-PLAN.md
+Last session: 2026-08-01T19:47:42.402Z
+Stopped at: Completed 01-07-PLAN.md
 Resume file: None
