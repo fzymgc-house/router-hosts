@@ -598,6 +598,43 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 	return stream.Send(&stats)
 }
 
+// exportChunkSize bounds the size of each ExportHostsResponse message sent to
+// the client. Mirrors importChunkSize in
+// internal/client/commands/importexport.go so both directions of hosts data
+// transfer use the same wire framing size.
+const exportChunkSize = 64 * 1024 // 64 KiB
+
+// exportChunkSender is the minimal surface sendExportChunks needs from the
+// gRPC stream. Narrowing to just Send (rather than the full
+// grpc.ServerStreamingServer[hostsv1.ExportHostsResponse]) lets the chunking
+// logic be exercised directly against a fake in tests.
+type exportChunkSender interface {
+	Send(*hostsv1.ExportHostsResponse) error
+}
+
+// sendExportChunks frames data into successive windows of at most
+// exportChunkSize bytes and sends one ExportHostsResponse per window. An
+// empty payload still sends exactly one response carrying an empty chunk,
+// preserving the pre-chunking single-message contract for an empty
+// inventory (review L14): a naive `for len(data) > 0` loop sends zero
+// messages here, which is a different observable contract and silently
+// breaks the client's drain loop.
+func sendExportChunks(stream exportChunkSender, data []byte) error {
+	if len(data) == 0 {
+		return stream.Send(&hostsv1.ExportHostsResponse{Chunk: data})
+	}
+	for offset := 0; offset < len(data); offset += exportChunkSize {
+		end := offset + exportChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		if err := stream.Send(&hostsv1.ExportHostsResponse{Chunk: data[offset:end]}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ExportHosts implements the server-streaming export RPC.
 func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream grpc.ServerStreamingServer[hostsv1.ExportHostsResponse]) error {
 	ctx := stream.Context()
@@ -675,7 +712,7 @@ func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream g
 		return status.Errorf(codes.InvalidArgument, "unsupported export format %q", format)
 	}
 
-	return stream.Send(&hostsv1.ExportHostsResponse{Chunk: data})
+	return sendExportChunks(stream, data)
 }
 
 // ---------------------------------------------------------------------------
