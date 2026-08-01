@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.13.0
 milestone_name: Consumer-Owned Output
-current_phase: 1
-current_phase_name: Consumer-Rendered Output
-status: planning
-stopped_at: Phase 1 context gathered
-last_updated: "2026-08-01T13:20:30.412Z"
-last_activity: 2026-07-31
-last_activity_desc: Milestone v0.13.0 started; phase numbering restarted at 1
+current_phase: 01
+current_phase_name: consumer-rendered-output-templates-sink
+status: executing
+stopped_at: Completed 01-09-PLAN.md
+last_updated: "2026-08-01T16:42:40.746Z"
+last_activity: 2026-08-01
+last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 1
   completed_phases: 0
   total_plans: 9
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -24,7 +24,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-07-31)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Milestone v0.13.0 — Consumer-Owned Output. Phase 1 (Consumer-Rendered Output: templates + sink) is defined with TMPL-01…07 and approved from #364; next step is `/gsd-discuss-phase 1`.
+**Current focus:** Phase 01 — consumer-rendered-output-templates-sink
 
 > **Phase numbering restarted at v0.13.0.** Phases 1–9 belong to the previous
 > continuous sequence (v0.10.13–v0.12.0) and are archived under
@@ -33,10 +33,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: 1 — Consumer-Rendered Output (templates + sink)
-Plan: —
-Status: Requirements defined (TMPL-01…07); phase not yet planned
-Last activity: 2026-07-31 — Milestone v0.13.0 started; phase numbering restarted at 1
+Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
+Plan: 2 of 9
+Status: Ready to execute
+Last activity: 2026-08-01 — Phase 01 execution started
 
 ## Performance Metrics
 
@@ -81,6 +81,7 @@ Last activity: 2026-07-31 — Milestone v0.13.0 started; phase numbering restart
 | Phase 09 P03 | 12min | 3 tasks | 4 files |
 | Phase 09 P04 | 6min | 3 tasks | 2 files |
 | Phase 09 P05 | 25min | 3 tasks | 4 files |
+| Phase 01 P09 | 55min | 3 tasks | 12 files |
 
 ## Accumulated Context
 
@@ -120,6 +121,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: hookRunner.Trigger records router_hosts_hook_runs_coalesced_total exactly once per superseded request via context.Background(); adds a stopped-flag check closing a latent phantom-coalesce bug on repeated post-Stop triggers
 - [Phase ?]: Phase 9 hook docs (09-05): reverted docs/reference/api.md and docs/reference/cli.md after every task docs:build run — stale generated files unrelated to this plan's scope
 - [Phase ?]: Phase 9 (09-05): checkpoint Task 3 closed on documentation review only; live OTel scrape explicitly deferred, recorded in 09-VALIDATION.md as not-run rather than claimed done
+- [Phase ?]: 01-09: Generator value type + package singleton + SwapDefault escape hatch established as the pattern for any future process-wide monotonic-ID need
+- [Phase ?]: 01-09: In-transaction ordering guard re-mints (never rejects) a non-advancing event ID at the single insertEvent funnel, unconditionally (no emptiness branch) to prevent zero-ULID collision with storage.ZeroChangeID
 
 ### Pending Todos
 
@@ -148,6 +151,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-31T23:51:03.918Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-consumer-rendered-output-templates-sink/01-CONTEXT.md
+Last session: 2026-08-01T16:42:40.739Z
+Stopped at: Completed 01-09-PLAN.md
+Resume file: None
