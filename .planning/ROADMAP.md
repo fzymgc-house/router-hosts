@@ -55,7 +55,7 @@ Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 
 **v0.13.0 — Consumer-Owned Output:**
 
-- [ ] **Phase 1: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink
+- [x] **Phase 1: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink (completed 2026-08-01)
 
 ## 📋 v0.13.0 — Consumer-Owned Output (Phase Details)
 
@@ -129,7 +129,7 @@ Single phase this milestone — Phase 1 stands alone.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Consumer-Rendered Output | 9/9 | In Progress|  |
+| 1. Consumer-Rendered Output | 9/9 | Complete    | 2026-08-01 |
 
 **Shipped (previous continuous numbering):**
 
