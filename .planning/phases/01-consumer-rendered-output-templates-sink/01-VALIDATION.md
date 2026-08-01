@@ -59,9 +59,20 @@ filled in per task during planning.
 | TMPL-04 | Atomic write-and-rename; a concurrent reader never observes a partial file | — | unit | `task test -- -run AtomicWrite ./internal/atomicfile/` | ⚠️ exists at `internal/server/hostsfile_test.go:181-227`; **moves** this phase | ⬜ pending |
 | TMPL-05 | Sink reflects a host mutation without polling | — | integration (bufconn) | `task test -- -run Watch ./internal/server/` | ❌ W0 | ⬜ pending |
 | TMPL-05 | Sink recovers after connection interruption without emitting a truncated artifact | T-1-02 | integration (bufconn) | `task test -- -run ReconnectNoTruncation ./internal/server/` | ❌ W0 | ⬜ pending |
-| TMPL-06 | Stream yields per-entry rather than materializing the whole payload | — | integration | `task test -- -run StreamsPerEntry ./internal/server/` | ❌ W0 | ⬜ pending |
+| TMPL-06 | Wire messages are bounded: one entry per Watch message, chunked ExportHosts sends (amended 2026-07-31 — storage-layer laziness is out of scope, see #400) | — | integration | `task test -- -run StreamsPerEntry ./internal/server/` | ❌ W0 | ⬜ pending |
+| TMPL-06 | Chunked ExportHosts output is byte-identical after reassembly, for all three formats (review L2 — existing tests read only the first response) | — | integration | `task test -- -run 'TestService_ExportHosts_ChunksLargePayload' ./internal/server/` | ❌ W0 | ⬜ pending |
 | TMPL-07 | Bounded client collection; clear error past the cap, **never** silent truncation | T-1-01 | unit | `task test -- -run CapExceeded ./internal/client/commands/` | ❌ W0 | ⬜ pending |
-| D-09/D-10 | Server exposes per-consumer last-seen keyed by mTLS CN; survives stream close | — | unit | `task test -- -run SinkLastSeen ./internal/server/` | ❌ W0 | ⬜ pending |
+| TMPL-07 | Byte budget refuses fat entries below the entry cap (review L1) | T-1-05 | unit | `task test -- -run ByteBudgetExceeded ./internal/client/commands/` | ❌ W0 | ⬜ pending |
+| TMPL-08 | Change ID = `MAX(event_id)`; zero-ULID on an empty log | — | unit | `task test -- -run EventStoreLatestEventID ./internal/storage/sqlite/` | ❌ W0 | ⬜ pending |
+| TMPL-08 | Change ID advances across same-millisecond mutations (D-20 monotonicity) | T-1-33 | integration (bufconn) | `task test -- -run ChangeIDAdvancesOnMutation ./internal/server/` | ❌ W0 | ⬜ pending |
+| TMPL-08 | Server never uses a client-reported change ID to decide what to send (D-21) | T-1-34 | integration (bufconn) | `task test -- -run IgnoresReportedChangeIDForSendDecision ./internal/server/` | ❌ W0 | ⬜ pending |
+| TMPL-08 | Client skips a redundant render only when the artifact still exists (D-21) | T-1-36 | unit | `task test -- -run 'TestWatch_SkipsRedundantRenderOnSameChangeID\|TestWatch_RendersWhenArtifactMissing' ./internal/client/commands/` | ❌ W0 | ⬜ pending |
+| D-09/D-10 | Server exposes per-consumer last-seen keyed by mTLS CN; survives stream close | — | unit | `task test -- -run SinkHealth ./internal/server/` | ❌ W0 | ⬜ pending |
+| D-09/D-13 | CN keying validated over a REAL verified chain against the literal `e2e-test-client` (review M3) | T-1-30 | e2e | `task test:e2e` (`TestE2E_WatchSinkHealthKeyedByCN`) | ❌ W0 | ⬜ pending |
+| D-12a | Hook failure retains the NEWLY written artifact and marks reload health, without touching the write-failure count (review H3) | T-1-35 | unit | `task test -- -run 'TestWatch_HookFailureRetainsNewArtifact\|TestSinkStatus_ReloadFailureKeepsWriteHealth' ./internal/client/commands/` | ❌ W0 | ⬜ pending |
+| review H1 | Handler returns promptly when Send fails while Recv is idle, and when Recv hits EOF while Send is blocked on flow control | T-1-20 | integration (bufconn) | `task test -- -run 'TestService_WatchHosts_FollowSendErrorReturnsWhileRecvIdle\|TestService_WatchHosts_FollowRecvEOFReturnsWhileSendBlocked' ./internal/server/` | ❌ W0 | ⬜ pending |
+| review H4 | Sink CLI health state is race-free under concurrent ticker reads and receive-loop writes | — | unit | `task test -- -count=10 -run TestSinkStatus_ConcurrentAccess ./internal/client/commands/` | ❌ W0 | ⬜ pending |
+| review M4 | Sink survives a real server stop/restart under the running `watch` command, artifact byte-identical throughout | T-1-37 | e2e | `task test:e2e` (`TestE2E_WatchSinkSurvivesServerRestart`) | ❌ W0 | ⬜ pending |
 | (regression) | `unbound_conf_path` and existing `ExportHosts` format strings unchanged | — | unit | `task test -- -run ExportHosts ./internal/server/` | ✅ exists | ⬜ pending |
 | (regression) | Existing `unbound`/`dnsmasq`/hosts generators unaffected by the `atomicWriteFile` move | — | unit | `task test ./internal/server/` | ✅ exists | ⬜ pending |
 
@@ -84,7 +95,8 @@ filled in per task during planning.
 | Behavior | Requirement | Why Manual | Test Instructions |
 |----------|-------------|------------|-------------------|
 | Post-write exec hook actually reloads a real resolver | TMPL-05 / D-16 | Requires a live `unbound`/`dnsmasq` process; the automated suite asserts the hook is *invoked* with the right argv, not that a third-party daemon reloaded | Run the sink against a local unbound with `--exec 'unbound-control reload'`, mutate a host, confirm `dig` reflects the change without operator action |
-| Two independent resolver nodes stay consistent | TMPL-01 / phase goal | Needs two hosts; the phase's success criterion is a deployment property, not a unit-testable one | Point two sinks at one server with the same template; mutate a host; confirm both artifacts converge and both resolvers answer identically |
+| Two independent resolver nodes stay consistent | TMPL-01 / TMPL-08 / phase goal | Needs two hosts; the phase's success criterion is a deployment property, not a unit-testable one | Point two sinks at one server with the same template; mutate a host; confirm both artifacts converge, both sidecars report the same `rendered_change_id`, and both resolvers answer identically |
+| A restarted server does not trigger a fleet-wide resolver reload | TMPL-08 / D-21 | Needs two or more sinks and a real server restart; the value is the *absence* of an action across a fleet, which a single-node test cannot observe | With two sinks running and current, restart the server; confirm neither sink re-runs its `--exec` command, because the change ID is unchanged and both artifacts still exist |
 
 ---
 
