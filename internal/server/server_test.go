@@ -467,7 +467,7 @@ func TestServer_BufconnConnection(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestKeepalive_ServerParams(t *testing.T) {
-	params := ServerKeepaliveParams()
+	params := KeepaliveParams()
 	assert.Equal(t, 30*time.Second, params.Time, "server ping interval")
 	assert.Equal(t, 10*time.Second, params.Timeout, "server ping timeout")
 	// Deliberately unset: any of these would terminate a healthy long-lived
@@ -478,7 +478,7 @@ func TestKeepalive_ServerParams(t *testing.T) {
 }
 
 func TestKeepalive_ServerEnforcementPolicy(t *testing.T) {
-	policy := ServerKeepaliveEnforcementPolicy()
+	policy := KeepaliveEnforcementPolicy()
 	assert.Equal(t, 15*time.Second, policy.MinTime, "minimum accepted client ping interval")
 	assert.True(t, policy.PermitWithoutStream, "an idle sink must still be permitted to ping")
 }

@@ -4,13 +4,30 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"os"
+	"time"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/config"
 	"github.com/samber/oops"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 )
+
+// KeepaliveParams returns the gRPC keepalive.ClientParameters this client
+// applies to every connection NewClient creates — every `router-hosts` CLI
+// command, not only long-lived sinks. Pings continue during quiet periods
+// (PermitWithoutStream), so a partitioned connection surfaces within tens of
+// seconds instead of grpc-go's default two-hour interval (T-1-13). Time must
+// stay at or above internal/server.KeepaliveEnforcementPolicy().MinTime, or a
+// compliant client is sent GOAWAY for pinging too often.
+func KeepaliveParams() keepalive.ClientParameters {
+	return keepalive.ClientParameters{
+		Time:                20 * time.Second,
+		Timeout:             10 * time.Second,
+		PermitWithoutStream: true,
+	}
+}
 
 // Client wraps a gRPC connection and provides the HostsService client.
 type Client struct {
@@ -31,6 +48,7 @@ func NewClient(cfg *config.ClientConfig) (*Client, error) {
 	conn, err := grpc.NewClient(
 		cfg.Server.Address,
 		grpc.WithTransportCredentials(creds),
+		grpc.WithKeepaliveParams(KeepaliveParams()),
 	)
 	if err != nil {
 		return nil, oops.Wrapf(err, "dialing gRPC server %s", cfg.Server.Address)

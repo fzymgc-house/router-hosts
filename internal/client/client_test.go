@@ -198,7 +198,7 @@ func generateTestCerts(t *testing.T, dir string) (certPath, keyPath, caPath stri
 // ---------------------------------------------------------------------------
 
 func TestKeepalive_ClientParams(t *testing.T) {
-	params := ClientKeepaliveParams()
+	params := KeepaliveParams()
 	assert.Equal(t, 20*time.Second, params.Time, "client ping interval")
 	assert.Equal(t, 10*time.Second, params.Timeout, "client ping timeout")
 	assert.True(t, params.PermitWithoutStream, "pings must continue with no active RPC")
@@ -208,7 +208,7 @@ func TestKeepalive_ClientParams(t *testing.T) {
 // silently produces GOAWAY storms when violated: a client pinging more often
 // than the server's enforcement minimum gets disconnected.
 func TestKeepalive_ClientIntervalRespectsServerMinTime(t *testing.T) {
-	clientTime := ClientKeepaliveParams().Time
-	serverMinTime := server.ServerKeepaliveEnforcementPolicy().MinTime
+	clientTime := KeepaliveParams().Time
+	serverMinTime := server.KeepaliveEnforcementPolicy().MinTime
 	assert.GreaterOrEqual(t, clientTime, serverMinTime)
 }

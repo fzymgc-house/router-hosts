@@ -198,6 +198,54 @@ template {
 - CA chain validity (checked at connection time)
 - Key/cert match (checked by Go crypto/tls on load)
 
+## Long-lived sink connections
+
+`router-hosts` sets gRPC keepalive parameters explicitly on both server and
+client, because grpc-go's default ping interval is two hours — far too coarse
+for the sink last-seen signal a continuous `watch` consumer depends on.
+
+### Server-side parameters
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| Ping interval (`Time`) | 30s | How often the server pings an otherwise-idle connection |
+| Ping timeout (`Timeout`) | 10s | How long the server waits for a ping ack before considering the connection dead |
+| `MaxConnectionIdle` / `MaxConnectionAge` / `MaxConnectionAgeGrace` | unset (disabled) | Deliberately absent — any of these would terminate a healthy long-lived sink stream on a timer |
+| Enforcement minimum client ping interval | 15s | A client pinging more often than this is sent GOAWAY |
+
+### Client-side parameters
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| Ping interval (`Time`) | 20s | How often the client pings, even with no active RPC (`PermitWithoutStream: true`) |
+| Ping timeout (`Timeout`) | 10s | How long the client waits for a ping ack |
+
+The client's ping interval must stay **at or above** the server's
+enforcement minimum (15s); if lowered below it, a compliant client is sent
+GOAWAY.
+
+### Scope: every connection, not only sinks
+
+`ClientKeepaliveParams` is applied in `internal/client.NewClient`, the
+constructor **every** `router-hosts` CLI command uses — a short-lived `host
+list` invocation enables these pings just as much as a long-lived `watch`
+sink, and `PermitWithoutStream: true` means a client with no active RPC still
+pings. This is a deliberate fleet-wide default, not an oversight: the
+steady-state cost is one HTTP/2 PING frame per open client connection
+roughly every 20 seconds — negligible on a LAN, worth knowing about on a
+metered or high-latency link.
+
+### Changing these values
+
+These are compiled-in constants (`internal/server.KeepaliveParams`,
+`internal/server.KeepaliveEnforcementPolicy`,
+`internal/client.KeepaliveParams`), not TOML configuration keys. No
+deployment need for tuning them is known today, and each new TOML key becomes
+a compatibility surface to maintain, so they stay as constants until a real
+need appears. If you do change them, preserve the invariant above: the
+client's ping interval must stay at or above the server's enforcement
+minimum.
+
 ## Logging
 
 The server uses `slog` for structured logging.
