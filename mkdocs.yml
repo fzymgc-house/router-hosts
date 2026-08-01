@@ -70,6 +70,7 @@ nav:
   - Guides:
     - guides/index.md
     - Operations: guides/operations.md
+    - Consumer-Rendered Output: guides/consumer-rendered-output.md
     - ACME Certificates: guides/acme.md
     - Kubernetes Operator: guides/kubernetes.md
     - Storage Backends: guides/storage-backends.md

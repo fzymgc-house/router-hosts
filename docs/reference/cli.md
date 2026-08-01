@@ -38,8 +38,41 @@ router-hosts uses a subcommand-based CLI built with [Cobra](https://github.com/s
 | `snapshot rollback` | Rollback to a snapshot |
 | `snapshot delete` | Delete a snapshot |
 | `serve` | Start the gRPC server |
+| `render` | Render host data through a template once |
+| `watch` | Keep a rendered artifact current as a long-lived sink |
 | `health` | Check server health |
 | `version` | Print version information |
+
+### `render`
+
+One-shot: renders the current host data through a template and exits. See
+the [Consumer-Rendered Output guide](../guides/consumer-rendered-output.md)
+and the [Template Data Contract](template-contract.md) for the field set a
+template may reference. Reads the same global connection flags as the rest
+of the CLI.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--template` | *(required)* | Path to a `text/template` file declaring its contract version |
+| `--out` | stdout | Artifact output path |
+
+### `watch`
+
+Long-lived sink: opens a streaming connection and keeps `--out` current as
+host data changes, with automatic reconnect and a local sidecar status
+file. See the
+[Consumer-Rendered Output guide](../guides/consumer-rendered-output.md)
+for the full walkthrough. Reads the same global connection flags as the
+rest of the CLI.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--template` | *(required)* | Path to a `text/template` file declaring its contract version |
+| `--out` | *(required)* | Artifact output path, kept current for the life of the process |
+| `--exec` | *(none)* | Command run via `sh -c` after every successful write (e.g. a resolver reload) |
+| `--exec-timeout` | 30s | Timeout for the post-write command |
+| `--status-file` | `<out>.status` | Sidecar status file path |
+| `--status-interval` | 30s | Interval between upstream status reports |
 
 ## Examples
 
