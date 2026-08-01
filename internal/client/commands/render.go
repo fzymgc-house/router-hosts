@@ -47,6 +47,10 @@ func newRenderCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			declaredVersion, err := template.DeclaredVersion(tmpl)
+			if err != nil {
+				return err
+			}
 
 			c, err := newClientFromFlags()
 			if err != nil {
@@ -94,6 +98,9 @@ func newRenderCmd() *cobra.Command {
 			}
 			if complete == nil {
 				return oops.Errorf("WatchHosts stream ended without a snapshot terminator")
+			}
+			if err := template.RequireVersion(declaredVersion, complete.GetContractVersion()); err != nil {
+				return err
 			}
 
 			data := template.FromProto(entries, complete)
