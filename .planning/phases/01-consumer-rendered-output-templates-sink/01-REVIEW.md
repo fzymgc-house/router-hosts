@@ -1,181 +1,163 @@
 ---
-phase: 01-consumer-rendered-output-templates-sink
-reviewed: 2026-08-01T20:57:26Z
+phase: 01
+scope: gap-closure
+scope_note: >-
+  This review covers ONLY the G-01-1 gap-closure changes from plans 01-10
+  and 01-11 (diff range 2a0272e..HEAD). It supersedes the prior full-phase
+  review committed as ee61917 for this narrower scope; it is not a re-review
+  of plans 01-01..01-09.
+reviewed: 2026-08-01T20:20:00-04:00
 depth: standard
-files_reviewed: 34
+files_reviewed: 7
 files_reviewed_list:
-  - internal/server/watch.go
-  - internal/server/changenotify.go
-  - internal/server/changenotify_test.go
-  - internal/server/watch_test.go
-  - internal/server/sinkmetrics.go
-  - internal/server/sinkmetrics_test.go
-  - internal/server/metrics.go
-  - internal/server/metrics_test.go
-  - internal/server/peercn.go
-  - internal/server/peercn_test.go
-  - internal/server/service.go
-  - internal/server/service_test.go
-  - internal/server/commands.go
-  - internal/client/commands/watch.go
-  - internal/client/commands/watch_test.go
-  - internal/client/commands/watchpolicy.go
-  - internal/client/commands/watchpolicy_test.go
-  - internal/client/commands/posthook.go
-  - internal/client/commands/posthook_test.go
-  - internal/client/commands/sinkstatus.go
-  - internal/client/commands/sinkstatus_test.go
-  - internal/client/commands/render.go
-  - internal/client/commands/render_test.go
-  - internal/client/commands/host.go
-  - internal/client/commands/snapshot.go
-  - internal/client/commands/serve_wiring.go
-  - internal/client/template/template.go
-  - internal/sanitize/sanitize.go
-  - internal/sanitize/sanitize_test.go
-  - internal/eventid/eventid.go
-  - internal/storage/sqlite/eventstore.go
-  - internal/storage/sqlite/eventid_guard_test.go
-  - internal/storage/storage.go
-  - internal/atomicfile/atomicfile.go
   - internal/config/client.go
-  - internal/client/client.go
-  - internal/contract/contract.go
-  - examples/templates/hosts.tmpl
-  - examples/templates/dnsmasq.tmpl
-  - examples/templates/unbound.tmpl
-  - docs/reference/template-contract.md
-  - docs/reference/cli.md
-  - e2e/e2e_test.go
+  - internal/config/client_test.go
+  - internal/client/commands/connect.go
+  - internal/client/commands/connect_test.go
+  - e2e/proc_harness_test.go
+  - e2e/proc_e2e_test.go
+  - Taskfile.yml
 findings:
   critical: 0
   warning: 0
-  info: 1
-  total: 1
+  info: 0
+  total: 0
 status: clean
 ---
 
-# Phase 1: Code Review Report
+# Phase 01 (gap-closure G-01-1): Code Review Report
 
-**Reviewed:** 2026-08-01T20:57:26Z
+**Reviewed:** 2026-08-01T20:20:00-04:00
 **Depth:** standard
-**Files Reviewed:** 34 read in full (list above); remainder of the 74-file
-scope sampled by targeted grep for the invariant checks below
+**Files Reviewed:** 7
 **Status:** clean
 
 ## Summary
 
-This phase adds a client-rendered template pipeline (`render`/`watch`), a new
-bidirectional `WatchHosts` RPC with per-consumer health reporting, a shared
-monotonic event-ID generator with an in-transaction ordering guard, and a
-shared sanitizing FuncMap for template output. All nine LOCKED invariants in
-the task brief were checked directly against the code and hold:
+This reviews the gap-closure work for G-01-1 (`--config` was silently ignored,
+allowing a sink to connect to the wrong server while reporting healthy) —
+plans 01-10 (the fix) and 01-11 (the real-process harness that proves it).
+It does not re-review plans 01-01..01-09; see `ee61917` for that.
 
-1. **Change-ID-before-`ListAll` ordering** — `sendSnapshot` in
-   `internal/server/watch.go:88-101` derives `changeID` from
-   `s.store.LatestEventID` before calling `s.store.ListAll`, in both the
-   one-shot and follow-mode paths (both route through this one helper).
-   `TestService_WatchHosts_ChangeIDIsLowerBoundOnEntries` and its follow-mode
-   mirror exercise this with a decorator that mutates state mid-`ListAll` and
-   assert the terminator's ID is strictly less than the post-stream maximum.
-2. **Zero ULID never a committed event ID** — `insertEvent`
-   (`internal/storage/sqlite/eventstore.go:373-473`) compares
-   `env.EventID.Compare(max) <= 0` unconditionally, with no "log is
-   non-empty" branch. `selectLatestEventID` returns the zero ULID for a NULL
-   `MAX`, so a proposed zero ID against an empty log compares equal and is
-   re-minted like any other non-advancing proposal.
-   `TestInsertEvent_ZeroIDIntoEmptyStoreRemints` and
-   `TestInsertEvent_ZeroIDIntoNonEmptyStoreRemints` pin both halves.
-3. **`insertEvent` single funnel** — confirmed; the one known bypass
-   (`legacy_migration.go:183`) is pre-existing, documented, and out of this
-   phase's scope per the task brief. No new bypass was introduced.
-4. **Artifact never rolled back after the post-write hook runs** —
-   `runWatchCycle` (`internal/client/commands/watch.go:341-400`) calls
-   `recordSuccess` before the hook, and `recordReloadFailure`
-   (`sinkstatus.go:172-179`) only sets `ReloadFailed`/`LastError`, never
-   touches `RenderedChangeID`/`ConsecutiveFailures`, and nothing in the write
-   path re-executes `atomicfile.Write` or removes the artifact after a hook
-   failure. `TestWatch_HookFailureRetainsNewArtifact` asserts the on-disk
-   content is the newly rendered content, not the prior one.
-5. **Staleness signalled via marker + metrics, never truncation** — every
-   failure branch in `runWatchCycle` returns before `atomicfile.Write`, and
-   `atomicfile.Write` itself (`internal/atomicfile/atomicfile.go`) only
-   replaces the target via `os.Rename` after a fully successful
-   create/write/fsync/close sequence, cleaning up the temp file on every
-   error path without ever touching the destination path.
-6/7. **CN not enforced-unique; `Connect`/`Disconnect` identity-free** —
-   confirmed in `sinkmetrics.go` and `watch.go`; both are documented,
-   deliberate, and tested (`TestService_WatchHosts_FollowWithoutPeerIdentityStillStreams`).
-6. **One Send-goroutine, one Recv-goroutine, never two concurrent Senders** —
-   `watchFollowSend` is the sole caller of `stream.Send` in `watch.go`;
-   `watchFollowRecv` is the sole caller of `stream.Recv`. On the client side,
-   `sendStatusTicker` is the sole `Send` owner and `runWatchRecvLoop` is the
-   sole `Recv` owner in `watch.go` (client). No path calls `Send` from two
-   goroutines.
-7. **Non-joining handler; cancelling `stream.Context()`'s derivative does not
-   unblock an in-flight `Send`/`Recv`** — `watchFollow` explicitly returns
-   without a `wg.Wait()`, and this exact regression is guarded by
-   `TestService_WatchHosts_FollowSendErrorReturnsWhileRecvIdle` and
-   `TestService_WatchHosts_FollowRecvEOFReturnsWhileSendBlocked`, both of
-   which are documented as having been verified to hang under a
-   reintroduced `wg.Wait()`.
+I read all seven files in full, traced the precedence chain in
+`LoadClientConfig` end to end, checked every early-return and error path for
+shadowing, and verified the nil/empty `*string` semantics from `connect.go`
+through to `LoadClientConfig`. I then went further than static reading: I
+ran the full unit suite for both touched packages, ran `golangci-lint` on
+both packages (0 issues, no `//nolint` present), built the binary and ran
+the real `proc_e2e` suite against the fixed code (3/3 pass, no orphaned
+processes afterward), and — as the strongest check available for "can this
+regression test actually fail" — reverted `internal/config/client.go` and
+`internal/client/commands/connect.go` to their pre-fix (`2a0272e`) content,
+rebuilt the real binary, and re-ran the two `proc_e2e` tests that assert the
+fix. Both failed with exactly the G-01-1 symptom: the cold-start test
+rendered `decoy-target.example` into the artifact (the silent wrong-server
+connection), and the "missing config" test wrote a full artifact via silent
+XDG fallback instead of erroring. I then restored both files and confirmed
+`git status` was clean and the suite passed again. This is about as direct
+a confirmation as static review can get that the fix works and the tests
+are not vacuous.
 
-Resource bounds (TMPL-07): the client-side entry-count and byte-budget caps
-are enforced identically and correctly (check-before-append, refuse-not-truncate)
-at all four collecting call sites (`host.go` list/search, `snapshot.go`
-list, `render.go`, and `watch.go`'s `runWatchRecvLoop`). The server-side
-64 KiB `ExportHosts` chunker (`service.go:642-677`) cannot emit an unbounded
-single message and correctly still emits one message for an empty payload.
+Findings by check:
 
-Injection (D-17): `internal/sanitize/sanitize.CommentField` collapses both
-`\r` and `\n` to spaces and is applied consistently to every `.Comment` and
-every `.Tags` element in all three shipped example templates
-(`hosts.tmpl`, `dnsmasq.tmpl`, `unbound.tmpl`), matching the identical
-server-side `sanitizeCommentField` this package was extracted to share.
+**1. Precedence correctness.** Confirmed correct. The explicit-path branch
+lives in layer 1 (`internal/config/client.go:128-141`), before
+`applyClientEnv` (layer 2, line 144) and `applyClientOverrides` (layer 3,
+line 149-151). `TestLoadClientConfig_EnvBeatsExplicitConfigFile` and
+`TestLoadClientConfig_ServerOverrideBeatsExplicitConfigFile`
+(`internal/config/client_test.go:421-457`) pin exactly this ordering and
+pass.
 
-Exec hook (`internal/client/commands/posthook.go`): the command is entirely
-operator-supplied (`--exec`), mirrors the server's own `hooks.go` shell-out
-pattern and timeout-vs-exit-code classification, and never receives
-server-controlled data interpolated into the command line — no injection
-vector beyond what the operator already typed.
+**2. No silent fallback.** Confirmed. The `if overrides != nil &&
+overrides.ConfigPath != nil && *overrides.ConfigPath != ""` branch
+(`client.go:128`) is an `if/else if`, not a fallthrough — when it is taken,
+`findClientConfigFile()` (the `else if` at line 135) is structurally
+unreachable in the same call. Every error path inside the branch (`os.Stat`
+failure via `os.ReadFile`, TOML parse failure, `meta.Undecoded()` unknown-key
+rejection) is wrapped with `oops.Wrapf(loadErr, "loading client config %s",
+path)` and returned immediately — none are logged-and-continued or
+downgraded to defaults.
 
-Error handling: no swallowed or shadowed errors were found in the reviewed
-files; every fallible call either returns a wrapped `oops` error or is a
-deliberate, documented "log and continue" (sidecar write failures, `Close()`
-on client teardown) consistent with D-12/D-12a's "never abort an otherwise-
-successful cycle over a secondary write."
+**3. No error shadowing.** Confirmed. `loadErr` in the new branch is a
+fresh `:=` declaration scoped to the `if` block; it is checked and returned
+before any outer `err`/`cfg` is touched. The `*cfg = *fileCfg` assignment
+only happens after the nil-error check, so a load failure returns
+`nil, wrapped-error` — `cfg` is never partially populated on failure. Traced
+through to the caller in `connect.go:33-36`, which re-wraps with `oops.Wrapf(err,
+"loading client config")` and returns; `watch.go:98-101` and every other
+call site returns the error from `newClientFromFlags()` unmodified up to
+`RunE`, which Cobra's `SilenceErrors: true` + `root.go:108-110`'s explicit
+`fmt.Fprintln(os.Stderr, err)` + `os.Exit(1)` in `main.go` turns into a
+non-zero exit with the path-bearing message on stderr — verified live via
+the pre-fix/post-fix binary swap above.
 
-Test quality: `watch_test.go` on both sides was read end-to-end looking for
-the two documented "test that cannot fail" shapes described in the task
-brief (a `ctx.Done()` escape hatch on a fake `Send`, and a first `Send` that
-could itself block). Neither reappears — `TestService_WatchHosts_FollowRecvEOFReturnsWhileSendBlocked`'s
-`sendBlock` channel is explicitly documented as "deliberately never closed"
-to avoid exactly that regression, and the client-side `fakeWatchStream`'s
-opening `Send` is unconditional (`callNum > 1` guards the blocking behavior)
-so `runWatch` can always reach the point of spawning its ticker/recv loop.
+**4. Empty-string vs nil semantics.** Confirmed correct on both sides.
+`connect.go:29-31` only takes `&Flags.Config` when `Flags.Config != ""`, so
+an absent `--config` leaves `overrides.ConfigPath` `nil` and layer 1 falls
+through to `findClientConfigFile()`. `client.go`'s own guard
+(`*overrides.ConfigPath != ""`) is defense-in-depth for direct callers of
+`LoadClientConfig` (e.g. tests) that pass a pointer to `""` rather than
+`nil` — `TestLoadClientConfig_EmptyConfigPathFallsBackToXDG` pins that this
+also falls through to XDG. Both paths agree.
 
-No Critical or Warning findings. One Info-level observation below.
+**5. Tilde/path expansion.** Confirmed. `expandTilde` runs on the raw
+`*overrides.ConfigPath` before the file read (`client.go:129`), and the
+error path names the _expanded_ absolute path, not the literal `~/...` the
+user typed — `TestLoadClientConfig_ExplicitPathTildeExpanded` asserts the
+error contains the expanded prefix and explicitly asserts it does NOT
+contain a literal `~/`. This is a legitimate operator-diagnostics
+trade-off (the expanded path is what actually failed to open), not a bug,
+and it's covered by a dedicated regression test. No directory-vs-file,
+symlink, or empty-result edge case produces a different failure mode:
+`os.ReadFile` on a directory returns a `read` error that flows through the
+same wrap.
+
+**6. Process/resource hygiene in the harness.** Verified both by reading
+and by execution. `startServerProcess` and `startSinkProcess` both use
+`exec.CommandContext` plus a `t.Cleanup` that cancels the context, waits up
+to 5s on a `stopped` channel fed by a `cmd.Wait()` goroutine, and
+force-kills on timeout — covering normal completion, test failure (output is
+dumped only in the `t.Failed()` branch), and the case where the process
+never exits on cancellation. `cmd.Wait()` also fences the internal
+stdout/stderr-copying goroutines, so no data race or leaked goroutine
+between the `Buffer` writes and the post-`stop()` `.String()` reads in the
+cleanup. All filesystem paths in both files derive from `t.TempDir()`. I
+confirmed no orphaned `router-hosts serve`/`watch` processes remained after
+running the full suite (`ps aux` empty for both).
+
+**7. Test-quality anti-vacuity.** Confirmed by direct falsification, not
+just reading. All three `TestProcE2E_*` tests discriminate on artifact
+_content_ (`named-target.example` present AND `decoy-target.example`
+absent; not just "non-empty"), and the negative test checks three
+independent signals (non-zero exit via `*exec.ExitError`, the exact failed
+path appearing in output, and the artifact's absence via `os.IsNotExist`)
+rather than a single loose assertion. No `t.Skip` exists in either file
+except the pre-existing, orthogonal root-uid guard in
+`internal/config/client_test.go`. Reverting the fix and rebuilding the real
+binary reproduced the exact G-01-1 symptom and made both tests fail for the
+expected reason, which is the strongest available evidence these are not
+vacuous.
+
+No Critical, Warning, or Info findings were identified. The `Taskfile.yml`
+addition (`test:e2e:proc`) correctly depends on `build`, and its default
+binary discovery path (`../bin/router-hosts` relative to `e2e/`) matches
+`task build`'s output path — confirmed by running `task build && task
+test:e2e:proc` directly, which passed.
+
+## Critical Issues
+
+None found.
+
+## Warnings
+
+None found.
 
 ## Info
 
-### IN-01: `sinkHealthState.recordReloadFailure`'s timestamp parameter is currently always discarded
-
-**File:** `internal/client/commands/sinkstatus.go:172`
-**Issue:** `recordReloadFailure(err error, _ time.Time)` accepts a timestamp
-argument it never stores — every call site (`watch.go:392`) passes
-`time.Now().UTC()` into it. The doc comment already explains this is
-intentional ("accepted for signature symmetry with `recordSuccess` and
-`recordReloadSuccess`; today's `sinkStatus` contract has no
-last-reload-attempt field to store it in"), so this is not a defect, just a
-note for the next contributor: if a `last_reload_attempt` field is ever
-added to the sidecar contract, this is the parameter that already carries
-the value it would need.
-**Fix:** No action required now. When/if a `LastReloadAttempt` field is
-added to `sinkStatus`, wire this parameter through instead of adding a new
-one.
+None found.
 
 ---
 
-_Reviewed: 2026-08-01T20:57:26Z_
+_Reviewed: 2026-08-01T20:20:00-04:00_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
