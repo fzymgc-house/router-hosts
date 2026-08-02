@@ -2,9 +2,13 @@
 gsd_state_version: 1.0
 milestone: v0.14.0
 milestone_name: Verification & Lazy Reads
+current_phase: 1
+current_phase_name: CI Gating for the e2e Tiers
 status: planning
-last_updated: "2026-08-02T18:43:17.000Z"
+stopped_at: Phase 1 context gathered
+last_updated: "2026-08-02T23:04:56.420Z"
 last_activity: 2026-08-02
+last_activity_desc: v0.14.0 roadmap created (3 phases, 13/13 requirements mapped)
 progress:
   total_phases: 3
   completed_phases: 0
@@ -207,9 +211,9 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-02
-Stopped at: v0.14.0 roadmap created — 3 phases, all 13 pending requirements (CI-01…04, VRFY-01…05, LAZY-01…04) mapped, no orphans. `.planning/phases/` is empty; phase directories start at `01-`.
-Resume file: None
+Last session: 2026-08-02T23:04:56.411Z
+Stopped at: Phase 1 context gathered
+Resume file: .planning/phases/01-ci-gating-for-the-e2e-tiers/01-CONTEXT.md
 
 ## Operator Next Steps
 
