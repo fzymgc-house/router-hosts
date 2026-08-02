@@ -16,6 +16,7 @@ exclude = [
   ".beads",
   ".claude",
   ".serena",
+  ".planning",
   "target",
   "dist",
 ]

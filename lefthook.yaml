@@ -40,9 +40,19 @@ pre-commit:
       run: shellcheck {staged_files}
     lint-markdown:
       glob: "*.md"
+      # .planning/ is GSD-owned: those files are written by gsd-tools verbs, not
+      # by hand, so lint findings there are not actionable by the committer.
+      # Also excluded in .rumdl.toml; kept here so the intent is visible at the
+      # enforcement point.
+      exclude:
+        - ".planning/**"
       run: rumdl check {staged_files}
     fmt-markdown:
       glob: "*.md"
+      # rumdl fmt corrupts multi-line evidence blocks in .planning/*-UAT.md —
+      # indented `key: |` bodies get reparsed as markdown lists.
+      exclude:
+        - ".planning/**"
       run: rumdl fmt {staged_files}
       stage_fixed: true
     check-yaml:

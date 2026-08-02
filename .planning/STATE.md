@@ -2,19 +2,19 @@
 gsd_state_version: 1.0
 milestone: v0.13.0
 milestone_name: Consumer-Owned Output
-current_phase: 01
-status: "Phase 01 shipped — PR #404"
-stopped_at: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1, phase 01 fully executed)
-last_updated: "2026-08-02T01:04:55.325Z"
+status: Awaiting next milestone
+stopped_at: Milestone v0.13.0 closed and archived. Next milestone unscoped — run /gsd-new-milestone.
+last_updated: "2026-08-02T12:40:43.840Z"
 last_activity: 2026-08-02
+last_activity_desc: Milestone v0.13.0 completed and archived
 progress:
   total_phases: 1
   completed_phases: 1
   total_plans: 11
   completed_plans: 11
   percent: 100
+current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
-last_activity_desc: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1)
 ---
 
 # Project State
@@ -24,7 +24,7 @@ last_activity_desc: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1)
 See: .planning/PROJECT.md (updated 2026-08-02)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Milestone v0.13.0 complete — ready to close and open the next milestone.
+**Current focus:** None — v0.13.0 shipped and archived. Next milestone unscoped (`/gsd-new-milestone`); three items parked in the ROADMAP backlog.
 
 > **Phase numbering restarted at v0.13.0.** Phases 1–9 belong to the previous
 > continuous sequence (v0.10.13–v0.12.0) and are archived under
@@ -33,10 +33,10 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 
 ## Current Position
 
-Phase: 01
-Plan: Not started
-Status: Phase 01 shipped — PR #404
-Last activity: 2026-08-02
+Phase: Milestone v0.13.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-08-02 — Milestone v0.13.0 completed and archived
 
 ## Performance Metrics
 
@@ -172,14 +172,17 @@ None yet.
 ### Blockers/Concerns
 
 - **[Codebase]**: `service.go` (1033 LOC) and `commands.go` (519 LOC) are merge hotspots; in-tree `legacy_migration.go` is a permanent maintenance surface pending a removal milestone.
-- **[Phase 1 / ship gate]**: `.planning/WINDOWS.md` has `open_count: 1` (plan 01-07 test-file-location deviation). `/gsd-ship` blocks until waived (`gsd-tools windows waive 1 "<reason>"`) or fixed.
-- **[Phase 1 / verification debt]**: UAT test 42 (resolver reload + two-node convergence) is recorded `skipped` — needs a real unbound host and a second machine. `gsd-tools phase uat-passed` counts only `pass`/`passed`, so phase 1 shows `passed:false` permanently. The transition was an explicit operator decision against this known blocker, not a green predicate. Recorded NOT-RUN in 01-VALIDATION.md and called out in 01-VERIFICATION.md's re-verification section.
-- **[Phase 1 / CI]**: none of the three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) run in `ci-go.yml` — issue #403. The `proc_e2e` tier is the only one that can catch CLI-flag regressions like G-01-1, and it is not gating merges.
-- **[Phase 1 / deferred]**: `store.ListAll` still folds full event history server-side (#400, #401) — the wire is bounded and the client refuses unbounded responses, but the storage-layer half of lazy streaming is out of TMPL-06's amended scope.
 - **[Ship / tooling]**: `/gsd-ship`'s ship-note commit carries a `[ci skip]` marker, which is unsafe here: `protect-main` requires `CI (Go) Complete` and `Vulnerability check` on the **head** SHA, and `ci-go.yml` triggers only on `pull_request`, so a skipped head leaves both contexts unreported and the PR `BLOCKED`. Strip the marker from the ship note, or add `workflow_dispatch` to `ci-go.yml` so a stuck SHA can be re-dispatched.
-- **[PR #404 / UNRESOLVED]**: since the PR opened (`c149371`, 01:04Z), GitHub has created **no `github-actions` check suite** for any later commit — `6fa5025` (had `[ci skip]`), `6f36302` (empty), `a61291d` (real file change) — nor for the 01:15Z close/reopen. Ruled out: workflow config (base and head copies identical; no `paths`/`types`/`concurrency` filters), Actions disabled (`enabled`, workflow `state=active`), and a service incident (githubstatus Actions operational). The `[ci skip]` marker explains only the first of the three. Cause not yet identified; needs a throwaway PR from a scratch branch to tell PR-specific from repo/account-wide.
+- **[CI / unexplained]**: during PR #404, GitHub created no `github-actions` check suite for three consecutive head commits and a close/reopen, then recovered on its own ~15 minutes later. Ruled out at the time: workflow config (base and head copies identical; no `paths`/`types`/`concurrency` filters), Actions disabled (`enabled`, workflow `state=active`), and a service incident (githubstatus Actions operational). The `[ci skip]` marker explains only the first commit. Cause never identified. Watch for a recurrence; a throwaway PR from a scratch branch would tell PR-specific from repo-wide.
 
-Resolved and removed at this transition: Phase 7 Gateway API design-only concern (shipped v0.11.0) and Phase 8 Rust-era Service controller concern (built fresh in Go, shipped v0.11.0).
+Parked to the ROADMAP backlog at milestone close (see `.planning/ROADMAP.md`):
+999.1 wire the e2e tiers into CI (#403), 999.2 close the hardware-dependent
+verification gap (UAT 42 + four manual deployment checks), 999.3 server-side
+lazy streaming for `store.ListAll` (#400, #401).
+
+Resolved and removed at this milestone close: the WINDOWS.md ship-gate blocker
+(window 1 waived, `open_count: 0`); phase 1 verification and CI debt (now
+tracked as backlog 999.1–999.3 rather than as open concerns).
 
 ### Quick Tasks Completed
 
@@ -201,3 +204,7 @@ Items acknowledged and carried forward:
 Last session: 2026-08-02
 Stopped at: Phase 01 complete (UAT 57 pass / 1 skipped, verification passed, transition applied by explicit operator decision). Milestone v0.13.0 is 100% complete — ready to close.
 Resume file: None
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
