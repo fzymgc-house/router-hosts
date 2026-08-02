@@ -72,12 +72,15 @@ Shipped and running in the Go codebase at v0.10.13.
 - ✓ Gateway API support: operator reconciles HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS, IPs resolved from the parent Gateway's `status.addresses`, opt-in via `--enable-gateway` — Validated in Phase 7: Gateway API Support (GW-01, GW-02, GW-03)
 - ✓ Kubernetes Service controller: annotated LoadBalancer/NodePort Services register their hostnames, IPs resolved from `status.loadBalancer.ingress[]` or the `ip-address` annotation, opt-in via `--enable-service` — Validated in Phase 8: Kubernetes Service Controller (SVC-01, SVC-02). **Not yet deployed** — see the rollout note under Context.
 - ✓ Hook reliability: post-edit hooks emit execution metrics (count, duration, outcome), run detached from the write path with per-hook configurable timeouts, bounded concurrency, coalescing, and a bounded-drain shutdown — Validated in v0.12.0 Phase 9: Hook Reliability & Metrics (HOOK-01, HOOK-02)
+- ✓ Consumer-rendered output: `render` (one-shot) and `watch` (long-lived sink) drive caller-supplied Go templates against a documented, versioned data contract; contract-version declaration is enforced before any RPC; artifacts are written temp-file-plus-rename so a render failure leaves the previous file byte-identical; the sink reflects mutations with no polling (server-side change notification), reconnects with jittered backoff, and reports health both upstream and to a local sidecar; every snapshot carries a monotonic change ID naming server state — Validated in v0.13.0 Phase 1: Consumer-Rendered Output (TMPL-01…08)
 
 ### Active
 
 Open forward work toward the north star. Building toward these.
 
-- [ ] Consumer-rendered output: caller-supplied templates, one-shot and as a continuous sink, with a versioned template data contract and lazy streaming on both sides (v0.13.0 Phase 1 — TMPL-01…07)
+- [ ] Lazy storage-layer read for `ExportHosts`/`WatchHosts` — the wire is bounded and the client refuses unbounded responses, but `store.ListAll` still folds full event history into memory server-side. Deliberately deferred out of TMPL-06 (#400, #401).
+- [ ] Deployment-level verification harness — containerize the manual resolver-reload and two-node convergence checks (a real unbound container plus two sink containers) so they stop needing a second physical machine. Raised during Phase 1 UAT; the same harness would cover the `proc_e2e` tier's container extension points.
+- [ ] Wire the three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) into CI — none currently run in `ci-go.yml` (#403).
 
 ### Out of Scope
 
@@ -139,6 +142,10 @@ Deliver only a manual `CompactAggregates` gRPC RPC + CLI and two aggregate-level
 | unbound per-name `static` zones (bzg) | Closes ECH/AAAA leak, bounds blast radius | ✓ Good (LOCKED) |
 | HostCompacted seed at preserved OCC version (v5b) | O(1) rehydration, OCC intact | ✓ Good (LOCKED) |
 | Manual remediate+observe compaction only (vl8) | YAGNI on auto/snapshots | ✓ Good (LOCKED) |
+| Change ID derived BEFORE `store.ListAll` (D-21, Phase 1) | Makes it a LOWER bound on entries sent. Deriving after would make it an upper bound, which the client-side skip turns into a permanently stale consumer that self-reports converged | ✓ Good — counter-intuitive, do not "fix" back |
+| In-transaction event-ID ordering guard, not a DB sequence (D-18/D-20, Phase 1) | A DB-owned monotonic sequence contradicts locked D-18 ("the change ID is the ULID of the newest event"). Guard re-mints above `MAX(event_id)` inside `insertEvent` | ✓ Good — amend D-18 before revisiting |
+| Sink hook failure retains the NEW artifact, never rolls back (D-12a, Phase 1) | Write health and reload health are independent outcomes; rolling back would discard correct data because a downstream reload failed | ✓ Good |
+| Third e2e tier running real OS processes (`proc_e2e`, Phase 1) | The in-process and Docker tiers both drive the client in-process and cannot observe CLI flag→config resolution — the exact blind spot that let a bound-but-unread `--config` ship green through 45 UAT checkpoints | ✓ Good — any CLI-surface claim must be proven here |
 
 ## Evolution
 
@@ -161,4 +168,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-07-31 — Milestone v0.13.0 (Consumer-Owned Output) started; phase numbering restarted at 1*
+*Last updated: 2026-08-02 after Phase 1 — Consumer-Rendered Output validated (TMPL-01…08); milestone v0.13.0 is 100% complete and ready to close*

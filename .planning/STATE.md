@@ -3,10 +3,9 @@ gsd_state_version: 1.0
 milestone: v0.13.0
 milestone_name: Consumer-Owned Output
 current_phase: 01
-current_phase_name: consumer-rendered-output-templates-sink
-status: executing
+status: completed
 stopped_at: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1, phase 01 fully executed)
-last_updated: "2026-08-02T00:13:08.495Z"
+last_updated: "2026-08-02T00:54:35.687Z"
 last_activity: 2026-08-02
 last_activity_desc: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1)
 progress:
@@ -15,16 +14,17 @@ progress:
   total_plans: 11
   completed_plans: 11
   percent: 100
+current_phase_name: consumer-rendered-output-templates-sink
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-31)
+See: .planning/PROJECT.md (updated 2026-08-02)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Phase 01 — consumer-rendered-output-templates-sink
+**Current focus:** Milestone v0.13.0 complete — ready to close and open the next milestone.
 
 > **Phase numbering restarted at v0.13.0.** Phases 1–9 belong to the previous
 > continuous sequence (v0.10.13–v0.12.0) and are archived under
@@ -33,16 +33,16 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: 01 (consumer-rendered-output-templates-sink) — ALL PLANS COMPLETE
-Plan: 11 of 11
-Status: Ready for phase verification (/gsd-verify-work 01)
-Last activity: 2026-08-02 — Completed 01-11-PLAN.md (real-process e2e for gap G-01-1)
+Phase: 01
+Plan: Not started
+Status: All phases complete
+Last activity: 2026-08-01 — Phase 01 complete
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 25 phases shipped pre-GSD (no per-plan timing captured)
+- Total plans completed: 27 phases shipped pre-GSD (no per-plan timing captured)
 - Average duration: n/a (retrospective baseline)
 - Total execution time: n/a
 
@@ -54,7 +54,7 @@ Last activity: 2026-08-02 — Completed 01-11-PLAN.md (real-process e2e for gap 
 | 7 | 6 | - | - |
 | 8 | 5 | - | - |
 | 9 | 5 | - | - |
-| 01 | 9 | - | - |
+| 01 | 11 | - | - |
 
 **Recent Trend:**
 
@@ -171,9 +171,13 @@ None yet.
 
 ### Blockers/Concerns
 
-- **[Phase 7]**: Gateway API is design-only (Draft, 2026-06-07) — no `gateway-api` dependency or controller in the Go operator; net-new implementation.
-- **[Phase 8]**: Service controller exists only as superseded Rust-era design; must be built fresh in Go.
 - **[Codebase]**: `service.go` (1033 LOC) and `commands.go` (519 LOC) are merge hotspots; in-tree `legacy_migration.go` is a permanent maintenance surface pending a removal milestone.
+- **[Phase 1 / ship gate]**: `.planning/WINDOWS.md` has `open_count: 1` (plan 01-07 test-file-location deviation). `/gsd-ship` blocks until waived (`gsd-tools windows waive 1 "<reason>"`) or fixed.
+- **[Phase 1 / verification debt]**: UAT test 42 (resolver reload + two-node convergence) is recorded `skipped` — needs a real unbound host and a second machine. `gsd-tools phase uat-passed` counts only `pass`/`passed`, so phase 1 shows `passed:false` permanently. The transition was an explicit operator decision against this known blocker, not a green predicate. Recorded NOT-RUN in 01-VALIDATION.md and called out in 01-VERIFICATION.md's re-verification section.
+- **[Phase 1 / CI]**: none of the three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) run in `ci-go.yml` — issue #403. The `proc_e2e` tier is the only one that can catch CLI-flag regressions like G-01-1, and it is not gating merges.
+- **[Phase 1 / deferred]**: `store.ListAll` still folds full event history server-side (#400, #401) — the wire is bounded and the client refuses unbounded responses, but the storage-layer half of lazy streaming is out of TMPL-06's amended scope.
+
+Resolved and removed at this transition: Phase 7 Gateway API design-only concern (shipped v0.11.0) and Phase 8 Rust-era Service controller concern (built fresh in Go, shipped v0.11.0).
 
 ### Quick Tasks Completed
 
@@ -192,6 +196,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-02T00:13:08.486Z
-Stopped at: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1, phase 01 fully executed)
+Last session: 2026-08-02
+Stopped at: Phase 01 complete (UAT 57 pass / 1 skipped, verification passed, transition applied by explicit operator decision). Milestone v0.13.0 is 100% complete — ready to close.
 Resume file: None
