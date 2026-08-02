@@ -371,3 +371,23 @@ rumdl gate — which is why that file is currently hand-maintained.
 Plans:
 
 - [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.20: ListHosts silently discards filter, limit, and offset (BACKLOG)
+
+**Goal:** Make `host list --filter/--limit/--offset` do something. The whole path
+is wired except the server: `ListHostsRequest` declares all three fields
+(`proto/router_hosts/v1/hosts.proto:169-178`), the client populates them
+(`internal/client/commands/host.go:258-267`), and then
+`HostsServiceImpl.ListHosts` never reads `req` at all — it calls
+`s.handler.ListHosts(stream.Context())` and streams everything
+(`internal/server/service.go:360-373`). The flags are accepted and silently
+dropped, so a user asking for 10 entries gets the full table. Either implement
+server-side handling or reject the flags loudly; silent discard is the one
+option that must not survive.
+**Source:** GH #215 — close on completion.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)
