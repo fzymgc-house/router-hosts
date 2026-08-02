@@ -6,17 +6,19 @@ router-hosts is a Go control plane for managing DNS host entries on Linux router
 
 ## Current State
 
-**Shipped:** v0.12.0 (2026-07-31)
+**Shipped:** v0.13.0 (2026-08-02, PR #404)
 
 | Milestone | Phases | Delivered |
 |-----------|--------|-----------|
 | v0.10.13 — v1 Shipped Baseline | 1–6 | Event-sourced core, cert lifecycle, K8s operator, OTel, split-horizon DNS output, aggregate compaction |
 | v0.11.0 — K8s-Native Automation | 7–8 | Gateway API routes (HTTPRoute/GRPCRoute/TLSRoute) and LoadBalancer/NodePort Services auto-populate router DNS |
 | v0.12.0 — Hook Reliability & Metrics | 9 | Post-edit hooks emit metrics and no longer block the write path; per-hook configurable timeouts |
+| v0.13.0 — Consumer-Owned Output | 1 | Caller-supplied templates rendered client-side, one-shot and as a self-healing sink, over a new `WatchHosts` RPC; every snapshot carries a monotonic change ID |
 
-**Next:** v0.13.0 — Consumer-Owned Output. Moves output rendering from the
-server to the consumer, so one stateful server can feed N independent consumers
-without accreting a per-resolver format for each.
+**Next:** not yet defined. Run `/gsd-new-milestone` to scope it. Three parked
+items sit in the ROADMAP backlog (999.1–999.3): wire the e2e tiers into CI
+(#403), close the hardware-dependent verification gap, and finish server-side
+lazy streaming (#400/#401).
 
 > **Phase numbering restarted at this milestone.** v0.10.13 through v0.12.0 used
 > continuous numbering (phases 1–9). v0.13.0 restarts at Phase 1. When a
@@ -24,26 +26,31 @@ without accreting a per-resolver format for each.
 > sequence; phase references in this milestone's live artifacts are v0.13.0-local.
 > Archived phase directories live under `milestones/<version>-phases/`.
 
-## Current Milestone: v0.13.0 Consumer-Owned Output
+## Current Milestone
+
+None active. v0.13.0 closed 2026-08-02; the next milestone is unscoped.
+
+<details>
+<summary>Shipped: v0.13.0 Consumer-Owned Output</summary>
 
 **Goal:** A consumer defines its own output format and keeps it current, so one
 stateful server feeds N independent consumers and new resolver formats stop
 requiring an upstream release.
 
-**Target features:**
+Approved 2026-07-25 from #364. Absorbed #23 (lazy `ExportHosts`) as TMPL-06
+and #38 (client-side collection bound) as TMPL-07. TMPL-02 was called the
+highest-risk requirement at planning time — once consumers depend on a template
+field set, that set becomes a compatibility obligation the proto does not cover;
+it was handled with an explicit version gate rather than left implicit.
 
-- Template-rendered output — the caller supplies the template, the server renders host data through it
-- Sink mode — a long-lived invocation that holds the rendered artifact current as host data changes, without polling
-- A documented, versioned template data contract, treated as an explicit compatibility surface
-- Fail-loud rendering: an undefined key or a render error never produces a partial, empty, or half-written artifact
-- Lazy streaming end to end, so neither server nor client can be driven out of memory by the other
+All eight requirements (TMPL-01…08) shipped. TMPL-06 was amended mid-milestone
+after cross-AI review: the original "O(1) memory" claim overreached, since
+chunked sends do not deliver it, so storage-layer laziness was descoped
+to #400/#401 and the requirement rewritten as bounded wire messages with client
+backpressure. `unbound_conf_path` (#349) and existing `ExportHosts` format
+strings stayed out of scope and were left unchanged.
 
-**Key context:** Approved 2026-07-25 from #364, the only `approved-feature` in
-the backlog. Absorbs #23 (lazy `ExportHosts`) as TMPL-06 and #38 (client-side
-collection bound) as TMPL-07. TMPL-02 is the highest-risk requirement — once
-consumers depend on a template field set, that set becomes a compatibility
-obligation the proto contract does not cover. Explicitly out of scope:
-`unbound_conf_path` behavior (#349) and the existing `ExportHosts` format strings.
+</details>
 
 ## Core Value
 
@@ -94,8 +101,10 @@ Open forward work toward the north star. Building toward these.
 
 - **Stack transition (history):** The system was originally implemented in Rust (crates, kube-rs, instant-acme). The 2026-02-22 Go migration superseded that stack; the current codebase is Go 1.26, SQLite-only via `zombiezen.com/go/sqlite` (no CGo), with a Go `cmd/operator`. Rust-era design/plan docs (sqlite-default-\*, acme-pebble-testing, operator-impl, service-controller-impl) are historical intent, not current architecture.
 - **Requirements provenance:** No PRDs exist. Requirements are reconstructed from 10 SPEC design docs and inferred from the mapped Go codebase, gated by four locked ADRs.
-- **Operator reality (after Phase 7):** Three controller families are registered — HostMapping, IngressRoute/IngressRouteTCP, and Gateway API routes (one `GatewayRouteReconciler` per kind for HTTPRoute/GRPCRoute/TLSRoute, sharing one `syncRoute` core and the single `router-hosts.fzymgc.house/gateway-cleanup` finalizer). Only the HostMapping CRD ships; Gateway API CRDs are a documented cluster prerequisite the chart deliberately does not bundle, and each kind is gated on RESTMapper presence so absent CRDs skip cleanly instead of crash-looping the manager. The Service controller (designed in the Rust era, never ported) is now the remaining concrete north-star gap.
-- **Known refinement areas** (from codebase concerns): oversized `service.go`/`commands.go`; in-tree Rust-era `legacy_migration.go`; pre-release protobuf pseudo-version pin.
+- **Operator reality (after Phase 8):** Four controller families are registered — HostMapping, IngressRoute/IngressRouteTCP, Gateway API routes (one `GatewayRouteReconciler` per kind for HTTPRoute/GRPCRoute/TLSRoute, sharing one `syncRoute` core and the single `router-hosts.fzymgc.house/gateway-cleanup` finalizer), and Services. Only the HostMapping CRD ships; Gateway API CRDs are a documented cluster prerequisite the chart deliberately does not bundle, and each kind is gated on RESTMapper presence so absent CRDs skip cleanly instead of crash-looping the manager. The Service controller was built fresh in Go and shipped in v0.11.0, closing what was previously the north star's last concrete gap; it is **not yet deployed** — see the rollout note under Validated.
+- **Consumer surface (after v0.13.0):** Output rendering is no longer server-owned. `render` and `watch` execute caller-supplied templates in the consumer's own process, so adding a resolver format needs no upstream release and the server never parses template text. Three e2e tiers now exist — `e2e` (in-process), `docker_e2e` (containerized server), and `proc_e2e` (real OS processes, the only tier that observes CLI-flag resolution).
+- **Codebase state:** 86.3% test coverage against an enforced 80% floor; `task test`, all three e2e tiers, and `task build` green as of the v0.13.0 audit.
+- **Known refinement areas** (from codebase concerns): oversized `service.go`/`commands.go`; in-tree Rust-era `legacy_migration.go`; pre-release protobuf pseudo-version pin; no e2e tier gates CI (#403).
 
 ## Constraints
 
@@ -168,4 +177,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-08-02 after Phase 1 — Consumer-Rendered Output validated (TMPL-01…08); milestone v0.13.0 is 100% complete and ready to close*
+*Last updated: 2026-08-02 after the v0.13.0 milestone — Consumer-Owned Output shipped (PR #404); next milestone unscoped*
