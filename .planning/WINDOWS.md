@@ -1,10 +1,10 @@
 ---
 schema_version: 1
-open_count: 1
-waived_count: 0
+open_count: 0
+waived_count: 1
 fixed_count: 0
 total_count: 1
-last_updated: 2026-08-01T19:45:10.272Z
+last_updated: 2026-08-02T01:00:10.586Z
 ---
 
 # Broken Windows Ledger
@@ -15,7 +15,7 @@ last_updated: 2026-08-01T19:45:10.272Z
 
 | id | phase | kind | file | line | description | status | reason | recorded_at | resolved_at |
 |----|-------|------|------|------|-------------|--------|--------|-------------|-------------|
-| 1 | 01 | deviation | internal/client/commands/watch_test.go |  | 01-07: TestWatchPolicy_StatusIntervalDefaultsFromPolicy/_ExplicitStatusIntervalFlagOverridesPolicy moved from watchpolicy_test.go (Task 1) to watch_test.go (Task 2) as TestWatch_*, since they exercise newWatchCmd's own flag registration which does not exist until Task 2 lands. | open |  | 2026-08-01T19:45:10.272Z |  |
+| 1 | 01 | deviation | internal/client/commands/watch_test.go |  | 01-07: TestWatchPolicy_StatusIntervalDefaultsFromPolicy/_ExplicitStatusIntervalFlagOverridesPolicy moved from watchpolicy_test.go (Task 1) to watch_test.go (Task 2) as TestWatch_*, since they exercise newWatchCmd's own flag registration which does not exist until Task 2 lands. | waived | Sequencing consequence, not a defect: TestWatch_StatusIntervalDefaultsFromPolicy/_ExplicitStatusIntervalFlagOverridesPolicy exercise newWatchCmd's own flag registration, which does not exist until plan 01-07 Task 2. Both tests exist and pass in watch_test.go; no coverage lost. Moving them back would not compile. | 2026-08-01T19:45:10.272Z | 2026-08-02T01:00:10.586Z |
 
 ````json
 [
@@ -26,10 +26,10 @@ last_updated: 2026-08-01T19:45:10.272Z
     "file": "internal/client/commands/watch_test.go",
     "line": null,
     "description": "01-07: TestWatchPolicy_StatusIntervalDefaultsFromPolicy/_ExplicitStatusIntervalFlagOverridesPolicy moved from watchpolicy_test.go (Task 1) to watch_test.go (Task 2) as TestWatch_*, since they exercise newWatchCmd's own flag registration which does not exist until Task 2 lands.",
-    "status": "open",
-    "reason": "",
+    "status": "waived",
+    "reason": "Sequencing consequence, not a defect: TestWatch_StatusIntervalDefaultsFromPolicy/_ExplicitStatusIntervalFlagOverridesPolicy exercise newWatchCmd's own flag registration, which does not exist until plan 01-07 Task 2. Both tests exist and pass in watch_test.go; no coverage lost. Moving them back would not compile.",
     "recorded_at": "2026-08-01T19:45:10.272Z",
-    "resolved_at": null
+    "resolved_at": "2026-08-02T01:00:10.586Z"
   }
 ]
 ````
