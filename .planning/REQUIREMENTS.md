@@ -168,27 +168,27 @@ v0.14.0 Phase 1 are different phases.
 | TMPL-06 | v0.13.0 | Phase 1 | Complete |
 | TMPL-07 | v0.13.0 | Phase 1 | Complete |
 | TMPL-08 | v0.13.0 | Phase 1 | Complete |
-| CI-01 | **v0.14.0** | TBD | Pending |
-| CI-02 | **v0.14.0** | TBD | Pending |
-| CI-03 | **v0.14.0** | TBD | Pending |
-| CI-04 | **v0.14.0** | TBD | Pending |
-| VRFY-01 | **v0.14.0** | TBD | Pending |
-| VRFY-02 | **v0.14.0** | TBD | Pending |
-| VRFY-03 | **v0.14.0** | TBD | Pending |
-| VRFY-04 | **v0.14.0** | TBD | Pending |
-| VRFY-05 | **v0.14.0** | TBD | Pending |
-| LAZY-01 | **v0.14.0** | TBD | Pending |
-| LAZY-02 | **v0.14.0** | TBD | Pending |
-| LAZY-03 | **v0.14.0** | TBD | Pending |
-| LAZY-04 | **v0.14.0** | TBD | Pending |
+| CI-01 | **v0.14.0** | Phase 1 | Pending |
+| CI-02 | **v0.14.0** | Phase 1 | Pending |
+| CI-03 | **v0.14.0** | Phase 1 | Pending |
+| CI-04 | **v0.14.0** | Phase 1 | Pending |
+| VRFY-01 | **v0.14.0** | Phase 3 | Pending |
+| VRFY-02 | **v0.14.0** | Phase 3 | Pending |
+| VRFY-03 | **v0.14.0** | Phase 3 | Pending |
+| VRFY-04 | **v0.14.0** | Phase 3 | Pending |
+| VRFY-05 | **v0.14.0** | Phase 1 | Pending |
+| LAZY-01 | **v0.14.0** | Phase 2 | Pending |
+| LAZY-02 | **v0.14.0** | Phase 2 | Pending |
+| LAZY-03 | **v0.14.0** | Phase 2 | Pending |
+| LAZY-04 | **v0.14.0** | Phase 2 | Pending |
 
 **Coverage:**
 
 - v1 requirements: 46 total (33 shipped / Complete, 13 active / Pending)
-- Mapped to phases: 33 (v0.14.0 phase mapping filled by the roadmapper)
-- Unmapped: 13 (all v0.14.0, pending roadmap)
+- Mapped to phases: 46 — v0.14.0's 13 mapped 2026-08-02 (Phase 1 x5, Phase 2 x4, Phase 3 x4)
+- Unmapped: 0
 
 ---
 
 *Requirements defined: 2026-07-07*
-*Last updated: 2026-08-02 defining v0.14.0 Verification & Lazy Reads (CI-01…04, VRFY-01…05, LAZY-01…04)*
+*Last updated: 2026-08-02 mapping v0.14.0's 13 requirements to phases 1-3 (roadmap created)*

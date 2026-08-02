@@ -3,10 +3,10 @@ gsd_state_version: 1.0
 milestone: v0.14.0
 milestone_name: Verification & Lazy Reads
 status: planning
-last_updated: "2026-08-02T18:01:54.253Z"
+last_updated: "2026-08-02T18:43:17.000Z"
 last_activity: 2026-08-02
 progress:
-  total_phases: 0
+  total_phases: 3
   completed_phases: 0
   total_plans: 0
   completed_plans: 0
@@ -20,19 +20,24 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-02)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** None — v0.13.0 shipped and archived. Next milestone unscoped (`/gsd-new-milestone`); three items parked in the ROADMAP backlog.
+**Current focus:** v0.14.0 roadmapped into 3 phases. Next action: plan Phase 1 (CI Gating for the e2e Tiers).
 
-> **Phase numbering restarted at v0.13.0.** Phases 1–9 belong to the previous
-> continuous sequence (v0.10.13–v0.12.0) and are archived under
-> `milestones/<version>-phases/`. A bare "Phase 1" in this milestone's live
-> artifacts means Consumer-Rendered Output, not the shipped Event-Sourced Host Core.
+> **Phase numbering restarted at v0.13.0 and again at v0.14.0.** Phases 1–9
+> belong to the previous continuous sequence (v0.10.13–v0.12.0) and are archived
+> under `milestones/<version>-phases/`. A bare "Phase 1" in this milestone's live
+> artifacts means CI Gating for the e2e Tiers — not the shipped Event-Sourced
+> Host Core (v0.10.13) and not Consumer-Rendered Output (v0.13.0).
+> `.planning/phases/` was emptied at the reset; new phase directories start at
+> `01-`.
 
 ## Current Position
 
-Phase: Not started (defining requirements)
+Phase: 1 — CI Gating for the e2e Tiers (not started)
 Plan: —
-Status: Defining requirements
-Last activity: 2026-08-02 — Milestone v0.14.0 started
+Status: Roadmap created; awaiting phase planning
+Last activity: 2026-08-02 — v0.14.0 roadmap created (3 phases, 13/13 requirements mapped)
+
+Progress: [                    ] 0% (0/3 phases)
 
 ## Performance Metrics
 
@@ -50,11 +55,11 @@ Last activity: 2026-08-02 — Milestone v0.14.0 started
 | 7 | 6 | - | - |
 | 8 | 5 | - | - |
 | 9 | 5 | - | - |
-| 01 | 11 | - | - |
+| 01 (v0.13.0) | 11 | - | - |
 
 **Recent Trend:**
 
-- Last shipped release: v0.10.13
+- Last shipped release: v0.13.0 (2026-08-02, PR #404)
 - Trend: Stable (mature, in-production)
 
 *Updated after each plan completion*
@@ -97,9 +102,12 @@ Last activity: 2026-08-02 — Milestone v0.14.0 started
 Decisions are logged in PROJECT.md (Key Decisions table + Locked Decisions ADR blocks).
 Load-bearing locked decisions affecting current/forward work:
 
-- **router-hosts-bzg** (LOCKED): unbound per-name `local-zone static` — Phase 5 output constraint
-- **router-hosts-v5b / -vl8 / -4w2** (LOCKED): compaction via HostCompacted seed, manual scope, GetAtTime sacrificed — Phase 6
+- **router-hosts-bzg** (LOCKED): unbound per-name `local-zone static` — constrains v0.14.0 Phase 3's resolver-reload assertion (an unmanaged sibling name MUST still resolve)
+- **router-hosts-v5b** (LOCKED): compaction via `HostCompacted` seed at the preserved OCC version — the target a v0.14.0 Phase 2 cursor jumps to when its aggregate is compacted mid-stream (LAZY-03)
+- **router-hosts-vl8 / -4w2** (LOCKED): manual compaction scope, GetAtTime sacrificed — Phase 6
 - **Rust → Go migration (2026-02-22)**: current stack is Go/SQLite-only; Rust-era Service-controller design was never ported (Phase 8 gap)
+- [v0.14.0 roadmap]: VRFY-05 (shared wait-strategy readiness helper) assigned to Phase 1, not Phase 3 — two of its three named consumers (`docker_e2e`, `proc_e2e`) become merge gates in Phase 1, and the tree already carries five ad-hoc pollers plus six bare `time.Sleep` calls in the `e2e` tier
+- [v0.14.0 roadmap]: phase order 1 → 2 → 3 is a de-risking choice, not a build dependency — the three capabilities are independent
 - [Phase ?]: D-09 confirmed at plan checkpoint: single gatewayCleanupFinalizer (router-hosts.fzymgc.house/gateway-cleanup) shared across all three Gateway API route kinds, not per-kind finalizers
 - [Phase ?]: Fixed pre-existing lefthook.yaml regex-vs-glob bug in check-yaml exclude (Rule 3, blocking); added .yamlfmt.yaml with retain_line_breaks:true to preserve values.yaml formatting style
 - [Phase ?]: Gateway API RBAC: write verbs (update/patch) only on httproutes/grpcroutes/tlsroutes for finalizer+annotation write-back; gateways stays read-only get/list/watch
@@ -163,22 +171,22 @@ Load-bearing locked decisions affecting current/forward work:
 
 ### Pending Todos
 
-None yet.
+Open planning questions the v0.14.0 roadmap deliberately left unresolved (each
+must be answered during that phase's planning, not discovered during execution):
+
+- **Phase 2 — `ExportHosts` format scope:** the `hosts` and `json` formats sort globally by IP-then-hostname before rendering, so a read-layer cursor does not by itself bound their memory. Decide explicitly: descope them (leave materialized, name the residual O(N entries)) or restructure the sort. Must be settled before the LAZY-02 benchmark is written.
+- **Phase 2 — memory measurement rig:** fixture size, benchmark pattern, and the concrete bound to assert.
+- **Phase 3 — harness runtime:** research proposes `testcontainers-go` v0.43.0 behind its own build tag (testing-only, quarantined from shipped binaries) and a digest-pinned Alpine `unbound` image; both are planning decisions, not roadmap commitments.
 
 ### Blockers/Concerns
 
 - **[Codebase]**: `service.go` (1033 LOC) and `commands.go` (519 LOC) are merge hotspots; in-tree `legacy_migration.go` is a permanent maintenance surface pending a removal milestone.
-- **[Ship / tooling]**: `/gsd-ship`'s ship-note commit carries a `[ci skip]` marker, which is unsafe here: `protect-main` requires `CI (Go) Complete` and `Vulnerability check` on the **head** SHA, and `ci-go.yml` triggers only on `pull_request`, so a skipped head leaves both contexts unreported and the PR `BLOCKED`. Strip the marker from the ship note, or add `workflow_dispatch` to `ci-go.yml` so a stuck SHA can be re-dispatched.
+- **[Ship / tooling]**: `/gsd-ship`'s ship-note commit carries a `[ci skip]` marker, which is unsafe here: `protect-main` requires `CI (Go) Complete` and `Vulnerability check` on the **head** SHA, and `ci-go.yml` triggers only on `pull_request`, so a skipped head leaves both contexts unreported and the PR `BLOCKED`. Strip the marker from the ship note, or add `workflow_dispatch` to `ci-go.yml` so a stuck SHA can be re-dispatched. **Phase 1 touches `ci-go.yml` and the required-check set directly — resolve or re-verify this there.**
 - **[CI / unexplained]**: during PR #404, GitHub created no `github-actions` check suite for three consecutive head commits and a close/reopen, then recovered on its own ~15 minutes later. Ruled out at the time: workflow config (base and head copies identical; no `paths`/`types`/`concurrency` filters), Actions disabled (`enabled`, workflow `state=active`), and a service incident (githubstatus Actions operational). The `[ci skip]` marker explains only the first commit. Cause never identified. Watch for a recurrence; a throwaway PR from a scratch branch would tell PR-specific from repo-wide.
+- **[v0.13.0 Phase 1]**: reports `uat-passed: false` permanently — UAT test 42 and four manual deployment checks recorded NOT-RUN. This is v0.14.0 Phase 3's acceptance bar (VRFY-04), not a standing concern to be waived.
 
-Parked to the ROADMAP backlog at milestone close (see `.planning/ROADMAP.md`):
-999.1 wire the e2e tiers into CI (#403), 999.2 close the hardware-dependent
-verification gap (UAT 42 + four manual deployment checks), 999.3 server-side
-lazy streaming for `store.ListAll` (#400, #401).
-
-Resolved and removed at this milestone close: the WINDOWS.md ship-gate blocker
-(window 1 waived, `open_count: 0`); phase 1 verification and CI debt (now
-tracked as backlog 999.1–999.3 rather than as open concerns).
+Backlog items 999.1, 999.2, and 999.3 were **promoted** into this milestone on
+2026-08-02 as Phases 1, 3, and 2 respectively; they are no longer parked.
 
 ### Quick Tasks Completed
 
@@ -194,13 +202,16 @@ Items acknowledged and carried forward:
 |----------|------|--------|-------------|
 | Storage/History | Snapshot tables + auto-compaction (v2 HIST-01/02) | Deferred (YAGNI, ADR vl8) | 2026-07-07 |
 | Maintainability | Remove Rust-era `legacy_migration.go` (v2 DEBT-01) | Deferred | 2026-07-07 |
+| CI | Nightly-scheduled e2e cadence; flake-quarantine convention | Out of scope for v0.14.0 | 2026-08-02 |
+| Storage | Materialized/indexed read model for sorted pagination | Out of scope for v0.14.0 | 2026-08-02 |
 
 ## Session Continuity
 
 Last session: 2026-08-02
-Stopped at: Phase 01 complete (UAT 57 pass / 1 skipped, verification passed, transition applied by explicit operator decision). Milestone v0.13.0 is 100% complete — ready to close.
+Stopped at: v0.14.0 roadmap created — 3 phases, all 13 pending requirements (CI-01…04, VRFY-01…05, LAZY-01…04) mapped, no orphans. `.planning/phases/` is empty; phase directories start at `01-`.
 Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Plan the first phase with `/gsd-plan-phase 1` (CI Gating for the e2e Tiers)
+- Optionally clarify approach first with `/gsd-discuss-phase 1`

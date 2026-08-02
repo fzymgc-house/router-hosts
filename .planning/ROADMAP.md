@@ -10,12 +10,19 @@ axis: output rendering moved from the server to the consumer, so one stateful
 server feeds N independent consumers without accreting a per-resolver output
 format for each.
 
-> **Phase numbering restarted at v0.13.0.** Milestones v0.10.13–v0.12.0 used a
-> single continuous sequence (phases 1–9). Where an archived document says
-> "Phase 1" it means Event-Sourced Host Core; in v0.13.0 it means
-> Consumer-Rendered Output. Historical phase detail and phase directories are
-> archived under `milestones/<version>-ROADMAP.md` and
-> `milestones/<version>-phases/`.
+**v0.14.0 does not open a third axis.** It finishes what v0.13.0 deliberately
+deferred: make the three e2e tiers gate merges, containerize the deployment
+verifications that needed a second physical machine and run them green, and stop
+`store.ListAll` folding full event history into memory before the first byte
+ships. Every requirement in this milestone closes a gap this project already
+wrote down.
+
+> **Phase numbering restarted at v0.13.0 and again at v0.14.0.** Milestones
+> v0.10.13–v0.12.0 used a single continuous sequence (phases 1–9). Where an
+> archived document says "Phase 1" it means Event-Sourced Host Core; in v0.13.0
+> it means Consumer-Rendered Output; in this milestone it means CI Gating for
+> the e2e Tiers. Historical phase detail and phase directories are archived
+> under `milestones/<version>-ROADMAP.md` and `milestones/<version>-phases/`.
 
 ## Milestones
 
@@ -23,7 +30,7 @@ format for each.
 - ✅ **v0.11.0 — K8s-Native Automation** — Phases 7–8 (shipped 2026-07-30, PR #381)
 - ✅ **v0.12.0 — Hook Reliability & Metrics** — Phase 9 (shipped 2026-07-31, PR #389)
 - ✅ **v0.13.0 — Consumer-Owned Output** — Phase 1 (shipped 2026-08-02, PR #404)
-- 📋 **Next milestone** — not yet defined (`/gsd-new-milestone`)
+- 🚧 **v0.14.0 — Verification & Lazy Reads** — Phases 1–3 (in progress, started 2026-08-02)
 
 ## Phases
 
@@ -74,7 +81,133 @@ satisfied. Two gap-closure plans (01-10, 01-11) added after UAT found G-01-1.
 
 </details>
 
+### 🚧 v0.14.0 — Verification & Lazy Reads (Phases 1–3)
+
+**Milestone Goal:** The three e2e tiers gate merges, the hardware-dependent
+deployment verifications run green in containers on one machine, and streaming
+reads stop materializing full event history server-side.
+
+**Phase Numbering:**
+
+- Numbering is milestone-local from v0.13.0 onward and restarts at 1 each milestone
+- Integer phases (1, 2, 3): Planned milestone work
+- Decimal phases (1.1, 1.2): Urgent insertions (marked INSERTED)
+
+**v0.14.0 phases:**
+
+- [ ] **Phase 1: CI Gating for the e2e Tiers** - All three tiers run in CI, gate merges, and are proven able to fail
+- [ ] **Phase 2: Cursor-Based Lazy Storage Reads** - `HostProjection` pages by aggregate ID so streaming stops folding full event history into memory
+- [ ] **Phase 3: Containerized Deployment-Verification Harness** - Real unbound plus two sink containers run UAT 42 and the four blocked deployment checks green
+
+## 🚧 v0.14.0 — Verification & Lazy Reads (Phase Details)
+
+### Phase 1: CI Gating for the e2e Tiers
+
+**Goal**: A change cannot reach `main` without all three e2e tiers having actually run against it — and each gate has been watched going red, so "never observed to fail" is ruled out.
+**Depends on**: Nothing in this milestone. The three tiers already exist and pass from v0.13.0 Phase 1; this is wiring, not new test code.
+**Requirements**: CI-01, CI-02, CI-03, CI-04, VRFY-05
+**Success Criteria** (what must be TRUE):
+
+1. Opening a PR runs the fast `e2e` tier, and merging to `main` is blocked until `docker_e2e` and `proc_e2e` have also run and passed — reported through a single aggregated required check that fails if any tier fails, so no merge can land on a tier nobody made required. `proc_e2e` is required because it is the only tier that observes the CLI-flag→config seam that G-01-1 shipped through
+2. A container tier on a host without Docker fails the job loudly instead of skipping, and `proc_e2e` builds the binary fresh in the same job rather than restoring a cached `bin/` — so neither tier can report green while testing nothing
+3. Each new gate has been demonstrated **red**: a deliberately reintroduced regression is pushed, the failing run is linked, and only then is the gate accepted
+4. Every readiness wait in `e2e`, `docker_e2e`, and `proc_e2e` runs through one shared bounded-timeout polling helper — the bare `time.Sleep` synchronizations in `e2e/e2e_test.go` are gone, and a timeout is reported as a failure rather than falling through to an assertion
+
+**Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run `/gsd-plan-phase 1`)
+
+**Why first**: zero shipped-source risk, closes #403, and establishes the CI job
+pattern the later phases reuse. It also puts the cursor refactor (Phase 2) under
+e2e coverage that actually gates, rather than repeating the G-01-1 blind spot.
+
+**VRFY-05 placement note**: the shared wait-strategy helper is a `VRFY-*`
+requirement but lands here, not in Phase 3. Two of its three named consumers
+(`docker_e2e`, `proc_e2e`) become merge gates in this phase, and the tree today
+carries five separate ad-hoc pollers (`waitForServer`, `waitForDockerServer`,
+`waitForProcAddr`, `waitForFileContent`, `waitForSidecar`) plus six bare
+`time.Sleep` calls in the `e2e` tier. Building the helper in Phase 3 would mean
+Phase 1 reinvents it first — exactly what the requirement forbids.
+
+### Phase 2: Cursor-Based Lazy Storage Reads
+
+**Goal**: A read of the host set no longer requires the server to replay every aggregate's full event log into memory before the first byte ships — and the memory claim is measured, not asserted.
+**Depends on**: Phase 1 (not a build dependency — sequenced so this API-surface change lands under e2e tiers that actually gate merges)
+**Requirements**: LAZY-01, LAZY-02, LAZY-03, LAZY-04
+**Success Criteria** (what must be TRUE):
+
+1. `storage.HostProjection` exposes a cursor-based read keyed on aggregate ID (keyset, never `OFFSET`), and a caller pages through the complete entry set without the store folding every aggregate's history into memory at once. This is a published interface change, not an internal optimization
+2. A measured benchmark (`AllocsPerRun`/memstats) against a 10k+ entry fixture records a concrete number showing `ExportHosts`/`WatchHosts` peak allocation tracking page size rather than total event-log size. The claim is never made from API shape — TMPL-06 already had to be publicly amended for exactly that overreach
+3. Compacting an aggregate while a cursor sits inside its pre-compaction history leaves the reader at that aggregate's `HostCompacted` seed event at the preserved OCC version (ADR router-hosts-v5b), documented and pinned by a test rather than left implicit
+4. Rendered output is byte-identical before and after the change for every format, so no consumer template and no pinned fixture breaks
+
+**Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run `/gsd-plan-phase 2`)
+
+**Highest-risk requirement**: LAZY-02. The cursor is necessary but not
+sufficient — `ExportHosts`' `hosts` and `json` formats sort globally by
+IP-then-hostname before rendering, so a cursor at the read layer does not by
+itself bound their memory. Whether those formats are descoped (left materialized,
+with the residual O(N entries) named explicitly) or the sort is restructured is a
+**planning decision that must be made before the benchmark is written**, not
+discovered while writing it.
+
+**Explicitly out of scope**: a materialized or indexed read model for sorted
+pagination, generic multi-writer gap detection, and exactly-once delivery
+guarantees — all three are recorded Out of Scope in REQUIREMENTS.md. A
+cross-call server-side cache or snapshot would reintroduce the first by
+accident.
+
+### Phase 3: Containerized Deployment-Verification Harness
+
+**Goal**: The deployment verifications that needed a second physical machine run green on one machine, retiring v0.13.0 Phase 1's permanent `uat-passed: false`.
+**Depends on**: Phase 1 (reuses the shared readiness helper and the CI job pattern), Phase 2 (validates a settled read path rather than a moving target)
+**Requirements**: VRFY-01, VRFY-02, VRFY-03, VRFY-04
+**Success Criteria** (what must be TRUE):
+
+1. An operator runs the deployment-verification suite on a single machine — locally and in CI — against a real unbound container plus two independent sink containers on a shared Docker network, with no second physical host anywhere in the path
+2. The resolver-reload check queries the running unbound container and asserts a **real DNS answer** for the regenerated name, and asserts that an unmanaged sibling name still resolves normally — no zone-wide NXDOMAIN leak, per ADR router-hosts-bzg. "The file changed" or "the container is healthy" does not satisfy this
+3. The two-node convergence check forces a pre/post state difference and then asserts both sinks report the same monotonic change ID (TMPL-08), so "converged" is distinguishable from "never diverged" — and a timeout is recorded as a failure, never as success
+4. UAT test 42 (resolver reload plus two-node convergence) and the four manual deployment checks from plan 01-08 have **executed and passed** in the harness, and v0.13.0 Phase 1 no longer reports `uat-passed: false`
+
+**Plans**: TBD
+
+Plans:
+
+- [ ] TBD (run `/gsd-plan-phase 3`)
+
+**The bar is green, not built.** Criterion 4 is the milestone's sharpest
+acceptance line: a harness that exists and runs but has not retired v0.13.0
+Phase 1's `uat-passed: false` leaves this milestone's stated goal unmet. The
+predicate counts only `pass`/`passed`, so a recorded `not-run` still fails it.
+
+**Explicitly out of scope**: a nightly-scheduled e2e cadence and a
+flake-quarantine convention — both recorded Out of Scope in REQUIREMENTS.md.
+Two gating events only (PR, merge to `main`).
+
 ## Progress
+
+**Execution Order:**
+Phases execute in numeric order: 1 → 2 → 3. The three capabilities have no hard
+build dependency on one another; this order is chosen to de-risk, not because it
+is forced. CI wiring first (zero shipped-source risk, establishes the job
+pattern), then the cursor refactor under real gating coverage, then the harness
+against a settled read path.
+
+**Current milestone (v0.14.0):**
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. CI Gating for the e2e Tiers | 0/TBD | Not started | - |
+| 2. Cursor-Based Lazy Storage Reads | 0/TBD | Not started | - |
+| 3. Containerized Deployment-Verification Harness | 0/TBD | Not started | - |
+
+**Shipped (previous milestones):**
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
@@ -92,8 +225,8 @@ satisfied. Two gap-closure plans (01-10, 01-11) added after UAT found G-01-1.
 ## Backlog
 
 Unsequenced items parked from the v0.13.0 milestone audit
-(`.planning/v0.13.0-MILESTONE-AUDIT.md`) and imported from the GitHub issue
-tracker. Promote with `/gsd-review-backlog`.
+(`.planning/milestones/v0.13.0-MILESTONE-AUDIT.md`) and imported from the GitHub
+issue tracker. Promote with `/gsd-review-backlog`.
 
 **Source tracking (normative).** Every backlog item carries a `**Source:**`
 field naming the GitHub issue it came from, or `none` for items with no issue.
@@ -104,50 +237,13 @@ while its source issue remains open. There is no automatic sync in either
 direction: the ROADMAP does not import new issues and closing an issue does not
 update this file, so both edges are maintained by hand.
 
-### Phase 999.1: Wire the three e2e tiers into CI (BACKLOG)
-
-**Goal:** `e2e`, `docker_e2e`, and `proc_e2e` gate merges instead of being
-developer-only. `proc_e2e` is the only tier that observes the CLI-flag to config
-seam — the exact blind spot that let blocker G-01-1 ship green through 45 UAT
-items — and it currently does not gate anything. Tracked as #403 (threat
-T-01-G1-13, disposition accept).
-**Source:** GH #403 — close on completion.
-**Requirements:** TBD
-**Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (promote with /gsd-review-backlog when ready)
-
-### Phase 999.2: Close the hardware-dependent verification gap (BACKLOG)
-
-**Goal:** Run the verifications this environment cannot: UAT test 42 (resolver
-reload plus two-node convergence) and the four manual deployment checks from plan
-01-08, all recorded NOT-RUN in `01-VALIDATION.md`. Needs a real unbound host and a
-second machine. Until then phase 01 reports `uat-passed: false` permanently,
-because the predicate counts only `pass`/`passed`.
-**Source:** none — originated in the v0.13.0 milestone audit.
-**Requirements:** TBD
-**Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (promote with /gsd-review-backlog when ready)
-
-### Phase 999.3: Server-side lazy streaming for store.ListAll (BACKLOG)
-
-**Goal:** Finish the half of TMPL-06 that was explicitly descoped. The wire is
-bounded and the client refuses an unbounded response, but `store.ListAll` still
-enumerates every aggregate and replays its full event log into memory before the
-first byte is sent. Needs a cursor-based `storage.HostProjection` method. Tracked
-as #400 (absorbs #23's wire-layer half) and #401.
-**Source:** GH #400, #401, #23 — close all three on completion.
-**Requirements:** TBD
-**Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (promote with /gsd-review-backlog when ready)
+<!-- 999.1 (GH #403, wire the e2e tiers into CI), 999.2 (close the
+     hardware-dependent verification gap), and 999.3 (GH #400/#401/#23,
+     server-side lazy streaming) were PROMOTED into milestone v0.14.0 on
+     2026-08-02 as Phases 1, 3, and 2 respectively. Their numbers are
+     intentionally left unused rather than reclaimed — backlog numbers are
+     published in GitHub issue comments, so renumbering would invalidate
+     external references. Sparse numbering is expected here. -->
 
 ### Phase 999.4: Event store size monitoring and warnings (BACKLOG)
 
