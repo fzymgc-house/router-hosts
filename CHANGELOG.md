@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1](https://github.com/fzymgc-house/router-hosts/compare/v0.13.0...v0.13.1) (2026-08-02)
+
+
+### Documentation
+
+* **docs:** reconcile GitHub issues with GSD planning backlog ([#411](https://github.com/fzymgc-house/router-hosts/issues/411)) ([aef39c9](https://github.com/fzymgc-house/router-hosts/commit/aef39c9a95dc0edb34a4ee1c046d29b8f1baf8fd))
+
+
+### Build System
+
+* **deps:** update ghcr.io/fzymgc-house/router-hosts:latest docker digest to b8ab7df ([#409](https://github.com/fzymgc-house/router-hosts/issues/409)) ([ad026c2](https://github.com/fzymgc-house/router-hosts/commit/ad026c22e8b12f58febb06a443a10215d4c79e6b))
+* **deps:** update ghcr.io/fzymgc-house/router-hosts:latest docker digest to e06bbd2 ([#407](https://github.com/fzymgc-house/router-hosts/issues/407)) ([ba438bb](https://github.com/fzymgc-house/router-hosts/commit/ba438bbced453df9db14c64c4a7d044cd1c9747a))
+
 ## [0.13.0](https://github.com/fzymgc-house/router-hosts/compare/v0.12.0...v0.13.0) (2026-08-02)
 
 
