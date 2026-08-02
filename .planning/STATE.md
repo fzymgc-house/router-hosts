@@ -5,16 +5,16 @@ milestone_name: Consumer-Owned Output
 current_phase: 01
 current_phase_name: consumer-rendered-output-templates-sink
 status: executing
-stopped_at: Completed 01-10-PLAN.md (gap closure G-01-1 plumbing)
-last_updated: "2026-08-01T23:08:27.677Z"
-last_activity: 2026-08-01
-last_activity_desc: Phase 01 execution started
+stopped_at: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1, phase 01 fully executed)
+last_updated: "2026-08-02T00:13:08.495Z"
+last_activity: 2026-08-02
+last_activity_desc: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1)
 progress:
   total_phases: 1
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 11
-  completed_plans: 10
-  percent: 0
+  completed_plans: 11
+  percent: 100
 ---
 
 # Project State
@@ -33,10 +33,10 @@ See: .planning/PROJECT.md (updated 2026-07-31)
 
 ## Current Position
 
-Phase: 01 (consumer-rendered-output-templates-sink) — EXECUTING
-Plan: 2 of 11
-Status: Ready to execute
-Last activity: 2026-08-01 — Phase 01 execution started
+Phase: 01 (consumer-rendered-output-templates-sink) — ALL PLANS COMPLETE
+Plan: 11 of 11
+Status: Ready for phase verification (/gsd-verify-work 01)
+Last activity: 2026-08-02 — Completed 01-11-PLAN.md (real-process e2e for gap G-01-1)
 
 ## Performance Metrics
 
@@ -92,6 +92,7 @@ Last activity: 2026-08-01 — Phase 01 execution started
 | Phase 01 P07 | 23min | 3 tasks | 9 files |
 | Phase 01 P08 | 62min | 3 tasks | 6 files |
 | Phase 01 P10 | 15min | 3 tasks | 6 files |
+| Phase 01 P11 | ~55min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -161,6 +162,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-08: docs/reference/cli.md kept as hand-maintained edit over task docs:build's regenerated output, which fails rumdl (missing code-fence language) — filed as issue #402
 - [Phase ?]: 01-08: all four manual deployment verifications recorded as explicitly NOT-RUN in 01-VALIDATION.md (no unbound host / no second machine in this environment), per operator checkpoint decision, mirroring phase 9's OTel-scrape precedent
 - [Phase ?]: 01-10: Explicit --config path branch placed in LoadClientConfig layer 1 (not applyClientOverrides layer 3), preserving file < env < flag precedence; fixes G-01-1 silent-fallback-to-XDG defect
+- [Phase ?]: 01-11: proc_e2e is a new build tag (not an e2e overload) with a real-process harness (os/exec on both sides); revert-and-observe confirmed the tracer test fails against pre-fix code and passes restored
+- [Phase ?]: 01-11: CI wiring for all three e2e tiers deferred; tracked as GitHub issue #403 (threat T-01-G1-13, disposition accept)
 
 ### Pending Todos
 
@@ -189,6 +192,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-01T23:08:27.668Z
-Stopped at: Completed 01-10-PLAN.md (gap closure G-01-1 plumbing)
+Last session: 2026-08-02T00:13:08.486Z
+Stopped at: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1, phase 01 fully executed)
 Resume file: None
