@@ -1,20 +1,16 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.13.0
-milestone_name: Consumer-Owned Output
-status: Awaiting next milestone
-stopped_at: Milestone v0.13.0 closed and archived. Next milestone unscoped — run /gsd-new-milestone.
-last_updated: "2026-08-02T12:40:43.840Z"
+milestone: v0.14.0
+milestone_name: Verification & Lazy Reads
+status: planning
+last_updated: "2026-08-02T18:01:54.253Z"
 last_activity: 2026-08-02
-last_activity_desc: Milestone v0.13.0 completed and archived
 progress:
-  total_phases: 1
-  completed_phases: 1
-  total_plans: 11
-  completed_plans: 11
-  percent: 100
-current_phase: 01
-current_phase_name: consumer-rendered-output-templates-sink
+  total_phases: 0
+  completed_phases: 0
+  total_plans: 0
+  completed_plans: 0
+  percent: 0
 ---
 
 # Project State
@@ -33,10 +29,10 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 
 ## Current Position
 
-Phase: Milestone v0.13.0 complete
+Phase: Not started (defining requirements)
 Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-08-02 — Milestone v0.13.0 completed and archived
+Status: Defining requirements
+Last activity: 2026-08-02 — Milestone v0.14.0 started
 
 ## Performance Metrics
 

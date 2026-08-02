@@ -26,9 +26,29 @@ lazy streaming (#400/#401).
 > sequence; phase references in this milestone's live artifacts are v0.13.0-local.
 > Archived phase directories live under `milestones/<version>-phases/`.
 
-## Current Milestone
+## Current Milestone: v0.14.0 Verification & Lazy Reads
 
-None active. v0.13.0 closed 2026-08-02; the next milestone is unscoped.
+**Goal:** Finish what v0.13.0 deliberately deferred — make the three e2e tiers
+gate merges, containerize the deployment verifications that needed a second
+physical machine and run them green, and stop `store.ListAll` folding full event
+history into memory before the first byte ships.
+
+**Target features:**
+
+- The three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) run in CI and gate merges — `proc_e2e` is the only tier that observes the CLI-flag→config seam
+- A containerized deployment-verification harness (real unbound container plus two sink containers) replacing the second-machine dependency
+- The blocked verifications actually executed green, not merely made runnable — retiring phase 1's permanent `uat-passed: false`
+- Cursor-based storage reads, so `ExportHosts`/`WatchHosts` stream without materializing every aggregate's full event log server-side
+
+**Key context:** Closes the three items this document already listed as Active
+rather than opening a new front — deliberately not a North Star push, and no new
+K8s-native capability. Promoted from backlog 999.1, 999.2, and 999.3. The
+harness bar is green-not-built: UAT test 42 (resolver reload plus two-node
+convergence) and the four manual deployment checks from plan 01-08 must run and
+pass, since a harness that exists but has not retired the gap leaves phase 1
+blocked exactly as before. The lazy read changes the `storage.HostProjection`
+interface, so it is an API surface and not an implementation swap. Closes #403,
+#400, #401, #23.
 
 <details>
 <summary>Shipped: v0.13.0 Consumer-Owned Output</summary>
@@ -177,4 +197,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-08-02 after the v0.13.0 milestone — Consumer-Owned Output shipped (PR #404); next milestone unscoped*
+*Last updated: 2026-08-02 starting milestone v0.14.0 — Verification & Lazy Reads (promotes backlog 999.1, 999.2, 999.3)*
