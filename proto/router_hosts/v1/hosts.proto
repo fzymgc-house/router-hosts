@@ -272,6 +272,93 @@ message ExportHostsResponse {
   bytes chunk = 1;
 }
 
+// Consumer-rendered output (sink streaming)
+
+// Opening (and, in follow mode, only) request on a WatchHosts stream.
+message WatchHostsRequest {
+  // Whether to keep the stream open and push a fresh snapshot on every
+  // change (sink mode) instead of closing after one snapshot (one-shot
+  // mode). Read only from the FIRST message on the stream; the server
+  // ignores this field on every later message, so a status-only message
+  // may leave it unset.
+  bool follow = 1;
+
+  // Sink status. Meaningful on EVERY message including the first: a
+  // reconnecting sink uses the opening message to report the state it
+  // already has on disk, and the server records it.
+  optional SinkStatus status = 2;
+}
+
+// Upstream health/status a sink reports on its WatchHosts stream.
+message SinkStatus {
+  // Unix seconds of the sink's last successful render+write.
+  int64 last_success_unix = 1;
+
+  // Consecutive render/write failures since the last success.
+  int32 consecutive_failures = 2;
+
+  // Template contract version this sink was built against.
+  string contract_version = 3;
+
+  // Change ID (see SnapshotComplete.change_id) this sink last rendered.
+  //
+  // The server records this value and reports it upstream through metrics;
+  // the server never consults it when deciding what to send. Using it to
+  // decide what to send would make it a resume token and break the
+  // stateless-server constraint (D-06, D-08).
+  string rendered_change_id = 4;
+
+  // Whether the sink's post-write reload hook failed on its last cycle.
+  // Distinguishes "your zone file is correct but your resolver did not
+  // pick it up" (reload_failed = true) from "your zone file is old"
+  // (last_success_unix is stale) — a different page.
+  bool reload_failed = 5;
+
+  // Unix seconds of the sink's last successful reload-hook run.
+  int64 last_reload_success_unix = 6;
+}
+
+// Terminates a WatchHosts snapshot: every HostEntry message that precedes
+// it on the stream belongs to the same snapshot.
+message SnapshotComplete {
+  // Number of entries in this snapshot. int32 because the practical
+  // ceiling is the consumer's configured limits.max_stream_entries
+  // (default 50,000) — a server holding more entries than a consumer's
+  // ceiling makes that consumer refuse the snapshot rather than truncate
+  // it, so the two numbers are the same unit. The server validates the
+  // count fits an int32 before setting it and fails the RPC otherwise, so
+  // this field can never carry a wrapped negative value.
+  int32 count = 1;
+
+  // When this snapshot was generated.
+  google.protobuf.Timestamp generated_at = 2;
+
+  // Template data contract version this snapshot was produced under.
+  string contract_version = 3;
+
+  // ULID of the newest event in the server's log as of the moment the
+  // snapshot began — therefore a LOWER BOUND on the state the entries
+  // reflect: the entries may include a mutation that landed after this ID
+  // was read, never the reverse. The same server state yields the same
+  // value for every consumer. An empty log yields the zero ULID. A
+  // consumer comparing change IDs uses exact string equality — never a
+  // prefix, ordering, or numeric comparison.
+  string change_id = 4;
+}
+
+// One message on a WatchHosts response stream: either one host entry, or
+// the terminator for the snapshot that preceded it.
+message WatchHostsResponse {
+  // Exactly one of entry (one per host, zero or more messages) or complete
+  // (exactly one, terminating the snapshot) is set per message.
+  oneof payload {
+    // A single host entry belonging to the in-progress snapshot.
+    HostEntry entry = 1;
+    // Terminator for the in-progress snapshot.
+    SnapshotComplete complete = 2;
+  }
+}
+
 // Snapshot requests/responses
 
 // Request to create a snapshot of the current hosts database state
@@ -501,6 +588,12 @@ service HostsService {
 
   // Export all hosts in a specified format via server streaming
   rpc ExportHosts(ExportHostsRequest) returns (stream ExportHostsResponse);
+
+  // Consumer-rendered output (sink streaming)
+
+  // Stream host entries plus a snapshot terminator over a bidirectional
+  // stream; in follow mode, push a fresh snapshot on every change.
+  rpc WatchHosts(stream WatchHostsRequest) returns (stream WatchHostsResponse);
 
   // Snapshots
 

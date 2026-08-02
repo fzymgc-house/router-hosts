@@ -49,10 +49,24 @@ type CompactResult struct {
 //     aggregateID parameter. This aligns with typical access patterns (counting events for a
 //     specific host/aggregate) and allows for efficient scoped queries on large datasets.
 type EventStore interface {
+	// AppendEvent appends a single event with optimistic concurrency control.
+	//
+	// An implementation MUST NOT commit an event whose EventID sorts at or
+	// below the store's current maximum (see LatestEventID) — it MAY
+	// therefore replace a proposed EventID that does not. A caller must not
+	// assume the ID it supplied is the ID persisted; read the event back
+	// (LoadEvents) if the actual persisted ID matters.
 	AppendEvent(ctx context.Context, aggregateID ulid.ULID, event domain.EventEnvelope, expectedVersion int64) error
+	// AppendEvents appends multiple events atomically with optimistic
+	// concurrency control. The same ordering obligation as AppendEvent
+	// applies to every event in the slice: an implementation MUST NOT
+	// commit any of them at or below the store's running maximum as of its
+	// own insert, and MAY replace a proposed EventID accordingly.
 	AppendEvents(ctx context.Context, aggregateID ulid.ULID, events []domain.EventEnvelope, expectedVersion int64) error
 	// AppendEventsBatch writes events for multiple aggregates atomically in a
-	// single transaction. If any write fails, no events are persisted.
+	// single transaction. If any write fails, no events are persisted. The
+	// same ordering obligation as AppendEvent applies to every event across
+	// every aggregate in the batch.
 	AppendEventsBatch(ctx context.Context, batch []AggregateEvents) error
 	LoadEvents(ctx context.Context, aggregateID ulid.ULID) ([]domain.EventEnvelope, error)
 	GetCurrentVersion(ctx context.Context, aggregateID ulid.ULID) (int64, error)
@@ -65,7 +79,33 @@ type EventStore interface {
 	// version. No-op if the aggregate has <= 1 event. The whole operation is one
 	// transaction; any failure rolls back and leaves the log intact.
 	CompactAggregate(ctx context.Context, aggregateID ulid.ULID) (CompactResult, error)
+	// LatestEventID returns the greatest event_id in the log, or the zero ULID
+	// with a nil error when the log is empty. This is the server's change ID
+	// (TMPL-08, D-18), and it is a valid high-water mark only because an
+	// implementation MUST NOT commit an event whose EventID sorts at or below
+	// the store's current maximum — an implementation MAY therefore replace a
+	// proposed EventID that does not, and a caller must not assume the ID it
+	// supplied is the ID persisted (see the AppendEvent/AppendEvents/
+	// AppendEventsBatch doc comments for that obligation). The ordering
+	// property this method depends on is a requirement on the append path, not
+	// a property of how an ID is minted — see internal/eventid for the shared
+	// generator every production mint goes through, which makes minting
+	// monotonic but does not by itself make commits ordered. If that append
+	// obligation is ever violated, the change ID fails to advance across a
+	// real state change and a deduping consumer silently keeps serving a
+	// stale zone.
+	LatestEventID(ctx context.Context) (ulid.ULID, error)
 }
+
+// ZeroChangeID is the canonical string form of the zero ULID
+// (ulid.ULID{}.String()): the sentinel LatestEventID's result represents on
+// the wire when the event log is empty. It is the one spelling every
+// backend, the compliance suite and the server agree on (D-22). A consumer
+// comparing change IDs must treat it as a value like any other — comparison
+// is exact string equality, never a prefix or numeric comparison. No commit
+// may ever persist the zero ULID as an event ID (see the AppendEvent family's
+// doc comments); that invariant is what keeps this sentinel unambiguous.
+const ZeroChangeID = "00000000000000000000000000"
 
 // SnapshotStore manages point-in-time snapshots.
 type SnapshotStore interface {

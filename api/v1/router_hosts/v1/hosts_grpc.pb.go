@@ -8,6 +8,7 @@ package hostsv1
 
 import (
 	context "context"
+
 	grpc "google.golang.org/grpc"
 	codes "google.golang.org/grpc/codes"
 	status "google.golang.org/grpc/status"
@@ -27,6 +28,7 @@ const (
 	HostsService_SearchHosts_FullMethodName        = "/router_hosts.v1.HostsService/SearchHosts"
 	HostsService_ImportHosts_FullMethodName        = "/router_hosts.v1.HostsService/ImportHosts"
 	HostsService_ExportHosts_FullMethodName        = "/router_hosts.v1.HostsService/ExportHosts"
+	HostsService_WatchHosts_FullMethodName         = "/router_hosts.v1.HostsService/WatchHosts"
 	HostsService_CreateSnapshot_FullMethodName     = "/router_hosts.v1.HostsService/CreateSnapshot"
 	HostsService_ListSnapshots_FullMethodName      = "/router_hosts.v1.HostsService/ListSnapshots"
 	HostsService_RollbackToSnapshot_FullMethodName = "/router_hosts.v1.HostsService/RollbackToSnapshot"
@@ -59,6 +61,9 @@ type HostsServiceClient interface {
 	ImportHosts(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ImportHostsRequest, ImportHostsResponse], error)
 	// Export all hosts in a specified format via server streaming
 	ExportHosts(ctx context.Context, in *ExportHostsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportHostsResponse], error)
+	// Stream host entries plus a snapshot terminator over a bidirectional
+	// stream; in follow mode, push a fresh snapshot on every change.
+	WatchHosts(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchHostsRequest, WatchHostsResponse], error)
 	// Create a snapshot of the current hosts database state
 	CreateSnapshot(ctx context.Context, in *CreateSnapshotRequest, opts ...grpc.CallOption) (*CreateSnapshotResponse, error)
 	// List all available snapshots (server streaming)
@@ -195,6 +200,19 @@ func (c *hostsServiceClient) ExportHosts(ctx context.Context, in *ExportHostsReq
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostsService_ExportHostsClient = grpc.ServerStreamingClient[ExportHostsResponse]
 
+func (c *hostsServiceClient) WatchHosts(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchHostsRequest, WatchHostsResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &HostsService_ServiceDesc.Streams[4], HostsService_WatchHosts_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchHostsRequest, WatchHostsResponse]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostsService_WatchHostsClient = grpc.BidiStreamingClient[WatchHostsRequest, WatchHostsResponse]
+
 func (c *hostsServiceClient) CreateSnapshot(ctx context.Context, in *CreateSnapshotRequest, opts ...grpc.CallOption) (*CreateSnapshotResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateSnapshotResponse)
@@ -207,7 +225,7 @@ func (c *hostsServiceClient) CreateSnapshot(ctx context.Context, in *CreateSnaps
 
 func (c *hostsServiceClient) ListSnapshots(ctx context.Context, in *ListSnapshotsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListSnapshotsResponse], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &HostsService_ServiceDesc.Streams[4], HostsService_ListSnapshots_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &HostsService_ServiceDesc.Streams[5], HostsService_ListSnapshots_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -306,6 +324,9 @@ type HostsServiceServer interface {
 	ImportHosts(grpc.BidiStreamingServer[ImportHostsRequest, ImportHostsResponse]) error
 	// Export all hosts in a specified format via server streaming
 	ExportHosts(*ExportHostsRequest, grpc.ServerStreamingServer[ExportHostsResponse]) error
+	// Stream host entries plus a snapshot terminator over a bidirectional
+	// stream; in follow mode, push a fresh snapshot on every change.
+	WatchHosts(grpc.BidiStreamingServer[WatchHostsRequest, WatchHostsResponse]) error
 	// Create a snapshot of the current hosts database state
 	CreateSnapshot(context.Context, *CreateSnapshotRequest) (*CreateSnapshotResponse, error)
 	// List all available snapshots (server streaming)
@@ -335,48 +356,67 @@ type UnimplementedHostsServiceServer struct{}
 func (UnimplementedHostsServiceServer) AddHost(context.Context, *AddHostRequest) (*AddHostResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method AddHost not implemented")
 }
+
 func (UnimplementedHostsServiceServer) GetHost(context.Context, *GetHostRequest) (*GetHostResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetHost not implemented")
 }
+
 func (UnimplementedHostsServiceServer) UpdateHost(context.Context, *UpdateHostRequest) (*UpdateHostResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method UpdateHost not implemented")
 }
+
 func (UnimplementedHostsServiceServer) DeleteHost(context.Context, *DeleteHostRequest) (*DeleteHostResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteHost not implemented")
 }
+
 func (UnimplementedHostsServiceServer) ListHosts(*ListHostsRequest, grpc.ServerStreamingServer[ListHostsResponse]) error {
 	return status.Error(codes.Unimplemented, "method ListHosts not implemented")
 }
+
 func (UnimplementedHostsServiceServer) SearchHosts(*SearchHostsRequest, grpc.ServerStreamingServer[SearchHostsResponse]) error {
 	return status.Error(codes.Unimplemented, "method SearchHosts not implemented")
 }
+
 func (UnimplementedHostsServiceServer) ImportHosts(grpc.BidiStreamingServer[ImportHostsRequest, ImportHostsResponse]) error {
 	return status.Error(codes.Unimplemented, "method ImportHosts not implemented")
 }
+
 func (UnimplementedHostsServiceServer) ExportHosts(*ExportHostsRequest, grpc.ServerStreamingServer[ExportHostsResponse]) error {
 	return status.Error(codes.Unimplemented, "method ExportHosts not implemented")
 }
+
+func (UnimplementedHostsServiceServer) WatchHosts(grpc.BidiStreamingServer[WatchHostsRequest, WatchHostsResponse]) error {
+	return status.Error(codes.Unimplemented, "method WatchHosts not implemented")
+}
+
 func (UnimplementedHostsServiceServer) CreateSnapshot(context.Context, *CreateSnapshotRequest) (*CreateSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateSnapshot not implemented")
 }
+
 func (UnimplementedHostsServiceServer) ListSnapshots(*ListSnapshotsRequest, grpc.ServerStreamingServer[ListSnapshotsResponse]) error {
 	return status.Error(codes.Unimplemented, "method ListSnapshots not implemented")
 }
+
 func (UnimplementedHostsServiceServer) RollbackToSnapshot(context.Context, *RollbackToSnapshotRequest) (*RollbackToSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RollbackToSnapshot not implemented")
 }
+
 func (UnimplementedHostsServiceServer) DeleteSnapshot(context.Context, *DeleteSnapshotRequest) (*DeleteSnapshotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteSnapshot not implemented")
 }
+
 func (UnimplementedHostsServiceServer) CompactAggregates(context.Context, *CompactAggregatesRequest) (*CompactAggregatesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CompactAggregates not implemented")
 }
+
 func (UnimplementedHostsServiceServer) Liveness(context.Context, *LivenessRequest) (*LivenessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Liveness not implemented")
 }
+
 func (UnimplementedHostsServiceServer) Readiness(context.Context, *ReadinessRequest) (*ReadinessResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Readiness not implemented")
 }
+
 func (UnimplementedHostsServiceServer) Health(context.Context, *HealthRequest) (*HealthResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Health not implemented")
 }
@@ -512,6 +552,13 @@ func _HostsService_ExportHosts_Handler(srv interface{}, stream grpc.ServerStream
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type HostsService_ExportHostsServer = grpc.ServerStreamingServer[ExportHostsResponse]
+
+func _HostsService_WatchHosts_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(HostsServiceServer).WatchHosts(&grpc.GenericServerStream[WatchHostsRequest, WatchHostsResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type HostsService_WatchHostsServer = grpc.BidiStreamingServer[WatchHostsRequest, WatchHostsResponse]
 
 func _HostsService_CreateSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreateSnapshotRequest)
@@ -723,6 +770,12 @@ var HostsService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "ExportHosts",
 			Handler:       _HostsService_ExportHosts_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchHosts",
+			Handler:       _HostsService_WatchHosts_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 		{
 			StreamName:    "ListSnapshots",

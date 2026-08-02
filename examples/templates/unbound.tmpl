@@ -1,0 +1,35 @@
+{{define "contract_version"}}1{{end -}}
+{{/*
+	Worked example: unbound conf-dir output (TMPL-02).
+	See docs/reference/template-contract.md for the full field/function set.
+
+	Emits the per-name `local-zone: ... static` form ADR router-hosts-bzg
+	mandates for every managed name (hostname plus each alias): the
+	forward-everything-else zone type ADR router-hosts-bzg rejects, or a
+	single zone-wide declaration, would leak unmanaged record types
+	(notably HTTPS/type 65) to public recursion instead of answering
+	NODATA for them. Do not change the zone type keyword below away from
+	"static" — see the ADR for why.
+
+	.Comment and each .Tags element are writer-supplied and unescaped
+	without `sanitize` — a value containing a newline would otherwise
+	break out of this "# ..." comment line and inject a live unbound
+	directive. See the "Template functions" section of the contract page.
+	Every reference to .Comment below is bound to $comment via sanitize
+	immediately, rather than emitted raw; every tag element is sanitized
+	individually before being joined into the bracketed list.
+*/ -}}
+server:
+{{range .Entries -}}
+{{$comment := sanitize .Comment -}}
+{{$tags := .Tags -}}
+{{if or $comment $tags}}# {{if $comment}}{{$comment}}{{end}}{{if $tags}} [{{range $i, $t := $tags}}{{if $i}}, {{end}}{{sanitize $t}}{{end}}]{{end}}
+{{end -}}
+local-zone: "{{.Hostname}}." static
+local-data: "{{.Hostname}}. 300 IN A {{.IPAddress}}"
+{{$ip := .IPAddress -}}
+{{range .Aliases -}}
+local-zone: "{{.}}." static
+local-data: "{{.}}. 300 IN A {{$ip}}"
+{{end -}}
+{{end -}}

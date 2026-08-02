@@ -1,45 +1,48 @@
 ---
 gsd_state_version: 1.0
-milestone: v0.12.0
-milestone_name: Hook Reliability & Metrics
-current_phase: 9
-status: milestone_complete
-stopped_at: Completed 09-05-PLAN.md
-last_updated: "2026-07-31T17:24:46.494Z"
-last_activity: 2026-07-31
-last_activity_desc: Milestone v0.12.0 archived; ready for v0.13.0
+milestone: v0.13.0
+milestone_name: Consumer-Owned Output
+current_phase: 01
+status: "Phase 01 shipped — PR #404"
+stopped_at: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1, phase 01 fully executed)
+last_updated: "2026-08-02T01:04:55.325Z"
+last_activity: 2026-08-02
 progress:
   total_phases: 1
   completed_phases: 1
-  total_plans: 5
-  completed_plans: 5
+  total_plans: 11
+  completed_plans: 11
   percent: 100
-current_phase_name: Hook Reliability & Metrics
+current_phase_name: consumer-rendered-output-templates-sink
+last_activity_desc: Completed 01-11-PLAN.md (real-process e2e for gap G-01-1)
 ---
 
 # Project State
 
 ## Project Reference
 
-See: .planning/PROJECT.md (updated 2026-07-26)
+See: .planning/PROJECT.md (updated 2026-08-02)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Milestone v0.12.0 shipped and archived. Next: v0.13.0 — Consumer-Owned Output (Phase 10). Start with `/gsd-new-milestone`.
+**Current focus:** Milestone v0.13.0 complete — ready to close and open the next milestone.
+
+> **Phase numbering restarted at v0.13.0.** Phases 1–9 belong to the previous
+> continuous sequence (v0.10.13–v0.12.0) and are archived under
+> `milestones/<version>-phases/`. A bare "Phase 1" in this milestone's live
+> artifacts means Consumer-Rendered Output, not the shipped Event-Sourced Host Core.
 
 ## Current Position
 
-Phase: 9 — Hook Reliability & Metrics (complete, unmerged)
-Plan: 5/5 complete
-Status: Milestone v0.12.0 archived; PR #389 merged as d9f609e; release PR #384 open
-Last activity: 2026-07-31 — Phase 9 complete (verified 24/25 must-haves, code review fixed, `task ci` green)
-
-Progress: [██████████] 100%
+Phase: 01
+Plan: Not started
+Status: Phase 01 shipped — PR #404
+Last activity: 2026-08-02
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 16 phases shipped pre-GSD (no per-plan timing captured)
+- Total plans completed: 27 phases shipped pre-GSD (no per-plan timing captured)
 - Average duration: n/a (retrospective baseline)
 - Total execution time: n/a
 
@@ -51,6 +54,7 @@ Progress: [██████████] 100%
 | 7 | 6 | - | - |
 | 8 | 5 | - | - |
 | 9 | 5 | - | - |
+| 01 | 11 | - | - |
 
 **Recent Trend:**
 
@@ -78,6 +82,17 @@ Progress: [██████████] 100%
 | Phase 09 P03 | 12min | 3 tasks | 4 files |
 | Phase 09 P04 | 6min | 3 tasks | 2 files |
 | Phase 09 P05 | 25min | 3 tasks | 4 files |
+| Phase 01 P09 | 55min | 3 tasks | 12 files |
+| Phase 01 P05 | 35min | 3 tasks | 6 files |
+| Phase 01 P01 | ~75min | 3 tasks | 17 files |
+| Phase 01 P02 | 70min | 3 tasks | 13 files |
+| Phase 01 P04 | 45min | 2 tasks | 8 files |
+| Phase 01 P03 | ~11min | 3 tasks | 12 files |
+| Phase 01 P06 | 21min | 3 tasks | 7 files |
+| Phase 01 P07 | 23min | 3 tasks | 9 files |
+| Phase 01 P08 | 62min | 3 tasks | 6 files |
+| Phase 01 P10 | 15min | 3 tasks | 6 files |
+| Phase 01 P11 | ~55min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -117,6 +132,38 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: hookRunner.Trigger records router_hosts_hook_runs_coalesced_total exactly once per superseded request via context.Background(); adds a stopped-flag check closing a latent phantom-coalesce bug on repeated post-Stop triggers
 - [Phase ?]: Phase 9 hook docs (09-05): reverted docs/reference/api.md and docs/reference/cli.md after every task docs:build run — stale generated files unrelated to this plan's scope
 - [Phase ?]: Phase 9 (09-05): checkpoint Task 3 closed on documentation review only; live OTel scrape explicitly deferred, recorded in 09-VALIDATION.md as not-run rather than claimed done
+- [Phase ?]: 01-09: Generator value type + package singleton + SwapDefault escape hatch established as the pattern for any future process-wide monotonic-ID need
+- [Phase ?]: 01-09: In-transaction ordering guard re-mints (never rejects) a non-advancing event ID at the single insertEvent funnel, unconditionally (no emptiness branch) to prevent zero-ULID collision with storage.ZeroChangeID
+- [Phase ?]: 01-05: RecordStatus/RecordSeen fully overwrite SinkState on write (last-writer-wins for duplicate CNs), pinned by TestSinkHealth_DuplicateCNCollapsesLastWriterWins per review M6
+- [Phase ?]: 01-05: MaxTrackedSinks is a package var (not const) so tests can shrink the eviction ceiling instead of seeding 1000+ entries
+- [Phase ?]: 01-05: TMPL-05 not marked complete in REQUIREMENTS.md by this plan — only identity/registry/gauge primitives built, WatchHosts wiring deferred to plan 06
+- [Phase ?]: 01-01: Change ID (LatestEventID) read strictly before ListAll in WatchHosts (H1); reversed order verified RED before rejection
+- [Phase ?]: 01-01: Atomic {entries, latestEventID} single-transaction read deferred; filed as GitHub issue #401 alongside #400
+- [Phase ?]: 01-01: renderDrainLimit is a package-level var (not const) so a test can lower it without seeding 50,000 entries
+- [Phase ?]: 01-02: commentLineBreakReplacer moved to internal/sanitize.CommentField, shared by server generators and client template FuncMap
+- [Phase ?]: 01-02: RequireVersion is exact string equality only (no semver/prefix); .Comment sanitize binding uses a single $comment := sanitize .Comment reference so a grep count-equality gate can prove no unsanitized emission path
+- [Phase ?]: 01-02: .ChangeID's eventual-convergence claim scoped to sink/follow mode; one-shot render given its own weaker sentence (review round-3 M5)
+- [Phase ?]: 01-04: ExportHosts chunks its already-formatted payload via sendExportChunks (exportChunkSize=64KiB); empty payload still sends exactly one message (review L14)
+- [Phase ?]: 01-04: gRPC keepalive constructors renamed from plan's suggested Server-/Client-prefixed names to KeepaliveParams/KeepaliveEnforcementPolicy per package to fix a revive stutter lint finding (no acceptance grep depended on the original names)
+- [Phase ?]: 01-04: Server keepalive 30s/10s ping with 15s min client interval, no connection-lifetime limits; client keepalive 20s/10s applied fleet-wide via NewClient, not sink-specific
+- [Phase ?]: 01-03: LoadClientConfig now distinguishes benign absent-file from fatal present-but-invalid file, making the strict unknown-key rejection reachable (review H3)
+- [Phase ?]: 01-03: ClientLimitsConfig (max_stream_entries/max_stream_bytes) with 50k/64MiB defaults, both bounds checked independently at every collecting call site (D-14, review L1)
+- [Phase ?]: 01-03: client.Option (WithMaxStreamEntries/WithMaxStreamBytes) is the pinned test seam replacing plan 01's renderDrainLimit var; setupCmdTest made variadic (review L6/M8)
+- [Phase ?]: watchFollow's handler owns neither Send nor Recv and never joins its two goroutines (review H1); enforced by negative grep + two teardown tests each verified RED against a reintroduced wg.Wait()
+- [Phase ?]: changeNotifier promises AT MOST one additional wake per busy subscriber during a burst, never a strict lower bound (review M2)
+- [Phase ?]: Notify() is the first statement of regenerateOutputs; CompactAggregates gets its own second notify site gated on a real non-dry-run shrink (review round-3 H1)
+- [Phase ?]: TMPL-05 is NOT marked complete by this plan — plan 07's client-side sink CLI completes it, mirroring plan 05's precedent
+- [Phase ?]: 01-07: recordReloadFailure never touches ConsecutiveFailures — D-12a's middle outcome keeps write health and reload health fully separate fields
+- [Phase ?]: 01-07: D-21 change-ID skip guarded on ID match AND artifact-exists AND reload-health-not-failed in one expression, so no future edit can silently drop a guard (review M4)
+- [Phase ?]: 01-07: runWatchSupervised resets backoff on watchSessionResult.SnapshotWritten, not on err == nil, so a session that wrote then later failed still resets (review H5)
+- [Phase ?]: 01-07: --status-interval flag's own default is WatchPolicy.normalized().StatusInterval; Changed() distinguishes an explicit override from Cobra's default (review round-3 M2), verified RED against a literal 30s default
+- [Phase ?]: 01-07: sidecar adopted at startup only when --out artifact still exists; otherwise loaded rendered_change_id is discarded and health starts empty (review M3)
+- [Phase ?]: 01-08: stopServer calls grpc.Server.Stop() directly (not only context cancellation), since Server.Run's gracefulStop drains up to 30s and would keep an open WatchHosts stream alive through the simulated outage
+- [Phase ?]: 01-08: docs/reference/cli.md kept as hand-maintained edit over task docs:build's regenerated output, which fails rumdl (missing code-fence language) — filed as issue #402
+- [Phase ?]: 01-08: all four manual deployment verifications recorded as explicitly NOT-RUN in 01-VALIDATION.md (no unbound host / no second machine in this environment), per operator checkpoint decision, mirroring phase 9's OTel-scrape precedent
+- [Phase ?]: 01-10: Explicit --config path branch placed in LoadClientConfig layer 1 (not applyClientOverrides layer 3), preserving file < env < flag precedence; fixes G-01-1 silent-fallback-to-XDG defect
+- [Phase ?]: 01-11: proc_e2e is a new build tag (not an e2e overload) with a real-process harness (os/exec on both sides); revert-and-observe confirmed the tracer test fails against pre-fix code and passes restored
+- [Phase ?]: 01-11: CI wiring for all three e2e tiers deferred; tracked as GitHub issue #403 (threat T-01-G1-13, disposition accept)
 
 ### Pending Todos
 
@@ -124,9 +171,15 @@ None yet.
 
 ### Blockers/Concerns
 
-- **[Phase 7]**: Gateway API is design-only (Draft, 2026-06-07) — no `gateway-api` dependency or controller in the Go operator; net-new implementation.
-- **[Phase 8]**: Service controller exists only as superseded Rust-era design; must be built fresh in Go.
 - **[Codebase]**: `service.go` (1033 LOC) and `commands.go` (519 LOC) are merge hotspots; in-tree `legacy_migration.go` is a permanent maintenance surface pending a removal milestone.
+- **[Phase 1 / ship gate]**: `.planning/WINDOWS.md` has `open_count: 1` (plan 01-07 test-file-location deviation). `/gsd-ship` blocks until waived (`gsd-tools windows waive 1 "<reason>"`) or fixed.
+- **[Phase 1 / verification debt]**: UAT test 42 (resolver reload + two-node convergence) is recorded `skipped` — needs a real unbound host and a second machine. `gsd-tools phase uat-passed` counts only `pass`/`passed`, so phase 1 shows `passed:false` permanently. The transition was an explicit operator decision against this known blocker, not a green predicate. Recorded NOT-RUN in 01-VALIDATION.md and called out in 01-VERIFICATION.md's re-verification section.
+- **[Phase 1 / CI]**: none of the three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) run in `ci-go.yml` — issue #403. The `proc_e2e` tier is the only one that can catch CLI-flag regressions like G-01-1, and it is not gating merges.
+- **[Phase 1 / deferred]**: `store.ListAll` still folds full event history server-side (#400, #401) — the wire is bounded and the client refuses unbounded responses, but the storage-layer half of lazy streaming is out of TMPL-06's amended scope.
+- **[Ship / tooling]**: `/gsd-ship`'s ship-note commit carries a `[ci skip]` marker, which is unsafe here: `protect-main` requires `CI (Go) Complete` and `Vulnerability check` on the **head** SHA, and `ci-go.yml` triggers only on `pull_request`, so a skipped head leaves both contexts unreported and the PR `BLOCKED`. Strip the marker from the ship note, or add `workflow_dispatch` to `ci-go.yml` so a stuck SHA can be re-dispatched.
+- **[PR #404 / UNRESOLVED]**: since the PR opened (`c149371`, 01:04Z), GitHub has created **no `github-actions` check suite** for any later commit — `6fa5025` (had `[ci skip]`), `6f36302` (empty), `a61291d` (real file change) — nor for the 01:15Z close/reopen. Ruled out: workflow config (base and head copies identical; no `paths`/`types`/`concurrency` filters), Actions disabled (`enabled`, workflow `state=active`), and a service incident (githubstatus Actions operational). The `[ci skip]` marker explains only the first of the three. Cause not yet identified; needs a throwaway PR from a scratch branch to tell PR-specific from repo/account-wide.
+
+Resolved and removed at this transition: Phase 7 Gateway API design-only concern (shipped v0.11.0) and Phase 8 Rust-era Service controller concern (built fresh in Go, shipped v0.11.0).
 
 ### Quick Tasks Completed
 
@@ -145,6 +198,6 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-07-31T16:19:20.896Z
-Stopped at: Completed 09-05-PLAN.md
+Last session: 2026-08-02
+Stopped at: Phase 01 complete (UAT 57 pass / 1 skipped, verification passed, transition applied by explicit operator decision). Milestone v0.13.0 is 100% complete — ready to close.
 Resume file: None

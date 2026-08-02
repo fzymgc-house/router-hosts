@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/csv"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -560,6 +562,285 @@ func TestService_ExportHosts_CSVFormat(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// ExportHosts chunking (TMPL-06 amended; review L2/L14)
+// ---------------------------------------------------------------------------
+
+// drainExportHosts drains an ExportHosts stream into its raw chunks.
+func drainExportHosts(t *testing.T, stream hostsv1.HostsService_ExportHostsClient) [][]byte {
+	t.Helper()
+	var chunks [][]byte
+	for {
+		resp, err := stream.Recv()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		chunks = append(chunks, resp.GetChunk())
+	}
+	return chunks
+}
+
+func concatChunks(chunks [][]byte) []byte {
+	var buf bytes.Buffer
+	for _, c := range chunks {
+		buf.Write(c)
+	}
+	return buf.Bytes()
+}
+
+// expectedExportJSON replicates the JSON construction ExportHosts performs
+// for format="json" (an inline, unexported type), so the reconstruction
+// tests below prove byte-for-byte reassembly rather than comparing against
+// an independently hand-written shape that could silently diverge.
+func expectedExportJSON(t *testing.T, entries []domain.HostEntry) []byte {
+	t.Helper()
+	type jsonEntry struct {
+		ID        string   `json:"id"`
+		IPAddress string   `json:"ip_address"`
+		Hostname  string   `json:"hostname"`
+		Comment   *string  `json:"comment,omitempty"`
+		Tags      []string `json:"tags"`
+		Aliases   []string `json:"aliases"`
+	}
+	out := make([]jsonEntry, len(entries))
+	for i, e := range entries {
+		out[i] = jsonEntry{
+			ID:        e.ID.String(),
+			IPAddress: e.IP,
+			Hostname:  e.Hostname,
+			Comment:   e.Comment,
+			Tags:      e.Tags,
+			Aliases:   e.Aliases,
+		}
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	require.NoError(t, err)
+	return data
+}
+
+// expectedExportCSV replicates the CSV construction ExportHosts performs for
+// format="csv", for the same reassembly-proving reason as expectedExportJSON.
+func expectedExportCSV(t *testing.T, entries []domain.HostEntry) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := csv.NewWriter(&buf)
+	require.NoError(t, w.Write([]string{"id", "ip_address", "hostname", "comment", "tags", "aliases"}))
+	for _, e := range entries {
+		comment := ""
+		if e.Comment != nil {
+			comment = *e.Comment
+		}
+		require.NoError(t, w.Write([]string{
+			e.ID.String(),
+			e.IP,
+			e.Hostname,
+			comment,
+			strings.Join(e.Tags, ";"),
+			strings.Join(e.Aliases, ";"),
+		}))
+	}
+	w.Flush()
+	require.NoError(t, w.Error())
+	return buf.Bytes()
+}
+
+// paddedHostsCommentForLength returns a comment value such that
+// HostsFileGenerator.FormatHostsFile of a single entry with the given
+// ip/hostname and that comment is exactly targetLen bytes. The "hosts"
+// format's header embeds a fixed-width timestamp
+// ("2006-01-02 15:04:05 UTC" — every field zero-padded to constant width),
+// so the LENGTH computed here matches the server's own call deterministically
+// even though the two calls happen at slightly different instants and their
+// header TEXT will therefore differ.
+func paddedHostsCommentForLength(t *testing.T, ip, hostname string, targetLen int) string {
+	t.Helper()
+	baseline := domain.HostEntry{IP: ip, Hostname: hostname}
+	baseLen := len((&HostsFileGenerator{}).FormatHostsFile([]domain.HostEntry{baseline}))
+	// formatSuffix's non-empty branch adds "\t# " (3 bytes) ahead of the
+	// comment text itself, replacing nothing (the no-comment line has no
+	// trailing tab) — that is the only fixed overhead beyond baseLen.
+	const commentOverhead = 3
+	padding := targetLen - baseLen - commentOverhead
+	require.Greater(t, padding, 0, "targetLen %d too small to accommodate fixed hosts-format overhead", targetLen)
+	return strings.Repeat("x", padding)
+}
+
+func TestService_ExportHosts_ChunksLargePayloadHosts(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	comment := strings.Repeat("x", exportChunkSize) // guarantees a payload larger than one chunk on its own
+	_, err := env.handler.AddHost(ctx, "192.168.1.1", "large-hosts.local", &comment, nil, nil)
+	require.NoError(t, err)
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "hosts"})
+	require.NoError(t, err)
+	chunks := drainExportHosts(t, stream)
+
+	entries, err := env.store.ListAll(ctx)
+	require.NoError(t, err)
+	expected := (&HostsFileGenerator{}).FormatHostsFile(entries)
+
+	require.Greater(t, len(chunks), 1, "payload larger than one chunk must split into multiple responses")
+	for i, c := range chunks[:len(chunks)-1] {
+		assert.Lenf(t, c, exportChunkSize, "chunk %d must be exactly exportChunkSize bytes", i)
+	}
+	assert.Equal(t, expected, string(concatChunks(chunks)))
+}
+
+func TestService_ExportHosts_ChunksLargePayloadJSON(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	comment := strings.Repeat("x", exportChunkSize)
+	_, err := env.handler.AddHost(ctx, "10.0.0.1", "large-json.local", &comment, []string{"web"}, []string{"alt-json.local"})
+	require.NoError(t, err)
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "json"})
+	require.NoError(t, err)
+	chunks := drainExportHosts(t, stream)
+
+	entries, err := env.store.ListAll(ctx)
+	require.NoError(t, err)
+	expected := expectedExportJSON(t, entries)
+
+	require.Greater(t, len(chunks), 1)
+	for i, c := range chunks[:len(chunks)-1] {
+		assert.Lenf(t, c, exportChunkSize, "chunk %d must be exactly exportChunkSize bytes", i)
+	}
+	assert.Equal(t, expected, concatChunks(chunks))
+}
+
+func TestService_ExportHosts_ChunksLargePayloadCSV(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	comment := strings.Repeat("x", exportChunkSize)
+	_, err := env.handler.AddHost(ctx, "10.0.0.2", "large-csv.local", &comment, []string{"prod"}, nil)
+	require.NoError(t, err)
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "csv"})
+	require.NoError(t, err)
+	chunks := drainExportHosts(t, stream)
+
+	entries, err := env.store.ListAll(ctx)
+	require.NoError(t, err)
+	expected := expectedExportCSV(t, entries)
+
+	require.Greater(t, len(chunks), 1)
+	for i, c := range chunks[:len(chunks)-1] {
+		assert.Lenf(t, c, exportChunkSize, "chunk %d must be exactly exportChunkSize bytes", i)
+	}
+	assert.Equal(t, expected, concatChunks(chunks))
+}
+
+func TestService_ExportHosts_EmptyInventorySendsOneChunk(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "hosts"})
+	require.NoError(t, err)
+	chunks := drainExportHosts(t, stream)
+
+	// The "hosts" format always emits a header even for zero entries, so the
+	// payload here is not literally zero bytes — but the message count must
+	// still be exactly one, never zero and never more than one. The true
+	// zero-byte framing edge case is pinned directly against sendExportChunks
+	// in TestSendExportChunks_EmptyDataSendsOneEmptyChunk below.
+	require.Len(t, chunks, 1, "an empty inventory must still yield exactly one response")
+}
+
+func TestService_ExportHosts_ExactChunkBoundary(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	comment := paddedHostsCommentForLength(t, "192.168.1.1", "boundary.local", exportChunkSize)
+	_, err := env.handler.AddHost(ctx, "192.168.1.1", "boundary.local", &comment, nil, nil)
+	require.NoError(t, err)
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "hosts"})
+	require.NoError(t, err)
+	chunks := drainExportHosts(t, stream)
+
+	require.Len(t, chunks, 1)
+	assert.Len(t, chunks[0], exportChunkSize)
+}
+
+func TestService_ExportHosts_OneByteOverBoundary(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	comment := paddedHostsCommentForLength(t, "192.168.1.2", "over-boundary.local", exportChunkSize+1)
+	_, err := env.handler.AddHost(ctx, "192.168.1.2", "over-boundary.local", &comment, nil, nil)
+	require.NoError(t, err)
+
+	stream, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "hosts"})
+	require.NoError(t, err)
+	chunks := drainExportHosts(t, stream)
+
+	require.Len(t, chunks, 2)
+	assert.Len(t, chunks[0], exportChunkSize)
+	assert.Len(t, chunks[1], 1)
+}
+
+func TestService_ExportHosts_RepeatedCallsAreIdentical(t *testing.T) {
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	comment := "stable"
+	_, err := env.handler.AddHost(ctx, "10.0.0.9", "stable.local", &comment, []string{"prod"}, []string{"alt-stable.local"})
+	require.NoError(t, err)
+
+	// format="json" carries no embedded timestamp (unlike "hosts"), so two
+	// calls over unchanged state are expected to be byte-identical without
+	// racing a clock-second boundary.
+	stream1, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "json"})
+	require.NoError(t, err)
+	first := concatChunks(drainExportHosts(t, stream1))
+
+	stream2, err := env.client.ExportHosts(ctx, &hostsv1.ExportHostsRequest{Format: "json"})
+	require.NoError(t, err)
+	second := concatChunks(drainExportHosts(t, stream2))
+
+	assert.Equal(t, first, second, "two exports over unchanged state must be byte-identical")
+}
+
+// fakeExportChunkSender is a minimal exportChunkSender for unit-testing
+// sendExportChunks directly, without a live gRPC stream.
+type fakeExportChunkSender struct {
+	sent []*hostsv1.ExportHostsResponse
+}
+
+func (f *fakeExportChunkSender) Send(resp *hostsv1.ExportHostsResponse) error {
+	f.sent = append(f.sent, resp)
+	return nil
+}
+
+func TestSendExportChunks_EmptyDataSendsOneEmptyChunk(t *testing.T) {
+	fake := &fakeExportChunkSender{}
+	require.NoError(t, sendExportChunks(fake, nil))
+	require.Len(t, fake.sent, 1, "a naive `for len(data) > 0` loop sends zero messages for empty data; exactly one is required")
+	assert.Empty(t, fake.sent[0].GetChunk())
+}
+
+func TestSendExportChunks_ExactChunkBoundary(t *testing.T) {
+	fake := &fakeExportChunkSender{}
+	data := bytes.Repeat([]byte("a"), exportChunkSize)
+	require.NoError(t, sendExportChunks(fake, data))
+	require.Len(t, fake.sent, 1)
+	assert.Len(t, fake.sent[0].GetChunk(), exportChunkSize)
+}
+
+func TestSendExportChunks_OneByteOverBoundary(t *testing.T) {
+	fake := &fakeExportChunkSender{}
+	data := bytes.Repeat([]byte("a"), exportChunkSize+1)
+	require.NoError(t, sendExportChunks(fake, data))
+	require.Len(t, fake.sent, 2)
+	assert.Len(t, fake.sent[0].GetChunk(), exportChunkSize)
+	assert.Len(t, fake.sent[1].GetChunk(), 1)
+}
+
+// ---------------------------------------------------------------------------
 // parseHostsFormat unit tests
 // ---------------------------------------------------------------------------
 
@@ -781,8 +1062,14 @@ func TestService_Readiness_Healthy(t *testing.T) {
 func TestService_Readiness_Unhealthy(t *testing.T) {
 	ctx := context.Background()
 
-	// Create a store and close it to make HealthCheck fail
-	store, err := sqlite.New("file::memory:?mode=memory", slog.Default())
+	// Create a store and close it to make HealthCheck fail. cache=shared is
+	// required (matching every other in-memory DSN in this codebase):
+	// without it, each pooled connection gets its own private in-memory
+	// database, so Initialize's post-migration LatestEventID seeding read
+	// (plan 01-09 task 3) can land on a connection that never saw the
+	// migrations run on a different connection, and fail with "no such
+	// table: events".
+	store, err := sqlite.New("file::memory:?mode=memory&cache=shared", slog.Default())
 	require.NoError(t, err)
 	require.NoError(t, store.Initialize(ctx))
 	handler := NewCommandHandler(store)

@@ -461,3 +461,29 @@ func TestServer_BufconnConnection(t *testing.T) {
 		t.Fatal("server did not shut down")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// gRPC keepalive (TMPL-06 amended plan, review L14/D-09/T-1-13)
+// ---------------------------------------------------------------------------
+
+func TestKeepalive_ServerParams(t *testing.T) {
+	params := KeepaliveParams()
+	assert.Equal(t, 30*time.Second, params.Time, "server ping interval")
+	assert.Equal(t, 10*time.Second, params.Timeout, "server ping timeout")
+	// Deliberately unset: any of these would terminate a healthy long-lived
+	// sink stream on a timer.
+	assert.Zero(t, params.MaxConnectionIdle)
+	assert.Zero(t, params.MaxConnectionAge)
+	assert.Zero(t, params.MaxConnectionAgeGrace)
+}
+
+func TestKeepalive_ServerEnforcementPolicy(t *testing.T) {
+	policy := KeepaliveEnforcementPolicy()
+	assert.Equal(t, 15*time.Second, policy.MinTime, "minimum accepted client ping interval")
+	assert.True(t, policy.PermitWithoutStream, "an idle sink must still be permitted to ping")
+}
+
+func TestKeepalive_ServerOptionsCount(t *testing.T) {
+	opts := KeepaliveServerOptions()
+	assert.Len(t, opts, 2)
+}

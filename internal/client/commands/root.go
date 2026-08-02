@@ -31,6 +31,26 @@ type GlobalFlags struct {
 // Flags is the singleton global flags instance populated by Cobra.
 var Flags GlobalFlags
 
+// rootConfig holds resolved options for NewRootCmd. WatchPolicy is currently
+// its only field.
+type rootConfig struct {
+	watchPolicy WatchPolicy
+}
+
+// RootOption configures NewRootCmd. It exists so an external test package
+// (plan 08's e2e suite is `package e2e_test`) can inject behavior through an
+// exported function, since NewRootCmd's own construction is otherwise
+// unreachable from outside this package (review H4).
+type RootOption func(*rootConfig)
+
+// WithWatchPolicy overrides the WatchPolicy the "watch" command resolves at
+// construction time. Production callers omit this and get
+// DefaultWatchPolicy(); tests inject millisecond backoff bounds and a
+// deterministic Jitter function.
+func WithWatchPolicy(p WatchPolicy) RootOption {
+	return func(c *rootConfig) { c.watchPolicy = p }
+}
+
 // versionString returns the version for display. Tagged releases show just
 // the version; dev builds include the commit hash when available.
 func versionString() string {
@@ -41,7 +61,15 @@ func versionString() string {
 }
 
 // NewRootCmd creates the top-level CLI command with all subcommand groups.
-func NewRootCmd() *cobra.Command {
+// opts is variadic (never a required parameter) so every existing
+// NewRootCmd() call site — in cmd/router-hosts and in every pre-existing
+// test — keeps compiling unchanged (review M8's trap, applied here too).
+func NewRootCmd(opts ...RootOption) *cobra.Command {
+	cfg := rootConfig{watchPolicy: DefaultWatchPolicy()}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
 	root := &cobra.Command{
 		Use:           "router-hosts",
 		Short:         "Manage DNS host entries via gRPC",
@@ -68,6 +96,8 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(newCompactCmd())
 	root.AddCommand(newServerCmd())
 	root.AddCommand(newServeCmd())
+	root.AddCommand(newRenderCmd())
+	root.AddCommand(newWatchCmd(cfg.watchPolicy))
 
 	return root
 }

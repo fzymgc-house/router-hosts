@@ -3,15 +3,15 @@ package server
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/samber/oops"
 
+	"github.com/fzymgc-house/router-hosts/internal/atomicfile"
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/sanitize"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
@@ -34,7 +34,7 @@ func (g *HostsFileGenerator) Regenerate(ctx context.Context, store storage.Stora
 	}
 
 	content := g.FormatHostsFile(entries)
-	if err := atomicWriteFile(g.path, content); err != nil {
+	if err := atomicfile.Write(g.path, []byte(content)); err != nil {
 		return 0, err
 	}
 	return len(entries), nil
@@ -116,49 +116,13 @@ func formatSuffix(comment *string, tags []string) string {
 	return "# " + strings.Join(parts, " ")
 }
 
-// commentLineBreakReplacer collapses CR and LF to spaces so user-supplied
-// comment/tag text stays on a single line in generated config files.
-var commentLineBreakReplacer = strings.NewReplacer("\n", " ", "\r", " ")
-
 // sanitizeCommentField strips line breaks from comment/tag text emitted as a
 // "# ..." comment. Without it, a Comment or Tag containing a newline would break
 // out of the comment line and inject active directives into the generated
 // hosts/dnsmasq/unbound output. See GH #349 review finding router-hosts-00b.2.
+// Delegates to internal/sanitize.CommentField, the single shared
+// implementation also reachable from the client-side template FuncMap
+// (D-17, contract v1) — see internal/client/template.FuncMap.
 func sanitizeCommentField(s string) string {
-	return commentLineBreakReplacer.Replace(s)
-}
-
-// atomicWriteFile writes content to a temp file in the target directory,
-// fsyncs, then renames into place. Shared by all output-file generators.
-func atomicWriteFile(path, content string) error {
-	f, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp.*")
-	if err != nil {
-		return oops.Wrapf(err, "create temp file")
-	}
-	tmpPath := f.Name()
-
-	_, writeErr := f.WriteString(content)
-	if writeErr != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return oops.Wrapf(writeErr, "write file")
-	}
-
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "fsync file")
-	}
-
-	if err := f.Close(); err != nil {
-		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "close file")
-	}
-
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return oops.Wrapf(err, "rename file")
-	}
-
-	return nil
+	return sanitize.CommentField(s)
 }

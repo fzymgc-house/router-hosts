@@ -6,10 +6,12 @@ import (
 	"io"
 	"log/slog"
 
-	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
-	"github.com/fzymgc-house/router-hosts/internal/client/output"
 	"github.com/samber/oops"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/proto"
+
+	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
+	"github.com/fzymgc-house/router-hosts/internal/client/output"
 )
 
 // addSnapshotSubcommands attaches all snapshot subcommands to the parent.
@@ -108,7 +110,7 @@ func newSnapshotListCmd() *cobra.Command {
 				return oops.Wrapf(err, "listing snapshots")
 			}
 
-			snapshots, err := collectSnapshotStream(stream)
+			snapshots, err := collectSnapshotStream(stream, limitsFrom(c))
 			if err != nil {
 				return err
 			}
@@ -205,8 +207,12 @@ func newSnapshotDeleteCmd() *cobra.Command {
 
 // --- helpers ---
 
-func collectSnapshotStream(stream hostsv1.HostsService_ListSnapshotsClient) ([]*hostsv1.Snapshot, error) {
+// collectSnapshotStream drains a ListSnapshots server stream into a slice,
+// refusing (nil slice, non-nil error) before the offending append if either
+// bound in limits is crossed (D-14, TMPL-07).
+func collectSnapshotStream(stream hostsv1.HostsService_ListSnapshotsClient, limits streamLimits) ([]*hostsv1.Snapshot, error) {
 	var snapshots []*hostsv1.Snapshot
+	var totalBytes int64
 	for {
 		resp, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
@@ -216,6 +222,14 @@ func collectSnapshotStream(stream hostsv1.HostsService_ListSnapshotsClient) ([]*
 			return nil, oops.Wrapf(err, "receiving snapshot")
 		}
 		if resp.GetSnapshot() != nil {
+			if len(snapshots) >= limits.entries {
+				return nil, streamLimitError(limits.entries)
+			}
+			size := int64(proto.Size(resp))
+			if totalBytes+size > limits.bytes {
+				return nil, streamByteLimitError(limits.bytes)
+			}
+			totalBytes += size
 			snapshots = append(snapshots, resp.GetSnapshot())
 		}
 	}

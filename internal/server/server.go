@@ -16,6 +16,7 @@ import (
 	"github.com/samber/oops"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
 	"github.com/fzymgc-house/router-hosts/internal/domain"
@@ -24,6 +25,47 @@ import (
 
 // GracefulShutdownTimeout is the maximum time to wait for in-flight RPCs.
 const GracefulShutdownTimeout = 30 * time.Second
+
+// KeepaliveParams returns the gRPC keepalive.ServerParameters this server
+// applies to every connection. The 30s ping interval and 10s timeout replace
+// grpc-go's default two-hour ping interval, which is far too coarse for the
+// sink last-seen signal (D-09/D-10, T-1-13): a dead TCP connection could
+// otherwise sit undetected for hours.
+//
+// MaxConnectionIdle, MaxConnectionAge and MaxConnectionAgeGrace are
+// deliberately left at their zero values (disabled). Setting any of them
+// would tear down a healthy long-lived sink stream on a timer, which is
+// exactly the failure mode TMPL-08's continuous sink mode must not have
+// (T-1-14).
+func KeepaliveParams() keepalive.ServerParameters {
+	return keepalive.ServerParameters{
+		Time:    30 * time.Second,
+		Timeout: 10 * time.Second,
+	}
+}
+
+// KeepaliveEnforcementPolicy returns the minimum ping interval this server
+// accepts from clients. MinTime must stay at or below the client's
+// configured keepalive.ClientParameters.Time (see
+// internal/client.KeepaliveParams): a client pinging more often than MinTime
+// is sent GOAWAY. PermitWithoutStream is enabled so a client with no active
+// RPC — a sink between snapshots — is not penalized for pinging (T-1-12).
+func KeepaliveEnforcementPolicy() keepalive.EnforcementPolicy {
+	return keepalive.EnforcementPolicy{
+		MinTime:             15 * time.Second,
+		PermitWithoutStream: true,
+	}
+}
+
+// KeepaliveServerOptions bundles the keepalive gRPC ServerOptions this server
+// applies. NewServer inserts these ahead of any caller-supplied
+// WithGRPCOptions, so a caller can still override them explicitly.
+func KeepaliveServerOptions() []grpc.ServerOption {
+	return []grpc.ServerOption{
+		grpc.KeepaliveParams(KeepaliveParams()),
+		grpc.KeepaliveEnforcementPolicy(KeepaliveEnforcementPolicy()),
+	}
+}
 
 // Server wraps a gRPC server with mTLS and lifecycle management.
 type Server struct {
@@ -81,7 +123,11 @@ func NewServer(cfg config.Config, store storage.Storage, logger *slog.Logger, op
 	}
 
 	creds := credentials.NewTLS(tlsConfig)
-	grpcOpts := append([]grpc.ServerOption{grpc.Creds(creds)}, s.grpcOptions...)
+	keepaliveOpts := KeepaliveServerOptions()
+	grpcOpts := make([]grpc.ServerOption, 0, 1+len(keepaliveOpts)+len(s.grpcOptions))
+	grpcOpts = append(grpcOpts, grpc.Creds(creds))
+	grpcOpts = append(grpcOpts, keepaliveOpts...)
+	grpcOpts = append(grpcOpts, s.grpcOptions...)
 	s.grpc = grpc.NewServer(grpcOpts...)
 
 	return s, nil

@@ -70,6 +70,7 @@ nav:
   - Guides:
     - guides/index.md
     - Operations: guides/operations.md
+    - Consumer-Rendered Output: guides/consumer-rendered-output.md
     - ACME Certificates: guides/acme.md
     - Kubernetes Operator: guides/kubernetes.md
     - Storage Backends: guides/storage-backends.md
@@ -78,6 +79,7 @@ nav:
     - CLI Reference: reference/cli.md
     - API Reference: reference/api.md
     - Configuration Reference: reference/configuration.md
+    - Template Data Contract: reference/template-contract.md
   - Contributing:
     - contributing/index.md
     - Architecture: contributing/architecture.md

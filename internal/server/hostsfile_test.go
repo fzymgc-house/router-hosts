@@ -178,54 +178,6 @@ func TestFormatHostsFile_SortedByIPThenHostname(t *testing.T) {
 	assert.True(t, strings.HasPrefix(entryLines[3], "192.168.1.20\tbeta.local"))
 }
 
-func TestAtomicWrite_NewFile(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "hosts")
-
-	err := atomicWriteFile(path, "test content\n")
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "test content\n", string(data))
-
-	// No temp files should remain after successful write
-	matches, _ := filepath.Glob(filepath.Join(dir, "hosts.tmp.*"))
-	assert.Empty(t, matches, "temp files should be cleaned up after atomicWrite")
-}
-
-func TestAtomicWrite_OverwritesExisting(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "hosts")
-
-	require.NoError(t, os.WriteFile(path, []byte("old content"), 0o644))
-
-	err := atomicWriteFile(path, "new content\n")
-	require.NoError(t, err)
-
-	data, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, "new content\n", string(data))
-}
-
-func TestAtomicWrite_CleansUpTmp(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "hosts")
-
-	err := atomicWriteFile(path, "content\n")
-	require.NoError(t, err)
-
-	// No temp files should remain after successful write
-	matches, _ := filepath.Glob(filepath.Join(dir, "hosts.tmp.*"))
-	assert.Empty(t, matches, "temp files should be cleaned up after atomicWrite")
-}
-
-func TestAtomicWrite_InvalidPath(t *testing.T) {
-	err := atomicWriteFile("/nonexistent/dir/hosts", "content\n")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "create temp file")
-}
-
 func TestRegenerate(t *testing.T) {
 	ctx := context.Background()
 

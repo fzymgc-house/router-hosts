@@ -252,12 +252,338 @@ func TestApplyClientEnv(t *testing.T) {
 	cfg := &ClientConfig{
 		Server: ClientServerConfig{Address: "file-server"},
 	}
-	applyClientEnv(cfg)
+	require.NoError(t, applyClientEnv(cfg))
 
 	assert.Equal(t, "env-server", cfg.Server.Address)
 	assert.Equal(t, "/env/cert", cfg.TLS.CertPath)
 	assert.Equal(t, "/env/key", cfg.TLS.KeyPath)
 	assert.Equal(t, "/env/ca", cfg.TLS.CACertPath)
+}
+
+// ---------------------------------------------------------------------------
+// Invalid client config file must be a startup error, not a silent fallback
+// (review round-2 H3; internal/config/client.go:55-59 used to shadow and
+// discard both inner errors).
+// ---------------------------------------------------------------------------
+
+func TestLoadClientConfig_NoFileIsNotAnError(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // empty dir, no file on any search path
+	t.Setenv("ROUTER_HOSTS_SERVER", "env-only:50051")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, "env-only:50051", cfg.Server.Address)
+}
+
+func TestLoadClientConfig_MalformedFileErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := writeClientConfig(t, dir, "{{invalid")
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), path)
+	assert.Contains(t, err.Error(), "parse client config")
+}
+
+func TestLoadClientConfig_UnknownKeyErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeClientConfig(t, dir, "[server]\naddress = \"localhost:50051\"\nbogus_key = \"x\"\n")
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "bogus_key")
+}
+
+func TestLoadClientConfig_UnreadableFileErrors(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("running as root can read files regardless of mode")
+	}
+	dir := t.TempDir()
+	path := writeClientConfig(t, dir, clientConfigContent)
+	require.NoError(t, os.Chmod(path, 0o000))
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "read client config")
+}
+
+// ---------------------------------------------------------------------------
+// Explicit --config path resolution (gap G-01-1). An explicit path must be
+// loaded directly and must win over the XDG search, which must not run at
+// all when a path is supplied.
+// ---------------------------------------------------------------------------
+
+func TestLoadClientConfig_ExplicitPathBeatsXDG(t *testing.T) {
+	xdgDir := t.TempDir()
+	writeClientConfig(t, xdgDir, "[server]\naddress = \"decoy.invalid:59999\"\n")
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "explicit.toml")
+	require.NoError(t, os.WriteFile(explicitPath, []byte("[server]\naddress = \"explicit.example:18443\"\n"), 0o600))
+
+	cfg, err := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &explicitPath})
+	require.NoError(t, err)
+	assert.Equal(t, "explicit.example:18443", cfg.Server.Address)
+}
+
+func TestLoadClientConfig_ExplicitMissingPathFailsAndDoesNotFallBack(t *testing.T) {
+	xdgDir := t.TempDir()
+	writeClientConfig(t, xdgDir, clientConfigContent)
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	missingPath := filepath.Join(t.TempDir(), "does-not-exist.toml")
+
+	cfg, err := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &missingPath})
+	// A nil error here would mean the XDG decoy was silently used instead —
+	// the exact G-01-1 failure mode.
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), missingPath)
+	assert.Nil(t, cfg)
+}
+
+func TestLoadClientConfig_ExplicitMalformedPathFails(t *testing.T) {
+	xdgDir := t.TempDir()
+	writeClientConfig(t, xdgDir, clientConfigContent)
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "explicit.toml")
+	require.NoError(t, os.WriteFile(explicitPath, []byte("{{invalid"), 0o600))
+
+	_, err := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &explicitPath})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), explicitPath)
+	assert.Contains(t, err.Error(), "parse client config")
+}
+
+func TestLoadClientConfig_ExplicitUnknownKeyFails(t *testing.T) {
+	xdgDir := t.TempDir()
+	writeClientConfig(t, xdgDir, clientConfigContent)
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "explicit.toml")
+	require.NoError(t, os.WriteFile(explicitPath,
+		[]byte("[server]\naddress = \"explicit.example:18443\"\nbogus_key = \"x\"\n"), 0o600))
+
+	_, err := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &explicitPath})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unknown keys")
+}
+
+func TestLoadClientConfig_ExplicitPathDoesNotMergeXDGValues(t *testing.T) {
+	xdgDir := t.TempDir()
+	writeClientConfig(t, xdgDir,
+		"[server]\naddress = \"decoy.invalid:59999\"\n\n[tls]\ncert_path = \"/decoy/client.crt\"\n")
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "explicit.toml")
+	require.NoError(t, os.WriteFile(explicitPath, []byte("[server]\naddress = \"explicit.example:18443\"\n"), 0o600))
+
+	cfg, err := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &explicitPath})
+	require.NoError(t, err)
+	assert.Equal(t, "explicit.example:18443", cfg.Server.Address)
+	// The explicit file carries no [tls] table at all; an explicit load
+	// replaces the file layer wholesale, so nothing from the unrelated
+	// decoy config (T-01-G1-03) survives.
+	assert.Empty(t, cfg.TLS.CertPath)
+}
+
+func TestLoadClientConfig_EnvBeatsExplicitConfigFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "env-server:9090")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "explicit.toml")
+	require.NoError(t, os.WriteFile(explicitPath, []byte("[server]\naddress = \"explicit.example:18443\"\n"), 0o600))
+
+	cfg, err := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &explicitPath})
+	require.NoError(t, err)
+	// Pins that the explicit path is applied at layer 1, not promoted to
+	// layer 3 above environment variables.
+	assert.Equal(t, "env-server:9090", cfg.Server.Address)
+}
+
+func TestLoadClientConfig_ServerOverrideBeatsExplicitConfigFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	explicitDir := t.TempDir()
+	explicitPath := filepath.Join(explicitDir, "explicit.toml")
+	require.NoError(t, os.WriteFile(explicitPath, []byte("[server]\naddress = \"explicit.example:18443\"\n"), 0o600))
+
+	overrideServer := "cli-server:8080"
+	cfg, err := LoadClientConfig(&ClientConfigOverrides{
+		ConfigPath:    &explicitPath,
+		ServerAddress: &overrideServer,
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "cli-server:8080", cfg.Server.Address)
+}
+
+func TestLoadClientConfig_EmptyConfigPathFallsBackToXDG(t *testing.T) {
+	xdgDir := t.TempDir()
+	writeClientConfig(t, xdgDir, "[server]\naddress = \"xdg-server:50051\"\n")
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	emptyPath := ""
+	cfg, err := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &emptyPath})
+	require.NoError(t, err)
+	// A non-nil pointer to the empty string must behave identically to
+	// ConfigPath being unset (nil): the XDG search still runs.
+	assert.Equal(t, "xdg-server:50051", cfg.Server.Address)
+}
+
+func TestLoadClientConfig_ExplicitPathTildeExpanded(t *testing.T) {
+	xdgDir := t.TempDir()
+	writeClientConfig(t, xdgDir, "[server]\naddress = \"decoy.invalid:59999\"\n")
+	t.Setenv("XDG_CONFIG_HOME", xdgDir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "")
+	t.Setenv("ROUTER_HOSTS_CERT", "")
+	t.Setenv("ROUTER_HOSTS_KEY", "")
+	t.Setenv("ROUTER_HOSTS_CA", "")
+
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+
+	// No file is written under the real home directory (CLAUDE.md forbids
+	// writing to the real filesystem in tests). The file legitimately does
+	// not exist, so this asserts expandTilde ran on the explicit path by
+	// checking the error names the expanded absolute prefix, not a literal
+	// leading tilde.
+	tildePath := "~/router-hosts-test-nonexistent-explicit.toml"
+	_, loadErr := LoadClientConfig(&ClientConfigOverrides{ConfigPath: &tildePath})
+	require.Error(t, loadErr)
+	assert.Contains(t, loadErr.Error(), filepath.Join(home, "router-hosts-test-nonexistent-explicit.toml"))
+	assert.NotContains(t, loadErr.Error(), "~/")
+}
+
+func TestLoadClientConfig_EnvDoesNotMaskFileError(t *testing.T) {
+	dir := t.TempDir()
+	writeClientConfig(t, dir, "{{invalid")
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("ROUTER_HOSTS_SERVER", "env-server:9090")
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse client config")
+}
+
+// ---------------------------------------------------------------------------
+// Stream collection limits (D-14, TMPL-07, review L1/L6).
+// ---------------------------------------------------------------------------
+
+func TestLoadClientConfig_LimitsFromFile(t *testing.T) {
+	dir := t.TempDir()
+	writeClientConfig(t, dir, `
+[server]
+address = "localhost:50051"
+
+[limits]
+max_stream_entries = 10
+`)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, 10, cfg.Limits.MaxStreamEntries)
+}
+
+func TestLoadClientConfig_LimitsBytesFromFile(t *testing.T) {
+	dir := t.TempDir()
+	writeClientConfig(t, dir, `
+[server]
+address = "localhost:50051"
+
+[limits]
+max_stream_bytes = 4096
+`)
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, int64(4096), cfg.Limits.MaxStreamBytes)
+}
+
+func TestLoadClientConfig_LimitsDefault(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "localhost:50051")
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, DefaultMaxStreamEntries, cfg.Limits.MaxStreamEntries)
+	assert.Equal(t, int64(DefaultMaxStreamBytes), cfg.Limits.MaxStreamBytes)
+}
+
+func TestLoadClientConfig_LimitsFromEnv(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "localhost:50051")
+	t.Setenv("ROUTER_HOSTS_MAX_STREAM_ENTRIES", "25")
+	t.Setenv("ROUTER_HOSTS_MAX_STREAM_BYTES", "4096")
+
+	cfg, err := LoadClientConfig(nil)
+	require.NoError(t, err)
+	assert.Equal(t, 25, cfg.Limits.MaxStreamEntries)
+	assert.Equal(t, int64(4096), cfg.Limits.MaxStreamBytes)
+}
+
+func TestLoadClientConfig_LimitsInvalid(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "localhost:50051")
+	t.Setenv("ROUTER_HOSTS_MAX_STREAM_ENTRIES", "not-a-number")
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ROUTER_HOSTS_MAX_STREAM_ENTRIES")
+}
+
+func TestLoadClientConfig_LimitsBytesInvalid(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("ROUTER_HOSTS_SERVER", "localhost:50051")
+	t.Setenv("ROUTER_HOSTS_MAX_STREAM_BYTES", "not-a-number")
+
+	_, err := LoadClientConfig(nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ROUTER_HOSTS_MAX_STREAM_BYTES")
 }
 
 func TestApplyClientOverrides(t *testing.T) {

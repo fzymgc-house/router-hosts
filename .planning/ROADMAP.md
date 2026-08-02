@@ -2,244 +2,150 @@
 
 ## Overview
 
-router-hosts reached **v0.10.13** as an event-sourced, mTLS-secured DNS control plane with a CLI/TUI and a Kubernetes operator. Phases 1–6 reconstruct the shipped feature-spines as completed milestones so project state is anchored at an accurate built baseline. Phases 7–9 carry the project forward toward its north star — full operator / Gateway-API parity and hands-off cluster integration — starting with the largest gaps (Gateway API, then the Service controller) and finishing with hook reliability. Phase 10 opens a second axis: moving output rendering from the server to the consumer, so a single stateful server can feed N independent consumers without accreting a per-resolver format for each.
+router-hosts is an event-sourced, mTLS-secured DNS control plane with a CLI/TUI
+and a Kubernetes operator, shipped through v0.12.0. Milestones v0.10.13 through
+v0.12.0 built the baseline and then drove toward the north star — operator /
+Gateway-API parity and hands-off cluster integration — finishing with hook
+reliability.
+
+**v0.13.0 opens a second axis:** moving output rendering from the server to the
+consumer, so a single stateful server can feed N independent consumers without
+accreting a per-resolver output format for each one.
+
+> **Phase numbering restarted at v0.13.0.** Milestones v0.10.13–v0.12.0 used a
+> single continuous sequence (phases 1–9). This milestone restarts at Phase 1.
+> Where an archived document says "Phase 1" it means Event-Sourced Host Core;
+> in this file and in v0.13.0's live artifacts, Phase 1 means Consumer-Rendered
+> Output. Historical phase detail and phase directories are archived under
+> `milestones/<version>-ROADMAP.md` and `milestones/<version>-phases/`.
 
 ## Milestones
 
 ### ✅ v0.10.13 — v1 Shipped Baseline
 
-Phases 1–6. Shipped pre-GSD; reconstructed retrospectively at bootstrap (2026-07-07).
+Phases 1–6 (previous numbering). Shipped pre-GSD; reconstructed retrospectively
+at bootstrap (2026-07-07). Archived:
+[`milestones/v0.10.13-ROADMAP.md`](milestones/v0.10.13-ROADMAP.md).
 
 ### ✅ v0.11.0 — K8s-Native Automation
 
-Phases 7–8. Shipped 2026-07-30 in PR #381; released as v0.11.0 (version bump
-corrected by the follow-up `Release-As:` PR #382). Operator / Gateway-API parity.
+Phases 7–8 (previous numbering). Shipped 2026-07-30 in PR #381; released as
+v0.11.0 (version bump corrected by the follow-up `Release-As:` PR #382).
+Operator / Gateway-API parity. Archived:
+[`milestones/v0.11.0-ROADMAP.md`](milestones/v0.11.0-ROADMAP.md).
 
 ### ✅ v0.12.0 — Hook Reliability & Metrics
 
-Phase 9. Shipped 2026-07-31 in PR #389. Hook metrics wired (were dead code) and
-hook execution detached from the write path with configurable per-hook timeouts.
-Archived: [`milestones/v0.12.0-ROADMAP.md`](milestones/v0.12.0-ROADMAP.md).
+Phase 9 (previous numbering). Shipped 2026-07-31 in PR #389. Hook metrics wired
+(were dead code) and hook execution detached from the write path with
+configurable per-hook timeouts. Archived:
+[`milestones/v0.12.0-ROADMAP.md`](milestones/v0.12.0-ROADMAP.md).
 
 ### 📋 v0.13.0 — Consumer-Owned Output
 
-Phase 10. Approved 2026-07-25 from #364.
+Phase 1. Approved 2026-07-25 from #364. **Current milestone.**
 
 ## Phases
 
 **Phase Numbering:**
 
+- Numbering is milestone-local from v0.13.0 onward and restarts at 1 each milestone
 - Integer phases (1, 2, 3): Planned milestone work
-- Decimal phases (2.1, 2.2): Urgent insertions (marked INSERTED)
-- [x] **Phase 1: Event-Sourced Host Core (CLI + gRPC/mTLS)** - Event store, aggregate, aliases, hosts file, CLI/TUI over mTLS
-- [x] **Phase 2: Certificate Lifecycle (SIGHUP + ACME DNS-01)** - Hot-reload certs and auto-issue via ACME DNS-01
-- [x] **Phase 3: Kubernetes Operator (HostMapping + IngressRoute)** - Reconcile cluster resources into router DNS
-- [x] **Phase 4: Observability (OpenTelemetry)** - Metrics export and trace-context propagation
-- [x] **Phase 5: Split-Horizon DNS Output (dnsmasq + unbound)** - Leak-free per-name authoritative resolver config
-- [x] **Phase 6: Aggregate Compaction (manual RPC + gauges)** - Operator-driven event-log compaction with observability
-- [x] **Phase 7: Gateway API Support** - Reconcile HTTPRoute/GRPCRoute/TLSRoute hostnames into router DNS
-- [x] **Phase 8: Kubernetes Service Controller** - DNS entries for LoadBalancer/NodePort Services
-- [x] **Phase 9: Hook Reliability & Metrics** - Hook execution metrics + configurable timeout/concurrency
-- [ ] **Phase 10: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink
+- Decimal phases (1.1, 1.2): Urgent insertions (marked INSERTED)
 
-## ✅ v0.10.13 — v1 Shipped Baseline (Phase Details)
+**v0.13.0 — Consumer-Owned Output:**
 
-### Phase 1: Event-Sourced Host Core (CLI + gRPC/mTLS)
-
-**Goal**: A user can manage router DNS host entries end-to-end through an event-sourced, mTLS-secured client-server system.
-**Depends on**: Nothing (foundation)
-**Requirements**: CORE-01, CORE-02, CORE-03, CORE-04, CORE-05, ALIAS-01
-**Success Criteria** (what must be TRUE):
-
-1. User can add, update, and remove host entries (IP + hostname) from the CLI and see them reflected in the generated `hosts(5)` file
-2. Every mutation is persisted as an immutable event in the SQLite event log; replaying events reproduces current state
-3. Client and server refuse to communicate without valid mutual TLS certificates
-4. User can assign multiple aliases to one canonical entry and browse/import/export entries via TUI and table/JSON/CSV
-
-**Plans**: shipped (pre-GSD)
-**Status**: Complete — shipped (v0.10.13; migrated Rust → Go 2026-02-22)
-
-### Phase 2: Certificate Lifecycle (SIGHUP + ACME DNS-01)
-
-**Goal**: The server keeps its TLS identity current with zero-downtime reloads and automatic ACME issuance.
-**Depends on**: Phase 1
-**Requirements**: CERT-01, ACME-01, ACME-02
-**Success Criteria** (what must be TRUE):
-
-1. Sending SIGHUP reloads certificates and config without dropping in-flight connections (validated against Vault Agent rotation)
-2. The server automatically obtains and renews TLS certificates via ACME on a renewal loop
-3. ACME DNS-01 challenges complete through Cloudflare using env-expanded credentials
-
-**Plans**: shipped (pre-GSD)
-**Status**: Complete — shipped (v0.10.13)
-
-### Phase 3: Kubernetes Operator (HostMapping + IngressRoute)
-
-**Goal**: Cluster resources register their hostnames in router DNS automatically over mTLS.
-**Depends on**: Phase 1
-**Requirements**: OPER-01, OPER-02, OPER-03
-**Success Criteria** (what must be TRUE):
-
-1. Creating a HostMapping custom resource results in a corresponding router DNS entry
-2. IngressRoute hostnames sync to router DNS entries with configurable IP resolution
-3. Deleting a source resource removes its DNS entry via the deletion scheduler
-
-**Plans**: shipped (pre-GSD)
-**Status**: Complete — shipped (v0.10.13; HostMapping + IngressRoute controllers only)
-
-### Phase 4: Observability (OpenTelemetry)
-
-**Goal**: Operators can observe server behavior through metrics and distributed traces.
-**Depends on**: Phase 1
-**Requirements**: OBS-01, OBS-02
-**Success Criteria** (what must be TRUE):
-
-1. The server exports metrics via OpenTelemetry (OTLP / Prometheus) that a collector can scrape
-2. Trace context propagates across gRPC requests so a request can be followed end-to-end
-
-**Plans**: shipped (pre-GSD)
-**Status**: Complete — shipped (v0.10.13)
-
-### Phase 5: Split-Horizon DNS Output (dnsmasq + unbound)
-
-**Goal**: The server emits authoritative resolver config for the internal domain without leaking ECH/AAAA to public recursion.
-**Depends on**: Phase 1
-**Requirements**: DNSOUT-01, DNSOUT-02
-**Success Criteria** (what must be TRUE):
-
-1. On each successful write the server regenerates a `dnsmasq` config alongside the hosts file
-2. The server emits an `unbound` config with one `local-zone "<fqdn>." static` per managed name (hostname + each alias)
-3. Querying a managed name's HTTPS (type-65) or AAAA record does not leak to upstream recursion, and unmanaged sibling names are not NXDOMAIN'd (ADR router-hosts-bzg)
-
-**Plans**: shipped (pre-GSD)
-**Status**: Complete — shipped (v0.10.13)
-
-### Phase 6: Aggregate Compaction (manual RPC + gauges)
-
-**Goal**: An operator can bound event-log growth for a runaway aggregate and observe when to act.
-**Depends on**: Phase 1
-**Requirements**: COMP-01, COMP-02
-**Success Criteria** (what must be TRUE):
-
-1. Invoking `CompactAggregates` (RPC/CLI) replaces an aggregate's history with a single `HostCompacted` seed event at the preserved OCC version, atomically
-2. A compacted aggregate rehydrates to identical live/deleted state with its ULID and hostname preserved
-3. `router_hosts_aggregate_events_max` and `router_hosts_aggregates_over_threshold` gauges are exported for remediation alerts
-
-**Plans**: shipped (pre-GSD)
-**Status**: Complete — shipped (v0.10.13; governed by ADRs v5b, vl8, 4w2)
-
-## ✅ v0.11.0 — K8s-Native Automation (Phase Details)
-
-### Phase 7: Gateway API Support
-
-**Goal**: Gateway API routes auto-populate router DNS, closing the largest operator-parity gap toward the north star.
-**Depends on**: Phase 3
-**Requirements**: GW-01, GW-02, GW-03
-**Success Criteria** (what must be TRUE):
-
-1. Creating an HTTPRoute, GRPCRoute, or TLSRoute results in router DNS entries for each of its hostnames
-2. Route entry IPs are resolved from the parent Gateway's `status.addresses`
-3. Deleting or editing a route updates/removes the corresponding DNS entries, and the shipped Helm chart + RBAC grant the operator watch/list access to Gateway API resources
-
-**Plans**: 6/6 plans executed
-
-Plans:
-**Wave 1**
-
-- [x] 07-01-PLAN.md — Tracer: pin gateway-api v1.6.1, share the host-ids helpers, and take one HTTPRoute hostname end to end into a router DNS entry
-- [x] 07-06-PLAN.md — Helm chart: Gateway API RBAC, `gateway.enabled` opt-in, and chart docs
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 07-02-PLAN.md — Expand to GRPCRoute and TLSRoute; filter wildcard, duplicate, and invalid hostnames
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [x] 07-03-PLAN.md — Complete IP resolution from parent Gateway `status.addresses`, including fallback and no-IP requeue
-
-**Wave 4** *(blocked on Wave 3 completion)*
-
-- [x] 07-04-PLAN.md — Route lifecycle: create/update/delete diff, finalizer cleanup, corrupt-annotation safety
-
-**Wave 5** *(blocked on Wave 4 completion)*
-
-- [x] 07-05-PLAN.md — parentRef field index, Gateway re-enqueue, and CRD-presence gating for every watched kind
-
-**Status**: Complete (2026-07-26) — 6 plans across 5 waves; verified 16/16 must-haves. Code review found 4 Critical + 2 Warning issues, all fixed and re-verified before completion.
-
-### Phase 8: Kubernetes Service Controller
-
-**Goal**: Externally-reachable Services register their DNS automatically, completing "Gateway API + Ingress + Services" parity.
-**Depends on**: Phase 3
-**Requirements**: SVC-01, SVC-02
-**Success Criteria** (what must be TRUE):
-
-1. A LoadBalancer or NodePort Service with the configured annotations produces router DNS entries
-2. Service IPs are resolved per the IP-resolution rules, and entries are removed when the Service is deleted
-
-**Plans**: 5/5 plans executed
-
-Plans:
-**Wave 1**
-
-- [x] 08-01-PLAN.md — Tracer: one annotated LoadBalancer Service becomes one router DNS entry, behind `--enable-service`
-
-**Wave 2** *(blocked on Wave 1 completion)*
-
-- [x] 08-02-PLAN.md — IP resolution matrix, the four failure/waiting Events, and the cluster-scoped `events` RBAC fix
-
-**Wave 3** *(blocked on Wave 2 completion)*
-
-- [x] 08-03-PLAN.md — Hostname validation, aliases, and the fail-closed per-host sync path
-- [x] 08-05-PLAN.md — Chart `serviceController.enabled` toggle, `task test:chart` content assertions, and chart docs
-
-**Wave 4** *(blocked on Wave 3 completion)*
-
-- [x] 08-04-PLAN.md — Desired-set diff, provenance-gated adoption, and finalizer cleanup
-
-**Status**: Complete (2026-07-30) — 5 plans across 4 waves; 2/2 success criteria verified. Deep code review found 2 Critical + 2 Warning, all fixed and re-verified; security audit closed 20/21 threats with `threats_open: 0`; UAT 39/40 (1 blocked on deployment). Shipped in PR #381. **Deployment caveat:** T-08-04 (Events RBAC) remains live in production until v0.11.0 is released and the ArgoCD pin is bumped — see `08-SECURITY.md` § Deployment Caveat.
-
-## ✅ v0.12.0 — Hook Reliability & Metrics (Phase Details)
-
-Archived — see [`milestones/v0.12.0-ROADMAP.md`](milestones/v0.12.0-ROADMAP.md)
-for full phase detail, plans, stats, and carried-forward items.
-
-- [x] **Phase 9: Hook Reliability & Metrics** — 5/5 plans, complete 2026-07-31,
-  shipped in PR #389. Requirements HOOK-01, HOOK-02.
+- [x] **Phase 1: Consumer-Rendered Output (templates + sink)** - Caller-supplied templates, one-shot and as a continuous sink (completed 2026-08-01)
 
 ## 📋 v0.13.0 — Consumer-Owned Output (Phase Details)
 
-### Phase 10: Consumer-Rendered Output (templates + sink)
+### Phase 1: Consumer-Rendered Output (templates + sink)
 
 **Goal**: A consumer defines its own output format and keeps it current, so one stateful server feeds N independent consumers and new resolver formats stop requiring an upstream release.
-**Depends on**: Phase 1
-**Requirements**: TMPL-01, TMPL-02, TMPL-03, TMPL-04, TMPL-05, TMPL-06, TMPL-07
+**Depends on**: Nothing in this milestone. Builds on already-shipped surfaces — the event-sourced host core and `ExportHosts` streaming (v0.10.13, previous-numbering Phase 1) — so it starts from a green baseline rather than waiting on sibling work.
+**Requirements**: TMPL-01, TMPL-02, TMPL-03, TMPL-04, TMPL-05, TMPL-06, TMPL-07, TMPL-08
 **Success Criteria** (what must be TRUE):
 
 1. A caller supplies a template and receives host data rendered through it, with no code change to this project
 2. The field set a template may reference is documented and versioned, and a template referencing an undefined key fails loudly rather than rendering empty
 3. A render or write failure leaves any previously written artifact byte-identical, and a concurrent reader never observes a partially written file
 4. Sink mode reflects a host mutation without operator intervention and recovers on its own after a connection interruption, without emitting a truncated artifact
-5. Neither side of a stream can be driven out of memory by the other: the server yields lazily instead of materializing the full result set, and the client refuses an unbounded response rather than collecting it
-6. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
+5. The client cannot be driven out of memory by the server: wire messages are bounded, the client applies backpressure, and it refuses an unbounded response rather than collecting it. **Server-side materialization is explicitly out of scope for this phase** — see the amended TMPL-06 and follow-up issue #400; `store.ListAll` still folds every aggregate's event log into memory before streaming
+6. Every snapshot carries a change ID naming the server state it represents, so a consumer can tell whether it is current and two consumers can be compared for convergence
+7. Existing `unbound_conf_path` and `ExportHosts` format behavior is unchanged, demonstrated by existing tests still passing
 
-**Plans**: TBD
-**Status**: Not started — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07
+**Plans**: 11/11 plans executed; 2 gap-closure plans added 2026-08-01 (11 total)
+
+Plans:
+**Wave 1**
+
+- [x] 01-09-PLAN.md — Change-ID storage foundation: commit-ordered event IDs, in-transaction ordering guard, and `LatestEventID` (wave 1)
+- [x] 01-05-PLAN.md — Sink health primitives: mTLS CN extraction, health registry, OTel gauges (wave 1)
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [x] 01-01-PLAN.md — Tracer: end-to-end template render over a new `WatchHosts` RPC, shared atomic writer (wave 2)
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [x] 01-02-PLAN.md — Template data contract: version gate, sanitizing FuncMap, published field set, worked examples (wave 3)
+- [x] 01-04-PLAN.md — Bounded wire messages and gRPC keepalive on both sides (wave 3)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [x] 01-03-PLAN.md — Client config error propagation, then bounded fail-loud stream collection (entries and bytes) (wave 4)
+- [x] 01-06-PLAN.md — Server-side sink streaming: change notification and concurrent follow mode (wave 4)
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [x] 01-07-PLAN.md — Client sink CLI: `watch`, injectable runtime policy, sidecar status, post-write hook, reconnect (wave 5)
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [x] 01-08-PLAN.md — Real-mTLS e2e with server stop/start, operator guide, manual verification checkpoint (wave 6)
+
+**Gap closure** *(added 2026-08-01 after UAT; closes G-01-1)*
+
+- [x] 01-10-PLAN.md — Honor explicit `--config` in the client: plumb `Flags.Config` into the config loader, fail loudly on an unreadable path, never merge an XDG-discovered config (wave 1)
+- [x] 01-11-PLAN.md — Real-process cold-start e2e (`proc_e2e` tag): launch the built binary as OS processes and prove `watch --config` targets the named server (wave 2, depends on 01-10)
+
+**Status**: Planned 2026-07-31 — approved 2026-07-25 from #364 (`approved-feature`); absorbs #23 (lazy `ExportHosts` streaming) as TMPL-06 and #38 (client-side collection bound) as TMPL-07. **Replanned 2026-07-31** after cross-AI review (`01-REVIEWS.md`, reviewers codex + pi): all 8 plans revised in place, plan count and wave structure unchanged. TMPL-08 (change identity) added; TMPL-06 rescoped with storage-layer laziness deferred to #400. **Gap closure planned 2026-08-01** after UAT found G-01-1 (blocker): `--config` was registered but never read by the client, so `watch --config <path>` silently dialed whatever the XDG search found. Plans 01-10 (fix) and 01-11 (real-process e2e that can observe it) added; no TMPL requirement status changes
+
+**Highest-risk requirement**: TMPL-02. Once consumers depend on a template field
+set, that set becomes a compatibility surface the proto contract does not cover
+— renaming or removing a field breaks every consumer template even though the
+proto is untouched. Decide the contract deliberately at plan time rather than
+letting it default to whatever the internal struct exposes.
+
+**Open for planning** (deliberately unresolved in the roadmap):
+
+- Template engine — `text/template` is the default assumption (no new dependency), but the choice is a planning decision
+- Transport for sink mode — client-initiated is preferred so the server holds no per-sink registration, credentials, or retry state; server-push was considered and rejected in #364
+
+**Explicitly out of scope**: changes to `unbound_conf_path` (#349) and to the
+existing `ExportHosts` format strings.
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 (Phases 1–6 already shipped)
+Single phase this milestone — Phase 1 stands alone.
+
+**Current milestone (v0.13.0):**
+
+| Phase | Plans Complete | Status | Completed |
+|-------|----------------|--------|-----------|
+| 1. Consumer-Rendered Output | 11/11 | Complete    | 2026-08-01 |
+
+**Shipped (previous continuous numbering):**
 
 | Phase | Milestone | Plans Complete | Status | Completed |
 |-------|-----------|----------------|--------|-----------|
-| 1. Event-Sourced Host Core | v1 Baseline | shipped | Complete | v0.10.13 |
-| 2. Certificate Lifecycle | v1 Baseline | shipped | Complete | v0.10.13 |
-| 3. Kubernetes Operator | v1 Baseline | shipped | Complete | v0.10.13 |
-| 4. Observability | v1 Baseline | shipped | Complete | v0.10.13 |
-| 5. Split-Horizon DNS Output | v1 Baseline | shipped | Complete | v0.10.13 |
-| 6. Aggregate Compaction | v1 Baseline | shipped | Complete | v0.10.13 |
-| 7. Gateway API Support | K8s-Native Automation | 6/6 | Complete | 2026-07-26 |
-| 8. Service Controller | K8s-Native Automation | 5/5 | Complete | 2026-07-30 |
-| 9. Hook Reliability & Metrics | Hook Reliability & Metrics | 5/5 | Complete | 2026-07-31 |
-| 10. Consumer-Rendered Output | Consumer-Owned Output | 0/TBD | Not started | - |
+| 1. Event-Sourced Host Core | v0.10.13 | shipped | Complete | v0.10.13 |
+| 2. Certificate Lifecycle | v0.10.13 | shipped | Complete | v0.10.13 |
+| 3. Kubernetes Operator | v0.10.13 | shipped | Complete | v0.10.13 |
+| 4. Observability | v0.10.13 | shipped | Complete | v0.10.13 |
+| 5. Split-Horizon DNS Output | v0.10.13 | shipped | Complete | v0.10.13 |
+| 6. Aggregate Compaction | v0.10.13 | shipped | Complete | v0.10.13 |
+| 7. Gateway API Support | v0.11.0 | 6/6 | Complete | 2026-07-26 |
+| 8. Service Controller | v0.11.0 | 5/5 | Complete | 2026-07-30 |
+| 9. Hook Reliability & Metrics | v0.12.0 | 5/5 | Complete | 2026-07-31 |

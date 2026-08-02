@@ -10,6 +10,7 @@ import (
 
 	"github.com/samber/oops"
 
+	"github.com/fzymgc-house/router-hosts/internal/eventid"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
@@ -70,7 +71,7 @@ var migrationFiles = []struct {
 // After SQL migrations, it runs the legacy Rust data migration if a pre-Go
 // database is detected.
 func (s *Storage) Initialize(ctx context.Context) error {
-	return s.withConn(ctx, func(conn *sqlite.Conn) error {
+	if err := s.withConn(ctx, func(conn *sqlite.Conn) error {
 		for _, m := range migrationFiles {
 			sql, err := migrations.ReadFile(m.path)
 			if err != nil {
@@ -88,6 +89,12 @@ func (s *Storage) Initialize(ctx context.Context) error {
 		}
 
 		// Go-based migration: convert Rust-era host_events to Go events table.
+		// This is the one INSERT INTO events statement that does not funnel
+		// through insertEvent's ordering guard (legacy_migration.go:183) — see
+		// the guard's comment in eventstore.go for the full safety argument.
+		// It runs strictly before the eventid.Seed call below, which is what
+		// makes it safe: whatever IDs it inserts are already inside the
+		// maximum that seeding reads.
 		if !isMigrationApplied(conn, legacyMigrationVersion) {
 			if err := migrateLegacyRustData(conn, s.log); err != nil {
 				return oops.Wrapf(err, "legacy Rust migration")
@@ -110,7 +117,26 @@ func (s *Storage) Initialize(ctx context.Context) error {
 		}
 
 		return assertSnapshotsSchema(conn)
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Seed the internal/eventid generator's floor from the persisted log
+	// maximum, AFTER the migration body above has fully committed (including
+	// the legacy migration's out-of-band inserts). This is what makes the
+	// process generator monotonic against the PERSISTED log rather than only
+	// against its own history (review round-3 H3): without it, the first ID
+	// minted after a restart that lands inside the same millisecond as the
+	// last pre-restart append could sort below it. A LatestEventID read
+	// error here is real (not merely "log is empty" — that case returns the
+	// zero ULID with a nil error, which seeds harmlessly) and must fail
+	// Initialize rather than start the process with an unseeded generator.
+	max, err := s.LatestEventID(ctx)
+	if err != nil {
+		return oops.Wrapf(err, "seed event id generator from persisted log")
+	}
+	eventid.Seed(max)
+	return nil
 }
 
 // isMigrationApplied checks whether a migration version has been recorded.

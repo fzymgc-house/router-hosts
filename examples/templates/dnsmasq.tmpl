@@ -1,0 +1,31 @@
+{{define "contract_version"}}1{{end -}}
+{{/*
+	Worked example: dnsmasq conf-dir output (TMPL-02).
+	See docs/reference/template-contract.md for the full field/function set.
+
+	Emits a local=/address= directive pair per managed name (hostname plus
+	each alias): local= makes dnsmasq authoritative for that exact name so
+	the *other* record type returns NODATA instead of being forwarded
+	upstream (see the Configuration Reference for why the pairing matters).
+
+	.Comment and each .Tags element are writer-supplied and unescaped
+	without `sanitize` — a value containing a newline would otherwise
+	break out of this "# ..." comment line and inject a live dnsmasq
+	directive. See the "Template functions" section of the contract page.
+	Every reference to .Comment below is bound to $comment via sanitize
+	immediately, rather than emitted raw; every tag element is sanitized
+	individually before being joined into the bracketed list.
+*/ -}}
+{{range .Entries -}}
+{{$comment := sanitize .Comment -}}
+{{$tags := .Tags -}}
+{{if or $comment $tags}}# {{if $comment}}{{$comment}}{{end}}{{if $tags}} [{{range $i, $t := $tags}}{{if $i}}, {{end}}{{sanitize $t}}{{end}}]{{end}}
+{{end -}}
+local=/{{.Hostname}}/
+address=/{{.Hostname}}/{{.IPAddress}}
+{{$ip := .IPAddress -}}
+{{range .Aliases -}}
+local=/{{.}}/
+address=/{{.}}/{{$ip}}
+{{end -}}
+{{end -}}

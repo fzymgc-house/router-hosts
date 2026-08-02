@@ -151,3 +151,47 @@ command = "notify-send 'router-hosts update failed'"
 | `cert_path` | path | required | Client certificate file |
 | `key_path` | path | required | Client private key file |
 | `ca_cert_path` | path | required | CA certificate for server verification |
+
+### `[limits]`
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `max_stream_entries` | int | `50000` | Maximum entries a single collecting command (`host list`, `host search`, `snapshot list`, `render`) accumulates from a server response |
+| `max_stream_bytes` | int | `67108864` (64 MiB) | Maximum accumulated serialized size, in bytes, of the same response |
+
+Both bounds are independent and are enforced at every collecting call site: a
+response can cross the byte budget while its entry count stays far below
+`max_stream_entries` (comment and tag text carry no length validation, unlike
+hostnames and aliases), and the reverse. Crossing **either** bound refuses
+the whole response — the client never returns a truncated result, and never
+silently drops entries to fit.
+
+`max_stream_bytes` counts serialized protobuf bytes as reported by
+`proto.Size` on each message actually received over the wire. This is a
+conservative operational bound on wire volume received, not an exact Go heap
+ceiling: slice headers, string headers, and the converted Go objects the
+client builds from each message all sit outside this count.
+
+Both keys can also be set via environment variable, which overrides the
+config file:
+
+| Environment variable | Overrides |
+|---|---|
+| `ROUTER_HOSTS_MAX_STREAM_ENTRIES` | `limits.max_stream_entries` |
+| `ROUTER_HOSTS_MAX_STREAM_BYTES` | `limits.max_stream_bytes` |
+
+A configured value of `0` (or an absent `[limits]` table) resolves to the
+default above rather than to "unlimited." A negative value, or a
+non-numeric environment variable value, is rejected at load time with an
+error naming the offending key.
+
+### Invalid config file handling
+
+The client refuses to start when a config file is *found but unusable*: the
+TOML does not parse, it contains an unknown key, or it fails validation. The
+error names the offending file path and the specific problem (parse failure,
+the unknown key, or the validation message).
+
+An *absent* config file is not an error — running on environment variables
+and/or CLI flags alone remains fully supported. Only a config file that
+exists and is wrong is treated as an operator error.

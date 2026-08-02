@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fzymgc-house/router-hosts/internal/client"
 )
 
 func TestSnapshotCmd_HasSubcommands(t *testing.T) {
@@ -231,6 +233,23 @@ func TestSnapshotRollback_QuietMode(t *testing.T) {
 	require.NoError(t, root.Execute())
 
 	assert.Empty(t, buf.String())
+}
+
+// TestCollectSnapshotStream_CapExceeded (D-14, TMPL-07, review L1/L6).
+func TestCollectSnapshotStream_CapExceeded(t *testing.T) {
+	setupCmdTest(t, client.WithMaxStreamEntries(1))
+
+	for _, name := range []string{"snap1", "snap2"} {
+		createSnapshotQuiet(t, name)
+	}
+
+	root := NewRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"--format", "json", "snapshot", "list"})
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1 entries")
 }
 
 func TestSnapshotCreate_WithTrigger(t *testing.T) {

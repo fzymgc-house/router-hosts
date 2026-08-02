@@ -9,6 +9,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/fzymgc-house/router-hosts/internal/client"
 )
 
 func TestHostCmd_HasCRUDSubcommands(t *testing.T) {
@@ -390,4 +392,70 @@ func TestHostList_EmptyResult(t *testing.T) {
 	var entries []json.RawMessage
 	require.NoError(t, json.Unmarshal(buf.Bytes(), &entries))
 	assert.Empty(t, entries)
+}
+
+// ---------------------------------------------------------------------------
+// Bounded, fail-loud stream collection (D-14, TMPL-07, review L1/L6)
+// ---------------------------------------------------------------------------
+
+func TestCollectHostStream_CapExceeded(t *testing.T) {
+	setupCmdTest(t, client.WithMaxStreamEntries(1))
+
+	for _, h := range []string{"a.local", "b.local"} {
+		addHostQuiet(t, "10.0.0.1", h)
+	}
+
+	root := NewRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"--format", "json", "host", "list"})
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "1 entries")
+}
+
+func TestCollectHostStream_AtCapSucceeds(t *testing.T) {
+	setupCmdTest(t, client.WithMaxStreamEntries(2))
+
+	for _, h := range []string{"a.local", "b.local"} {
+		addHostQuiet(t, "10.0.0.1", h)
+	}
+
+	root := NewRootCmd()
+	var buf bytes.Buffer
+	root.SetOut(&buf)
+	root.SetArgs([]string{"--format", "json", "host", "list"})
+	require.NoError(t, root.Execute())
+
+	var entries []json.RawMessage
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entries))
+	assert.Len(t, entries, 2)
+}
+
+// TestCollectHostStream_ByteBudgetExceeded seeds a single host carrying a
+// long comment — entry count (1) stays far below the default entry limit
+// (50,000) while the tiny configured byte budget trips, proving the two
+// bounds are checked independently (review L1: an entry count alone does
+// not bound memory because comment/tag text has no length validation).
+func TestCollectHostStream_ByteBudgetExceeded(t *testing.T) {
+	setupCmdTest(t, client.WithMaxStreamBytes(200))
+
+	root := NewRootCmd()
+	var addOut bytes.Buffer
+	root.SetOut(&addOut)
+	longComment := strings.Repeat("x", 2000)
+	root.SetArgs([]string{
+		"--quiet", "host", "add",
+		"--ip", "10.0.0.1", "--hostname", "big.local",
+		"--comment", longComment,
+	})
+	require.NoError(t, root.Execute())
+
+	root = NewRootCmd()
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	root.SetArgs([]string{"--format", "json", "host", "list"})
+	err := root.Execute()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "200 bytes")
 }

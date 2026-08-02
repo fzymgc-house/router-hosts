@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/fzymgc-house/router-hosts/internal/config"
+	"github.com/fzymgc-house/router-hosts/internal/server"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -190,4 +191,77 @@ func generateTestCerts(t *testing.T, dir string) (certPath, keyPath, caPath stri
 	require.NoError(t, os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600))
 
 	return certPath, keyPath, caPath
+}
+
+// ---------------------------------------------------------------------------
+// gRPC keepalive (TMPL-06 amended plan, review L14/D-09/T-1-13)
+// ---------------------------------------------------------------------------
+
+func TestKeepalive_ClientParams(t *testing.T) {
+	params := KeepaliveParams()
+	assert.Equal(t, 20*time.Second, params.Time, "client ping interval")
+	assert.Equal(t, 10*time.Second, params.Timeout, "client ping timeout")
+	assert.True(t, params.PermitWithoutStream, "pings must continue with no active RPC")
+}
+
+// TestKeepalive_ClientIntervalRespectsServerMinTime pins the invariant that
+// silently produces GOAWAY storms when violated: a client pinging more often
+// than the server's enforcement minimum gets disconnected.
+func TestKeepalive_ClientIntervalRespectsServerMinTime(t *testing.T) {
+	clientTime := KeepaliveParams().Time
+	serverMinTime := server.KeepaliveEnforcementPolicy().MinTime
+	assert.GreaterOrEqual(t, clientTime, serverMinTime)
+}
+
+// ---------------------------------------------------------------------------
+// Stream collection limits (D-14, TMPL-07, review L1/L6).
+// ---------------------------------------------------------------------------
+
+func TestClient_MaxStreamEntriesFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile, caFile := generateTestCerts(t, dir)
+	cfg := &config.ClientConfig{
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CertPath: certFile, KeyPath: keyFile, CACertPath: caFile},
+		Limits: config.ClientLimitsConfig{MaxStreamEntries: 42},
+	}
+
+	c, err := NewClient(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, 42, c.MaxStreamEntries())
+}
+
+func TestClient_MaxStreamEntriesDefaultsFromConn(t *testing.T) {
+	c := NewClientFromConn(nil)
+	assert.Equal(t, config.DefaultMaxStreamEntries, c.MaxStreamEntries())
+	assert.Equal(t, int64(config.DefaultMaxStreamBytes), c.MaxStreamBytes())
+}
+
+func TestClient_MaxStreamBytesFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile, caFile := generateTestCerts(t, dir)
+	cfg := &config.ClientConfig{
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CertPath: certFile, KeyPath: keyFile, CACertPath: caFile},
+		Limits: config.ClientLimitsConfig{MaxStreamBytes: 8192},
+	}
+
+	c, err := NewClient(cfg)
+	require.NoError(t, err)
+	assert.Equal(t, int64(8192), c.MaxStreamBytes())
+}
+
+func TestClient_OptionOverridesConfiguredLimit(t *testing.T) {
+	dir := t.TempDir()
+	certFile, keyFile, caFile := generateTestCerts(t, dir)
+	cfg := &config.ClientConfig{
+		Server: config.ClientServerConfig{Address: "localhost:50051"},
+		TLS:    config.ClientTLSConfig{CertPath: certFile, KeyPath: keyFile, CACertPath: caFile},
+		Limits: config.ClientLimitsConfig{MaxStreamEntries: 42, MaxStreamBytes: 8192},
+	}
+
+	c, err := NewClient(cfg, WithMaxStreamEntries(3), WithMaxStreamBytes(100))
+	require.NoError(t, err)
+	assert.Equal(t, 3, c.MaxStreamEntries())
+	assert.Equal(t, int64(100), c.MaxStreamBytes())
 }

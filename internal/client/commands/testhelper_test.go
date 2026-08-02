@@ -20,7 +20,13 @@ import (
 // setupCmdTest creates a bufconn-backed gRPC server and replaces
 // newClientFromFlags so that all cobra commands connect to it.
 // It restores the original newClientFromFlags and Flags on cleanup.
-func setupCmdTest(t *testing.T) {
+//
+// opts is the pinned TMPL-07 test seam (review L6): pass
+// client.WithMaxStreamEntries/client.WithMaxStreamBytes to force a small
+// stream-collection ceiling instead of seeding tens of thousands of host
+// entries to drive the refusal path. Variadic so every existing
+// setupCmdTest(t) call site keeps compiling unchanged (review M8).
+func setupCmdTest(t *testing.T, opts ...client.Option) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -62,7 +68,7 @@ func setupCmdTest(t *testing.T) {
 	// NewClientFromConn does not take ownership of the connection,
 	// so the command's defer c.Close() is a no-op.
 	newClientFromFlags = func() (*client.Client, error) {
-		return client.NewClientFromConn(conn), nil
+		return client.NewClientFromConn(conn, opts...), nil
 	}
 	Flags = GlobalFlags{}
 }

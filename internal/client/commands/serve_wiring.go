@@ -20,6 +20,7 @@ import (
 type hooksAndMetrics struct {
 	metrics    *server.Metrics
 	hookExec   *server.HookExecutor
+	sinkHealth *server.SinkHealth
 	serverOpts []server.Option
 	svcOpts    []server.ServiceOption
 	cleanup    func()
@@ -37,6 +38,15 @@ type hooksAndMetrics struct {
 func configureMetricsAndHooks(cfg *config.Config, store storage.EventStore, logger *slog.Logger) (hooksAndMetrics, error) {
 	var result hooksAndMetrics
 	var cleanups []func()
+
+	// Constructed unconditionally, before the metrics block: a deployment
+	// without OTel still benefits from status recording over WatchHosts
+	// (the registry works standalone), and appending the option
+	// unconditionally below keeps the service's behavior identical whether
+	// or not OTel is configured.
+	sinkHealth := server.NewSinkHealth()
+	result.sinkHealth = sinkHealth
+	result.svcOpts = append(result.svcOpts, server.WithSinkHealth(sinkHealth))
 
 	if cfg.Metrics != nil && cfg.Metrics.OTel != nil {
 		metrics, err := server.NewMetricsFromConfig(cfg.Metrics.OTel)
@@ -59,6 +69,9 @@ func configureMetricsAndHooks(cfg *config.Config, store storage.EventStore, logg
 
 		if rerr := metrics.RegisterAggregateEventGauges(store, server.DefaultAggregateEventsWarnThreshold); rerr != nil {
 			return hooksAndMetrics{}, oops.Wrapf(rerr, "register aggregate-event gauges")
+		}
+		if rerr := metrics.RegisterSinkGauges(sinkHealth); rerr != nil {
+			return hooksAndMetrics{}, oops.Wrapf(rerr, "register sink gauges")
 		}
 	}
 

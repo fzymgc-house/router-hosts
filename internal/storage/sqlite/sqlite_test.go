@@ -14,6 +14,7 @@ import (
 	"zombiezen.com/go/sqlite/sqlitex"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/eventid"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 )
 
@@ -49,8 +50,12 @@ func makeEnvelope(aggregateID ulid.ULID, event any, version int64, createdAt tim
 	if err != nil {
 		panic(fmt.Sprintf("NewHostEvent: %v", err))
 	}
+	// Minted through the shared generator so the store never has cause to
+	// replace it: callers of this helper assert env.EventID == the
+	// read-back ID, which only holds unconditionally when the proposed ID
+	// already sorts above the log's maximum.
 	return domain.EventEnvelope{
-		EventID:     ulid.Make(),
+		EventID:     eventid.New(),
 		AggregateID: aggregateID,
 		Event:       he,
 		Version:     version,
@@ -1080,7 +1085,7 @@ func TestReplayEventsUnknownEventTypeReturnsError(t *testing.T) {
 	// the Type field directly, bypassing EventType.UnmarshalJSON. This
 	// simulates a future or corrupt event that Decode() cannot handle.
 	unknownEnv := domain.EventEnvelope{
-		EventID:     ulid.Make(),
+		EventID:     eventid.New(),
 		AggregateID: aggID,
 		Event: domain.HostEvent{
 			Type: domain.EventType("FutureEventV99"),
@@ -1241,7 +1246,7 @@ func TestReplayEventsHostCompactedSeedsFullState(t *testing.T) {
 	he, err := domain.NewHostEvent(ev)
 	require.NoError(t, err)
 	env := domain.EventEnvelope{
-		EventID: ulid.Make(), AggregateID: aggID, Event: he, Version: 42,
+		EventID: eventid.New(), AggregateID: aggID, Event: he, Version: 42,
 		CreatedAt: time.Date(2026, 6, 26, 1, 0, 0, 0, time.UTC),
 	}
 
@@ -1265,7 +1270,7 @@ func TestReplayEventsHostCompactedDeleted(t *testing.T) {
 	}
 	he, err := domain.NewHostEvent(ev)
 	require.NoError(t, err)
-	env := domain.EventEnvelope{EventID: ulid.Make(), AggregateID: aggID, Event: he, Version: 7, CreatedAt: time.Now().UTC()}
+	env := domain.EventEnvelope{EventID: eventid.New(), AggregateID: aggID, Event: he, Version: 7, CreatedAt: time.Now().UTC()}
 	entry, err := replayEvents(aggID, []domain.EventEnvelope{env})
 	require.NoError(t, err)
 	require.NotNil(t, entry)

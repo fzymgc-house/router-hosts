@@ -36,6 +36,8 @@ type HostsServiceImpl struct {
 	dnsmasqGen        *DnsmasqConfGenerator
 	unboundGen        *UnboundConfGenerator
 	hooks             *HookExecutor
+	changes           *changeNotifier
+	sinkHealth        *SinkHealth
 	startTime         time.Time
 	retentionMaxSnaps *int
 	retentionMaxAge   *int
@@ -66,6 +68,15 @@ func WithHookExecutor(hooks *HookExecutor) ServiceOption {
 	return func(s *HostsServiceImpl) { s.hooks = hooks }
 }
 
+// WithSinkHealth sets the per-consumer sink health registry that WatchHosts
+// follow mode records identity, status, and convergence state into. Every
+// use site checks for nil: the bufconn test harnesses construct the service
+// without this option, and a nil registry disables per-consumer recording
+// without disabling streaming itself.
+func WithSinkHealth(health *SinkHealth) ServiceOption {
+	return func(s *HostsServiceImpl) { s.sinkHealth = health }
+}
+
 // WithVersion sets the version and build info strings returned by the Health RPC.
 func WithVersion(version, buildInfo string) ServiceOption {
 	return func(s *HostsServiceImpl) {
@@ -88,6 +99,7 @@ func NewHostsServiceImpl(handler *CommandHandler, store storage.Storage, opts ..
 	svc := &HostsServiceImpl{
 		handler:   handler,
 		store:     store,
+		changes:   newChangeNotifier(),
 		startTime: time.Now(),
 		version:   "dev",
 		buildInfo: "dev",
@@ -120,6 +132,35 @@ func (s *HostsServiceImpl) RegenerateOutputs(ctx context.Context) {
 // (there is nothing to react to). This runs on every regeneration — startup and
 // after each host mutation — so downstream reloads (e.g. dnsmasq) stay in sync.
 func (s *HostsServiceImpl) regenerateOutputs(ctx context.Context, op string) {
+	// Notify every open WatchHosts follow-mode watcher FIRST, before any
+	// generator runs and before the nil/no-op early return below. Two
+	// independent reasons, either of which alone would tempt a later reader
+	// to move this call, so both are recorded here.
+	//
+	// Independence: the three generators below are server-owned filesystem
+	// writes (hosts file, dnsmasq conf, unbound conf) that have nothing to do
+	// with consumer-rendered output. Notifying after them would make every
+	// sink's snapshot latency wait on them, and an unrelated write failure
+	// would delay consumer updates — the opposite of this phase's goal of
+	// independent, consumer-owned rendering.
+	//
+	// Coverage: a deployment with no generator and no hook executor returns
+	// early below (s.hooks == nil || !ran), so any notify placed lower would
+	// be skipped entirely on that configuration, and a generator-less sink
+	// deployment would never be woken by a mutation.
+	//
+	// Notifying first is correct because the write is already durable by the
+	// time this function is entered: regenerateOutputs is called from
+	// AddHost, UpdateHost, DeleteHost, ImportHosts and RollbackToSnapshot,
+	// and in every one of those the command has committed before the call —
+	// a woken watcher reads the projection and sees the mutation. The sixth
+	// caller is startup (RegenerateOutputs), which has no immediately
+	// preceding write; notifying there is safe (an initial broadcast to
+	// whatever subscribers exist, which at startup is none), but this call
+	// site is "after a successful mutation" — the startup call is an initial
+	// broadcast, not a post-commit notify.
+	s.changes.Notify()
+
 	var (
 		ran     bool
 		errMsgs []string
@@ -598,6 +639,43 @@ func (s *HostsServiceImpl) ImportHosts(stream grpc.BidiStreamingServer[hostsv1.I
 	return stream.Send(&stats)
 }
 
+// exportChunkSize bounds the size of each ExportHostsResponse message sent to
+// the client. Mirrors importChunkSize in
+// internal/client/commands/importexport.go so both directions of hosts data
+// transfer use the same wire framing size.
+const exportChunkSize = 64 * 1024 // 64 KiB
+
+// exportChunkSender is the minimal surface sendExportChunks needs from the
+// gRPC stream. Narrowing to just Send (rather than the full
+// grpc.ServerStreamingServer[hostsv1.ExportHostsResponse]) lets the chunking
+// logic be exercised directly against a fake in tests.
+type exportChunkSender interface {
+	Send(*hostsv1.ExportHostsResponse) error
+}
+
+// sendExportChunks frames data into successive windows of at most
+// exportChunkSize bytes and sends one ExportHostsResponse per window. An
+// empty payload still sends exactly one response carrying an empty chunk,
+// preserving the pre-chunking single-message contract for an empty
+// inventory (review L14): a naive `for len(data) > 0` loop sends zero
+// messages here, which is a different observable contract and silently
+// breaks the client's drain loop.
+func sendExportChunks(stream exportChunkSender, data []byte) error {
+	if len(data) == 0 {
+		return stream.Send(&hostsv1.ExportHostsResponse{Chunk: data})
+	}
+	for offset := 0; offset < len(data); offset += exportChunkSize {
+		end := offset + exportChunkSize
+		if end > len(data) {
+			end = len(data)
+		}
+		if err := stream.Send(&hostsv1.ExportHostsResponse{Chunk: data[offset:end]}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // ExportHosts implements the server-streaming export RPC.
 func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream grpc.ServerStreamingServer[hostsv1.ExportHostsResponse]) error {
 	ctx := stream.Context()
@@ -675,7 +753,7 @@ func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream g
 		return status.Errorf(codes.InvalidArgument, "unsupported export format %q", format)
 	}
 
-	return stream.Send(&hostsv1.ExportHostsResponse{Chunk: data})
+	return sendExportChunks(stream, data)
 }
 
 // ---------------------------------------------------------------------------
@@ -970,6 +1048,7 @@ func (s *HostsServiceImpl) CompactAggregates(ctx context.Context, req *hostsv1.C
 
 	resp := &hostsv1.CompactAggregatesResponse{}
 	var reclaimed int64
+	var shrunk bool
 	for _, r := range results {
 		resp.Compacted = append(resp.Compacted, &hostsv1.CompactedAggregate{
 			AggregateId:  r.AggregateID.String(),
@@ -978,8 +1057,28 @@ func (s *HostsServiceImpl) CompactAggregates(ctx context.Context, req *hostsv1.C
 			Version:      r.Version,
 		})
 		reclaimed += r.EventsBefore - r.EventsAfter
+		if r.EventsBefore > r.EventsAfter {
+			shrunk = true
+		}
 	}
 	resp.TotalEventsReclaimed = reclaimed
+
+	// Second and last notify call expression in this package (review
+	// round-3 H1). CompactAggregates never calls regenerateOutputs —
+	// compaction changes the event log without changing host state, so
+	// there is nothing for the hosts-file, dnsmasq or unbound generators to
+	// regenerate — but a real compaction still advances MAX(event_id), and
+	// without this call every consumer's change ID would go stale until an
+	// unrelated mutation happened to land. This is D-22's accepted one
+	// redundant render per compaction; this call is what makes that render
+	// actually happen. Gated on !dryRun (a dry run mutates nothing) AND
+	// shrunk (a no-op compaction of an aggregate with <=1 event changes
+	// nothing either) so a preview or a trivial compaction does not produce
+	// a spurious wake.
+	if !req.GetDryRun() && shrunk {
+		s.changes.Notify()
+	}
+
 	return resp, nil
 }
 

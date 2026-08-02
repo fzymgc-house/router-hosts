@@ -2,14 +2,13 @@ package server
 
 import (
 	"context"
-	"crypto/rand"
-	"sync"
 	"time"
 
 	"github.com/oklog/ulid/v2"
 	"github.com/samber/oops"
 
 	"github.com/fzymgc-house/router-hosts/internal/domain"
+	"github.com/fzymgc-house/router-hosts/internal/eventid"
 	"github.com/fzymgc-house/router-hosts/internal/storage"
 	"github.com/fzymgc-house/router-hosts/internal/validation"
 )
@@ -17,10 +16,8 @@ import (
 // CommandHandler implements domain logic for host CRUD operations
 // using event sourcing with the storage layer.
 type CommandHandler struct {
-	store   storage.Storage
-	queue   *WriteQueue // serializes write operations; nil means direct writes
-	entropy *ulid.MonotonicEntropy
-	mu      sync.Mutex // protects entropy
+	store storage.Storage
+	queue *WriteQueue // serializes write operations; nil means direct writes
 }
 
 // NewCommandHandler creates a command handler backed by the given storage.
@@ -28,8 +25,7 @@ type CommandHandler struct {
 // Use NewCommandHandlerWithQueue to route writes through a serializing queue.
 func NewCommandHandler(store storage.Storage) *CommandHandler {
 	return &CommandHandler{
-		store:   store,
-		entropy: ulid.Monotonic(rand.Reader, 0),
+		store: store,
 	}
 }
 
@@ -38,9 +34,8 @@ func NewCommandHandler(store storage.Storage) *CommandHandler {
 // serializing concurrent writes at the application level.
 func NewCommandHandlerWithQueue(store storage.Storage, queue *WriteQueue) *CommandHandler {
 	return &CommandHandler{
-		store:   store,
-		queue:   queue,
-		entropy: ulid.Monotonic(rand.Reader, 0),
+		store: store,
+		queue: queue,
 	}
 }
 
@@ -53,11 +48,13 @@ func (h *CommandHandler) submitWrite(ctx context.Context, fn func() error) error
 	return fn()
 }
 
-// newID generates a new ULID. Safe for concurrent use.
+// newID generates a new ULID. Safe for concurrent use. Minted through the
+// shared internal/eventid generator rather than a per-handler entropy
+// source, so every CommandHandler's mints are monotonic against each other
+// and against the persisted log — see internal/eventid for why the
+// generator is shared.
 func (h *CommandHandler) newID() ulid.ULID {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	return ulid.MustNew(ulid.Timestamp(time.Now()), h.entropy)
+	return eventid.New()
 }
 
 // nextVersion returns the next sequential version given the current one.
