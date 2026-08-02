@@ -149,3 +149,50 @@ Single phase this milestone — Phase 1 stands alone.
 | 7. Gateway API Support | v0.11.0 | 6/6 | Complete | 2026-07-26 |
 | 8. Service Controller | v0.11.0 | 5/5 | Complete | 2026-07-30 |
 | 9. Hook Reliability & Metrics | v0.12.0 | 5/5 | Complete | 2026-07-31 |
+
+## Backlog
+
+Unsequenced items parked from the v0.13.0 milestone audit
+(`.planning/v0.13.0-MILESTONE-AUDIT.md`). Promote with `/gsd-review-backlog`.
+
+### Phase 999.1: Wire the three e2e tiers into CI (BACKLOG)
+
+**Goal:** `e2e`, `docker_e2e`, and `proc_e2e` gate merges instead of being
+developer-only. `proc_e2e` is the only tier that observes the CLI-flag to config
+seam — the exact blind spot that let blocker G-01-1 ship green through 45 UAT
+items — and it currently does not gate anything. Tracked as #403 (threat
+T-01-G1-13, disposition accept).
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.2: Close the hardware-dependent verification gap (BACKLOG)
+
+**Goal:** Run the verifications this environment cannot: UAT test 42 (resolver
+reload plus two-node convergence) and the four manual deployment checks from plan
+01-08, all recorded NOT-RUN in `01-VALIDATION.md`. Needs a real unbound host and a
+second machine. Until then phase 01 reports `uat-passed: false` permanently,
+because the predicate counts only `pass`/`passed`.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)
+
+### Phase 999.3: Server-side lazy streaming for store.ListAll (BACKLOG)
+
+**Goal:** Finish the half of TMPL-06 that was explicitly descoped. The wire is
+bounded and the client refuses an unbounded response, but `store.ListAll` still
+enumerates every aggregate and replays its full event log into memory before the
+first byte is sent. Needs a cursor-based `storage.HostProjection` method. Tracked
+as #400 (absorbs #23's wire-layer half) and #401.
+**Requirements:** TBD
+**Plans:** 0 plans
+
+Plans:
+
+- [ ] TBD (promote with /gsd-review-backlog when ready)
