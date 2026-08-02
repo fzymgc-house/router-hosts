@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0](https://github.com/fzymgc-house/router-hosts/compare/v0.12.0...v0.13.0) (2026-08-02)
+
+
+### Features
+
+* add consumer-rendered output and sink ([#404](https://github.com/fzymgc-house/router-hosts/issues/404)) ([be9742d](https://github.com/fzymgc-house/router-hosts/commit/be9742d06f12a4ecc8ca413d16a8e911699eea7b))
+
+
+### Build System
+
+* **deps:** update github action astral-sh/setup-uv to v9 ([#395](https://github.com/fzymgc-house/router-hosts/issues/395)) ([2e2928e](https://github.com/fzymgc-house/router-hosts/commit/2e2928ea67215fae5306247165d0993414fb600c))
+
 ## [0.12.0](https://github.com/fzymgc-house/router-hosts/compare/v0.11.0...v0.12.0) (2026-07-31)
 
 
