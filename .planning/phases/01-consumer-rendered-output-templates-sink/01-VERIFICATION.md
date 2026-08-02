@@ -1,6 +1,6 @@
 ---
 phase: 01-consumer-rendered-output-templates-sink
-verified: 2026-08-01T21:30:00Z
+verified: 2026-08-02T00:50:00Z
 status: passed
 score: 7/7 roadmap success criteria verified; 8/8 requirement IDs satisfied
 behavior_unverified: 0
@@ -12,9 +12,11 @@ overrides_applied: 0
 **Phase Goal:** A consumer defines its own output format and keeps it current, so one
 stateful server feeds N independent consumers and new resolver formats stop requiring
 an upstream release.
-**Verified:** 2026-08-01T21:30:00Z
+**Verified:** 2026-08-01T21:30:00Z (initial); re-verified 2026-08-02T00:50:00Z
 **Status:** passed
-**Re-verification:** No — initial verification
+**Re-verification:** Yes — see "Re-Verification 2026-08-02" at the end of this
+report, covering plans 01-10 and 01-11 (gap G-01-1 closure), which postdate the
+initial pass.
 
 ## Goal Achievement
 
@@ -107,6 +109,75 @@ None required to reach `passed` for phase-goal achievement — all roadmap succe
 ### Gaps Summary
 
 No gaps found. All 7 roadmap success criteria and all 8 TMPL requirement IDs are backed by direct, independently-verified code and passing-test evidence, not merely SUMMARY.md narrative. The two process items above (WINDOWS.md open entry, missing `type: tdd` plan classification) are real but do not block phase-goal achievement — they are surfaced for the ship step.
+
+---
+
+## Re-Verification 2026-08-02 — plans 01-10 and 01-11 (gap G-01-1)
+
+The initial verification above was written at 2026-08-01T21:30:00Z, before UAT
+surfaced blocker G-01-1 and before the two gap-closure plans landed. This
+section covers `01-10-SUMMARY.md` and `01-11-SUMMARY.md`, which postdate it.
+
+**What changed:** client `--config` was a bound-but-never-read flag. `Flags.Config`
+was registered at `root.go:88` and consumed nowhere, so `LoadClientConfig`
+resolved the file layer solely through `findClientConfigFile()`'s XDG search.
+A sink pointed at an explicit config silently dialed whatever the XDG search
+found instead — the wrong server, with the wrong certs, and no error.
+
+**Fix (01-10):** `ClientConfigOverrides.ConfigPath *string` plus an explicit-path
+branch in LAYER 1 of `LoadClientConfig`, ahead of `findClientConfigFile`, with
+`Flags.Config` plumbed at `connect.go:29-31`. An explicit path makes the XDG
+search structurally unreachable; an unreadable or malformed file returns an
+oops-wrapped error naming the path rather than falling back. Env vars still
+outrank the file layer — only the FILE layer is replaced, preserving the
+precedence pinned by plan 01-03.
+
+**Harness (01-11):** a third e2e tier, `proc_e2e`, which builds the binary and
+runs `serve` and `watch` as real OS processes via `os/exec`. This is the only
+tier that crosses the CLI-flag→config seam: the pre-existing `e2e` tier
+constructs `server.Server` and calls `NewRootCmd().SetArgs()` in-process, and
+`docker_e2e` containerizes only the server while still driving the client
+in-process. Neither could observe this class of bug at all — which is why
+G-01-1 shipped green through 45 UAT checkpoints.
+
+| # | Deliverable | Status | Evidence (re-run live 2026-08-02, not cited from SUMMARY) |
+|---|---|---|---|
+| 01-10 D1–D6 | Explicit `--config` wins over XDG; fails loudly; replaces the file layer wholesale; precedence unchanged; empty pointer + tilde handled; documented | VERIFIED | `task test` (`go test -race -count=1 ./...`) green across every package, including `internal/config` and `internal/client/commands` |
+| 01-11 D1–D3 | Real-process proof of flag honoring, loud failure, and change-ID propagation | VERIFIED | `task test:e2e:proc` — `TestProcE2E_ColdStartWatchHonorsConfigFlag`, `TestProcE2E_MissingExplicitConfigFailsLoudly`, `TestProcE2E_ChangeIDPropagatesToSidecar` all PASS (0.988s) |
+| 01-11 D4 | `task test:e2e` stays build-independent | VERIFIED | Recorded in 01-11-SUMMARY.md (`task clean && task test:e2e` green with `bin/` absent); not re-run here |
+| 01-11 D5 | Revert-and-observe RED/GREEN demonstration | VERIFIED | Quoted both directions in 01-11-SUMMARY.md Regression Demonstrations; independently corroborated below by a control that reproduces the original failure |
+| 01-11 D6 | Three-tier e2e story documented | VERIFIED | `docs/contributing/testing.md`, rumdl clean |
+
+**Independent manual confirmation (UAT test 1, real processes, tmux):** two live
+servers from empty DBs — A on `127.0.0.1:18443` seeded only with `primary.lab`,
+B on `127.0.0.1:18444` seeded only with `decoy.lab` and planted at
+`$XDG_CONFIG_HOME/router-hosts/client.toml`. `watch --config <A>` with no
+`--server`/`--ca`/`--cert`/`--key` rendered A's content; `lsof` confirmed the
+sink held `127.0.0.1:59429->127.0.0.1:18443` while 18444 had zero established
+connections; a `host add` on A propagated to the artifact and advanced the
+sidecar's `rendered_change_id`. Two controls make the result non-vacuous:
+removing `--config` rendered `decoy.lab` (reproducing the original bug exactly,
+proving the decoy was genuinely discoverable), and `--config /nonexistent.toml`
+exited 1 naming the path and wrote no artifact rather than falling back to the
+decoy that would have connected. Full detail in `01-UAT.md` test 1.
+
+**Effect on the roadmap criteria above:** none are invalidated. G-01-1 was a
+CLI-plumbing defect in a flag that predates this phase (`--config` shipped
+before, XDG auto-discovery landed in 0.8.0); phase 1 raised its blast radius
+because `watch` is a long-lived sink whose natural deployment is N instances
+with per-instance config files. All 7 success criteria and 8 requirement IDs
+remain VERIFIED, now over a client that honors its own config flag.
+
+**Still outstanding (unchanged):** the four manual deployment verifications in
+`01-VALIDATION.md` remain NOT-RUN for want of a real unbound host and a second
+machine. UAT test 42 records this as `skipped` with reason by explicit operator
+decision. Note that `gsd-tools phase uat-passed` counts only `pass`/`passed` as
+passing, so this item still registers as a predicate blocker — a deliberate,
+documented deferral rather than an unnoticed gap. `.planning/WINDOWS.md` still
+has `open_count: 1`, which `/gsd-ship` will block on until waived.
+
+_Re-verified: 2026-08-02_
+_Verifier: Claude (orchestrator, /gsd-verify-work 01) — suites and cold start executed live_
 
 ---
 

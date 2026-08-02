@@ -1,16 +1,16 @@
 ---
-status: partial
+status: complete
 phase: 01-consumer-rendered-output-templates-sink
-source: [01-01-SUMMARY.md,01-02-SUMMARY.md 01-03-SUMMARY.md,01-04-SUMMARY.md 01-05-SUMMARY.md,01-06-SUMMARY.md 01-07-SUMMARY.md,01-08-SUMMARY.md 01-09-SUMMARY.md]
+source: [01-01-SUMMARY.md,01-02-SUMMARY.md 01-03-SUMMARY.md,01-04-SUMMARY.md 01-05-SUMMARY.md,01-06-SUMMARY.md 01-07-SUMMARY.md,01-08-SUMMARY.md 01-09-SUMMARY.md 01-10-SUMMARY.md,01-11-SUMMARY.md]
 started: 2026-08-01T21:47:54Z
-updated: 2026-08-01T22:19:36Z
+updated: 2026-08-02T00:40:00Z
 ---
 
 # Phase 1 UAT — Consumer-Rendered Output
 
 ## Current Test
 
-[testing paused — 1 item outstanding]
+[testing complete]
 
 ## Tests
 
@@ -24,10 +24,51 @@ expected: |
   template, and writes the artifact plus sidecar. Note: e2e already automates
   *server* restart + reconnect (TestE2E_WatchSinkSurvivesServerRestart); this
   checks a genuinely fresh CLI process against a fresh server.
-result: issue
-reported: "Cold start itself passes (server boots from empty DB, sink connects over real mTLS, renders artifact + sidecar, and a `host add` propagates with change_id moving off the zero sentinel). BUT the run exposed that `--config` is silently ignored by every client command: the sink dialed the operator's real router at 192.168.20.1:50051 instead of the 127.0.0.1:18443 in the config file passed via --config."
-severity: blocker
+result: pass
+previously: issue (blocker) — G-01-1, resolved by plans 01-10 + 01-11
+previously_reported: "Cold start itself passes (server boots from empty DB, sink connects over real mTLS, renders artifact + sidecar, and a `host add` propagates with change_id moving off the zero sentinel). BUT the run exposed that `--config` is silently ignored by every client command: the sink dialed the operator's real router at 192.168.20.1:50051 instead of the 127.0.0.1:18443 in the config file passed via --config."
+retest_reason: |
+  Gap G-01-1 is reconciled as resolved (01-10-PLAN.md and 01-11-PLAN.md both
+  declare closes_gaps: [G-01-1] and both have SUMMARYs). Re-run required to
+  confirm the user-visible behavior, since the original failure was only
+  observable from a real CLI process.
 run_by: claude (tmux, real processes, not the in-process e2e harness)
+retested: 2026-08-02
+retest_evidence: |
+  Fresh scratchpad PKI (openssl ECDSA CA, server leaf SAN localhost/127.0.0.1,
+  client leaf CN=coldstart-client). TWO live servers as real OS processes in
+  tmux, both from empty DBs:
+    A = 127.0.0.1:18443, seeded ONLY with primary.lab (named by --config)
+    B = 127.0.0.1:18444, seeded ONLY with decoy.lab (planted at
+        $XDG_CONFIG_HOME/router-hosts/client.toml, i.e. ON the search path)
+
+  MAIN TEST — `watch --config <real> --template … --out …`, with NO --server,
+  --ca, --cert or --key on the command line (everything resolved from the file):
+    * artifact rendered `10.0.0.1 primary.lab # server A only` — server A's
+      content, NOT the decoy's
+    * socket confirmation: watch pid 9679 held
+      `127.0.0.1:59429->127.0.0.1:18443 (ESTABLISHED)`; server A pid 6447 held
+      the matching inbound half; 18444 had ZERO established connections
+    * sidecar written with contract_version 1, consecutive_failures 0,
+      rendered_change_id 01KYZYSFJ8TJWGJKJSH00MPEKA
+    * live propagation: `host add second.lab` on A moved the sidecar to
+      01KYZYTFG047G1MHPMDFP5SK7J, count 1 -> 2, artifact rewrote with no
+      operator action
+
+  CONTROL 1 (anti-vacuity) — identical command with --config REMOVED rendered
+  `10.9.9.9 decoy.lab # server B only`. The decoy WAS genuinely discoverable
+  on the XDG path, so the main test's pass is the flag doing work, not the
+  decoy being unreachable. This control reproduces the ORIGINAL G-01-1
+  failure mode exactly.
+
+  CONTROL 2 (loud failure) — `--config /nonexistent.toml` exited 1 with
+  "loading client config …: no such file or directory" naming the path, wrote
+  no artifact, and did NOT fall back to the XDG decoy — which was present and
+  would have connected successfully.
+
+  Incidental: the first template attempt used {{define "contract"}} instead of
+  {{define "contract_version"}} and was refused before any gRPC call with a
+  message naming the required block — test 7's enforcement firing for real.
 
 ### 2. [01-01/D1] A caller runs `router-hosts render --template ./x.tmpl` and gets host data rendered through their own template, no upstream code change
 
@@ -410,10 +451,19 @@ expected: |
   Two manual, deployment-level verifications (resolver reload, two-node convergence) plus the restart/no-reload-storm and reload-failure-diagnosis scenarios, which require a real unbound host and a second machine
 rationale: |
   This environment has no unbound host and no second machine. Recorded explicitly as NOT-RUN in 01-VALIDATION.md with reason, concrete steps, and the automated coverage that does exist for each, per operator decision at the Task 3 checkpoint (mirrors phase 9's OTel-scrape precedent).
-result: blocked
-blocked_by: other
-reason: "skip/blocked - this is a great test but needs a harness and docker containers likely."
-existing_record: "Already recorded NOT-RUN in 01-VALIDATION.md with concrete steps and the automated coverage that does exist, per the Task 3 checkpoint decision."
+result: skipped
+reason: |
+  Deferred by explicit operator decision (Task 3 checkpoint, reaffirmed at UAT
+  close 2026-08-02): "skip/blocked - this is a great test but needs a harness
+  and docker containers likely." Requires a real unbound host and a second
+  machine, neither of which exists in this environment.
+previously: blocked (blocked_by: other) — reclassified 2026-08-02
+reclassified_reason: |
+  Not a code defect and not a prerequisite that will clear on its own — an
+  environmental gap the operator chose to defer, already formally recorded
+  rather than dropped. Mirrors phase 9's OTel-scrape precedent.
+existing_record: "Recorded NOT-RUN in 01-VALIDATION.md with concrete steps and the automated coverage that does exist, per the Task 3 checkpoint decision."
+follow_up: "Deferred Follow-Ups entry (test 42) — containerize via docker-compose with a real unbound container plus two sink containers."
 coverage_id: D3
 requirement: -
 reason: human_judgment
@@ -445,20 +495,149 @@ coverage_id: D3
 requirement: TMPL-08
 verified_by: unit internal/storage/sqlite/eventid_guard_test.go#TestInsertEvent_LowerCallerSuppliedIDStillAdvancesMax,TestInsertEvent_ZeroIDIntoEmptyStoreRemints,TestInsertEvent_ZeroIDIntoNonEmptyStoreRemints,TestAppendEventsBatch_AllLowerIDsStillAdvanceMax,TestInsertEvent_ConcurrentReverseCommitOrderAdvancesMax,TestInitialize_SeedsGeneratorFromPersistedLog; unit internal/storage/storagetest/suite.go#TestEventStoreAppendNeverLowersLatestEventID
 
+### 46. [01-10/D1] An explicit --config path is loaded directly and wins over XDG auto-discovery
+
+expected: An explicit --config path is loaded directly and wins over XDG auto-discovery
+result: pass
+source: automated
+coverage_id: D1
+requirement: TMPL-05
+verified_by: unit internal/config/client_test.go#TestLoadClientConfig_ExplicitPathBeatsXDG; internal/client/commands/connect_test.go#TestDefaultNewClientFromFlags_ConfigFlagSelectsFile
+
+### 47. [01-10/D2] An unreadable, unparseable, or unknown-key explicit path fails loudly and never falls back to XDG
+
+expected: An unreadable, unparseable, or unknown-key explicit path fails loudly and never falls back to XDG
+result: pass
+source: automated
+coverage_id: D2
+requirement: TMPL-05
+verified_by: unit internal/config/client_test.go#TestLoadClientConfig_ExplicitMissingPathFailsAndDoesNotFallBack,TestLoadClientConfig_ExplicitMalformedPathFails,TestLoadClientConfig_ExplicitUnknownKeyFails
+
+### 48. [01-10/D3] An explicit load replaces the file layer wholesale — no field from an XDG-discovered decoy config survives
+
+expected: An explicit load replaces the file layer wholesale — no field from an XDG-discovered decoy config survives
+result: pass
+source: automated
+coverage_id: D3
+requirement: TMPL-05
+verified_by: unit internal/config/client_test.go#TestLoadClientConfig_ExplicitPathDoesNotMergeXDGValues
+
+### 49. [01-10/D4] Layer precedence unchanged: explicit config file < env vars < CLI value flags
+
+expected: Layer precedence unchanged: explicit config file < env vars < CLI value flags
+result: pass
+source: automated
+coverage_id: D4
+requirement: TMPL-05
+verified_by: unit internal/config/client_test.go#TestLoadClientConfig_EnvBeatsExplicitConfigFile,TestLoadClientConfig_ServerOverrideBeatsExplicitConfigFile
+
+### 50. [01-10/D5] An empty ConfigPath pointer behaves identically to unset, and tilde expansion runs on the explicit path
+
+expected: An empty ConfigPath pointer behaves identically to unset, and tilde expansion runs on the explicit path
+result: pass
+source: automated
+coverage_id: D5
+requirement: TMPL-05
+verified_by: unit internal/config/client_test.go#TestLoadClientConfig_EmptyConfigPathFallsBackToXDG,TestLoadClientConfig_ExplicitPathTildeExpanded
+
+### 51. [01-10/D6] --config precedence and XDG search order documented for operators
+
+expected: --config precedence and XDG search order documented for operators
+result: pass
+source: automated
+coverage_id: D6
+requirement: -
+verified_by: other rumdl check docs/reference/cli.md docs/guides/consumer-rendered-output.md
+
+### 52. [01-11/D1] A test launches the built router-hosts binary as a real OS process and observes that watch --config <path> connects to the server named in <path> and to no other, discriminated by content between two live servers
+
+expected: A test launches the built router-hosts binary as a real OS process and observes that watch --config <path> connects to the server named in <path> and to no other, discriminated by content between two live servers
+result: pass
+source: automated
+coverage_id: D1
+requirement: TMPL-05
+verified_by: e2e e2e/proc_e2e_test.go#TestProcE2E_ColdStartWatchHonorsConfigFlag
+
+### 53. [01-11/D2] A watch process given an unreadable --config exits non-zero with the path in its output and writes no artifact, even with a valid config present on the XDG search path
+
+expected: A watch process given an unreadable --config exits non-zero with the path in its output and writes no artifact, even with a valid config present on the XDG search path
+result: pass
+source: automated
+coverage_id: D2
+requirement: TMPL-05
+verified_by: e2e e2e/proc_e2e_test.go#TestProcE2E_MissingExplicitConfigFailsLoudly
+
+### 54. [01-11/D3] A host mutation made by a second real CLI process propagates to the sink's artifact and advances the sidecar's rendered_change_id
+
+expected: A host mutation made by a second real CLI process propagates to the sink's artifact and advances the sidecar's rendered_change_id
+result: pass
+source: automated
+coverage_id: D3
+requirement: TMPL-05
+verified_by: e2e e2e/proc_e2e_test.go#TestProcE2E_ChangeIDPropagatesToSidecar
+
+### 55. [01-11/D4] task test:e2e remains build-independent; the new proc_e2e tag does not make the pre-existing in-process suite require a built binary
+
+expected: task test:e2e remains build-independent; the new proc_e2e tag does not make the pre-existing in-process suite require a built binary
+result: pass
+source: automated
+coverage_id: D4
+requirement: -
+verified_by: other task clean && task test:e2e (verified green with bin/ absent)
+
+### 56. [01-11/D5] Both key proc_e2e tests were demonstrated to FAIL when plan 01-10's fix is reverted, and PASS again once restored
+
+expected: Both key proc_e2e tests were demonstrated to FAIL when plan 01-10's fix is reverted, and PASS again once restored
+result: pass
+source: automated
+coverage_id: D5
+requirement: -
+verified_by: e2e manual revert-and-observe cycle (01-11-SUMMARY.md Regression Demonstrations, both directions quoted)
+
+### 57. [01-11/D6] Three-tier e2e story, the in-process blind spot, and the deferred container-harness extension points are documented
+
+expected: Three-tier e2e story, the in-process blind spot, and the deferred container-harness extension points are documented
+result: pass
+source: automated
+coverage_id: D6
+requirement: -
+verified_by: other rumdl check docs/contributing/testing.md
+
+### 58. Gap-closure confirmation — plans 01-10 + 01-11
+
+expected: |
+  All 12 deliverables from the two gap-closure plans are deterministically
+  covered by passing tests (no human-judgment items). Orchestrator re-ran the
+  suites live during this UAT session rather than trusting the SUMMARYs:
+  `task test` (race) green across all packages, and `task test:e2e:proc` green
+  on all three real-process tests. Confirm this closes G-01-1.
+result: pass
+verified_by_orchestrator_run: |
+  Re-ran live during this UAT session rather than trusting the SUMMARYs:
+
+- `task test` (go test -race -count=1 ./...) — every package ok, no failures
+- `task test:e2e:proc` — TestProcE2E_ColdStartWatchHonorsConfigFlag,
+  TestProcE2E_MissingExplicitConfigFailsLoudly,
+  TestProcE2E_ChangeIDPropagatesToSidecar all PASS (0.988s)
+  Independently corroborated by the manual real-process cold start recorded
+  under test 1, including a control that reproduces the original failure.
+
 ## Summary
 
-total: 45
-passed: 43
-issues: 1
+total: 58
+passed: 57
+issues: 0
 pending: 0
-skipped: 0
-blocked: 1
+skipped: 1
+blocked: 0
 
 ## Gaps
 
 - gap_id: G-01-1
   truth: "`router-hosts watch --config <path>` connects to the server named in <path>"
-  status: failed
+  status: resolved
+  resolved_by: 01-10-PLAN.md, 01-11-PLAN.md
+  resolved_at: 2026-08-02
   reason: "User-visible: the sink ignored --config and dialed the operator's production router (192.168.20.1:50051) instead of the 127.0.0.1:18443 named in the file passed to --config."
   severity: blocker
   test: 1
