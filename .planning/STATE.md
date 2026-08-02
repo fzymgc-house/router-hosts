@@ -208,5 +208,3 @@ Resume file: None
 ## Operator Next Steps
 
 - Start the next milestone with /gsd-new-milestone
-
-<!-- lint probe -->
