@@ -291,7 +291,18 @@ Plans:
 **Goal:** Stop an aggregate from wedging permanently on optimistic-concurrency
 conflicts. The read returns a stale version, every retry submits the same stale
 expected version, and the gap never converges — across both operator and server
-restarts. Driven by 999.15's event-log growth; plan the two together.
+restarts.
+
+Status as of 2026-08-02: the two amplifiers named in #330 are FIXED —
+commit-on-timeout by PR #332 (pre-commit rollback guards in
+`internal/storage/sqlite/eventstore.go`, pinned by three passing tests in
+`pool_error_test.go`) and aggregate bloat by compaction (#336). What remains
+unverified is the read-model lag itself: `CommandHandler.UpdateHost` still
+derives current state from the projection (`internal/server/commands.go:176-177`,
+`h.store.GetByID`), so the structural precondition for a stale-version read is
+still present. Whether the wedge still reproduces could not be determined from
+code alone — it needs an affected database. Start by trying to reproduce; this
+may already be closed.
 **Source:** GH #323 — close on completion.
 **Requirements:** TBD
 **Plans:** 0 plans
@@ -300,20 +311,12 @@ Plans:
 
 - [ ] TBD (promote with /gsd-review-backlog when ready)
 
-### Phase 999.15: Write commits after gRPC deadline exceeded (BACKLOG)
-
-**Goal:** Close the runaway write loop. `WriteQueue.Submit` returns `ctx.Err()`
-once the deadline fires, but the worker still runs and commits `fn()`
-(`internal/server/writequeue.go:102-106`), so a client that cannot distinguish
-success from failure retries and commits again. Phase 6 compaction addressed the
-aggregate-bloat half; this commit-on-timeout half is still live.
-**Source:** GH #330 — close on completion.
-**Requirements:** TBD
-**Plans:** 0 plans
-
-Plans:
-
-- [ ] TBD (promote with /gsd-review-backlog when ready)
+<!-- 999.15 (GH #330, commit-on-timeout) was withdrawn 2026-08-02: the defect was
+     already fixed by PR #332 and is pinned by three passing regression tests in
+     internal/storage/sqlite/pool_error_test.go. The number is intentionally left
+     unused rather than reclaimed — backlog numbers are published in GitHub issue
+     comments, so renumbering would invalidate external references. Sparse
+     numbering is expected here (see add-backlog). -->
 
 ### Phase 999.16: IngressRoute finalizer wedges when host entry already deleted (BACKLOG)
 
