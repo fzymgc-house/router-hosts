@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.14.0
 milestone_name: Verification & Lazy Reads
-current_phase: 2
+current_phase: 02
 current_phase_name: Cursor-Based Lazy Storage Reads
 status: executing
-stopped_at: Phase 2 context gathered
-last_updated: "2026-08-03T20:39:11.494Z"
+stopped_at: Completed 02-01-PLAN.md
+last_updated: "2026-08-03T20:51:30.588Z"
 last_activity: 2026-08-03
-last_activity_desc: Phase 01 complete, transitioned to Phase 2
+last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 11
-  completed_plans: 5
+  completed_plans: 6
   percent: 33
 ---
 
@@ -24,7 +24,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-02)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** Phase 01 — CI Gating for the e2e Tiers
+**Current focus:** Phase 02 — Cursor-Based Lazy Storage Reads
 
 > **Phase numbering restarted at v0.13.0 and again at v0.14.0.** Phases 1–9
 > belong to the previous continuous sequence (v0.10.13–v0.12.0) and are archived
@@ -36,12 +36,12 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 
 ## Current Position
 
-Phase: 2 — Cursor-Based Lazy Storage Reads
-Plan: Not started
+Phase: 02 (Cursor-Based Lazy Storage Reads) — EXECUTING
+Plan: 2 of 6
 Status: Ready to execute
-Last activity: 2026-08-03 — Phase 01 complete, transitioned to Phase 2
+Last activity: 2026-08-03 — Phase 02 execution started
 
-Progress: [██████████] 100% (0/3 phases)
+Progress: [██████░░░░] 55% (0/3 phases)
 
 ## Performance Metrics
 
@@ -104,6 +104,7 @@ Progress: [██████████] 100% (0/3 phases)
 | Phase 01 P03 | 24min | 3 tasks | 4 files |
 | Phase 01 P04 | 20min | 2 tasks | 1 files |
 | Phase 01 P05 | 55min | 4 tasks | 2 files |
+| Phase 02 P01 | 25min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -191,6 +192,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-05: e2e-docker cert-permission fix — writePEM gained a mode parameter (0o600 in-process, 0o644 docker-mounted) since dockerd auto-creates /certs traversable, only the file's own mode/UID matters
 - [Phase ?]: 01-05: D-05 out-of-repo [ci skip] disposition = file-issue-only (issue #418); workflow_dispatch already shipped in plan 01-01
 - [Phase ?]: 01-05: Controls 1 (e2e tier, service.go Trigger string) and 3 (proc_e2e tier, main.go exit code) substituted simpler regressions for the plan's original candidates, each independently re-verified locally and in real CI (PRs #415, #416, both closed unmerged)
+- [Phase ?]: 02-01: TestFormatConf_Golden/TestUnboundFormatConf_Golden already byte-exact; confirmed green by execution, no new goldens added for those two writers
+- [Phase ?]: 02-01: template golden supplies GeneratedAt via fixed timestamppb.New rather than time.Now(), so no volatile-line stripping was needed for the client render path
+- [Phase ?]: 02-01: TestGetDistinctAggregateIDs_OrderMatchesDeFacto proves Q-01 by execution against the real zombiezen driver (250 shuffled aggregates, tombstone delete, CompactAggregate) — closes RESEARCH.md Assumption A1
 
 ### Pending Todos
 
@@ -230,9 +234,9 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-03T19:44:07.344Z
-Stopped at: Phase 2 context gathered
-Resume file: .planning/phases/02-cursor-based-lazy-storage-reads/02-CONTEXT.md
+Last session: 2026-08-03T20:51:30.579Z
+Stopped at: Completed 02-01-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 
