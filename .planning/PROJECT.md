@@ -15,10 +15,11 @@ router-hosts is a Go control plane for managing DNS host entries on Linux router
 | v0.12.0 — Hook Reliability & Metrics | 9 | Post-edit hooks emit metrics and no longer block the write path; per-hook configurable timeouts |
 | v0.13.0 — Consumer-Owned Output | 1 | Caller-supplied templates rendered client-side, one-shot and as a self-healing sink, over a new `WatchHosts` RPC; every snapshot carries a monotonic change ID |
 
-**Next:** not yet defined. Run `/gsd-new-milestone` to scope it. Three parked
-items sit in the ROADMAP backlog (999.1–999.3): wire the e2e tiers into CI
-(#403), close the hardware-dependent verification gap, and finish server-side
-lazy streaming (#400/#401).
+**Next:** v0.14.0 Phase 2 — Cursor-Based Lazy Storage Reads. Phase 1 (CI Gating
+for the e2e Tiers) completed 2026-08-03: all three e2e tiers now run in
+`ci-go.yml` and gate merges through `CI (Go) Complete`, and each gate was watched
+going red against a deliberate regression rather than assumed to work. Backlog
+999.1–999.3 were promoted into this milestone and are no longer parked.
 
 > **Phase numbering restarted at this milestone.** v0.10.13 through v0.12.0 used
 > continuous numbering (phases 1–9). v0.13.0 restarts at Phase 1. When a
@@ -100,6 +101,7 @@ Shipped and running in the Go codebase at v0.10.13.
 - ✓ Kubernetes Service controller: annotated LoadBalancer/NodePort Services register their hostnames, IPs resolved from `status.loadBalancer.ingress[]` or the `ip-address` annotation, opt-in via `--enable-service` — Validated in Phase 8: Kubernetes Service Controller (SVC-01, SVC-02). **Not yet deployed** — see the rollout note under Context.
 - ✓ Hook reliability: post-edit hooks emit execution metrics (count, duration, outcome), run detached from the write path with per-hook configurable timeouts, bounded concurrency, coalescing, and a bounded-drain shutdown — Validated in v0.12.0 Phase 9: Hook Reliability & Metrics (HOOK-01, HOOK-02)
 - ✓ Consumer-rendered output: `render` (one-shot) and `watch` (long-lived sink) drive caller-supplied Go templates against a documented, versioned data contract; contract-version declaration is enforced before any RPC; artifacts are written temp-file-plus-rename so a render failure leaves the previous file byte-identical; the sink reflects mutations with no polling (server-side change notification), reconnects with jittered backoff, and reports health both upstream and to a local sidecar; every snapshot carries a monotonic change ID naming server state — Validated in v0.13.0 Phase 1: Consumer-Rendered Output (TMPL-01…08)
+- ✓ CI gating for the e2e tiers: all three tiers (`e2e`, `docker_e2e`, `proc_e2e`) run as jobs in `ci-go.yml` and gate merges through the single pre-existing `CI (Go) Complete` required check; the aggregator compares each job `!= "success"` so an unreported result trips the gate; the container tier hard-fails instead of skipping when Docker is absent, and the process tier rebuilds `bin/` in-job; readiness waits route through a shared bounded-timeout helper — Validated in v0.14.0 Phase 1: CI Gating for the e2e Tiers (CI-01…04, VRFY-05). Each gate was demonstrated **red** against a deliberate regression in a throwaway PR (runs 30828580687, 30829014408, 30818557788, 30819896321). **Not yet merged** — lands with the v0.14.0 Phase 1 PR.
 
 ### Active
 
@@ -107,7 +109,6 @@ Open forward work toward the north star. Building toward these.
 
 - [ ] Lazy storage-layer read for `ExportHosts`/`WatchHosts` — the wire is bounded and the client refuses unbounded responses, but `store.ListAll` still folds full event history into memory server-side. Deliberately deferred out of TMPL-06 (#400, #401).
 - [ ] Deployment-level verification harness — containerize the manual resolver-reload and two-node convergence checks (a real unbound container plus two sink containers) so they stop needing a second physical machine. Raised during Phase 1 UAT; the same harness would cover the `proc_e2e` tier's container extension points.
-- [ ] Wire the three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) into CI — none currently run in `ci-go.yml` (#403).
 
 ### Out of Scope
 
@@ -197,4 +198,4 @@ This document evolves at phase transitions and milestone boundaries.
 
 ---
 
-*Last updated: 2026-08-02 starting milestone v0.14.0 — Verification & Lazy Reads (promotes backlog 999.1, 999.2, 999.3)*
+*Last updated: 2026-08-03 after v0.14.0 Phase 1 — CI Gating for the e2e Tiers (CI-01…04, VRFY-05 validated)*
