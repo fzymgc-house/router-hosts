@@ -113,7 +113,7 @@ reads stop materializing full event history server-side.
 3. Each new gate has been demonstrated **red**: a deliberately reintroduced regression is pushed, the failing run is linked, and only then is the gate accepted
 4. Every readiness wait in `e2e`, `docker_e2e`, and `proc_e2e` runs through one shared bounded-timeout polling helper — the bare `time.Sleep` synchronizations in `e2e/e2e_test.go` are gone, and a timeout is reported as a failure rather than falling through to an assertion
 
-**Plans**: 3/5 plans executed
+**Plans**: 4/5 plans executed
 
 Plans:
 **Wave 1**
@@ -127,7 +127,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-04-PLAN.md — Add the e2e-docker and e2e-proc jobs and complete ci-go-complete so one required check consumes all three tiers
+- [x] 01-04-PLAN.md — Add the e2e-docker and e2e-proc jobs and complete ci-go-complete so one required check consumes all three tiers
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -217,7 +217,7 @@ against a settled read path.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CI Gating for the e2e Tiers | 3/5 | In Progress|  |
+| 1. CI Gating for the e2e Tiers | 4/5 | In Progress|  |
 | 2. Cursor-Based Lazy Storage Reads | 0/TBD | Not started | - |
 | 3. Containerized Deployment-Verification Harness | 0/TBD | Not started | - |
 

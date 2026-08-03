@@ -5,15 +5,15 @@ milestone_name: Verification & Lazy Reads
 current_phase: 01
 current_phase_name: CI Gating for the e2e Tiers
 status: executing
-stopped_at: Completed 01-03-PLAN.md
-last_updated: "2026-08-03T12:37:49.958Z"
+stopped_at: Completed 01-04-PLAN.md
+last_updated: "2026-08-03T12:53:38.029Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 5
-  completed_plans: 3
+  completed_plans: 4
   percent: 0
 ---
 
@@ -37,11 +37,11 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 ## Current Position
 
 Phase: 01 (CI Gating for the e2e Tiers) — EXECUTING
-Plan: 4 of 5
+Plan: 5 of 5
 Status: Ready to execute
 Last activity: 2026-08-03 — Phase 01 execution started
 
-Progress: [██████░░░░] 60% (0/3 phases)
+Progress: [████████░░] 80% (0/3 phases)
 
 ## Performance Metrics
 
@@ -101,6 +101,7 @@ Progress: [██████░░░░] 60% (0/3 phases)
 | Phase 01 P01 | 15min | 2 tasks | 7 files |
 | Phase 01 P02 | 25min | 3 tasks | 3 files |
 | Phase 01 P03 | 24min | 3 tasks | 4 files |
+| Phase 01 P04 | 20min | 2 tasks | 1 files |
 
 ## Accumulated Context
 
@@ -182,6 +183,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-03: dockergate.Decide is presence-based not truthiness-based (Decide("0", err) and Decide("  ", err) both return Fatal); no os.Getenv inside dockergate package
 - [Phase ?]: 01-03: waitForDockerServer's t.Cleanup log dump is additive to buildAndStartContainer's existing container-removal cleanup, per decision P-02
 - [Phase ?]: 01-03: CI-04 deliberately NOT marked complete in REQUIREMENTS.md — this plan delivers only the container hard-fail half; proc_e2e fresh-build (D-08) is plan 04's, mirroring TMPL-05 precedent for conjunctive requirements
+- [Phase ?]: 01-04: No Docker setup action added to e2e-docker — Namespace runners provide Docker natively; docker/setup-buildx-action would overwrite their Remote Builder configuration (RESEARCH.md Q-01)
+- [Phase ?]: 01-04: e2e-docker's RH_E2E_REQUIRE_DOCKER copied byte-for-byte from dockergate.EnvVar, verified via rg -o comparison
+- [Phase ?]: 01-04: e2e-proc's rm -rf bin/ runs as its own step before task test:e2e:proc, making the fresh build structural (D-08)
 
 ### Pending Todos
 
@@ -221,8 +225,8 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-03T12:37:08.638Z
-Stopped at: Completed 01-03-PLAN.md
+Last session: 2026-08-03T12:53:38.021Z
+Stopped at: Completed 01-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
