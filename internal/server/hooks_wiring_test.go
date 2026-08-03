@@ -134,6 +134,36 @@ func TestRegenerateOutputs_PartialFailureFiresFailureHook(t *testing.T) {
 	assert.NoFileExists(t, successSentinel)
 }
 
+// D-04: the hook entry count is now produced by counting ListPage pages
+// rather than materializing every entry to call len() on it
+// (HostsServiceImpl.countLiveEntries). This must still exclude deleted
+// aggregates exactly as the prior ListAll-based count did — 3 live entries
+// plus 1 deleted one must report 3, not 4.
+func TestRegenerateOutputs_EntryCountExcludesDeleted(t *testing.T) {
+	ctx := context.Background()
+	store := hookWiringStore(t)
+	handler := NewCommandHandler(store)
+	seedHosts(t, handler, 3)
+
+	toDelete, err := handler.AddHost(ctx, "192.168.1.99", "deleteme.example.com", nil, nil, nil)
+	require.NoError(t, err)
+	require.NoError(t, handler.DeleteHost(ctx, toDelete.ID, -1))
+
+	dir := t.TempDir()
+	hooks, successSentinel, failureSentinel := sentinelHooks(dir)
+	hooks.Start()
+	gen := NewHostsFileGenerator(filepath.Join(dir, "hosts"))
+	svc := NewHostsServiceImpl(handler, store, WithHostsGenerator(gen), WithHookExecutor(hooks))
+
+	svc.RegenerateOutputs(ctx)
+	hooks.Stop(context.Background())
+
+	got, err := os.ReadFile(successSentinel)
+	require.NoError(t, err)
+	assert.Equal(t, "success:3", string(got), "count must exclude the deleted aggregate")
+	assert.NoFileExists(t, failureSentinel)
+}
+
 // Hooks react to output writes: with no generator configured, neither fires.
 func TestRegenerateOutputs_NoHooksWhenNoGenerator(t *testing.T) {
 	ctx := context.Background()
