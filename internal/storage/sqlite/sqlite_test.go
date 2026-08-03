@@ -740,6 +740,98 @@ func (s *StorageSuite) TestSearchByHostnamePattern() {
 	s.Equal("web.prod.local", entries[0].Hostname)
 }
 
+// D-04: FindByIPAndHostname and Search stream ListPage pages instead of
+// draining the whole inventory first. These three tests pin the properties
+// that migration must not silently change: FindByIPAndHostname's early
+// exit, Search's cross-page ascending order, and Search's nil-vs-empty
+// no-match return.
+
+// TestFindByIPAndHostnameStopsAtFirstMatch proves FindByIPAndHostname
+// returns as soon as it finds a match rather than draining every page —
+// the whole point of D-04's migration. A deliberately small page size (1)
+// against a store whose match sits in the very first aggregate means a full
+// drain would need 6 ListPage calls (5 aggregates + one empty done page);
+// the early-exit path must need exactly 1. Instrumented via the
+// package-level pageLister seam (findByIPAndHostname), a counting wrapper
+// around the real ListPage — not by reading the source.
+func (s *StorageSuite) TestFindByIPAndHostnameStopsAtFirstMatch() {
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	var target ulid.ULID
+	for i := 0; i < 5; i++ {
+		aggID := ulid.Make()
+		ip := fmt.Sprintf("10.0.1.%d", i)
+		hostname := fmt.Sprintf("stop%d.local", i)
+		if i == 0 {
+			target = aggID
+			ip = "10.0.1.100"
+			hostname = "match.local"
+		}
+		s.Require().NoError(s.store.AppendEvent(s.ctx, aggID, s.createHostEvents(aggID, ip, hostname, now), 0))
+	}
+
+	fetches := 0
+	counting := func(ctx context.Context, after ulid.ULID, limit int) ([]domain.HostEntry, ulid.ULID, bool, error) {
+		fetches++
+		return s.store.ListPage(ctx, after, limit)
+	}
+
+	entry, err := findByIPAndHostname(s.ctx, counting, 1, "10.0.1.100", "match.local")
+	s.Require().NoError(err)
+	s.Equal(target, entry.ID)
+	s.Equal(1, fetches, "must stop fetching pages once the first page already contains the match")
+}
+
+// TestSearchPreservesAscendingOrderAcrossPages proves Search's streaming
+// rewrite still returns matches in strictly ascending aggregate-ULID order
+// even when the result set spans multiple ListPage pages (page size shrunk
+// to 1, forcing one page per aggregate).
+func (s *StorageSuite) TestSearchPreservesAscendingOrderAcrossPages() {
+	orig := defaultListPageSize
+	defaultListPageSize = 1
+	defer func() { defaultListPageSize = orig }()
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	var wantOrder []ulid.ULID
+	for i := 0; i < 4; i++ {
+		aggID := ulid.Make()
+		wantOrder = append(wantOrder, aggID)
+		env := makeEnvelope(aggID, domain.HostCreated{
+			IPAddress: fmt.Sprintf("10.0.2.%d", i),
+			Hostname:  fmt.Sprintf("order%d.local", i),
+			Tags:      []string{"ordertest"},
+			Aliases:   []string{},
+			CreatedAt: now,
+		}, 1, now)
+		s.Require().NoError(s.store.AppendEvent(s.ctx, aggID, env, 0))
+	}
+	// An interleaved non-matching aggregate (minted last, so it sorts after
+	// every match) must not disturb the matches' relative order.
+	other := ulid.Make()
+	s.Require().NoError(s.store.AppendEvent(s.ctx, other, s.createHostEvents(other, "10.0.2.99", "nomatch.local", now), 0))
+
+	results, err := s.store.Search(s.ctx, domain.SearchFilter{Tags: []string{"ordertest"}})
+	s.Require().NoError(err)
+	s.Require().Len(results, 4)
+	for i, wantID := range wantOrder {
+		s.Equalf(wantID, results[i].ID, "result %d must be aggregate %s (ascending order)", i, wantID)
+	}
+}
+
+// TestSearchNoMatchReturnsNil pins Search's pre-existing nil-vs-empty
+// contract for the no-match case: a caller distinguishing nil from an
+// empty-but-non-nil slice must see the same thing after the streaming
+// rewrite as before it.
+func (s *StorageSuite) TestSearchNoMatchReturnsNil() {
+	aggID := ulid.Make()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	s.Require().NoError(s.store.AppendEvent(s.ctx, aggID, s.createHostEvents(aggID, "10.0.3.1", "present.local", now), 0))
+
+	q := "no-such-host-zzz-search-miss"
+	results, err := s.store.Search(s.ctx, domain.SearchFilter{Query: &q})
+	s.Require().NoError(err)
+	s.Nil(results, "a Search with no matches must return nil, not an empty non-nil slice")
+}
+
 func (s *StorageSuite) TestDeleteHostExcludedFromListAll() {
 	aggID := ulid.Make()
 	now := time.Now().UTC().Truncate(time.Millisecond)

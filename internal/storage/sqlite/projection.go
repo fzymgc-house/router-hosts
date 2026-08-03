@@ -122,40 +122,61 @@ func (s *Storage) GetByID(ctx context.Context, id ulid.ULID) (*domain.HostEntry,
 	return entry, nil
 }
 
+// pageLister matches ListPage's signature, narrowed to a function type so
+// findByIPAndHostname's early-exit behavior can be exercised against a
+// call-counting decorator in tests without a global hook (D-04).
+type pageLister func(ctx context.Context, after ulid.ULID, limit int) (entries []domain.HostEntry, next ulid.ULID, done bool, err error)
+
 // FindByIPAndHostname finds a host entry matching the given IP and hostname.
-// Note: This is O(n) — it scans all events for all aggregates via ListAll and linearly searches them.
-// For better performance on large datasets, consider indexing by IP+hostname in the event store.
+// Streams ListPage pages rather than draining the whole inventory first
+// (D-04): returns as soon as a match is found, so pages after the match are
+// never fetched.
 func (s *Storage) FindByIPAndHostname(ctx context.Context, ip, hostname string) (*domain.HostEntry, error) {
-	entries, err := s.ListAll(ctx)
-	if err != nil {
-		return nil, err
-	}
-	for i := range entries {
-		if entries[i].IP == ip && entries[i].Hostname == hostname {
-			return &entries[i], nil
-		}
-	}
-	return nil, domain.ErrNotFound("host", fmt.Sprintf("%s/%s", ip, hostname))
+	return findByIPAndHostname(ctx, s.ListPage, defaultListPageSize, ip, hostname)
 }
 
-// Search filters host entries using the provided search filter.
-func (s *Storage) Search(ctx context.Context, filter domain.SearchFilter) ([]domain.HostEntry, error) {
-	entries, err := s.ListAll(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	if filter.IsEmpty() {
-		return entries, nil
-	}
-
-	var results []domain.HostEntry
-	for _, entry := range entries {
-		if matchesFilter(entry, filter) {
-			results = append(results, entry)
+func findByIPAndHostname(ctx context.Context, list pageLister, pageSize int, ip, hostname string) (*domain.HostEntry, error) {
+	var cursor ulid.ULID
+	for {
+		page, next, done, err := list(ctx, cursor, pageSize)
+		if err != nil {
+			return nil, err
 		}
+		for i := range page {
+			if page[i].IP == ip && page[i].Hostname == hostname {
+				return &page[i], nil
+			}
+		}
+		if done {
+			return nil, domain.ErrNotFound("host", fmt.Sprintf("%s/%s", ip, hostname))
+		}
+		cursor = next
 	}
-	return results, nil
+}
+
+// Search filters host entries using the provided search filter. Streams
+// ListPage pages rather than draining the whole inventory first (D-04): its
+// peak is bounded by the result-set size plus one page rather than by the
+// whole inventory. Ordering is preserved (D-10's ascending aggregate-ULID
+// order) because entries are appended in the order pages arrive.
+func (s *Storage) Search(ctx context.Context, filter domain.SearchFilter) ([]domain.HostEntry, error) {
+	var results []domain.HostEntry
+	var cursor ulid.ULID
+	for {
+		page, next, done, err := s.ListPage(ctx, cursor, defaultListPageSize)
+		if err != nil {
+			return nil, err
+		}
+		for _, entry := range page {
+			if filter.IsEmpty() || matchesFilter(entry, filter) {
+				results = append(results, entry)
+			}
+		}
+		if done {
+			return results, nil
+		}
+		cursor = next
+	}
 }
 
 // GetAtTime returns the state of all hosts at a specific point in time.
