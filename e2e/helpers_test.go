@@ -209,15 +209,17 @@ func startServer(t *testing.T, env *testEnv) {
 	const maxBindAttempts = 20
 	const bindRetryDelay = 100 * time.Millisecond
 	var lis net.Listener
-	var err error
-	for attempt := 0; attempt < maxBindAttempts; attempt++ {
-		lis, err = net.Listen("tcp", bindAddr)
-		if err == nil {
-			break
-		}
-		time.Sleep(bindRetryDelay)
-	}
-	require.NoError(t, err, "listen on %s after %d attempts", bindAddr, maxBindAttempts)
+	wait.Until(t, maxBindAttempts*bindRetryDelay, bindRetryDelay,
+		fmt.Sprintf("listener to bind on %s", bindAddr),
+		func() bool {
+			l, err := net.Listen("tcp", bindAddr)
+			if err != nil {
+				return false
+			}
+			lis = l
+			return true
+		},
+	)
 	env.addr = lis.Addr().String()
 
 	handler := server.NewCommandHandler(env.store)
