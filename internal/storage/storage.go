@@ -118,7 +118,53 @@ type SnapshotStore interface {
 
 // HostProjection is the read side of the CQRS pattern.
 type HostProjection interface {
+	// ListAll returns every live host entry by draining ListPage from the
+	// zero cursor (D-07). Kept for existing callers; new code should prefer
+	// ListPage directly so it can bound memory to one page instead of the
+	// whole inventory.
 	ListAll(ctx context.Context) ([]domain.HostEntry, error)
+
+	// ListPage returns a keyset page of live (non-deleted) host entries
+	// strictly after the aggregate identified by after — pass the zero ULID
+	// (ulid.ULID{}) to fetch the first page. limit is the number of live
+	// entries the caller wants; an implementation MUST reject a
+	// non-positive limit with a non-nil error rather than loop forever or
+	// make zero progress (LAZY-01, RESEARCH.md Security Domain V5).
+	//
+	// Ordering (D-10): entries arrive in strictly ascending aggregate-ULID
+	// order. Aggregate IDs are immutable and unique, so this is a total
+	// order and no tie-break rule is needed or implied.
+	//
+	// Fill-to-N (D-08): a page fills to limit live entries, or the
+	// aggregate-ID space is exhausted — whichever comes first. A short page
+	// (fewer than limit entries) means done, and only done: an
+	// implementation MUST NOT return an empty-but-not-done page. next is
+	// the last aggregate ID consumed while filling this page and MUST be
+	// passed as the following call's after; next is meaningless when done
+	// is true.
+	//
+	// Atomicity (D-06): one aggregate's event fetch and replay happen
+	// together within a single page fetch, so a caller can never observe a
+	// partial HostEntry — a page boundary falls between aggregates, never
+	// inside one. This makes LAZY-03's literal scenario ("a cursor sits
+	// inside its pre-compaction history") unreachable by construction.
+	//
+	// Consistency (D-09): every aggregate present when a drain's first page
+	// is fetched is yielded exactly once across the full drain, because
+	// aggregate IDs are immutable and the keyset predicate is strict (>).
+	// An aggregate created mid-drain normally sorts ahead of the cursor
+	// (ULIDs are time-ordered) and is included — production aggregate IDs
+	// are minted through internal/eventid's strictly monotonic generator,
+	// so there is no same-millisecond ordering ambiguity for newly created
+	// aggregates in this single-process, single-WriteQueue deployment.
+	// What is NOT guaranteed is a single point-in-time VALUE for the whole
+	// drain: each page fetch checks out its own pooled connection (see
+	// sqlite.Storage.withConn), so an entry's value reflects the instant
+	// its own page was fetched, not one global instant. See GitHub issue
+	// #401 for the deferred atomic {entries, latestEventID} read that would
+	// close this gap.
+	ListPage(ctx context.Context, after ulid.ULID, limit int) (entries []domain.HostEntry, next ulid.ULID, done bool, err error)
+
 	GetByID(ctx context.Context, id ulid.ULID) (*domain.HostEntry, error)
 	FindByIPAndHostname(ctx context.Context, ip, hostname string) (*domain.HostEntry, error)
 	Search(ctx context.Context, filter domain.SearchFilter) ([]domain.HostEntry, error)

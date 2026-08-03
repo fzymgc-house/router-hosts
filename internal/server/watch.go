@@ -8,6 +8,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -16,6 +17,12 @@ import (
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/contract"
 )
+
+// snapshotPageSize is the page size sendSnapshot uses when draining
+// ListPage for a WatchHosts snapshot. A package var, not a const, so tests
+// can shrink it instead of seeding a large fixture to exercise multiple
+// pages — following the MaxTrackedSinks precedent (sinkmetrics.go).
+var snapshotPageSize = 500
 
 // TemplateContractVersion is the template data contract version this server
 // advertises on every WatchHosts SnapshotComplete terminator. Defined in
@@ -59,16 +66,17 @@ func (s *HostsServiceImpl) WatchHosts(stream watchHostsStream) error {
 // (watchFollowSend, below), so the terminator's shape, and specifically its
 // change ID, can never drift between the two modes.
 //
-// The change ID is derived STRICTLY BEFORE ListAll. This ordering is the H1
-// fix from plan 01, carried into follow mode via this shared helper, and it
-// is load-bearing: swapping these two calls reintroduces a bug that no test
-// in the suite catches by timing alone.
+// The change ID is derived STRICTLY BEFORE the first ListPage fetch. This
+// ordering is the H1 fix from plan 01, carried into follow mode via this
+// shared helper, and it is load-bearing: moving the change-ID read after the
+// first page fetch reintroduces a bug that no test in the suite catches by
+// timing alone.
 //
 // Deriving the ID first makes it a LOWER BOUND on the snapshot: a mutation
-// landing between this read and ListAll puts entries in the snapshot that
-// the ID does not yet name, and the ID is then corrected by the next
-// snapshot, which carries a strictly greater ID and therefore does not match
-// what the consumer recorded — costing one redundant render.
+// landing between this read and the entries drain puts entries in the
+// snapshot that the ID does not yet name, and the ID is then corrected by
+// the next snapshot, which carries a strictly greater ID and therefore does
+// not match what the consumer recorded — costing one redundant render.
 //
 // Deriving the ID LAST produces the opposite and unrecoverable error: the
 // snapshot would carry entries from before the mutation labelled with the ID
@@ -81,10 +89,12 @@ func (s *HostsServiceImpl) WatchHosts(stream watchHostsStream) error {
 //
 // What this ordering does NOT buy: the ID still does not name the entry set
 // exactly, because reads are not held under the write queue (which is
-// scoped to mutations, service.go). Making it exact needs a single
-// transaction {entries, latestEventID} read, which is deliberately deferred
-// — see plan 01-01's objective and GitHub issue #401. Do not describe the ID
-// as identifying the exact streamed state.
+// scoped to mutations, service.go), and because ListPage's own consistency
+// contract (storage.HostProjection.ListPage, D-09) is per-page, not
+// per-drain — each page checks out its own pooled connection. Making it
+// exact needs a single transaction {entries, latestEventID} read, which is
+// deliberately deferred — see plan 01-01's objective and GitHub issue #401.
+// Do not describe the ID as identifying the exact streamed state.
 func (s *HostsServiceImpl) sendSnapshot(ctx context.Context, send func(*hostsv1.WatchHostsResponse) error) error {
 	latestID, err := s.store.LatestEventID(ctx)
 	if err != nil {
@@ -94,26 +104,38 @@ func (s *HostsServiceImpl) sendSnapshot(ctx context.Context, send func(*hostsv1.
 	// (storage.ZeroChangeID), so its string form is used directly.
 	changeID := latestID.String()
 
-	entries, err := s.store.ListAll(ctx)
-	if err != nil {
-		return mapError(err)
-	}
-
-	for i := range entries {
-		if err := send(&hostsv1.WatchHostsResponse{
-			Payload: &hostsv1.WatchHostsResponse_Entry{
-				Entry: domainToProto(&entries[i]),
-			},
-		}); err != nil {
-			return err
+	// Drain ListPage rather than materializing the whole inventory in one
+	// ListAll call (LAZY-01/LAZY-02): count accumulates across pages because
+	// SnapshotComplete.Count has always meant "entries sent", and paging
+	// does not change that.
+	var count int
+	var cursor ulid.ULID
+	for {
+		page, next, done, pageErr := s.store.ListPage(ctx, cursor, snapshotPageSize)
+		if pageErr != nil {
+			return mapError(pageErr)
 		}
+		for i := range page {
+			if err := send(&hostsv1.WatchHostsResponse{
+				Payload: &hostsv1.WatchHostsResponse_Entry{
+					Entry: domainToProto(&page[i]),
+				},
+			}); err != nil {
+				return err
+			}
+		}
+		count += len(page)
+		if done {
+			break
+		}
+		cursor = next
 	}
 
 	// The client's configured 50,000-entry ceiling does not constrain the
 	// server's inventory, so this guard is the server's own: refuse rather
-	// than let int32(len(entries)) wrap to a negative count (review L7).
-	if len(entries) > math.MaxInt32 {
-		return status.Errorf(codes.Internal, "snapshot entry count %d exceeds int32 range", len(entries))
+	// than let int32(count) wrap to a negative count (review L7).
+	if count > math.MaxInt32 {
+		return status.Errorf(codes.Internal, "snapshot entry count %d exceeds int32 range", count)
 	}
 
 	// The convergence gauge's real observation point (plan 05's
@@ -127,7 +149,7 @@ func (s *HostsServiceImpl) sendSnapshot(ctx context.Context, send func(*hostsv1.
 	return send(&hostsv1.WatchHostsResponse{
 		Payload: &hostsv1.WatchHostsResponse_Complete{
 			Complete: &hostsv1.SnapshotComplete{
-				Count:           int32(len(entries)),
+				Count:           int32(count),
 				GeneratedAt:     timestamppb.New(time.Now().UTC()),
 				ContractVersion: TemplateContractVersion,
 				ChangeId:        changeID,

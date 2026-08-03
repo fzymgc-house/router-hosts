@@ -15,33 +15,84 @@ import (
 	"github.com/fzymgc-house/router-hosts/internal/domain"
 )
 
-// ListAll returns all non-deleted host entries by replaying events.
+// defaultListPageSize is the page size ListAll uses when draining ListPage
+// internally. A package var, not a const, so tests can shrink it instead of
+// seeding large fixtures — following the MaxTrackedSinks precedent
+// (internal/server/sinkmetrics.go).
+var defaultListPageSize = 500
+
+// ListAll returns all non-deleted host entries by draining ListPage from the
+// zero cursor (D-07). Kept for existing callers; new code should prefer
+// ListPage directly. This is a thin wrapper: the two paths are definitionally
+// the same ordering, since ListAll has no query logic of its own anymore.
 func (s *Storage) ListAll(ctx context.Context) ([]domain.HostEntry, error) {
 	var entries []domain.HostEntry
-	err := s.withConn(ctx, func(conn *sqlite.Conn) error {
-		aggIDs, err := getDistinctAggregateIDs(conn)
+	var cursor ulid.ULID
+	for {
+		page, next, done, err := s.ListPage(ctx, cursor, defaultListPageSize)
 		if err != nil {
-			return err
+			return nil, oops.Wrapf(err, "list all hosts")
 		}
-		for _, aggID := range aggIDs {
-			events, loadErr := loadEventsForAggregate(conn, aggID)
-			if loadErr != nil {
-				return loadErr
+		entries = append(entries, page...)
+		if done {
+			break
+		}
+		cursor = next
+	}
+	return entries, nil
+}
+
+// ListPage returns a keyset page of live host entries. See
+// storage.HostProjection.ListPage for the full ordering, fill-to-N,
+// atomicity, and consistency contract this method implements.
+func (s *Storage) ListPage(ctx context.Context, after ulid.ULID, limit int) (entries []domain.HostEntry, next ulid.ULID, done bool, err error) {
+	if limit <= 0 {
+		return nil, ulid.ULID{}, false, oops.Errorf("list host page after %s: limit must be positive, got %d", after, limit)
+	}
+	// Checked explicitly rather than relying solely on the pool's Take(ctx):
+	// Take selects between an already-ready free connection and ctx.Done(),
+	// and Go's select does not prefer either arm when both are ready, so an
+	// already-cancelled context is not guaranteed to short-circuit a
+	// same-instant Take. This check makes cancellation deterministic.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, ulid.ULID{}, false, oops.Wrapf(ctxErr, "list host page after %s", after)
+	}
+
+	cursor := after
+	err = s.withConn(ctx, func(conn *sqlite.Conn) error {
+		for len(entries) < limit {
+			ids, idErr := getAggregateIDPage(conn, cursor, limit-len(entries))
+			if idErr != nil {
+				return idErr
 			}
-			entry, replayErr := replayEvents(aggID, events)
-			if replayErr != nil {
-				return replayErr
+			if len(ids) == 0 {
+				done = true
+				return nil
 			}
-			if entry != nil && !entry.Deleted {
-				entries = append(entries, *entry)
+			for _, id := range ids {
+				cursor = id
+				events, loadErr := loadEventsForAggregate(conn, id)
+				if loadErr != nil {
+					return loadErr
+				}
+				entry, replayErr := replayEvents(id, events)
+				if replayErr != nil {
+					return replayErr
+				}
+				if entry != nil && !entry.Deleted {
+					entries = append(entries, *entry)
+				}
+				if len(entries) >= limit {
+					break
+				}
 			}
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, oops.Wrapf(err, "list all hosts")
+		return nil, ulid.ULID{}, false, oops.Wrapf(err, "list host page after %s", after)
 	}
-	return entries, nil
+	return entries, cursor, done, nil
 }
 
 // GetByID returns a single host entry by replaying its events.
@@ -328,6 +379,33 @@ func getDistinctAggregateIDs(conn *sqlite.Conn) ([]ulid.ULID, error) {
 		})
 	if err != nil {
 		return nil, oops.Wrapf(err, "get aggregate ids")
+	}
+	return ids, nil
+}
+
+// getAggregateIDPage returns up to limit distinct aggregate IDs strictly
+// greater than after, in ascending order — the keyset query behind
+// ListPage. Served by the existing idx_events_aggregate(aggregate_id,
+// event_version) covering index (migrations/001_initial.sql); no new index,
+// no migration.
+func getAggregateIDPage(conn *sqlite.Conn, after ulid.ULID, limit int) ([]ulid.ULID, error) {
+	var ids []ulid.ULID
+	err := sqlitex.Execute(conn,
+		`SELECT DISTINCT aggregate_id FROM events
+		 WHERE aggregate_id > ? ORDER BY aggregate_id LIMIT ?`,
+		&sqlitex.ExecOptions{
+			Args: []any{after.String(), limit},
+			ResultFunc: func(stmt *sqlite.Stmt) error {
+				id, parseErr := ulid.Parse(stmt.ColumnText(0))
+				if parseErr != nil {
+					return parseErr
+				}
+				ids = append(ids, id)
+				return nil
+			},
+		})
+	if err != nil {
+		return nil, oops.Wrapf(err, "get aggregate id page after %s", after)
 	}
 	return ids, nil
 }
