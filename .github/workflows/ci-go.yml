@@ -170,8 +170,38 @@ jobs:
           cache: go
       - name: Install task runner
         run: go install github.com/go-task/task/v3/cmd/task@latest
-      - name: Run docker e2e tier
-        run: task test:e2e:docker
+      - name: Run docker e2e tier (Docker made unreachable, DO NOT MERGE)
+        # Red proof for CI-03/D-10: proves e2e-docker FAILS rather than
+        # SKIPS when Docker is unavailable, with RH_E2E_REQUIRE_DOCKER
+        # still set. This runner exposes "docker" from more than one PATH
+        # entry (at least /vendor/docker, read-only, and /usr/bin, which
+        # appears writable). For every PATH directory containing a
+        # "docker" file: rename it if that succeeds, otherwise drop the
+        # whole directory from PATH for this one command. Either way,
+        # exec.LookPath("docker") ends up with a real not-found error
+        # instead of finding it via whichever entry survives (a found
+        # binary would make dockergate.Decide see probeErr == nil and
+        # Proceed instead of Fatal). This step and this branch are
+        # throwaway.
+        run: |
+          echo "docker before: $(command -v docker || echo 'not found')"
+          IFS=':' read -ra dirs <<< "$PATH"
+          keep=()
+          for d in "${dirs[@]}"; do
+            if [ -e "$d/docker" ]; then
+              if mv "$d/docker" "$d/docker.disabled-redproof" 2>/dev/null; then
+                echo "renamed docker in $d"
+                keep+=("$d")
+              else
+                echo "cannot rename docker in $d, dropping dir from PATH for this command"
+              fi
+            else
+              keep+=("$d")
+            fi
+          done
+          no_docker_path="$(IFS=:; echo "${keep[*]}")"
+          echo "docker after: $(PATH="$no_docker_path" command -v docker || echo 'not found')"
+          PATH="$no_docker_path" go test -tags docker_e2e -count=1 -v -timeout 5m ./e2e/
   e2e-proc:
     name: E2E (proc)
     runs-on: namespace-profile-linux-amd64-4x8
