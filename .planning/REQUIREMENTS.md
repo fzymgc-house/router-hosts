@@ -93,10 +93,10 @@ Replaces the second-physical-machine dependency. The bar is green-not-built.
 
 Closes #400, #401, #23. Completes the half of TMPL-06 deferred at v0.13.0.
 
-- [ ] **LAZY-01**: `storage.HostProjection` exposes a cursor-based read keyed on aggregate ID (keyset, not `OFFSET`), so a caller pages through entries without the store replaying every aggregate's full event log into memory. This is an interface change, not an internal optimization
-- [ ] **LAZY-02**: `ExportHosts` and `WatchHosts` consume the cursor, and their peak memory no longer scales with total event-log size — proven by a **measured** benchmark (`AllocsPerRun`/memstats) against a 10k+ entry fixture, never by API-shape inspection
+- [x] **LAZY-01**: `storage.HostProjection` exposes a cursor-based read keyed on aggregate ID (keyset, not `OFFSET`), so a caller pages through entries without the store replaying every aggregate's full event log into memory. This is an interface change, not an internal optimization
+- [x] **LAZY-02**: `ExportHosts` and `WatchHosts` consume the cursor, and their peak memory no longer scales with total event-log size — proven by a **measured** benchmark (`AllocsPerRun`/memstats) against a 10k+ entry fixture, never by API-shape inspection
 - [ ] **LAZY-03**: When a cursor sits inside an aggregate's pre-compaction history and that aggregate is compacted mid-stream, the reader jumps to the `HostCompacted` seed event at the preserved OCC version. This behavior is documented and covered by a test rather than left implicit
-- [ ] **LAZY-04**: Rendered output is byte-identical before and after the change for every format, so no consumer template or pinned fixture breaks
+- [x] **LAZY-04**: Rendered output is byte-identical before and after the change for every format, so no consumer template or pinned fixture breaks
 
 ### v2 Requirements
 
@@ -177,10 +177,10 @@ v0.14.0 Phase 1 are different phases.
 | VRFY-03 | **v0.14.0** | Phase 3 | Pending |
 | VRFY-04 | **v0.14.0** | Phase 3 | Pending |
 | VRFY-05 | **v0.14.0** | Phase 1 | Complete |
-| LAZY-01 | **v0.14.0** | Phase 2 | Pending |
-| LAZY-02 | **v0.14.0** | Phase 2 | Pending |
+| LAZY-01 | **v0.14.0** | Phase 2 | Complete |
+| LAZY-02 | **v0.14.0** | Phase 2 | Complete |
 | LAZY-03 | **v0.14.0** | Phase 2 | Pending |
-| LAZY-04 | **v0.14.0** | Phase 2 | Pending |
+| LAZY-04 | **v0.14.0** | Phase 2 | Complete |
 
 **Coverage:**
 
