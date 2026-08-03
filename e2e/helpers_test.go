@@ -12,6 +12,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"math/big"
@@ -25,6 +26,7 @@ import (
 	"github.com/fzymgc-house/router-hosts/internal/config"
 	"github.com/fzymgc-house/router-hosts/internal/server"
 	"github.com/fzymgc-house/router-hosts/internal/storage/sqlite"
+	"github.com/fzymgc-house/router-hosts/internal/testutil/wait"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -369,19 +371,17 @@ func waitForServer(t *testing.T, addr, caCertPath, clientCertPath, clientKeyPath
 
 	tlsCfg := buildClientTLSConfig(t, caCertPath, clientCertPath, clientKeyPath)
 
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
+	wait.Until(t, 10*time.Second, 50*time.Millisecond, fmt.Sprintf("server at %s to accept a TLS connection", addr), func() bool {
 		conn, err := tls.DialWithDialer(
 			&net.Dialer{Timeout: 500 * time.Millisecond},
 			"tcp", addr, tlsCfg,
 		)
-		if err == nil {
-			_ = conn.Close()
-			return
+		if err != nil {
+			return false
 		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("server at %s did not become ready within 10 seconds", addr)
+		_ = conn.Close()
+		return true
+	})
 }
 
 // dialGRPC creates a gRPC client connection with mTLS.

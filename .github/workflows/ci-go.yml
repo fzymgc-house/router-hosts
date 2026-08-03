@@ -2,6 +2,7 @@ name: CI (Go)
 on:
   pull_request:
     branches: [main]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -133,10 +134,28 @@ jobs:
         run: go build -o /tmp/router-hosts ./cmd/router-hosts
       - name: Build docs (strict)
         run: task docs:ci BINARY=/tmp/router-hosts
+  e2e-fast:
+    name: E2E (fast)
+    runs-on: namespace-profile-linux-amd64-4x8
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cache Go modules and build
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: go
+      - name: Install task runner
+        run: go install github.com/go-task/task/v3/cmd/task@latest
+      - name: Run fast e2e tier
+        run: task test:e2e
   ci-go-complete:
     name: CI (Go) Complete
     if: always()
-    needs: [lint, vuln, test, build, buf-check, manifests, docs]
+    needs: [lint, vuln, test, build, buf-check, manifests, docs, e2e-fast]
     runs-on: namespace-profile-linux-amd64-2x4
     timeout-minutes: 5
     steps:
@@ -149,14 +168,16 @@ jobs:
           BUF_RESULT: ${{ needs.buf-check.result }}
           MANIFESTS_RESULT: ${{ needs.manifests.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
-        run: |
+          E2E_FAST_RESULT: ${{ needs.e2e-fast.result }}
+        run: |-
           if [[ "$LINT_RESULT" != "success" ]] ||
              [[ "$VULN_RESULT" != "success" ]] ||
              [[ "$TEST_RESULT" != "success" ]] ||
              [[ "$BUILD_RESULT" != "success" ]] ||
              [[ "$BUF_RESULT" != "success" ]] ||
              [[ "$MANIFESTS_RESULT" != "success" ]] ||
-             [[ "$DOCS_RESULT" != "success" ]]; then
+             [[ "$DOCS_RESULT" != "success" ]] ||
+             [[ "$E2E_FAST_RESULT" != "success" ]]; then
             echo "One or more CI jobs failed"
             exit 1
           fi
