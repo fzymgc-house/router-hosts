@@ -5,15 +5,15 @@ milestone_name: Verification & Lazy Reads
 current_phase: 01
 current_phase_name: CI Gating for the e2e Tiers
 status: executing
-stopped_at: Completed 01-01-PLAN.md
-last_updated: "2026-08-03T12:03:03.908Z"
+stopped_at: Completed 01-02-PLAN.md
+last_updated: "2026-08-03T12:11:30.600Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 5
-  completed_plans: 1
+  completed_plans: 2
   percent: 0
 ---
 
@@ -37,11 +37,11 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 ## Current Position
 
 Phase: 01 (CI Gating for the e2e Tiers) — EXECUTING
-Plan: 2 of 5
+Plan: 3 of 5
 Status: Ready to execute
 Last activity: 2026-08-03 — Phase 01 execution started
 
-Progress: [██░░░░░░░░] 20% (0/3 phases)
+Progress: [████░░░░░░] 40% (0/3 phases)
 
 ## Performance Metrics
 
@@ -99,6 +99,7 @@ Progress: [██░░░░░░░░] 20% (0/3 phases)
 | Phase 01 P10 | 15min | 3 tasks | 6 files |
 | Phase 01 P11 | ~55min | 3 tasks | 4 files |
 | Phase 01 P01 | 15min | 2 tasks | 7 files |
+| Phase 01 P02 | 25min | 3 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -175,6 +176,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-11: CI wiring for all three e2e tiers deferred; tracked as GitHub issue #403 (threat T-01-G1-13, disposition accept)
 - [Phase ?]: wait's two-function split (Until/UntilValue[T]) absorbs all five existing pollers' shapes without a return-value dance (D-14/D-15)
 - [Phase ?]: internal/ciwiring's invariant compares sorted, comma-joined string sets (not length) so a same-count-but-wrong-members mismatch still fails, per plan direction
+- [Phase ?]: Decision P-01 taken as written (no fallback): startServer bind-retry loop routes through wait.Until, timeout expressed as maxBindAttempts*bindRetryDelay
+- [Phase ?]: waitForFileContent/waitForSidecar's UntilValue timeout message trades raw JSON for decoded-value diagnostics; accepted, no gap surfaced
 
 ### Pending Todos
 
@@ -214,8 +217,8 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-03T12:03:03.899Z
-Stopped at: Completed 01-01-PLAN.md
+Last session: 2026-08-03T12:11:30.591Z
+Stopped at: Completed 01-02-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
