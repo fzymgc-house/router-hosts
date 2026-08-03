@@ -16,6 +16,8 @@ import (
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/client/commands"
 	"github.com/fzymgc-house/router-hosts/internal/contract"
+	"github.com/fzymgc-house/router-hosts/internal/server"
+	"github.com/fzymgc-house/router-hosts/internal/testutil/wait"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -658,29 +660,29 @@ func TestE2E_WatchSinkHealthKeyedByCN(t *testing.T) {
 		},
 	}))
 
-	var found bool
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		snap := env.sinkHealth.Snapshot()
-		if st, ok := snap.States["e2e-test-client"]; ok {
-			// Assert the literal CN, not "some non-empty key" — the literal
-			// is what proves extraction reached
-			// VerifiedChains[0][0].Subject.CommonName rather than anything
-			// else.
-			assert.Equal(t, int64(3), st.ConsecutiveFailures)
-			assert.Equal(t, contract.TemplateVersion, st.ContractVersion)
-			assert.Equal(t, initial.GetChangeId(), st.RenderedChangeID)
+	snap := wait.UntilValue(t, 5*time.Second, 20*time.Millisecond,
+		"sink health registry to hold an entry keyed by e2e-test-client",
+		func() (server.SinkSnapshot, error) {
+			return env.sinkHealth.Snapshot(), nil
+		},
+		func(s server.SinkSnapshot) bool {
+			_, ok := s.States["e2e-test-client"]
+			return ok
+		},
+	)
 
-			assert.Len(t, snap.States, 1, "registry should hold exactly one key")
-			_, hasEmptyKey := snap.States[""]
-			assert.False(t, hasEmptyKey, "registry must not hold an entry under the empty key")
+	// Assert the literal CN, not "some non-empty key" — the literal
+	// is what proves extraction reached
+	// VerifiedChains[0][0].Subject.CommonName rather than anything
+	// else.
+	st := snap.States["e2e-test-client"]
+	assert.Equal(t, int64(3), st.ConsecutiveFailures)
+	assert.Equal(t, contract.TemplateVersion, st.ContractVersion)
+	assert.Equal(t, initial.GetChangeId(), st.RenderedChangeID)
 
-			found = true
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	require.True(t, found, "sink health registry should hold an entry keyed by e2e-test-client")
+	assert.Len(t, snap.States, 1, "registry should hold exactly one key")
+	_, hasEmptyKey := snap.States[""]
+	assert.False(t, hasEmptyKey, "registry must not hold an entry under the empty key")
 }
 
 func TestE2E_WatchSinkSurvivesServerRestart(t *testing.T) {
@@ -735,16 +737,11 @@ func TestE2E_WatchSinkSurvivesServerRestart(t *testing.T) {
 	}()
 
 	// 1. Wait for the artifact to appear and record its bytes.
-	var initialBytes []byte
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		b, readErr := os.ReadFile(outPath)
-		if readErr == nil {
-			initialBytes = b
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
+	initialBytes := wait.UntilValue(t, 10*time.Second, 50*time.Millisecond,
+		"artifact at "+outPath+" to appear",
+		func() ([]byte, error) { return os.ReadFile(outPath) },
+		func(b []byte) bool { return len(b) > 0 },
+	)
 	require.NotEmpty(t, initialBytes, "sink should have written an initial artifact")
 
 	// 2. Stop the server and return — the server is now down and stays
@@ -754,21 +751,21 @@ func TestE2E_WatchSinkSurvivesServerRestart(t *testing.T) {
 
 	// 3. While it is down, the artifact stays byte-identical and the
 	// sidecar's failure count rises.
+	// SLEEP-INTENTIONAL: fixed 300ms outage-window hold, not a readiness
+	// wait — converting it to a poll would erase the window this step
+	// asserts against (D-13).
 	time.Sleep(300 * time.Millisecond)
 	stillBytes, err := os.ReadFile(outPath)
 	require.NoError(t, err)
 	assert.Equal(t, initialBytes, stillBytes, "artifact must stay byte-identical during the outage")
 
-	var sawFailure bool
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if n, ok := readSidecarConsecutiveFailures(t, statusPath); ok && n > 0 {
-			sawFailure = true
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	require.True(t, sawFailure, "sidecar should report a rising failure count during the outage")
+	wait.Until(t, 10*time.Second, 50*time.Millisecond,
+		"sidecar to report a rising failure count during the outage",
+		func() bool {
+			n, ok := readSidecarConsecutiveFailures(t, statusPath)
+			return ok && n > 0
+		},
+	)
 
 	// 4. Restart on the same address, then mutate over a fresh RPC so the
 	// post-reconnect snapshot carries genuinely new content — asserting a
@@ -783,28 +780,21 @@ func TestE2E_WatchSinkSurvivesServerRestart(t *testing.T) {
 
 	// 5. The sink reconnects on its own, rewrites the artifact, and its
 	// failure count returns to zero.
-	var sawNewContent bool
-	deadline = time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		b, readErr := os.ReadFile(outPath)
-		if readErr == nil && strings.Contains(string(b), "restarted.local") {
-			sawNewContent = true
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	require.True(t, sawNewContent, "artifact should be rewritten with the new host after reconnect")
+	wait.Until(t, 15*time.Second, 100*time.Millisecond,
+		"artifact to be rewritten with restarted.local after reconnect",
+		func() bool {
+			b, readErr := os.ReadFile(outPath)
+			return readErr == nil && strings.Contains(string(b), "restarted.local")
+		},
+	)
 
-	var failuresCleared bool
-	deadline = time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if n, ok := readSidecarConsecutiveFailures(t, statusPath); ok && n == 0 {
-			failuresCleared = true
-			break
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	require.True(t, failuresCleared, "consecutive failure count should return to zero after reconnect")
+	wait.Until(t, 10*time.Second, 50*time.Millisecond,
+		"consecutive failure count to return to zero after reconnect",
+		func() bool {
+			n, ok := readSidecarConsecutiveFailures(t, statusPath)
+			return ok && n == 0
+		},
+	)
 
 	// 6. Cancel the context and assert the command returns.
 	runCancel()
