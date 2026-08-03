@@ -200,7 +200,7 @@ jobs:
   ci-go-complete:
     name: CI (Go) Complete
     if: always()
-    needs: [lint, vuln, test, build, buf-check, manifests, docs, e2e-fast]
+    needs: [lint, vuln, test, build, buf-check, manifests, docs, e2e-fast, e2e-docker, e2e-proc]
     runs-on: namespace-profile-linux-amd64-2x4
     timeout-minutes: 5
     steps:
@@ -214,6 +214,8 @@ jobs:
           MANIFESTS_RESULT: ${{ needs.manifests.result }}
           DOCS_RESULT: ${{ needs.docs.result }}
           E2E_FAST_RESULT: ${{ needs.e2e-fast.result }}
+          E2E_DOCKER_RESULT: ${{ needs.e2e-docker.result }}
+          E2E_PROC_RESULT: ${{ needs.e2e-proc.result }}
         run: |-
           if [[ "$LINT_RESULT" != "success" ]] ||
              [[ "$VULN_RESULT" != "success" ]] ||
@@ -222,7 +224,9 @@ jobs:
              [[ "$BUF_RESULT" != "success" ]] ||
              [[ "$MANIFESTS_RESULT" != "success" ]] ||
              [[ "$DOCS_RESULT" != "success" ]] ||
-             [[ "$E2E_FAST_RESULT" != "success" ]]; then
+             [[ "$E2E_FAST_RESULT" != "success" ]] ||
+             [[ "$E2E_DOCKER_RESULT" != "success" ]] ||
+             [[ "$E2E_PROC_RESULT" != "success" ]]; then
             echo "One or more CI jobs failed"
             exit 1
           fi
