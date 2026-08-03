@@ -157,11 +157,16 @@ Phase 1 reinvents it first — exactly what the requirement forbids.
 3. Compacting an aggregate while a cursor sits inside its pre-compaction history leaves the reader at that aggregate's `HostCompacted` seed event at the preserved OCC version (ADR router-hosts-v5b), documented and pinned by a test rather than left implicit
 4. Rendered output is byte-identical before and after the change for every format, so no consumer template and no pinned fixture breaks
 
-**Plans**: TBD
+**Plans**: 6 plans
 
 Plans:
 
-- [ ] TBD (run `/gsd-plan-phase 2`)
+- [ ] 02-01-PLAN.md — Capture every byte-identity golden before any behavior change
+- [ ] 02-02-PLAN.md — Tracer: ListPage published on HostProjection, wired end-to-end through WatchHosts
+- [ ] 02-03-PLAN.md — Compaction-vs-cursor conformance tests and the documented read contracts
+- [ ] 02-04-PLAN.md — Stream-render ExportHosts json/csv; descope hosts; take the free-win migrations
+- [ ] 02-05-PLAN.md — Amend the memory claim, then measure it with a peak-heap benchmark
+- [ ] 02-06-PLAN.md — Gate the benchmark tier in CI and prove it RED on a Linux runner
 
 **Highest-risk requirement**: LAZY-02. The cursor is necessary but not
 sufficient — `ExportHosts`' `hosts` and `json` formats sort globally by
