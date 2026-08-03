@@ -126,7 +126,7 @@ Acknowledged but deferred; not in the current roadmap.
 | Nightly-scheduled e2e cadence | Two gating events only (PR, merge to `main`) — a fourth cadence is CI machinery this milestone was not asked to build |
 | Flake-quarantine convention | More machinery than a homelab-scale suite needs; revisit only if the container tiers prove flaky in practice |
 
-### Traceability
+## Traceability
 
 Phase numbering restarted at v0.13.0 and again at v0.14.0, so the Milestone
 column is required to read the Phase column unambiguously — v0.10.13 Phase 1
@@ -168,15 +168,15 @@ v0.14.0 Phase 1 are different phases.
 | TMPL-06 | v0.13.0 | Phase 1 | Complete |
 | TMPL-07 | v0.13.0 | Phase 1 | Complete |
 | TMPL-08 | v0.13.0 | Phase 1 | Complete |
-| CI-01 | **v0.14.0** | Phase 1 | Pending |
-| CI-02 | **v0.14.0** | Phase 1 | Pending |
-| CI-03 | **v0.14.0** | Phase 1 | Pending |
-| CI-04 | **v0.14.0** | Phase 1 | Pending |
+| CI-01 | **v0.14.0** | Phase 1 | Complete |
+| CI-02 | **v0.14.0** | Phase 1 | Complete |
+| CI-03 | **v0.14.0** | Phase 1 | Complete |
+| CI-04 | **v0.14.0** | Phase 1 | Complete |
 | VRFY-01 | **v0.14.0** | Phase 3 | Pending |
 | VRFY-02 | **v0.14.0** | Phase 3 | Pending |
 | VRFY-03 | **v0.14.0** | Phase 3 | Pending |
 | VRFY-04 | **v0.14.0** | Phase 3 | Pending |
-| VRFY-05 | **v0.14.0** | Phase 1 | Pending |
+| VRFY-05 | **v0.14.0** | Phase 1 | Complete |
 | LAZY-01 | **v0.14.0** | Phase 2 | Pending |
 | LAZY-02 | **v0.14.0** | Phase 2 | Pending |
 | LAZY-03 | **v0.14.0** | Phase 2 | Pending |

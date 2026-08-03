@@ -95,7 +95,7 @@ reads stop materializing full event history server-side.
 
 **v0.14.0 phases:**
 
-- [ ] **Phase 1: CI Gating for the e2e Tiers** - All three tiers run in CI, gate merges, and are proven able to fail
+- [x] **Phase 1: CI Gating for the e2e Tiers** - All three tiers run in CI, gate merges, and are proven able to fail (completed 2026-08-03)
 - [ ] **Phase 2: Cursor-Based Lazy Storage Reads** - `HostProjection` pages by aggregate ID so streaming stops folding full event history into memory
 - [ ] **Phase 3: Containerized Deployment-Verification Harness** - Real unbound plus two sink containers run UAT 42 and the four blocked deployment checks green
 
@@ -217,7 +217,7 @@ against a settled read path.
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. CI Gating for the e2e Tiers | 5/5 | In Progress|  |
+| 1. CI Gating for the e2e Tiers | 5/5 | Complete    | 2026-08-03 |
 | 2. Cursor-Based Lazy Storage Reads | 0/TBD | Not started | - |
 | 3. Containerized Deployment-Verification Harness | 0/TBD | Not started | - |
 
