@@ -2,18 +2,18 @@
 gsd_state_version: 1.0
 milestone: v0.14.0
 milestone_name: Verification & Lazy Reads
-current_phase: 1
+current_phase: 01
 current_phase_name: CI Gating for the e2e Tiers
-status: planning
-stopped_at: Phase 1 context gathered
-last_updated: "2026-08-03T00:02:24.858Z"
-last_activity: 2026-08-02
-last_activity_desc: v0.14.0 roadmap created (3 phases, 13/13 requirements mapped)
+status: executing
+stopped_at: Completed 01-01-PLAN.md
+last_updated: "2026-08-03T12:03:03.908Z"
+last_activity: 2026-08-03
+last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 5
-  completed_plans: 0
+  completed_plans: 1
   percent: 0
 ---
 
@@ -24,7 +24,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-08-02)
 
 **Core value:** Declare a hostname once — the router's authoritative DNS output stays correct, leak-free, and hands-off.
-**Current focus:** v0.14.0 roadmapped into 3 phases. Next action: plan Phase 1 (CI Gating for the e2e Tiers).
+**Current focus:** Phase 01 — CI Gating for the e2e Tiers
 
 > **Phase numbering restarted at v0.13.0 and again at v0.14.0.** Phases 1–9
 > belong to the previous continuous sequence (v0.10.13–v0.12.0) and are archived
@@ -36,12 +36,12 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 
 ## Current Position
 
-Phase: 1 — CI Gating for the e2e Tiers (not started)
-Plan: —
-Status: Roadmap created; awaiting phase planning
-Last activity: 2026-08-02 — v0.14.0 roadmap created (3 phases, 13/13 requirements mapped)
+Phase: 01 (CI Gating for the e2e Tiers) — EXECUTING
+Plan: 2 of 5
+Status: Ready to execute
+Last activity: 2026-08-03 — Phase 01 execution started
 
-Progress: [                    ] 0% (0/3 phases)
+Progress: [██░░░░░░░░] 20% (0/3 phases)
 
 ## Performance Metrics
 
@@ -98,6 +98,7 @@ Progress: [                    ] 0% (0/3 phases)
 | Phase 01 P08 | 62min | 3 tasks | 6 files |
 | Phase 01 P10 | 15min | 3 tasks | 6 files |
 | Phase 01 P11 | ~55min | 3 tasks | 4 files |
+| Phase 01 P01 | 15min | 2 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -172,6 +173,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-10: Explicit --config path branch placed in LoadClientConfig layer 1 (not applyClientOverrides layer 3), preserving file < env < flag precedence; fixes G-01-1 silent-fallback-to-XDG defect
 - [Phase ?]: 01-11: proc_e2e is a new build tag (not an e2e overload) with a real-process harness (os/exec on both sides); revert-and-observe confirmed the tracer test fails against pre-fix code and passes restored
 - [Phase ?]: 01-11: CI wiring for all three e2e tiers deferred; tracked as GitHub issue #403 (threat T-01-G1-13, disposition accept)
+- [Phase ?]: wait's two-function split (Until/UntilValue[T]) absorbs all five existing pollers' shapes without a return-value dance (D-14/D-15)
+- [Phase ?]: internal/ciwiring's invariant compares sorted, comma-joined string sets (not length) so a same-count-but-wrong-members mismatch still fails, per plan direction
 
 ### Pending Todos
 
@@ -211,9 +214,9 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-02T23:04:56.411Z
-Stopped at: Phase 1 context gathered
-Resume file: .planning/phases/01-ci-gating-for-the-e2e-tiers/01-CONTEXT.md
+Last session: 2026-08-03T12:03:03.899Z
+Stopped at: Completed 01-01-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 

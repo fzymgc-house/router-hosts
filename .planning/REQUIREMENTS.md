@@ -74,8 +74,8 @@
 
 Closes #403. The three tiers already exist from v0.13.0 Phase 1; this is wiring, not new test code.
 
-- [ ] **CI-01**: All three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) run as CI jobs, and a single aggregated required check fails if any tier fails — so a merge cannot land on a tier nobody made required
-- [ ] **CI-02**: The fast tier gates every PR; the container and process tiers gate merge to `main`. `proc_e2e` is required before merge because it is the only tier that observes the CLI-flag→config seam (the blind spot G-01-1 shipped through)
+- [x] **CI-01**: All three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) run as CI jobs, and a single aggregated required check fails if any tier fails — so a merge cannot land on a tier nobody made required
+- [x] **CI-02**: The fast tier gates every PR; the container and process tiers gate merge to `main`. `proc_e2e` is required before merge because it is the only tier that observes the CLI-flag→config seam (the blind spot G-01-1 shipped through)
 - [ ] **CI-03**: Each new gate is demonstrated **red** against a deliberately reintroduced regression before it is accepted — "never observed to fail" and "cannot fail" are indistinguishable from outside
 - [ ] **CI-04**: The container tiers hard-fail when Docker is unavailable instead of skipping (`e2e/docker_e2e_test.go` currently `t.Skip`s), and `proc_e2e` builds the binary fresh in-job rather than restoring a cached `bin/`, so neither tier can pass while testing nothing
 
@@ -87,7 +87,7 @@ Replaces the second-physical-machine dependency. The bar is green-not-built.
 - [ ] **VRFY-02**: The resolver-reload check asserts a **real DNS answer** from the running unbound container after zone regeneration, including that an unmanaged sibling name still resolves normally (no zone-wide NXDOMAIN leak, per ADR router-hosts-bzg) — asserting only "file changed" or "container healthy" does not satisfy this
 - [ ] **VRFY-03**: The two-node convergence check asserts **state equality** via the monotonic change ID (TMPL-08) both sinks report, and distinguishes "converged" from "never diverged" by forcing a pre/post state difference. A timeout is recorded as failure, never as success
 - [ ] **VRFY-04**: UAT test 42 (resolver reload plus two-node convergence) and the four manual deployment checks from plan 01-08 execute and pass in the harness, so v0.13.0 Phase 1 no longer reports `uat-passed: false`
-- [ ] **VRFY-05**: Readiness is established by wait-strategy polling with a bounded timeout — no fixed sleeps — through a shared helper reused by `docker_e2e`, `proc_e2e`, and the harness, so anti-flake rules live in one place rather than being reinvented per test file
+- [x] **VRFY-05**: Readiness is established by wait-strategy polling with a bounded timeout — no fixed sleeps — through a shared helper reused by `docker_e2e`, `proc_e2e`, and the harness, so anti-flake rules live in one place rather than being reinvented per test file
 
 #### Lazy Storage Reads (v0.14.0, active)
 
