@@ -4,17 +4,17 @@ milestone: v0.14.0
 milestone_name: Verification & Lazy Reads
 current_phase: 01
 current_phase_name: CI Gating for the e2e Tiers
-status: executing
-stopped_at: Completed 01-04-PLAN.md
-last_updated: "2026-08-03T12:53:38.029Z"
+status: verifying
+stopped_at: Completed 01-05-PLAN.md; UAT recorded (8/8 pass); phase ready for /gsd-verify-work final transition check
+last_updated: "2026-08-03T15:53:33.681Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 3
-  completed_phases: 0
+  completed_phases: 1
   total_plans: 5
-  completed_plans: 4
-  percent: 0
+  completed_plans: 5
+  percent: 33
 ---
 
 # Project State
@@ -38,10 +38,10 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 
 Phase: 01 (CI Gating for the e2e Tiers) — EXECUTING
 Plan: 5 of 5
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-03 — Phase 01 execution started
 
-Progress: [████████░░] 80% (0/3 phases)
+Progress: [██████████] 100% (0/3 phases)
 
 ## Performance Metrics
 
@@ -102,6 +102,7 @@ Progress: [████████░░] 80% (0/3 phases)
 | Phase 01 P02 | 25min | 3 tasks | 3 files |
 | Phase 01 P03 | 24min | 3 tasks | 4 files |
 | Phase 01 P04 | 20min | 2 tasks | 1 files |
+| Phase 01 P05 | 55min | 4 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -186,6 +187,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: 01-04: No Docker setup action added to e2e-docker — Namespace runners provide Docker natively; docker/setup-buildx-action would overwrite their Remote Builder configuration (RESEARCH.md Q-01)
 - [Phase ?]: 01-04: e2e-docker's RH_E2E_REQUIRE_DOCKER copied byte-for-byte from dockergate.EnvVar, verified via rg -o comparison
 - [Phase ?]: 01-04: e2e-proc's rm -rf bin/ runs as its own step before task test:e2e:proc, making the fresh build structural (D-08)
+- [Phase ?]: 01-05: e2e-docker cert-permission fix — writePEM gained a mode parameter (0o600 in-process, 0o644 docker-mounted) since dockerd auto-creates /certs traversable, only the file's own mode/UID matters
+- [Phase ?]: 01-05: D-05 out-of-repo [ci skip] disposition = file-issue-only (issue #418); workflow_dispatch already shipped in plan 01-01
+- [Phase ?]: 01-05: Controls 1 (e2e tier, service.go Trigger string) and 3 (proc_e2e tier, main.go exit code) substituted simpler regressions for the plan's original candidates, each independently re-verified locally and in real CI (PRs #415, #416, both closed unmerged)
 
 ### Pending Todos
 
@@ -225,8 +229,8 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-03T12:53:38.021Z
-Stopped at: Completed 01-04-PLAN.md
+Last session: 2026-08-03T15:53:33.673Z
+Stopped at: Completed 01-05-PLAN.md; UAT recorded (8/8 pass); phase ready for /gsd-verify-work final transition check
 Resume file: None
 
 ## Operator Next Steps

@@ -76,7 +76,7 @@ Closes #403. The three tiers already exist from v0.13.0 Phase 1; this is wiring,
 
 - [x] **CI-01**: All three e2e tiers (`e2e`, `docker_e2e`, `proc_e2e`) run as CI jobs, and a single aggregated required check fails if any tier fails — so a merge cannot land on a tier nobody made required
 - [x] **CI-02**: The fast tier gates every PR; the container and process tiers gate merge to `main`. `proc_e2e` is required before merge because it is the only tier that observes the CLI-flag→config seam (the blind spot G-01-1 shipped through)
-- [ ] **CI-03**: Each new gate is demonstrated **red** against a deliberately reintroduced regression before it is accepted — "never observed to fail" and "cannot fail" are indistinguishable from outside
+- [x] **CI-03**: Each new gate is demonstrated **red** against a deliberately reintroduced regression before it is accepted — "never observed to fail" and "cannot fail" are indistinguishable from outside
 - [x] **CI-04**: The container tiers hard-fail when Docker is unavailable instead of skipping (`e2e/docker_e2e_test.go` currently `t.Skip`s), and `proc_e2e` builds the binary fresh in-job rather than restoring a cached `bin/`, so neither tier can pass while testing nothing
 
 #### Deployment Verification Harness (v0.14.0, active)
