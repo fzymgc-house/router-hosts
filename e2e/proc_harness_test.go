@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fzymgc-house/router-hosts/internal/testutil/wait"
 	"github.com/stretchr/testify/require"
 )
 
@@ -347,16 +348,17 @@ func startServerProcess(t *testing.T, bin, cfgPath, addr string, b *pkiBundle) *
 func waitForProcAddr(t *testing.T, addr string) {
 	t.Helper()
 
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
-		if err == nil {
+	wait.Until(t, 10*time.Second, 50*time.Millisecond,
+		"server at "+addr+" to accept a TCP connection",
+		func() bool {
+			conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+			if err != nil {
+				return false
+			}
 			_ = conn.Close()
-			return
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	t.Fatalf("server at %s did not become ready within 10 seconds", addr)
+			return true
+		},
+	)
 }
 
 // sinkProc is a handle on a real `router-hosts watch` OS process. Multiple
@@ -494,29 +496,14 @@ type procSinkStatus struct {
 func waitForFileContent(t *testing.T, path string, deadline time.Duration, pred func(string) bool) string {
 	t.Helper()
 
-	end := time.Now().Add(deadline)
-	var last string
-	var lastErr error
-	for time.Now().Before(end) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			lastErr = err
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		lastErr = nil
-		last = string(data)
-		if pred(last) {
-			return last
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if lastErr != nil {
-		t.Fatalf("waiting for %s: condition not met within %s; last read error: %v", path, deadline, lastErr)
-	}
-	t.Fatalf("waiting for %s: condition not met within %s; last content:\n%s", path, deadline, last)
-	return ""
+	return wait.UntilValue(t, deadline, 100*time.Millisecond,
+		"content of "+path,
+		func() (string, error) {
+			data, err := os.ReadFile(path)
+			return string(data), err
+		},
+		pred,
+	)
 }
 
 // waitForSidecar polls path, parsing it as procSinkStatus JSON on every
@@ -525,35 +512,21 @@ func waitForFileContent(t *testing.T, path string, deadline time.Duration, pred 
 func waitForSidecar(t *testing.T, path string, deadline time.Duration, pred func(procSinkStatus) bool) procSinkStatus {
 	t.Helper()
 
-	end := time.Now().Add(deadline)
-	var lastRaw string
-	var lastErr error
-	for time.Now().Before(end) {
-		data, err := os.ReadFile(path)
-		if err != nil {
-			lastErr = err
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		lastRaw = string(data)
-		var st procSinkStatus
-		if err := json.Unmarshal(data, &st); err != nil {
-			lastErr = err
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
-		lastErr = nil
-		if pred(st) {
-			return st
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	if lastErr != nil {
-		t.Fatalf("waiting for sidecar %s: condition not met within %s; last error: %v", path, deadline, lastErr)
-	}
-	t.Fatalf("waiting for sidecar %s: condition not met within %s; last content:\n%s", path, deadline, lastRaw)
-	return procSinkStatus{}
+	return wait.UntilValue(t, deadline, 100*time.Millisecond,
+		"sidecar status at "+path,
+		func() (procSinkStatus, error) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return procSinkStatus{}, err
+			}
+			var st procSinkStatus
+			if err := json.Unmarshal(data, &st); err != nil {
+				return procSinkStatus{}, err
+			}
+			return st, nil
+		},
+		pred,
+	)
 }
 
 // examplesTemplatePath resolves a shipped example template relative to the
