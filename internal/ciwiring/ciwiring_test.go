@@ -142,6 +142,18 @@ func TestEveryE2ETierIsWiredIntoAggregator(t *testing.T) {
 		t.Fatalf("workflow has no %q job", aggregatorJobID)
 	}
 
+	// Guard against a tier drifting off the naming convention entirely,
+	// which would make it invisible to both e2eJobIDs and e2eNeedsIDs at
+	// once (both filter through the same e2eJobPattern) and defeat this
+	// whole invariant. Must run before the set-equality comparison below
+	// so an off-convention job fails with this naming message rather than
+	// silently vanishing from both sides of that comparison.
+	for id := range wf.Jobs {
+		if strings.Contains(strings.ToLower(id), "e2e") && !e2eJobPattern.MatchString(id) {
+			t.Fatalf("job %q looks like an e2e tier but does not match the required e2e-* naming convention this invariant depends on", id)
+		}
+	}
+
 	declaredTiers := e2eJobIDs(wf.Jobs)
 	wiredTiers := e2eNeedsIDs(aggregator.Needs)
 
