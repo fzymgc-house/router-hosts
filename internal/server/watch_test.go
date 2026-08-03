@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/oklog/ulid/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -213,25 +215,80 @@ func TestService_WatchHosts_EmptyStoreSendsTerminatorOnly(t *testing.T) {
 	assert.EqualValues(t, 0, complete.GetCount())
 }
 
-// mutatingListAllStore wraps a real storage.Storage and commits one host
-// mutation the first time ListAll is called, then delegates. It is the
+// TestService_WatchHosts_OneShotSnapshot_MultiplePages proves sendSnapshot
+// drains ListPage rather than materializing the whole inventory in one call:
+// snapshotPageSize is shrunk so a seeded inventory spans several pages, and
+// every seeded hostname must still arrive exactly once with no duplicate and
+// no omission.
+func TestService_WatchHosts_OneShotSnapshot_MultiplePages(t *testing.T) {
+	origPageSize := snapshotPageSize
+	snapshotPageSize = 3
+	t.Cleanup(func() { snapshotPageSize = origPageSize })
+
+	env := newServiceTestEnv(t)
+	ctx := context.Background()
+
+	const n = 10 // strictly more than the shrunk page size, so multiple pages are required
+	seeded := make(map[string]bool, n)
+	for i := range n {
+		hostname := fmt.Sprintf("multi%02d.local", i)
+		_, err := env.handler.AddHost(ctx, "192.168.2.1", hostname, nil, nil, nil)
+		require.NoError(t, err)
+		seeded[hostname] = true
+	}
+
+	entries, complete := oneShotWatch(t, ctx, env.client)
+	assert.Len(t, entries, n)
+	assert.EqualValues(t, n, complete.GetCount())
+
+	got := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		got[e.GetHostname()] = true
+	}
+	assert.Equal(t, seeded, got, "every seeded hostname must appear exactly once with no duplicate and no omission")
+}
+
+// mutatingListStore wraps a real storage.Storage and commits one host
+// mutation the first time ListPage is called, then delegates. It is the
 // vehicle for TestService_WatchHosts_ChangeIDIsLowerBoundOnEntries and its
 // follow-mode mirror below: it simulates a mutation landing between the
-// server's LatestEventID read and its ListAll read.
-type mutatingListAllStore struct {
+// server's LatestEventID read and its first entry read.
+//
+// sendSnapshot now drains ListPage rather than calling ListAll directly
+// (D-04's "already the easy consumer" migration), so the ListPage override
+// below is what actually fires in this suite. The ListAll override is kept
+// so any remaining ListAll-based caller in a later test still exercises the
+// same seam — this type used to be named mutatingListAllStore, renamed here
+// because ListPage is now the interception point that matters.
+type mutatingListStore struct {
 	storage.Storage
 	handler *CommandHandler
 	mutated bool
 }
 
-func (m *mutatingListAllStore) ListAll(ctx context.Context) ([]domain.HostEntry, error) {
-	if !m.mutated {
-		m.mutated = true
-		if _, err := m.handler.AddHost(ctx, "10.10.10.10", "mid-read.local", nil, nil, nil); err != nil {
-			return nil, err
-		}
+// mutateOnce performs the decorator's one-shot mutation exactly once,
+// regardless of which override (ListAll or ListPage) triggers it first.
+func (m *mutatingListStore) mutateOnce(ctx context.Context) error {
+	if m.mutated {
+		return nil
+	}
+	m.mutated = true
+	_, err := m.handler.AddHost(ctx, "10.10.10.10", "mid-read.local", nil, nil, nil)
+	return err
+}
+
+func (m *mutatingListStore) ListAll(ctx context.Context) ([]domain.HostEntry, error) {
+	if err := m.mutateOnce(ctx); err != nil {
+		return nil, err
 	}
 	return m.Storage.ListAll(ctx)
+}
+
+func (m *mutatingListStore) ListPage(ctx context.Context, after ulid.ULID, limit int) ([]domain.HostEntry, ulid.ULID, bool, error) {
+	if err := m.mutateOnce(ctx); err != nil {
+		return nil, ulid.ULID{}, false, err
+	}
+	return m.Storage.ListPage(ctx, after, limit)
 }
 
 func TestService_WatchHosts_ChangeIDIsLowerBoundOnEntries(t *testing.T) {
@@ -248,7 +305,7 @@ func TestService_WatchHosts_ChangeIDIsLowerBoundOnEntries(t *testing.T) {
 	_, err = handler.AddHost(ctx, "192.168.1.1", "seed.local", nil, nil, nil)
 	require.NoError(t, err)
 
-	decorated := &mutatingListAllStore{Storage: store, handler: handler}
+	decorated := &mutatingListStore{Storage: store, handler: handler}
 	hostsGen := NewHostsFileGenerator("/dev/null")
 	svc := NewHostsServiceImpl(handler, decorated, WithHostsGenerator(hostsGen))
 
@@ -793,7 +850,7 @@ func TestService_WatchHosts_FollowSnapshotIDIsLowerBoundOnEntries(t *testing.T) 
 	_, err = handler.AddHost(ctx, "192.168.1.1", "seed.local", nil, nil, nil)
 	require.NoError(t, err)
 
-	decorated := &mutatingListAllStore{Storage: store, handler: handler}
+	decorated := &mutatingListStore{Storage: store, handler: handler}
 	hostsGen := NewHostsFileGenerator("/dev/null")
 	svc := NewHostsServiceImpl(handler, decorated, WithHostsGenerator(hostsGen))
 
