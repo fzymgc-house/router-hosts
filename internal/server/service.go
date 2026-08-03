@@ -197,16 +197,35 @@ func (s *HostsServiceImpl) regenerateOutputs(ctx context.Context, op string) {
 	// report it, so read it directly. Best-effort: on a read error the hook
 	// still fires with a zero count rather than being skipped.
 	entryCount := 0
-	if entries, err := s.store.ListAll(ctx); err != nil {
+	if count, err := s.countLiveEntries(ctx); err != nil {
 		slog.Error("hook entry count unavailable", "op", op, "error", err)
 	} else {
-		entryCount = len(entries)
+		entryCount = count
 	}
 
 	if len(errMsgs) == 0 {
 		s.hooks.TriggerSuccess(entryCount)
 	} else {
 		s.hooks.TriggerFailure(entryCount, strings.Join(errMsgs, "; "))
+	}
+}
+
+// countLiveEntries returns the number of live host entries by counting
+// pages rather than materializing every entry to call len() on it (D-04): a
+// count is all this caller needs, so nothing is retained past each page.
+func (s *HostsServiceImpl) countLiveEntries(ctx context.Context) (int, error) {
+	count := 0
+	var cursor ulid.ULID
+	for {
+		page, next, done, err := s.store.ListPage(ctx, cursor, exportPageSize)
+		if err != nil {
+			return 0, err
+		}
+		count += len(page)
+		if done {
+			return count, nil
+		}
+		cursor = next
 	}
 }
 
@@ -676,42 +695,116 @@ func sendExportChunks(stream exportChunkSender, data []byte) error {
 	return nil
 }
 
-// ExportHosts implements the server-streaming export RPC.
-func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream grpc.ServerStreamingServer[hostsv1.ExportHostsResponse]) error {
-	ctx := stream.Context()
-	format := req.GetFormat()
-	if format == "" {
-		format = "hosts"
+// exportPageSize is the page size ExportHosts' json/csv streaming branches
+// and the hook entry-count drain use when calling ListPage. A package var,
+// not a const, so tests can shrink it instead of seeding large fixtures —
+// following the snapshotPageSize (watch.go) / MaxTrackedSinks precedent.
+var exportPageSize = 500
+
+// jsonEntry is ExportHosts' json format's per-entry shape. Field tags are
+// load-bearing for byte-identity (D-14): Comment's omitempty is what keeps
+// a nil comment's key absent from the rendered element rather than emitting
+// "comment": null.
+type jsonEntry struct {
+	ID        string   `json:"id"`
+	IPAddress string   `json:"ip_address"`
+	Hostname  string   `json:"hostname"`
+	Comment   *string  `json:"comment,omitempty"`
+	Tags      []string `json:"tags"`
+	Aliases   []string `json:"aliases"`
+}
+
+// chunkWriter is an io.Writer that frames written bytes into
+// ExportHostsResponse messages at the exportChunkSize boundary as they
+// arrive, rather than accumulating an entire rendered payload before
+// sendExportChunks frames it (T-02-09, D-03). Its own buffer never exceeds
+// exportChunkSize bytes.
+//
+// Close must be called exactly once after the last Write. If Write was
+// never called, Close sends exactly one message carrying an empty chunk —
+// preserving sendExportChunks' review-L14 empty-payload carve-out: an empty
+// inventory still yields exactly one response message, never zero.
+type chunkWriter struct {
+	stream exportChunkSender
+	buf    []byte // len(buf) <= exportChunkSize always
+	wrote  bool
+}
+
+func newChunkWriter(stream exportChunkSender) *chunkWriter {
+	return &chunkWriter{stream: stream, buf: make([]byte, 0, exportChunkSize)}
+}
+
+// Write implements io.Writer. The chunk-length sequence this produces for a
+// given total payload is identical to sendExportChunks' — verified by
+// TestExportHosts_ChunkBoundaryEquivalence.
+func (w *chunkWriter) Write(p []byte) (int, error) {
+	total := len(p)
+	if total == 0 {
+		return 0, nil
 	}
-
-	entries, err := s.store.ListAll(ctx)
-	if err != nil {
-		return mapError(err)
+	w.wrote = true
+	for len(p) > 0 {
+		space := exportChunkSize - len(w.buf)
+		n := len(p)
+		if n > space {
+			n = space
+		}
+		w.buf = append(w.buf, p[:n]...)
+		p = p[n:]
+		if len(w.buf) == exportChunkSize {
+			if err := w.flush(); err != nil {
+				return 0, err
+			}
+		}
 	}
+	return total, nil
+}
 
-	var data []byte
+// flush sends the current buffer as one message and resets the buffer to
+// empty, reusing its backing array (bounded at exportChunkSize capacity) —
+// the buffer never grows across the life of a chunkWriter.
+func (w *chunkWriter) flush() error {
+	if len(w.buf) == 0 {
+		return nil
+	}
+	chunk := make([]byte, len(w.buf))
+	copy(chunk, w.buf)
+	if err := w.stream.Send(&hostsv1.ExportHostsResponse{Chunk: chunk}); err != nil {
+		return err
+	}
+	w.buf = w.buf[:0]
+	return nil
+}
 
-	switch format {
-	case "hosts":
-		if s.hostsGen != nil {
-			data = []byte(s.hostsGen.FormatHostsFile(entries))
-		} else {
-			data = []byte((&HostsFileGenerator{}).FormatHostsFile(entries))
+// Close flushes any remaining buffered bytes, or sends the single
+// empty-chunk message if Write was never called.
+func (w *chunkWriter) Close() error {
+	if !w.wrote {
+		return w.stream.Send(&hostsv1.ExportHostsResponse{Chunk: nil})
+	}
+	return w.flush()
+}
+
+// exportJSONStream renders every live host entry as json.MarshalIndent(out,
+// "", "  ") would for the full slice — two-space indent, no trailing
+// newline, the literal two-byte "[]" for zero entries — but draining
+// ListPage page by page instead of materializing the whole inventory first
+// (D-03). The framing (Pattern 3, RESEARCH.md) writes "[" before the first
+// element, a "," before every subsequent element, "\n  " plus the
+// per-element MarshalIndent bytes for each, and "\n]" after the last —
+// verified byte-identical to the buffered baseline this session, so no
+// look-ahead for "is this the last element" is needed.
+func (s *HostsServiceImpl) exportJSONStream(ctx context.Context, w io.Writer) error {
+	count := 0
+	var cursor ulid.ULID
+	for {
+		page, next, done, err := s.store.ListPage(ctx, cursor, exportPageSize)
+		if err != nil {
+			return mapError(err)
 		}
-
-	case "json":
-		// Convert to proto-like structures for clean JSON
-		type jsonEntry struct {
-			ID        string   `json:"id"`
-			IPAddress string   `json:"ip_address"`
-			Hostname  string   `json:"hostname"`
-			Comment   *string  `json:"comment,omitempty"`
-			Tags      []string `json:"tags"`
-			Aliases   []string `json:"aliases"`
-		}
-		out := make([]jsonEntry, len(entries))
-		for i, e := range entries {
-			out[i] = jsonEntry{
+		for i := range page {
+			e := page[i]
+			elem := jsonEntry{
 				ID:        e.ID.String(),
 				IPAddress: e.IP,
 				Hostname:  e.Hostname,
@@ -719,22 +812,63 @@ func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream g
 				Tags:      e.Tags,
 				Aliases:   e.Aliases,
 			}
+			if count == 0 {
+				if _, werr := io.WriteString(w, "["); werr != nil {
+					return werr
+				}
+			} else {
+				if _, werr := io.WriteString(w, ","); werr != nil {
+					return werr
+				}
+			}
+			if _, werr := io.WriteString(w, "\n  "); werr != nil {
+				return werr
+			}
+			b, merr := json.MarshalIndent(elem, "  ", "  ")
+			if merr != nil {
+				return status.Errorf(codes.Internal, "json marshal: %v", merr)
+			}
+			if _, werr := w.Write(b); werr != nil {
+				return werr
+			}
+			count++
 		}
-		data, err = json.MarshalIndent(out, "", "  ")
-		if err != nil {
-			return status.Errorf(codes.Internal, "json marshal: %v", err)
+		if done {
+			break
 		}
+		cursor = next
+	}
+	if count == 0 {
+		_, err := io.WriteString(w, "[]")
+		return err
+	}
+	_, err := io.WriteString(w, "\n]")
+	return err
+}
 
-	case "csv":
-		var csvBuf bytes.Buffer
-		w := csv.NewWriter(&csvBuf)
-		_ = w.Write([]string{"id", "ip_address", "hostname", "comment", "tags", "aliases"}) // csv.Writer buffers errors; checked via w.Error() after Flush
-		for _, e := range entries {
+// exportCSVStream renders every live host entry as csv rows — identical
+// column order, "; "-free ";" joiner for tags/aliases, empty string for a
+// nil comment — draining ListPage page by page instead of materializing the
+// whole inventory first (D-03). Preserves the existing "errors are
+// buffered, checked via w.Error() after Flush()" discipline, flushing at
+// each page boundary so csv.Writer's internal buffer does not become the
+// new unbounded accumulator.
+func (s *HostsServiceImpl) exportCSVStream(ctx context.Context, w io.Writer) error {
+	csvw := csv.NewWriter(w)
+	_ = csvw.Write([]string{"id", "ip_address", "hostname", "comment", "tags", "aliases"}) // csv.Writer buffers errors; checked via w.Error() after Flush
+	var cursor ulid.ULID
+	for {
+		page, next, done, err := s.store.ListPage(ctx, cursor, exportPageSize)
+		if err != nil {
+			return mapError(err)
+		}
+		for i := range page {
+			e := page[i]
 			comment := ""
 			if e.Comment != nil {
 				comment = *e.Comment
 			}
-			_ = w.Write([]string{ // error buffered; checked via w.Error() after Flush
+			_ = csvw.Write([]string{ // error buffered; checked via w.Error() after Flush
 				e.ID.String(),
 				e.IP,
 				e.Hostname,
@@ -743,17 +877,65 @@ func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream g
 				strings.Join(e.Aliases, ";"),
 			})
 		}
-		w.Flush()
-		if err := w.Error(); err != nil {
-			return status.Errorf(codes.Internal, "csv write: %v", err)
+		csvw.Flush()
+		if ferr := csvw.Error(); ferr != nil {
+			return status.Errorf(codes.Internal, "csv write: %v", ferr)
 		}
-		data = csvBuf.Bytes()
+		if done {
+			break
+		}
+		cursor = next
+	}
+	return nil
+}
+
+// ExportHosts implements the server-streaming export RPC.
+func (s *HostsServiceImpl) ExportHosts(req *hostsv1.ExportHostsRequest, stream grpc.ServerStreamingServer[hostsv1.ExportHostsResponse]) error {
+	ctx := stream.Context()
+	format := req.GetFormat()
+	if format == "" {
+		format = "hosts"
+	}
+
+	switch format {
+	case "hosts":
+		// D-02: hosts is explicitly descoped from the streaming rewrite —
+		// this path holds every entry in memory for the IP-then-hostname
+		// sort, and the residual is O(entry count), a deliberate, recorded
+		// scope decision. REQUIREMENTS.md's Out of Scope table sanctions it:
+		// "the residual O(N entries) held for the hosts/json IP-then-hostname
+		// sort is not 'full event history' and is out of scope for v0.14.0".
+		// FormatHostsFile sorts the caller's slice IN PLACE, so this drained
+		// slice must not be reused after rendering.
+		entries, err := s.store.ListAll(ctx)
+		if err != nil {
+			return mapError(err)
+		}
+		var data []byte
+		if s.hostsGen != nil {
+			data = []byte(s.hostsGen.FormatHostsFile(entries))
+		} else {
+			data = []byte((&HostsFileGenerator{}).FormatHostsFile(entries))
+		}
+		return sendExportChunks(stream, data)
+
+	case "json":
+		w := newChunkWriter(stream)
+		if err := s.exportJSONStream(ctx, w); err != nil {
+			return err
+		}
+		return w.Close()
+
+	case "csv":
+		w := newChunkWriter(stream)
+		if err := s.exportCSVStream(ctx, w); err != nil {
+			return err
+		}
+		return w.Close()
 
 	default:
 		return status.Errorf(codes.InvalidArgument, "unsupported export format %q", format)
 	}
-
-	return sendExportChunks(stream, data)
 }
 
 // ---------------------------------------------------------------------------

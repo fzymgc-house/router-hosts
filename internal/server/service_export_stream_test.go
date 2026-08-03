@@ -51,14 +51,18 @@ func TestExportHosts_ChunkBoundaryEquivalenceAcrossPages(t *testing.T) {
 	ctx := context.Background()
 
 	origPageSize := exportPageSize
-	exportPageSize = 50 // force multiple ListPage calls well before 700 entries
+	exportPageSize = 20 // force multiple ListPage calls well before seedCount entries
 	t.Cleanup(func() { exportPageSize = origPageSize })
 
-	const seedCount = 700
+	// Each entry carries a padded comment so both json and csv comfortably
+	// exceed one 64 KiB exportChunkSize window well before seedCount entries,
+	// keeping the fixture (and the AddHost seeding loop) small.
+	const seedCount = 250
+	comment := fmt.Sprintf("%0400d", 0) // 400 zero-padded bytes, cheap to build
 	for i := 0; i < seedCount; i++ {
 		ip := fmt.Sprintf("10.%d.%d.%d", (i/65536)%256, (i/256)%256, i%256)
 		hostname := fmt.Sprintf("chunk-eq-host%04d.local", i)
-		_, err := env.handler.AddHost(ctx, ip, hostname, nil, nil, nil)
+		_, err := env.handler.AddHost(ctx, ip, hostname, &comment, nil, nil)
 		require.NoError(t, err)
 	}
 
