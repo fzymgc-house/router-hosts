@@ -116,11 +116,21 @@ reads stop materializing full event history server-side.
 **Plans**: 5 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 01-01-PLAN.md — Tracer: wait helper end-to-end through one call site, the e2e-fast job, and the aggregator, plus the e2e-tier set-equality invariant test
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 01-02-PLAN.md — Convert the remaining twelve readiness waits in e2e_test.go, proc_harness_test.go, and helpers_test.go; mark the intentional outage hold
 - [ ] 01-03-PLAN.md — Env-gated Docker precondition (dockergate + RH_E2E_REQUIRE_DOCKER), waitForDockerServer conversion, corrected testing docs
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 01-04-PLAN.md — Add the e2e-docker and e2e-proc jobs and complete ci-go-complete so one required check consumes all three tiers
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 01-05-PLAN.md — Four negative controls proving each gate can go red, plus the out-of-repo [ci skip] follow-up decision
 
 **Why first**: zero shipped-source risk, closes #403, and establishes the CI job
