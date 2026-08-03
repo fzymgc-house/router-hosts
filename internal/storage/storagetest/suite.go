@@ -703,6 +703,26 @@ func idsOf(entries []domain.HostEntry) []ulid.ULID {
 	return ids
 }
 
+// drainIDs fully drains ListPage from cursor and returns the ordered
+// aggregate IDs. Used to compare a keyset sequence captured before a
+// mutation (e.g. compaction) against one captured after, so a
+// position-stability assertion checks the full sequence rather than a
+// summary like length or set membership.
+func drainIDs(t *testing.T, ctx context.Context, store storage.Storage, cursor ulid.ULID) []ulid.ULID {
+	t.Helper()
+	var ids []ulid.ULID
+	for {
+		page, next, done, err := store.ListPage(ctx, cursor, 2)
+		require.NoError(t, err)
+		ids = append(ids, idsOf(page)...)
+		if done {
+			break
+		}
+		cursor = next
+	}
+	return ids
+}
+
 // TestHostProjectionListPage exercises storage.HostProjection.ListPage's
 // keyset contract (D-05..D-10): empty/singleton pages, the exact-boundary
 // cursor exclusion, exactly-once coverage across varying page sizes,
@@ -944,6 +964,158 @@ func TestHostProjectionListPage(t *testing.T, store storage.Storage) {
 	})
 }
 
+// TestHostProjectionListPage_CompactionAhead pins the first of LAZY-03's two
+// REACHABLE variants (FA-02-01): compacting an aggregate the cursor has NOT
+// yet reached. D-06 makes the scenario literally named by LAZY-03 — a cursor
+// sitting INSIDE an aggregate's pre-compaction history — unreachable by
+// construction, because loadEventsForAggregate and replayEvents are atomic
+// within a single page fetch: a page fetch happens either strictly before or
+// strictly after a compaction commits. This test drives the real
+// CompactAggregate between two page fetches and asserts the entry the later
+// page yields carries the version CompactAggregate preserved (ADR
+// router-hosts-v5b), by exact equality against a value captured BEFORE
+// compaction, and also that compaction never moves the aggregate's keyset
+// position (RESEARCH.md Pitfall 5).
+func TestHostProjectionListPage_CompactionAhead(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+	baseline := currentMaxAggregateID(t, ctx, store)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	ids := make([]ulid.ULID, 3)
+	for i := range ids {
+		ids[i] = ulid.Make()
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].Compare(ids[j]) < 0 })
+	for i, id := range ids {
+		hostname := fmt.Sprintf("page-compact-ahead%d.local", i)
+		require.NoError(t, store.AppendEvent(ctx, id, hostCreatedEnvelope(id, "10.20.4.1", hostname, now), 0))
+	}
+
+	// Raise ids[1]'s version above 1 (its HostCreated version) by applying a
+	// real update, so asserting the preserved version is distinguishable
+	// from a bug that merely resets it to 1.
+	upd := makeEnvelope(ids[1], domain.CommentUpdated{
+		NewComment: ptr("bumped before compaction"),
+		UpdatedAt:  now.Add(time.Second),
+	}, 2, now.Add(time.Second))
+	require.NoError(t, store.AppendEvent(ctx, ids[1], upd, 1))
+
+	preCompactEntry, err := store.GetByID(ctx, ids[1])
+	require.NoError(t, err)
+	require.Equal(t, int64(2), preCompactEntry.Version, "sanity: the update must have advanced the version before compaction")
+
+	// Capture the full drained sequence BEFORE compaction — the baseline for
+	// the keyset-position-stability assertion below.
+	preSequence := drainIDs(t, ctx, store, baseline)
+	require.Equal(t, ids, preSequence)
+
+	// Fetch page 1 with a page size that stops the cursor at ids[0], STRICTLY
+	// BEFORE ids[1]: the compaction below targets an aggregate the cursor has
+	// not yet reached.
+	page1, cursor, done, err := store.ListPage(ctx, baseline, 1)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, []ulid.ULID{ids[0]}, idsOf(page1))
+
+	compactResult, err := store.CompactAggregate(ctx, ids[1])
+	require.NoError(t, err)
+	require.Equal(t, preCompactEntry.Version, compactResult.Version,
+		"CompactAggregate must preserve the high-water OCC version (ADR router-hosts-v5b)")
+
+	var rest []domain.HostEntry
+	for !done {
+		var page []domain.HostEntry
+		page, cursor, done, err = store.ListPage(ctx, cursor, 10)
+		require.NoError(t, err)
+		rest = append(rest, page...)
+	}
+	require.Equal(t, []ulid.ULID{ids[1], ids[2]}, idsOf(rest), "the compacted aggregate must appear exactly once, in its original keyset position")
+
+	var got *domain.HostEntry
+	for i := range rest {
+		if rest[i].ID == ids[1] {
+			got = &rest[i]
+		}
+	}
+	require.NotNil(t, got)
+	require.Equal(t, preCompactEntry.Version, got.Version,
+		"the OCC version must equal the value captured BEFORE compaction, never reset")
+	require.Equal(t, preCompactEntry.IP, got.IP)
+	require.Equal(t, preCompactEntry.Hostname, got.Hostname)
+	require.Equal(t, preCompactEntry.Aliases, got.Aliases)
+	require.Equal(t, preCompactEntry.Tags, got.Tags)
+	require.Equal(t, preCompactEntry.Comment, got.Comment)
+
+	// Keyset-position stability (RESEARCH.md Pitfall 5): compaction reuses
+	// the same aggregate_id, so the full ORDERED sequence is unchanged — not
+	// merely the same length or set.
+	postSequence := drainIDs(t, ctx, store, baseline)
+	require.Equal(t, preSequence, postSequence, "compaction must not move an aggregate's keyset position")
+}
+
+// TestHostProjectionListPage_CompactionBehind pins the second of LAZY-03's
+// two REACHABLE variants (FA-02-01): compacting an aggregate the cursor has
+// ALREADY passed. The reader must keep the value it already emitted from an
+// earlier page — a later mutation to an aggregate the reader has moved past
+// must not retroactively change what the reader already holds, and the
+// aggregate must not reappear on a later page.
+func TestHostProjectionListPage_CompactionBehind(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+	baseline := currentMaxAggregateID(t, ctx, store)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	ids := make([]ulid.ULID, 3)
+	for i := range ids {
+		ids[i] = ulid.Make()
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i].Compare(ids[j]) < 0 })
+	for i, id := range ids {
+		hostname := fmt.Sprintf("page-compact-behind%d.local", i)
+		require.NoError(t, store.AppendEvent(ctx, id, hostCreatedEnvelope(id, "10.20.5.1", hostname, now), 0))
+	}
+
+	// Fetch page 1: the reader passes ids[0] and holds its value (a plain Go
+	// struct copy — nothing later in this test can retroactively mutate it).
+	page1, cursor, done, err := store.ListPage(ctx, baseline, 1)
+	require.NoError(t, err)
+	require.False(t, done)
+	require.Equal(t, []ulid.ULID{ids[0]}, idsOf(page1))
+	held := page1[0]
+	require.Nil(t, held.Comment, "sanity: page 1 was fetched before any update, so the held value has the original nil comment")
+
+	// Materially change ids[0] AFTER the reader has already passed it, then
+	// compact. Pre- and post-compaction values must genuinely differ, or this
+	// test would be vacuous — compaction alone preserves state.
+	upd := makeEnvelope(ids[0], domain.CommentUpdated{
+		NewComment: ptr("changed after reader passed"),
+		UpdatedAt:  now.Add(time.Second),
+	}, 2, now.Add(time.Second))
+	require.NoError(t, store.AppendEvent(ctx, ids[0], upd, 1))
+
+	postUpdate, err := store.GetByID(ctx, ids[0])
+	require.NoError(t, err)
+	require.NotEqual(t, held.Comment, postUpdate.Comment, "sanity: the update must genuinely change an observable field")
+
+	_, err = store.CompactAggregate(ctx, ids[0])
+	require.NoError(t, err)
+
+	var rest []domain.HostEntry
+	for !done {
+		var page []domain.HostEntry
+		page, cursor, done, err = store.ListPage(ctx, cursor, 10)
+		require.NoError(t, err)
+		rest = append(rest, page...)
+	}
+	require.Equal(t, []ulid.ULID{ids[1], ids[2]}, idsOf(rest), "an aggregate the cursor has already passed must not reappear after being compacted")
+
+	// The value the reader already holds from page 1 is unaffected — it is
+	// still the pre-compaction, pre-update value.
+	require.Nil(t, held.Comment, "the value already held by the reader must remain the pre-compaction value, not the post-compaction one")
+	require.NotEqual(t, postUpdate.Comment, held.Comment)
+}
+
 // ---------- SnapshotStore compliance ----------
 
 // TestSnapshotStoreRoundTrip verifies that a snapshot saved via SaveSnapshot can
@@ -1157,6 +1329,12 @@ func RunAll(t *testing.T, factory func(t *testing.T) storage.Storage) {
 	})
 	t.Run("HostProjectionListPage", func(t *testing.T) {
 		TestHostProjectionListPage(t, factory(t))
+	})
+	t.Run("HostProjectionListPage_CompactionAhead", func(t *testing.T) {
+		TestHostProjectionListPage_CompactionAhead(t, factory(t))
+	})
+	t.Run("HostProjectionListPage_CompactionBehind", func(t *testing.T) {
+		TestHostProjectionListPage_CompactionBehind(t, factory(t))
 	})
 	t.Run("HostProjectionGetByID", func(t *testing.T) {
 		TestHostProjectionGetByID(t, factory(t))
