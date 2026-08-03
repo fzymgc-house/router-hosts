@@ -5,15 +5,15 @@ milestone_name: Verification & Lazy Reads
 current_phase: 02
 current_phase_name: Cursor-Based Lazy Storage Reads
 status: executing
-stopped_at: Completed 02-03-PLAN.md
-last_updated: "2026-08-03T21:28:50.683Z"
+stopped_at: Completed 02-04-PLAN.md
+last_updated: "2026-08-03T21:48:14.246Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 11
-  completed_plans: 8
+  completed_plans: 9
   percent: 33
 ---
 
@@ -37,11 +37,11 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 ## Current Position
 
 Phase: 02 (Cursor-Based Lazy Storage Reads) — EXECUTING
-Plan: 4 of 6
+Plan: 5 of 6
 Status: Ready to execute
 Last activity: 2026-08-03 — Phase 02 execution started
 
-Progress: [███████░░░] 73% (0/3 phases)
+Progress: [████████░░] 82% (0/3 phases)
 
 ## Performance Metrics
 
@@ -107,6 +107,7 @@ Progress: [███████░░░] 73% (0/3 phases)
 | Phase 02 P01 | 25min | 3 tasks | 4 files |
 | Phase 02 P02 | ~50min | 3 tasks | 6 files |
 | Phase 02 P03 | ~25min | 2 tasks | 2 files |
+| Phase 02 P04 | ~20min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -200,6 +201,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: ListPage tuple-4 signature and page-size-as-package-var confirmed at Task 1's auto-selected checkpoint (02-02)
 - [Phase ?]: Two page-size vars (defaultListPageSize in sqlite, snapshotPageSize in server) instead of one shared symbol, keeping server decoupled from the concrete sqlite backend (02-02)
 - [Phase ?]: FA-02-01 (LAZY-03) carried forward, not resolved: unreachability of the literal scenario is documented and the two reachable variants are pinned by tests; human review at /gsd-verify-work required
+- [Phase ?]: chunkWriter uses a fixed-capacity buffer with flush-and-reset rather than append-and-reslice, so its backing array never grows across the life of an ExportHosts stream (02-04)
+- [Phase ?]: FindByIPAndHostname's early-exit test seam is a pageLister func type + findByIPAndHostname helper, not a global hook or interface decorator, since it is a method on the concrete *Storage type (02-04)
 
 ### Pending Todos
 
@@ -239,8 +242,8 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-03T21:28:50.673Z
-Stopped at: Completed 02-03-PLAN.md
+Last session: 2026-08-03T21:48:14.238Z
+Stopped at: Completed 02-04-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

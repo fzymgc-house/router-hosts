@@ -157,7 +157,7 @@ Phase 1 reinvents it first — exactly what the requirement forbids.
 3. Compacting an aggregate while a cursor sits inside its pre-compaction history leaves the reader at that aggregate's `HostCompacted` seed event at the preserved OCC version (ADR router-hosts-v5b), documented and pinned by a test rather than left implicit
 4. Rendered output is byte-identical before and after the change for every format, so no consumer template and no pinned fixture breaks
 
-**Plans**: 3/6 plans executed
+**Plans**: 4/6 plans executed
 
 Plans:
 **Wave 1**
@@ -171,7 +171,7 @@ Plans:
 **Wave 3** *(blocked on Wave 2 completion)*
 
 - [x] 02-03-PLAN.md — Compaction-vs-cursor conformance tests and the documented read contracts
-- [ ] 02-04-PLAN.md — Stream-render ExportHosts json/csv; descope hosts; take the free-win migrations
+- [x] 02-04-PLAN.md — Stream-render ExportHosts json/csv; descope hosts; take the free-win migrations
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
@@ -236,7 +236,7 @@ against a settled read path.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CI Gating for the e2e Tiers | 5/5 | Complete    | 2026-08-03 |
-| 2. Cursor-Based Lazy Storage Reads | 3/6 | In Progress|  |
+| 2. Cursor-Based Lazy Storage Reads | 4/6 | In Progress|  |
 | 3. Containerized Deployment-Verification Harness | 0/TBD | Not started | - |
 
 **Shipped (previous milestones):**
