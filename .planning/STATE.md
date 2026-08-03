@@ -5,15 +5,15 @@ milestone_name: Verification & Lazy Reads
 current_phase: 01
 current_phase_name: CI Gating for the e2e Tiers
 status: executing
-stopped_at: Completed 01-02-PLAN.md
-last_updated: "2026-08-03T12:11:30.600Z"
+stopped_at: Completed 01-03-PLAN.md
+last_updated: "2026-08-03T12:37:49.958Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 01 execution started
 progress:
   total_phases: 3
   completed_phases: 0
   total_plans: 5
-  completed_plans: 2
+  completed_plans: 3
   percent: 0
 ---
 
@@ -37,11 +37,11 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 ## Current Position
 
 Phase: 01 (CI Gating for the e2e Tiers) — EXECUTING
-Plan: 3 of 5
+Plan: 4 of 5
 Status: Ready to execute
 Last activity: 2026-08-03 — Phase 01 execution started
 
-Progress: [████░░░░░░] 40% (0/3 phases)
+Progress: [██████░░░░] 60% (0/3 phases)
 
 ## Performance Metrics
 
@@ -100,6 +100,7 @@ Progress: [████░░░░░░] 40% (0/3 phases)
 | Phase 01 P11 | ~55min | 3 tasks | 4 files |
 | Phase 01 P01 | 15min | 2 tasks | 7 files |
 | Phase 01 P02 | 25min | 3 tasks | 3 files |
+| Phase 01 P03 | 24min | 3 tasks | 4 files |
 
 ## Accumulated Context
 
@@ -178,6 +179,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: internal/ciwiring's invariant compares sorted, comma-joined string sets (not length) so a same-count-but-wrong-members mismatch still fails, per plan direction
 - [Phase ?]: Decision P-01 taken as written (no fallback): startServer bind-retry loop routes through wait.Until, timeout expressed as maxBindAttempts*bindRetryDelay
 - [Phase ?]: waitForFileContent/waitForSidecar's UntilValue timeout message trades raw JSON for decoded-value diagnostics; accepted, no gap surfaced
+- [Phase ?]: 01-03: dockergate.Decide is presence-based not truthiness-based (Decide("0", err) and Decide("  ", err) both return Fatal); no os.Getenv inside dockergate package
+- [Phase ?]: 01-03: waitForDockerServer's t.Cleanup log dump is additive to buildAndStartContainer's existing container-removal cleanup, per decision P-02
+- [Phase ?]: 01-03: CI-04 deliberately NOT marked complete in REQUIREMENTS.md — this plan delivers only the container hard-fail half; proc_e2e fresh-build (D-08) is plan 04's, mirroring TMPL-05 precedent for conjunctive requirements
 
 ### Pending Todos
 
@@ -217,8 +221,8 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-03T12:11:30.591Z
-Stopped at: Completed 01-02-PLAN.md
+Last session: 2026-08-03T12:37:08.638Z
+Stopped at: Completed 01-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
