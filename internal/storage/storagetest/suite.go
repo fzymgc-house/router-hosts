@@ -6,6 +6,8 @@ package storagetest
 import (
 	"context"
 	"fmt"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -667,6 +669,281 @@ func TestHostProjectionFindByIPAndHostname(t *testing.T, store storage.Storage) 
 	require.Nil(t, entry)
 }
 
+// currentMaxAggregateID returns the greatest aggregate ID currently in
+// store (the zero ULID if the store is empty), then sleeps past a
+// millisecond boundary. A subtest that captures this value BEFORE seeding
+// its own fixtures gets a cursor strictly less than every aggregate it is
+// about to create — including on a store already populated by earlier
+// subtests within the same TestHostProjectionListPage run — without relying
+// on ulid.Make() being monotonic across separate calls (it is only
+// monotonic in expectation at millisecond granularity; ties within the same
+// millisecond break on unordered random entropy). The sleep is what turns
+// "very likely ordered" into "deterministically ordered".
+func currentMaxAggregateID(t *testing.T, ctx context.Context, store storage.Storage) ulid.ULID {
+	t.Helper()
+	entries, err := store.ListAll(ctx)
+	require.NoError(t, err)
+	var maxID ulid.ULID
+	for _, e := range entries {
+		if e.ID.Compare(maxID) > 0 {
+			maxID = e.ID
+		}
+	}
+	time.Sleep(2 * time.Millisecond)
+	return maxID
+}
+
+// idsOf extracts each entry's aggregate ID, in order, for compact
+// order/membership assertions against a ListPage result.
+func idsOf(entries []domain.HostEntry) []ulid.ULID {
+	ids := make([]ulid.ULID, len(entries))
+	for i, e := range entries {
+		ids[i] = e.ID
+	}
+	return ids
+}
+
+// TestHostProjectionListPage exercises storage.HostProjection.ListPage's
+// keyset contract (D-05..D-10): empty/singleton pages, the exact-boundary
+// cursor exclusion, exactly-once coverage across varying page sizes,
+// cross-page ascending order, idempotency, D-08's fill-to-N loop over
+// deleted aggregates, drain equivalence with ListAll, and concurrent full
+// drains. Every subtest after "empty store" isolates itself from prior
+// subtests' fixtures via currentMaxAggregateID, so subtests may run in any
+// relative order without polluting each other's exact-count assertions.
+func TestHostProjectionListPage(t *testing.T, store storage.Storage) {
+	t.Helper()
+	ctx := context.Background()
+
+	t.Run("empty store", func(t *testing.T) {
+		entries, next, done, err := store.ListPage(ctx, ulid.ULID{}, 10)
+		require.NoError(t, err)
+		require.Empty(t, entries)
+		require.True(t, done)
+		require.Equal(t, ulid.ULID{}, next)
+	})
+
+	t.Run("single aggregate", func(t *testing.T) {
+		baseline := currentMaxAggregateID(t, ctx, store)
+		aggID := ulid.Make()
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		require.NoError(t, store.AppendEvent(ctx, aggID, hostCreatedEnvelope(aggID, "10.20.0.1", "page-single.local", now), 0))
+
+		entries, next, done, err := store.ListPage(ctx, baseline, 10)
+		require.NoError(t, err)
+		require.Len(t, entries, 1)
+		require.Equal(t, aggID, entries[0].ID)
+		require.True(t, done)
+		require.Equal(t, aggID, next)
+	})
+
+	t.Run("exact-boundary cursor separates rather than merges", func(t *testing.T) {
+		baseline := currentMaxAggregateID(t, ctx, store)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		ids := make([]ulid.ULID, 3)
+		for i := range ids {
+			ids[i] = ulid.Make()
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i].Compare(ids[j]) < 0 })
+		for i, id := range ids {
+			require.NoError(t, store.AppendEvent(ctx, id, hostCreatedEnvelope(id, "10.20.1.1", fmt.Sprintf("page-boundary%d.local", i), now), 0))
+		}
+
+		// Sanity: from baseline, exactly these 3 fixtures exist — confirms
+		// the isolation baseline is doing its job before testing the
+		// boundary itself.
+		full, _, fullDone, err := store.ListPage(ctx, baseline, 10)
+		require.NoError(t, err)
+		require.True(t, fullDone)
+		require.Equal(t, ids, idsOf(full))
+
+		page, next, done, err := store.ListPage(ctx, ids[1], 10)
+		require.NoError(t, err)
+		require.True(t, done)
+		require.Len(t, page, 1, "the cursor's own aggregate (ids[1]) must be excluded, and nothing beyond ids[2] exists yet")
+		require.Equal(t, ids[2], page[0].ID)
+		require.Equal(t, ids[2], next)
+	})
+
+	t.Run("exactly-once across pages of varying size", func(t *testing.T) {
+		baseline := currentMaxAggregateID(t, ctx, store)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+		const n = 9
+		ids := make([]ulid.ULID, n)
+		for i := range ids {
+			ids[i] = ulid.Make()
+			require.NoError(t, store.AppendEvent(ctx, ids[i], hostCreatedEnvelope(ids[i], "10.20.2.1", fmt.Sprintf("page-exact%d.local", i), now), 0))
+		}
+		want := make(map[ulid.ULID]struct{}, n)
+		for _, id := range ids {
+			want[id] = struct{}{}
+		}
+
+		for _, pageSize := range []int{1, 2, n} {
+			t.Run(fmt.Sprintf("pageSize=%d", pageSize), func(t *testing.T) {
+				got := make(map[ulid.ULID]struct{}, n)
+				cursor := baseline
+				for {
+					page, next, done, err := store.ListPage(ctx, cursor, pageSize)
+					require.NoError(t, err)
+					for _, e := range page {
+						_, dup := got[e.ID]
+						require.False(t, dup, "aggregate %s returned more than once", e.ID)
+						got[e.ID] = struct{}{}
+					}
+					if done {
+						break
+					}
+					cursor = next
+				}
+				require.Equal(t, want, got, "drain with page size %d must yield the identical complete set", pageSize)
+			})
+		}
+	})
+
+	t.Run("ascending order across page boundaries", func(t *testing.T) {
+		// No isolation baseline here — this asserts a property (strict
+		// ascending order and total-count agreement with ListAll) that holds
+		// regardless of how much fixture data prior subtests contributed.
+		want, err := store.ListAll(ctx)
+		require.NoError(t, err)
+		require.NotEmpty(t, want, "prior subtests must have seeded at least one aggregate by this point")
+
+		var drained []domain.HostEntry
+		var cursor ulid.ULID
+		for {
+			page, next, done, pageErr := store.ListPage(ctx, cursor, 3)
+			require.NoError(t, pageErr)
+			for i := 1; i < len(page); i++ {
+				require.Positivef(t, page[i].ID.Compare(page[i-1].ID), "within-page order must be strictly ascending")
+			}
+			if len(drained) > 0 && len(page) > 0 {
+				require.Positivef(t, page[0].ID.Compare(drained[len(drained)-1].ID), "order must remain strictly ascending across a page boundary")
+			}
+			drained = append(drained, page...)
+			if done {
+				break
+			}
+			cursor = next
+		}
+		require.Len(t, drained, len(want), "draining ListPage must visit every aggregate ListAll sees")
+	})
+
+	t.Run("idempotency", func(t *testing.T) {
+		page1, next1, done1, err := store.ListPage(ctx, ulid.ULID{}, 5)
+		require.NoError(t, err)
+		page2, next2, done2, err := store.ListPage(ctx, ulid.ULID{}, 5)
+		require.NoError(t, err)
+
+		require.Equal(t, page1, page2, "two identical ListPage calls against an unchanged store must return equal slices")
+		require.Equal(t, next1, next2)
+		require.Equal(t, done1, done2)
+	})
+
+	t.Run("fill-to-N with deleted aggregates", func(t *testing.T) {
+		baseline := currentMaxAggregateID(t, ctx, store)
+		now := time.Now().UTC().Truncate(time.Millisecond)
+
+		const deletedCount = 5
+		const liveCount = 4
+		ids := make([]ulid.ULID, 0, deletedCount+liveCount)
+		for range deletedCount + liveCount {
+			ids = append(ids, ulid.Make())
+		}
+		sort.Slice(ids, func(i, j int) bool { return ids[i].Compare(ids[j]) < 0 })
+
+		for i, id := range ids {
+			hostname := fmt.Sprintf("page-fill%02d.local", i)
+			require.NoError(t, store.AppendEvent(ctx, id, hostCreatedEnvelope(id, "10.20.3.1", hostname, now), 0))
+			if i < deletedCount {
+				del := makeEnvelope(id, domain.HostDeleted{
+					IPAddress: "10.20.3.1",
+					Hostname:  hostname,
+					DeletedAt: now.Add(time.Second),
+				}, 2, now.Add(time.Second))
+				require.NoError(t, store.AppendEvent(ctx, id, del, 1))
+			}
+		}
+
+		// Requesting 3 live entries must skip all 5 deleted aggregates
+		// internally and return a FULL page of 3, not a short page — even
+		// though 8 of these 9 fixture aggregates had to be scanned to find
+		// them, and even though the aggregate-ID space is not yet exhausted.
+		page, next, done, err := store.ListPage(ctx, baseline, 3)
+		require.NoError(t, err)
+		require.False(t, done, "one live aggregate remains beyond this page, so it must not be done")
+		require.Len(t, page, 3)
+
+		// Draining the remainder must yield exactly the one remaining live
+		// entry, and THIS page — the one that actually exhausts the
+		// aggregate-ID space — is where done becomes true.
+		page2, _, done2, err := store.ListPage(ctx, next, 3)
+		require.NoError(t, err)
+		require.True(t, done2)
+		require.Len(t, page2, 1)
+	})
+
+	t.Run("drain equivalence with ListAll", func(t *testing.T) {
+		want, err := store.ListAll(ctx)
+		require.NoError(t, err)
+
+		var drained []domain.HostEntry
+		var cursor ulid.ULID
+		for {
+			page, next, done, pageErr := store.ListPage(ctx, cursor, 4)
+			require.NoError(t, pageErr)
+			drained = append(drained, page...)
+			if done {
+				break
+			}
+			cursor = next
+		}
+		require.Equal(t, want, drained, "draining ListPage must equal ListAll element-for-element")
+	})
+
+	t.Run("concurrent full drains observe the same complete set", func(t *testing.T) {
+		const goroutines = 5
+		results := make([][]ulid.ULID, goroutines)
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
+		for g := range goroutines {
+			go func(idx int) {
+				defer wg.Done()
+				var ids []ulid.ULID
+				var cursor ulid.ULID
+				for {
+					page, next, done, err := store.ListPage(ctx, cursor, 3)
+					if err != nil {
+						return // asserted against below via a nil check on results[idx]
+					}
+					for _, e := range page {
+						ids = append(ids, e.ID)
+					}
+					if done {
+						break
+					}
+					cursor = next
+				}
+				results[idx] = ids
+			}(g)
+		}
+		wg.Wait()
+
+		toSet := func(ids []ulid.ULID) map[ulid.ULID]struct{} {
+			set := make(map[ulid.ULID]struct{}, len(ids))
+			for _, id := range ids {
+				set[id] = struct{}{}
+			}
+			return set
+		}
+		require.NotEmpty(t, results[0], "concurrent drain must not have failed silently")
+		want := toSet(results[0])
+		for i := 1; i < goroutines; i++ {
+			require.Equal(t, want, toSet(results[i]), "goroutine %d must observe the same complete entry set as goroutine 0", i)
+		}
+	})
+}
+
 // ---------- SnapshotStore compliance ----------
 
 // TestSnapshotStoreRoundTrip verifies that a snapshot saved via SaveSnapshot can
@@ -877,6 +1154,9 @@ func RunAll(t *testing.T, factory func(t *testing.T) storage.Storage) {
 	// HostProjection
 	t.Run("HostProjectionListAll", func(t *testing.T) {
 		TestHostProjectionListAll(t, factory(t))
+	})
+	t.Run("HostProjectionListPage", func(t *testing.T) {
+		TestHostProjectionListPage(t, factory(t))
 	})
 	t.Run("HostProjectionGetByID", func(t *testing.T) {
 		TestHostProjectionGetByID(t, factory(t))
