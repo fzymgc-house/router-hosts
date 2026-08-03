@@ -160,12 +160,25 @@ Phase 1 reinvents it first — exactly what the requirement forbids.
 **Plans**: 6 plans
 
 Plans:
+**Wave 1**
 
 - [ ] 02-01-PLAN.md — Capture every byte-identity golden before any behavior change
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 02-02-PLAN.md — Tracer: ListPage published on HostProjection, wired end-to-end through WatchHosts
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 02-03-PLAN.md — Compaction-vs-cursor conformance tests and the documented read contracts
 - [ ] 02-04-PLAN.md — Stream-render ExportHosts json/csv; descope hosts; take the free-win migrations
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 02-05-PLAN.md — Amend the memory claim, then measure it with a peak-heap benchmark
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 02-06-PLAN.md — Gate the benchmark tier in CI and prove it RED on a Linux runner
 
 **Highest-risk requirement**: LAZY-02. The cursor is necessary but not
