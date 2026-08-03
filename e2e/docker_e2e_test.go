@@ -13,6 +13,7 @@ import (
 	"time"
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
+	"github.com/fzymgc-house/router-hosts/internal/testutil/dockergate"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -133,15 +134,32 @@ func TestDockerE2E_OperatorBinaryExists(t *testing.T) {
 	assert.NotEmpty(t, out, "operator binary should produce output")
 }
 
-// requireDocker skips the test if Docker is not available.
+// requireDocker skips the test if Docker is not available, unless
+// dockergate.EnvVar is set — in that case it fails the test instead, so a
+// green e2e-docker CI run can never mean "Docker was missing so we skipped".
 func requireDocker(t *testing.T) {
 	t.Helper()
-	if _, err := exec.LookPath("docker"); err != nil {
+
+	required := os.Getenv(dockergate.EnvVar)
+
+	_, lookErr := exec.LookPath("docker")
+	switch dockergate.Decide(required, lookErr) {
+	case dockergate.Fatal:
+		t.Fatalf("docker not found, but %s is set: %v", dockergate.EnvVar, lookErr)
+	case dockergate.Skip:
 		t.Skip("docker not found, skipping Docker E2E test")
+	default:
+		// Proceed: fall through to the daemon check.
 	}
-	// Verify Docker daemon is running
-	if err := exec.Command("docker", "info").Run(); err != nil {
+
+	infoErr := exec.Command("docker", "info").Run()
+	switch dockergate.Decide(required, infoErr) {
+	case dockergate.Fatal:
+		t.Fatalf("docker daemon not running, but %s is set: %v", dockergate.EnvVar, infoErr)
+	case dockergate.Skip:
 		t.Skip("docker daemon not running, skipping Docker E2E test")
+	default:
+		// Proceed.
 	}
 }
 
