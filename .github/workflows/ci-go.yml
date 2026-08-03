@@ -152,6 +152,51 @@ jobs:
         run: go install github.com/go-task/task/v3/cmd/task@latest
       - name: Run fast e2e tier
         run: task test:e2e
+  e2e-docker:
+    name: E2E (docker)
+    runs-on: namespace-profile-linux-amd64-4x8
+    timeout-minutes: 10
+    env:
+      RH_E2E_REQUIRE_DOCKER: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cache Go modules and build
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: go
+      - name: Install task runner
+        run: go install github.com/go-task/task/v3/cmd/task@latest
+      - name: Run docker e2e tier
+        run: task test:e2e:docker
+  e2e-proc:
+    name: E2E (proc)
+    runs-on: namespace-profile-linux-amd64-4x8
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cache Go modules and build
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: go
+      - name: Install task runner
+        run: go install github.com/go-task/task/v3/cmd/task@latest
+      - name: Remove any pre-existing bin/ (structural fresh build)
+        # nscloud-cache-action's cache: go mode persists only
+        # GOCACHE/GOMODCACHE and never touches bin/, so this step converts
+        # "no cache step happens to restore bin/ today" into "bin/ cannot be
+        # restored" (D-08). Must run before task test:e2e:proc, whose
+        # deps: ['build'] rebuilds into whatever bin/ already contains.
+        run: rm -rf bin/
+      - name: Run proc e2e tier
+        run: task test:e2e:proc
   ci-go-complete:
     name: CI (Go) Complete
     if: always()
