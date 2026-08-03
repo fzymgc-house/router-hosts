@@ -14,6 +14,7 @@ import (
 
 	hostsv1 "github.com/fzymgc-house/router-hosts/api/v1/router_hosts/v1"
 	"github.com/fzymgc-house/router-hosts/internal/testutil/dockergate"
+	"github.com/fzymgc-house/router-hosts/internal/testutil/wait"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -267,34 +268,40 @@ ca_cert_path = "/certs/ca.crt"
 	return env
 }
 
-// waitForDockerServer polls the containerized server until it accepts connections.
+// waitForDockerServer polls the containerized server until it accepts
+// connections, via internal/testutil/wait. The container-log diagnostic is
+// registered as a t.Cleanup gated on t.Failed(), per decision P-02, so it
+// fires on every failure path — including wait.Until's own timeout Fatalf —
+// without adding a Docker-specific failure hook to the shared helper.
 func waitForDockerServer(t *testing.T, env *dockerEnv) {
 	t.Helper()
 
-	caCertPEM := mustReadFile(t, env.caCertPath)
-	deadline := time.Now().Add(startupTimeout)
-
-	for time.Now().Before(deadline) {
-		// Check container is still running
-		out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", env.containerID).Output()
-		if err != nil || strings.TrimSpace(string(out)) != "true" {
+	t.Cleanup(func() {
+		if t.Failed() {
 			logs, _ := exec.Command("docker", "logs", env.containerID).CombinedOutput()
-			t.Fatalf("container exited before becoming ready:\n%s", string(logs))
+			t.Logf("container %s logs:\n%s", env.containerID, string(logs))
 		}
+	})
 
-		conn := dialGRPCWithCerts(t, env.grpcAddr, caCertPEM, env.clientCert, env.clientKey)
-		client := hostsv1.NewHostsServiceClient(conn)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, err = client.Liveness(ctx, &hostsv1.LivenessRequest{})
-		cancel()
-		_ = conn.Close()
-		if err == nil {
-			return
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	logs, _ := exec.Command("docker", "logs", env.containerID).CombinedOutput()
-	t.Fatalf("container did not become ready within %v:\n%s", startupTimeout, string(logs))
+	caCertPEM := mustReadFile(t, env.caCertPath)
+
+	wait.Until(t, startupTimeout, 500*time.Millisecond,
+		fmt.Sprintf("container %s to answer Liveness on %s", env.containerID, env.grpcAddr),
+		func() bool {
+			out, err := exec.Command("docker", "inspect", "-f", "{{.State.Running}}", env.containerID).Output()
+			if err != nil || strings.TrimSpace(string(out)) != "true" {
+				t.Fatalf("container exited before becoming ready")
+			}
+
+			conn := dialGRPCWithCerts(t, env.grpcAddr, caCertPEM, env.clientCert, env.clientKey)
+			client := hostsv1.NewHostsServiceClient(conn)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			_, err = client.Liveness(ctx, &hostsv1.LivenessRequest{})
+			cancel()
+			_ = conn.Close()
+			return err == nil
+		},
+	)
 }
 
 // projectRoot finds the project root by looking for go.mod.
