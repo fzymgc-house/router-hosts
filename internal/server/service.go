@@ -874,7 +874,7 @@ func (s *HostsServiceImpl) RollbackToSnapshot(ctx context.Context, req *hostsv1.
 		// backup and the batch commit below.
 		backupResp, err := s.CreateSnapshot(ctx, &hostsv1.CreateSnapshotRequest{
 			Name:    "pre-rollback-backup",
-			Trigger: "pre-rollback",
+			Trigger: "pre-rollback-BROKEN", // TEMPORARY red proof for e2e tier — DO NOT MERGE
 		})
 		if err != nil {
 			return oops.Code(domain.CodeInternal).Wrapf(err, "create pre-rollback backup")
