@@ -191,10 +191,20 @@ func buildAndStartContainer(t *testing.T) *dockerEnv {
 	serverCertPEM, serverKeyPEM := generateCert(t, ca, caKeyPEM, true)
 	clientCertPEM, clientKeyPEM := generateCert(t, ca, caKeyPEM, false)
 
-	// Write certs to disk (for mounting into container)
-	caCertPath := writePEM(t, tmpDir, "ca.crt", caCertPEM)
-	writePEM(t, tmpDir, "server.crt", serverCertPEM)
-	writePEM(t, tmpDir, "server.key", serverKeyPEM)
+	// Write certs to disk (for mounting into container). 0o644 (world
+	// readable) is required, not just convenient: these files are bind-
+	// mounted individually (not the containing t.TempDir(), whose 0o700
+	// mode is therefore irrelevant to container-side traversal — Docker
+	// creates /certs inside the container's own rootfs as a normal,
+	// traversable directory), but the container runs as the distroless
+	// "nonroot" image's UID 65532, which never matches the CI runner's
+	// UID that owns the file on disk. Without the "other" read bit the
+	// server process inside the container cannot open ca.crt, server.crt,
+	// or server.key at all. See writePEM's doc comment for why this is
+	// safe (throwaway certs, regenerated every run, never shipped).
+	caCertPath := writePEM(t, tmpDir, "ca.crt", caCertPEM, 0o644)
+	writePEM(t, tmpDir, "server.crt", serverCertPEM, 0o644)
+	writePEM(t, tmpDir, "server.key", serverKeyPEM, 0o644)
 
 	// Write server config
 	configContent := fmt.Sprintf(`[server]

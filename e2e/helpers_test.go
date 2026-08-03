@@ -78,12 +78,15 @@ func setupTestEnv(t *testing.T) *testEnv {
 	serverCertPEM, serverKeyPEM := generateCert(t, ca, caKeyPEM, true)
 	clientCertPEM, clientKeyPEM := generateCert(t, ca, caKeyPEM, false)
 
-	// Write certs to disk
-	caCertPath := writePEM(t, tmpDir, "ca.crt", caCertPEM)
-	serverCertPath := writePEM(t, tmpDir, "server.crt", serverCertPEM)
-	serverKeyPath := writePEM(t, tmpDir, "server.key", serverKeyPEM)
-	clientCertPath := writePEM(t, tmpDir, "client.crt", clientCertPEM)
-	clientKeyPath := writePEM(t, tmpDir, "client.key", clientKeyPEM)
+	// Write certs to disk. This test process is the only reader, so 0o600
+	// (owner-only) is correct here — unlike the docker_e2e tier, which
+	// needs the container's non-matching UID to read these files too (see
+	// writePEM).
+	caCertPath := writePEM(t, tmpDir, "ca.crt", caCertPEM, 0o600)
+	serverCertPath := writePEM(t, tmpDir, "server.crt", serverCertPEM, 0o600)
+	serverKeyPath := writePEM(t, tmpDir, "server.key", serverKeyPEM, 0o600)
+	clientCertPath := writePEM(t, tmpDir, "client.crt", clientCertPEM, 0o600)
+	clientKeyPath := writePEM(t, tmpDir, "client.key", clientKeyPEM, 0o600)
 
 	// SQLite database
 	dbPath := filepath.Join(tmpDir, "hosts.db")
@@ -335,11 +338,22 @@ func generateCert(t *testing.T, ca *x509.Certificate, caKeyPEM []byte, isServer 
 	return certPEM, keyPEM
 }
 
-// writePEM writes PEM data to a file in the given directory and returns the path.
-func writePEM(t *testing.T, dir, name string, data []byte) string {
+// writePEM writes PEM data to a file in the given directory and returns the
+// path. mode controls the file's permission bits.
+//
+// These are throwaway test certs regenerated in t.TempDir() for every test
+// run and never shipped — relaxing mode below 0o600 for the docker_e2e
+// tier is not a hardening regression to "fix" later. The in-process e2e
+// tier (setupTestEnv) reads its certs from the same process that wrote
+// them, so 0o600 is correct there. The docker_e2e tier bind-mounts these
+// files into a distroless "nonroot" container that runs as UID 65532 — a
+// UID that never matches the CI runner's UID/GID that owns the file on
+// disk — so the container process needs the file's "other" bit set to
+// read it at all; docker_e2e_test.go passes 0o644 for exactly that reason.
+func writePEM(t *testing.T, dir, name string, data []byte, mode os.FileMode) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	err := os.WriteFile(path, data, 0o600)
+	err := os.WriteFile(path, data, mode)
 	require.NoError(t, err, "write %s", name)
 	return path
 }
