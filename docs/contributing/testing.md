@@ -47,6 +47,23 @@ task test:e2e:proc
 - `task test:e2e:proc`: no external dependencies beyond the Go toolchain and
   `task`; no Docker, no network access beyond loopback, no privileged ports
 
+### `RH_E2E_REQUIRE_DOCKER`
+
+`task test:e2e:docker` probes for the `docker` binary and a reachable daemon
+before running. What happens when that probe fails depends on
+`RH_E2E_REQUIRE_DOCKER`:
+
+- **Unset (the contributor default):** the tier **skips** if Docker is
+  missing or the daemon is down, so `task test:e2e:docker` stays usable on a
+  machine without a Docker daemon.
+- **Set to any non-empty value** — which the `e2e-docker` CI job does — the
+  same conditions **fail** the test instead of skipping it, so a green
+  `e2e-docker` run can never mean "Docker was missing so we skipped."
+
+Presence, not truthiness, is what counts: `RH_E2E_REQUIRE_DOCKER=0` still
+means required, exactly as `RH_E2E_REQUIRE_DOCKER=1` does. The variable is
+never parsed as a boolean.
+
 ## Test Scenarios
 
 ### In-process (`e2e`)
@@ -167,7 +184,18 @@ cannot see any of that, by construction.
   process launchers for `serve`, `watch`, and one-shot subcommands
 - `hermeticEnv(t, xdgDir)` — the explicit child-process environment (see
   "Hermetic environment" below)
-- `waitForFileContent` / `waitForSidecar` — filesystem-based polling helpers
+- `waitForFileContent` / `waitForSidecar` — thin wrappers over
+  `internal/testutil/wait.UntilValue`
+
+All readiness waiting across the three e2e tiers goes through
+`internal/testutil/wait` (`wait.Until` / `wait.UntilValue`), which reports a
+timeout via `t.Fatalf` rather than returning an error a caller could
+silently drop. The one deliberate exception is a fixed-duration sleep in
+`e2e/e2e_test.go` marked `SLEEP-INTENTIONAL:` — it holds an outage window
+open for an assertion about behavior *during* an outage, not readiness, so
+converting it to a poll would erase the window the test exists to check. A
+future sweep for stray sleeps should treat that marker as the signal to
+leave it alone.
 
 Certificate generation in `e2e/proc_harness_test.go` is a deliberate,
 ~90-line duplication of the equivalent helpers in `e2e/helpers_test.go`
@@ -237,15 +265,29 @@ networking, no resolver-reload assertion, and no two-node convergence test.
 
 ## CI Integration
 
-**None of the three e2e tiers currently run in CI**
-(`.github/workflows/ci-go.yml`). The `test` job runs `task test:coverage:ci`,
-which is `go test ./internal/...` with a coverage threshold — unit and
-integration tests only, not `task test:e2e`, `task test:e2e:docker`, or
-`task test:e2e:proc`.
+All three e2e tiers run on every pull request
+(`.github/workflows/ci-go.yml`), as three parallel jobs:
 
-This is a known limitation, not a settled decision: it is recorded here
-rather than silently carried forward, and tracked in
-[issue #403](https://github.com/fzymgc-house/router-hosts/issues/403). Gap
-G-01-1 (a `--config` regression that shipped through a full phase of green
-e2e runs) is a direct consequence of no e2e tier running automatically on
-any PR.
+| Job | Runs |
+|-----|------|
+| `e2e-fast` | `task test:e2e` |
+| `e2e-docker` | `task test:e2e:docker` |
+| `e2e-proc` | `task test:e2e:proc` (after removing `bin/`, so the binary under test is always a fresh build) |
+
+Their results feed the single aggregated required check, `CI (Go) Complete`,
+via the `ci-go-complete` job: a tier that fails, is cancelled, or is skipped
+makes that check fail, so a merge cannot land without all three green.
+
+There is no merge queue in this repository and merges are squash-only, so
+the pull-request check *is* the merge gate — the fast tier and the slower
+container/process tiers gate at the same moment rather than in two stages.
+
+`internal/ciwiring`'s test asserts that every `e2e-*` job in
+`ci-go.yml` is represented in `ci-go-complete`'s aggregation, so adding a
+fourth tier without wiring it into the aggregator fails `task test`.
+
+This closes [issue #403](https://github.com/fzymgc-house/router-hosts/issues/403):
+gap G-01-1 (a `--config` regression that shipped through a full phase of
+green e2e runs) was a direct consequence of no e2e tier running
+automatically on any PR — that gap is why all three tiers are now required
+gates rather than developer-run-only suites.
