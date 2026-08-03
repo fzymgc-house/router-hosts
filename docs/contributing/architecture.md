@@ -212,6 +212,74 @@ Server requires:
 - Default path: `~/.local/share/router-hosts/hosts.db` (XDG-compliant)
 - Use in-memory mode for tests: `sqlite.New(":memory:")`
 
+### Read Path: Ordering and Consistency Contract
+
+`HostProjection.ListPage` (`internal/storage/storage.go`) is the keyset-paginated read
+path every list/export/watch operation drains through — `ListAll` is a thin loop over
+it, not a separate query. It carries three contracts an operator or contributor should
+know about before relying on it.
+
+**Ordering.** Reads iterate aggregates in strictly ascending aggregate-ULID order via an
+explicit `ORDER BY aggregate_id`. This is a documented, tested contract rather than an
+accident of the query planner's covering-index scan — it was verified against the real
+driver to reproduce the previous de-facto order exactly, so no rendered output (hosts
+file, export formats) changed when it landed.
+
+**Consistency: snapshot-per-page, not snapshot-for-the-whole-read.** A paged read gives
+three distinct guarantees, and they are not the same strength:
+
+- *Exactly-once set membership* — every aggregate present when the read started is
+  yielded exactly once across the full drain. Aggregate IDs are immutable, so none is
+  skipped or duplicated. This is the strong guarantee.
+- *Mid-read creation ordering* — an aggregate created while a drain is in progress
+  normally sorts ahead of the cursor and is included. This follows from the strictly
+  monotonic `internal/eventid` singleton that `CommandHandler.newID` mints every
+  aggregate ID through (not from `ulid.Make()`, which is only monotonic in expectation
+  within a millisecond). In this single-process, single-`WriteQueue` deployment there is
+  no same-millisecond ordering ambiguity for newly created aggregates.
+- *Per-page value freshness* — an entry's **value** reflects the instant its own page was
+  fetched, not one global instant for the whole read. This is the real weakness of the
+  contract and should be stated as such, not softened.
+
+Per-page value freshness follows directly from how connections are checked out, not from
+journal mode: `Storage.withConn` (`internal/storage/sqlite/sqlite.go`) takes a connection
+from a 10-connection `sqlitex.Pool` and returns it per call, so consecutive pages of the
+same drain commonly run on different connections. The pool is **not** in WAL mode today —
+there is no `PrepareConn` hook and no `journal_mode` pragma anywhere in
+`internal/storage/sqlite`. Enabling WAL would be a prerequisite for a true cross-page
+snapshot, but not sufficient by itself: a single connection pinned across the whole drain
+would also be required, which the current per-page `ListPage` shape deliberately does not
+hold. GitHub issue #401 tracks the deferred atomic `{entries, latestEventID}`
+single-transaction read that would close this gap; this contract does not change, close,
+or reopen that issue.
+
+**Atomicity and compaction.** One aggregate's event fetch and replay happen together
+within a single page fetch, so a reader can never observe half a `HostEntry` — a page
+boundary falls between aggregates, never inside one. The consequence for compaction: a
+page fetch happens either strictly before or strictly after a compaction commits, so the
+reader always sees one atomic replay result for that aggregate, never a torn state. Two
+reachable variants are pinned by the cross-backend conformance suite
+(`internal/storage/storagetest/suite.go`):
+
+- `TestHostProjectionListPage_CompactionAhead` — compacting an aggregate the cursor has
+  not yet reached; the reader sees the compacted entry at the OCC version
+  `CompactAggregate` preserved (ADR `router-hosts-v5b`).
+- `TestHostProjectionListPage_CompactionBehind` — compacting an aggregate the cursor has
+  already passed; the reader keeps the value it already emitted, and the aggregate does
+  not reappear.
+
+Compaction never moves an aggregate's keyset position: `CompactAggregate` reuses the same
+`aggregate_id` and mints only a fresh `event_id` for the replacement seed event, so the
+aggregate's index in ascending order is identical before and after. This is also why the
+literal scenario LAZY-03 names — a cursor sitting *inside* an aggregate's pre-compaction
+history while that aggregate is compacted — cannot occur: a page fetch's load-and-replay
+of one aggregate is atomic, so there is no "inside" for a cursor to sit in.
+
+**`ListAll`.** `ListAll` remains available and is now a thin drain loop over `ListPage`
+(same file, same connection-checkout behavior), so both paths share one ordering
+definition. New callers should prefer `ListPage` directly so they can bound memory to one
+page instead of the whole inventory.
+
 ## Validation
 
 All validation logic lives in `internal/validation/`:
