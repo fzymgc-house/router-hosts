@@ -15,7 +15,12 @@ const workflowPath = "../../.github/workflows/ci-go.yml"
 
 const aggregatorJobID = "ci-go-complete"
 
-var e2eJobPattern = regexp.MustCompile(`^e2e-`)
+// gatedTierJobPattern matches every job-id prefix this invariant treats as a
+// "gated tier" — a job whose result must be folded into ci-go-complete's
+// needs list. Today that is the e2e-* tiers (Phase 1, T-01-01) and the
+// bench-* tier (Phase 2's LAZY-02 benchmark gate, T-02-21). Extending this
+// alternation is how a future gated tier joins the invariant.
+var gatedTierJobPattern = regexp.MustCompile(`^(?:e2e|bench)-`)
 
 type workflowStep struct {
 	Env map[string]string `yaml:"env"`
@@ -53,11 +58,12 @@ func loadWorkflow(t *testing.T) workflowFile {
 	return wf
 }
 
-// e2eJobIDs returns the sorted set of top-level job ids matching ^e2e-.
-func e2eJobIDs(jobs map[string]workflowJob) []string {
+// gatedTierJobIDs returns the sorted set of top-level job ids matching
+// gatedTierJobPattern.
+func gatedTierJobIDs(jobs map[string]workflowJob) []string {
 	var ids []string
 	for id := range jobs {
-		if e2eJobPattern.MatchString(id) {
+		if gatedTierJobPattern.MatchString(id) {
 			ids = append(ids, id)
 		}
 	}
@@ -65,12 +71,12 @@ func e2eJobIDs(jobs map[string]workflowJob) []string {
 	return ids
 }
 
-// e2eNeedsIDs returns the sorted set of ids inside a needs: list matching
-// ^e2e-.
-func e2eNeedsIDs(needs []string) []string {
+// gatedTierNeedsIDs returns the sorted set of ids inside a needs: list
+// matching gatedTierJobPattern.
+func gatedTierNeedsIDs(needs []string) []string {
 	var ids []string
 	for _, id := range needs {
-		if e2eJobPattern.MatchString(id) {
+		if gatedTierJobPattern.MatchString(id) {
 			ids = append(ids, id)
 		}
 	}
@@ -128,13 +134,14 @@ func aggregatorRunScript(job workflowJob) string {
 	return strings.Join(scripts, "\n")
 }
 
-// TestEveryE2ETierIsWiredIntoAggregator is the phase's standing structural
-// invariant (T-01-01): the set of top-level e2e-* jobs must equal the set of
-// e2e-* jobs represented in ci-go-complete's needs list, each with its own
+// TestEveryGatedTierIsWiredIntoAggregator is the phase's standing structural
+// invariant (T-01-01, extended by T-02-21 to cover the bench-* tier): the
+// set of top-level gated-tier jobs (e2e-* and bench-*) must equal the set of
+// such jobs represented in ci-go-complete's needs list, each with its own
 // distinct *_RESULT env binding compared against "success" with !=. Adding a
-// fourth e2e-* job without wiring it into all three locations turns this red
-// with no edit to this test required.
-func TestEveryE2ETierIsWiredIntoAggregator(t *testing.T) {
+// new gated-tier job without wiring it into all three locations turns this
+// red with no edit to this test required.
+func TestEveryGatedTierIsWiredIntoAggregator(t *testing.T) {
 	wf := loadWorkflow(t)
 
 	aggregator, ok := wf.Jobs[aggregatorJobID]
@@ -143,19 +150,21 @@ func TestEveryE2ETierIsWiredIntoAggregator(t *testing.T) {
 	}
 
 	// Guard against a tier drifting off the naming convention entirely,
-	// which would make it invisible to both e2eJobIDs and e2eNeedsIDs at
-	// once (both filter through the same e2eJobPattern) and defeat this
-	// whole invariant. Must run before the set-equality comparison below
-	// so an off-convention job fails with this naming message rather than
-	// silently vanishing from both sides of that comparison.
+	// which would make it invisible to both gatedTierJobIDs and
+	// gatedTierNeedsIDs at once (both filter through the same
+	// gatedTierJobPattern) and defeat this whole invariant. Must run before
+	// the set-equality comparison below so an off-convention job fails with
+	// this naming message rather than silently vanishing from both sides of
+	// that comparison.
 	for id := range wf.Jobs {
-		if strings.Contains(strings.ToLower(id), "e2e") && !e2eJobPattern.MatchString(id) {
-			t.Fatalf("job %q looks like an e2e tier but does not match the required e2e-* naming convention this invariant depends on", id)
+		lower := strings.ToLower(id)
+		if (strings.Contains(lower, "e2e") || strings.Contains(lower, "bench")) && !gatedTierJobPattern.MatchString(id) {
+			t.Fatalf("job %q looks like a gated tier but does not match the required e2e-*/bench-* naming convention this invariant depends on", id)
 		}
 	}
 
-	declaredTiers := e2eJobIDs(wf.Jobs)
-	wiredTiers := e2eNeedsIDs(aggregator.Needs)
+	declaredTiers := gatedTierJobIDs(wf.Jobs)
+	wiredTiers := gatedTierNeedsIDs(aggregator.Needs)
 
 	// Set equality via sorted-joined-string comparison carries both "no
 	// fewer" and "no more" in a single check — never a length comparison,
@@ -163,13 +172,13 @@ func TestEveryE2ETierIsWiredIntoAggregator(t *testing.T) {
 	if strings.Join(declaredTiers, ",") != strings.Join(wiredTiers, ",") {
 		onlyDeclared, onlyWired := setDiff(declaredTiers, wiredTiers)
 		t.Fatalf(
-			"e2e-* jobs and %s.needs are out of sync: declared but not needed=%v, needed but not declared=%v",
+			"gated-tier jobs and %s.needs are out of sync: declared but not needed=%v, needed but not declared=%v",
 			aggregatorJobID, onlyDeclared, onlyWired,
 		)
 	}
 
 	if declaredTiers == nil {
-		t.Fatalf("expected at least one e2e-* job in the workflow, found none")
+		t.Fatalf("expected at least one gated-tier job in the workflow, found none")
 	}
 
 	runScript := aggregatorRunScript(aggregator)

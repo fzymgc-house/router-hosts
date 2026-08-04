@@ -197,10 +197,28 @@ jobs:
         run: rm -rf bin/
       - name: Run proc e2e tier
         run: task test:e2e:proc
+  bench-lazy:
+    name: Benchmark (lazy storage reads)
+    runs-on: namespace-profile-linux-amd64-4x8
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Cache Go modules and build
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547 # v1
+        with:
+          cache: go
+      - name: Install task runner
+        run: go install github.com/go-task/task/v3/cmd/task@latest
+      - name: Run LAZY-02 peak-heap benchmark gate
+        run: task test:bench:lazy
   ci-go-complete:
     name: CI (Go) Complete
     if: always()
-    needs: [lint, vuln, test, build, buf-check, manifests, docs, e2e-fast, e2e-docker, e2e-proc]
+    needs: [lint, vuln, test, build, buf-check, manifests, docs, e2e-fast, e2e-docker, e2e-proc, bench-lazy]
     runs-on: namespace-profile-linux-amd64-2x4
     timeout-minutes: 5
     steps:
@@ -216,6 +234,7 @@ jobs:
           E2E_FAST_RESULT: ${{ needs.e2e-fast.result }}
           E2E_DOCKER_RESULT: ${{ needs.e2e-docker.result }}
           E2E_PROC_RESULT: ${{ needs.e2e-proc.result }}
+          BENCH_LAZY_RESULT: ${{ needs.bench-lazy.result }}
         run: |-
           if [[ "$LINT_RESULT" != "success" ]] ||
              [[ "$VULN_RESULT" != "success" ]] ||
@@ -226,7 +245,8 @@ jobs:
              [[ "$DOCS_RESULT" != "success" ]] ||
              [[ "$E2E_FAST_RESULT" != "success" ]] ||
              [[ "$E2E_DOCKER_RESULT" != "success" ]] ||
-             [[ "$E2E_PROC_RESULT" != "success" ]]; then
+             [[ "$E2E_PROC_RESULT" != "success" ]] ||
+             [[ "$BENCH_LAZY_RESULT" != "success" ]]; then
             echo "One or more CI jobs failed"
             exit 1
           fi

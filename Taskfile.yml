@@ -38,6 +38,10 @@ tasks:
     deps: ['build']
     cmds:
       - go test -tags proc_e2e -count=1 -v -timeout 5m ./e2e/
+  test:bench:lazy:
+    desc: Run the LAZY-02 peak-heap benchmark gate (no -race; race distorts the allocation accounting being measured)
+    cmds:
+      - go test -tags lazybench -bench BenchmarkPeakMemory -benchtime 1x -run '^$' ./internal/storage/sqlite/ ./internal/server/
   test:coverage:
     desc: Run tests with HTML coverage report
     cmds:
