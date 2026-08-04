@@ -153,7 +153,7 @@ Phase 1 reinvents it first — exactly what the requirement forbids.
 **Success Criteria** (what must be TRUE):
 
 1. `storage.HostProjection` exposes a cursor-based read keyed on aggregate ID (keyset, never `OFFSET`), and a caller pages through the complete entry set without the store folding every aggregate's history into memory at once. This is a published interface change, not an internal optimization
-2. A measured benchmark (`AllocsPerRun`/memstats) against a 10k+ entry fixture records a concrete number showing `ExportHosts`/`WatchHosts` peak allocation tracking page size rather than total event-log size. The claim is never made from API shape — TMPL-06 already had to be publicly amended for exactly that overreach
+2. A measured benchmark (`AllocsPerRun`/memstats) against a 10k+ entry fixture records a concrete number showing `ExportHosts`/`WatchHosts` peak allocation tracking page size rather than total entry count. The claim is never made from API shape — TMPL-06 already had to be publicly amended for exactly that overreach. Amended 2026-08-03 during Phase 2 planning (`02-CONTEXT.md` D-01) — the original wording said "total event-log size", which already held true before this phase began, since `ListAll` never retained more than one aggregate's event history at a time
 3. Compacting an aggregate while a cursor sits inside its pre-compaction history leaves the reader at that aggregate's `HostCompacted` seed event at the preserved OCC version (ADR router-hosts-v5b), documented and pinned by a test rather than left implicit
 4. Rendered output is byte-identical before and after the change for every format, so no consumer template and no pinned fixture breaks
 
@@ -182,12 +182,16 @@ Plans:
 - [ ] 02-06-PLAN.md — Gate the benchmark tier in CI and prove it RED on a Linux runner
 
 **Highest-risk requirement**: LAZY-02. The cursor is necessary but not
-sufficient — `ExportHosts`' `hosts` and `json` formats sort globally by
-IP-then-hostname before rendering, so a cursor at the read layer does not by
-itself bound their memory. Whether those formats are descoped (left materialized,
-with the residual O(N entries) named explicitly) or the sort is restructured is a
-**planning decision that must be made before the benchmark is written**, not
-discovered while writing it.
+sufficient — `ExportHosts`' `hosts` format sorts globally by IP-then-hostname
+before rendering, so a cursor at the read layer does not by itself bound its
+memory. `hosts` is descoped (drains to a slice, sorts, and renders as before),
+with the residual O(entry count) named explicitly in code and in the benchmark
+record; `json`/`csv` are stream-rendered directly through the cursor instead.
+Amended 2026-08-03 during Phase 2 planning (`02-CONTEXT.md` D-01a) — the
+original wording also named `json` as sorting globally; it does not.
+`service.go`'s `json` branch builds its output with a plain range over
+entries, and `csv` does not sort either — only `FormatHostsFile` performs a
+global sort, and it sorts the caller's slice in place.
 
 **Explicitly out of scope**: a materialized or indexed read model for sorted
 pagination, generic multi-writer gap detection, and exactly-once delivery

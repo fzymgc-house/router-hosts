@@ -94,7 +94,7 @@ Replaces the second-physical-machine dependency. The bar is green-not-built.
 Closes #400, #401, #23. Completes the half of TMPL-06 deferred at v0.13.0.
 
 - [x] **LAZY-01**: `storage.HostProjection` exposes a cursor-based read keyed on aggregate ID (keyset, not `OFFSET`), so a caller pages through entries without the store replaying every aggregate's full event log into memory. This is an interface change, not an internal optimization
-- [x] **LAZY-02**: `ExportHosts` and `WatchHosts` consume the cursor, and their peak memory no longer scales with total event-log size — proven by a **measured** benchmark (`AllocsPerRun`/memstats) against a 10k+ entry fixture, never by API-shape inspection
+- [x] **LAZY-02**: `ExportHosts` and `WatchHosts` consume the cursor, and **their peak memory no longer scales with total entry count** — proven by a **measured** benchmark (`AllocsPerRun`/memstats) against a 10k+ entry fixture, never by API-shape inspection. Amended 2026-08-03 during Phase 2 planning (`02-CONTEXT.md` D-01) — the original wording said peak memory no longer scaled with total event-log size, a property that already held true before this phase began: `ListAll` reassigns its events slice per aggregate and `replayEvents` retains no reference to it, so no benchmark could show that "improving"
 - [x] **LAZY-03**: When a cursor sits inside an aggregate's pre-compaction history and that aggregate is compacted mid-stream, the reader jumps to the `HostCompacted` seed event at the preserved OCC version. This behavior is documented and covered by a test rather than left implicit
 - [x] **LAZY-04**: Rendered output is byte-identical before and after the change for every format, so no consumer template or pinned fixture breaks
 
