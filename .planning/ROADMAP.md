@@ -157,7 +157,7 @@ Phase 1 reinvents it first — exactly what the requirement forbids.
 3. Compacting an aggregate while a cursor sits inside its pre-compaction history leaves the reader at that aggregate's `HostCompacted` seed event at the preserved OCC version (ADR router-hosts-v5b), documented and pinned by a test rather than left implicit
 4. Rendered output is byte-identical before and after the change for every format, so no consumer template and no pinned fixture breaks
 
-**Plans**: 4/6 plans executed
+**Plans**: 5/6 plans executed
 
 Plans:
 **Wave 1**
@@ -175,7 +175,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 02-05-PLAN.md — Amend the memory claim, then measure it with a peak-heap benchmark
+- [x] 02-05-PLAN.md — Amend the memory claim, then measure it with a peak-heap benchmark
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
@@ -240,7 +240,7 @@ against a settled read path.
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. CI Gating for the e2e Tiers | 5/5 | Complete    | 2026-08-03 |
-| 2. Cursor-Based Lazy Storage Reads | 4/6 | In Progress|  |
+| 2. Cursor-Based Lazy Storage Reads | 5/6 | In Progress|  |
 | 3. Containerized Deployment-Verification Harness | 0/TBD | Not started | - |
 
 **Shipped (previous milestones):**

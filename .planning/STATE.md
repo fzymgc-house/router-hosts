@@ -5,15 +5,15 @@ milestone_name: Verification & Lazy Reads
 current_phase: 02
 current_phase_name: Cursor-Based Lazy Storage Reads
 status: executing
-stopped_at: Completed 02-04-PLAN.md
-last_updated: "2026-08-03T21:48:14.246Z"
+stopped_at: Completed 02-05-PLAN.md
+last_updated: "2026-08-04T00:53:54.352Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 3
   completed_phases: 1
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
   percent: 33
 ---
 
@@ -37,11 +37,11 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 ## Current Position
 
 Phase: 02 (Cursor-Based Lazy Storage Reads) — EXECUTING
-Plan: 5 of 6
+Plan: 6 of 6
 Status: Ready to execute
 Last activity: 2026-08-03 — Phase 02 execution started
 
-Progress: [████████░░] 82% (0/3 phases)
+Progress: [█████████░] 91% (0/3 phases)
 
 ## Performance Metrics
 
@@ -108,6 +108,7 @@ Progress: [████████░░] 82% (0/3 phases)
 | Phase 02 P02 | ~50min | 3 tasks | 6 files |
 | Phase 02 P03 | ~25min | 2 tasks | 2 files |
 | Phase 02 P04 | ~20min | 3 tasks | 5 files |
+| Phase 02 P05 | ~55min | 3 tasks | 5 files |
 
 ## Accumulated Context
 
@@ -203,6 +204,9 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: FA-02-01 (LAZY-03) carried forward, not resolved: unreachability of the literal scenario is documented and the two reachable variants are pinned by tests; human review at /gsd-verify-work required
 - [Phase ?]: chunkWriter uses a fixed-capacity buffer with flush-and-reset rather than append-and-reslice, so its backing array never grows across the life of an ExportHosts stream (02-04)
 - [Phase ?]: FindByIPAndHostname's early-exit test seam is a pageLister func type + findByIPAndHostname helper, not a global hook or interface decorator, since it is a method on the concrete *Storage type (02-04)
+- [Phase ?]: LAZY-02 and ROADMAP SC2 amended from 'total event-log size' to 'total entry count' (D-01), human-signed-off; ROADMAP's highest-risk note corrected to name only hosts as sorting (D-01a)
+- [Phase ?]: heapsample.PeakDuring reports marginal peak (delta from pre-call baseline), not raw HeapAlloc — the pure-Go SQLite driver's own multi-MB heap floor swamped a raw peak-to-peak ratio; discovered empirically, not anticipated
+- [Phase ?]: D-11 tolerances (paged/streaming < 1.8, drained/buffered > 2.2) derived from 8 real runs per benchmark against non-overlapping observed clusters, not chosen in advance
 
 ### Pending Todos
 
@@ -242,8 +246,8 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-03T21:48:14.238Z
-Stopped at: Completed 02-04-PLAN.md
+Last session: 2026-08-04T00:53:54.342Z
+Stopped at: Completed 02-05-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
