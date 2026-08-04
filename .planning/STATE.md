@@ -4,17 +4,17 @@ milestone: v0.14.0
 milestone_name: Verification & Lazy Reads
 current_phase: 02
 current_phase_name: Cursor-Based Lazy Storage Reads
-status: executing
-stopped_at: Completed 02-05-PLAN.md
-last_updated: "2026-08-04T00:53:54.352Z"
+status: verifying
+stopped_at: Completed 02-06-PLAN.md
+last_updated: "2026-08-04T01:28:31.313Z"
 last_activity: 2026-08-03
 last_activity_desc: Phase 02 execution started
 progress:
   total_phases: 3
-  completed_phases: 1
+  completed_phases: 2
   total_plans: 11
-  completed_plans: 10
-  percent: 33
+  completed_plans: 11
+  percent: 67
 ---
 
 # Project State
@@ -38,10 +38,10 @@ See: .planning/PROJECT.md (updated 2026-08-02)
 
 Phase: 02 (Cursor-Based Lazy Storage Reads) — EXECUTING
 Plan: 6 of 6
-Status: Ready to execute
+Status: Phase complete — ready for verification
 Last activity: 2026-08-03 — Phase 02 execution started
 
-Progress: [█████████░] 91% (0/3 phases)
+Progress: [██████████] 100% (0/3 phases)
 
 ## Performance Metrics
 
@@ -109,6 +109,7 @@ Progress: [█████████░] 91% (0/3 phases)
 | Phase 02 P03 | ~25min | 2 tasks | 2 files |
 | Phase 02 P04 | ~20min | 3 tasks | 5 files |
 | Phase 02 P05 | ~55min | 3 tasks | 5 files |
+| Phase 02 P06 | 40min | 3 tasks | 7 files |
 
 ## Accumulated Context
 
@@ -207,6 +208,8 @@ Load-bearing locked decisions affecting current/forward work:
 - [Phase ?]: LAZY-02 and ROADMAP SC2 amended from 'total event-log size' to 'total entry count' (D-01), human-signed-off; ROADMAP's highest-risk note corrected to name only hosts as sorting (D-01a)
 - [Phase ?]: heapsample.PeakDuring reports marginal peak (delta from pre-call baseline), not raw HeapAlloc — the pure-Go SQLite driver's own multi-MB heap floor swamped a raw peak-to-peak ratio; discovered empirically, not anticipated
 - [Phase ?]: D-11 tolerances (paged/streaming < 1.8, drained/buffered > 2.2) derived from 8 real runs per benchmark against non-overlapping observed clusters, not chosen in advance
+- [Phase ?]: LAZY-02 benchmark gate: drained-arm assertion changed from an absolute magnitude (drainedRatio > 2.2, macOS-derived) to a separation check (drainedRatio > pagedRatio * 1.4) after the fixed magnitude went RED on its first real Linux CI run — proven still-live by a deliberate-regression RED run on Linux.
+- [Phase ?]: Benchmark tier wired as bench-lazy CI job / test:bench:lazy task target, folded into ci-go-complete; internal/ciwiring invariant generalized from e2e-*-only to e2e-*/bench-* and proven with teeth via four demonstrated-RED runs.
 
 ### Pending Todos
 
@@ -246,8 +249,8 @@ Items acknowledged and carried forward:
 
 ## Session Continuity
 
-Last session: 2026-08-04T00:53:54.342Z
-Stopped at: Completed 02-05-PLAN.md
+Last session: 2026-08-04T01:28:31.303Z
+Stopped at: Completed 02-06-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
