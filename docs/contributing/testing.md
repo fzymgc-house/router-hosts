@@ -263,31 +263,130 @@ Explicitly left out of the `proc_e2e` tier, and left for that future work:
 no docker-compose file, no unbound container, no cross-container
 networking, no resolver-reload assertion, and no two-node convergence test.
 
+## Benchmark Gate: peak-heap regression check (`lazybench`, LAZY-02)
+
+Alongside the three e2e tiers, one more tier is a required gate on every PR:
+a benchmark that proves the paged storage-read path (`ListPage`) keeps peak
+memory flat as the dataset grows, in contrast to the drained path
+(`ListAll`), which materializes everything into one slice and scales with
+entry count. This is LAZY-02's regression check for D-13: without it, a
+future change that silently reintroduces full materialization on the paged
+path would only be caught by someone happening to profile it by hand.
+
+| Tier | Build tag | Task command | CI job |
+|------|-----------|---------------|--------|
+| Benchmark gate | `lazybench` | `task test:bench:lazy` | `bench-lazy` |
+
+**Build tag and isolation.** `internal/storage/sqlite/projection_bench_test.go`
+and `internal/server`'s equivalent live behind `//go:build lazybench`, so
+they are excluded from the default build and from `task test` entirely —
+confirmed by grepping a full `task test` run for `BenchmarkPeakMemory` and
+finding zero matches.
+
+**Why it does not run under `task test`, and does not use `-race`.**
+`task test` runs the full suite with `-race`. `-race` instruments every
+memory access, which both slows a 10,000-entry fixture significantly and
+perturbs the allocation accounting this tier exists to measure — the same
+reasoning `append_bench_test.go`'s `BenchmarkAppendEventsBatch` already
+uses for timing, extended here to peak-heap sampling. Running it inside
+`task test` would make the very quantity under test unreliable, so it gets
+its own build tag, its own task target, and its own CI job instead of
+riding along inside the race-enabled suite.
+
+**How it differs from `BenchmarkAppendEventsBatch`.** That benchmark is a
+recorded measurement only — no threshold is wired into CI, deliberately,
+because a wall-clock threshold is flaky by construction. `BenchmarkPeakMemory`
+is the opposite: it asserts a ratio and is a required, blocking CI gate.
+
+**What it measures.** The primary metric is *marginal peak live heap*,
+sampled via `internal/heapsample.PeakDuring`: a background goroutine polls
+`runtime.MemStats.HeapAlloc` on a 250µs ticker during the measured call and
+reports the sampled peak minus a `runtime.GC()`-then-`ReadMemStats` baseline
+taken immediately before the call. The 250µs interval was chosen empirically
+(100µs showed both a wider spread and direct evidence of stop-the-world poll
+overhead; 250µs and 500µs performed comparably) — see plan 02-05's SUMMARY
+for the measured spreads. Because `runtime.ReadMemStats` briefly stops the
+world, every sample is itself an approximation, which is exactly why the
+gate asserts a ratio with margin rather than a tight absolute figure.
+
+The `allocs/op` and `B/op` figures the benchmark also reports
+(`b.ReportAllocs()`) are **informational only** and must never become
+load-bearing: cumulative allocation is roughly O(entry count) for the paged
+and drained paths alike, so it cannot distinguish "peak held at once" from
+"total allocated over the run." A future contributor investigating a red run
+should look at the reported `peak-heap-bytes` metric, not reach for
+`-benchmem` numbers as a fix.
+
+**What it asserts — a ratio, never an absolute ceiling.** Two assertions,
+both in `BenchmarkPeakMemory` (mirrored in `internal/server`'s consumer-level
+benchmark):
+
+- `pagedRatio < 1.8` — the paged path's peak heap must stay roughly flat as
+  the fixture grows 10x (1,000 to 10,000 live entries). This is the
+  load-bearing claim.
+- `drainedRatio > pagedRatio * 1.4` — the drained path's peak must scale
+  measurably faster than the paged path's, i.e. the two paths must stay
+  clearly separated.
+
+Neither assertion is an absolute byte ceiling, and that is deliberate: a
+fixed number is a magic constant someone bumps the first time it goes red,
+which quietly turns the gate into a rubber stamp. The gate exists to catch
+*separation collapsing* — the paged path starting to scale like the drained
+one — not to enforce a specific byte count.
+
+This design was proven, not assumed. The `drainedRatio` assertion originally
+was a fixed `drainedRatio > 2.2`, derived from 15 local macOS/arm64 runs.
+Its first real run on Linux CI (`workflow_dispatch` run `30867901912`,
+`goos=linux goarch=amd64`, AMD EPYC) failed: `pagedRatio` was `1.010` (well
+inside bound) but `drainedRatio` was only `1.775` — Linux's allocator and GC
+grow the drained path's marginal peak less than macOS's do. The *qualitative*
+behavior still held (1.775 vs 1.010 is a decisive gap), but the *magnitude*
+constant, derived only from local runs, did not travel to a different OS/
+arch. The fix (commit `a0691da`) replaced the fixed threshold with the
+`drainedRatio > pagedRatio * 1.4` separation check above, and that change
+was itself proven with a deliberate-regression RED run on Linux CI
+(`workflow_dispatch` run `30868423963`: removing the drained arm's
+`ListAll` retention collapsed both paths to near-flat and the assertion
+correctly failed) before being trusted. **Do not "simplify" this back to a
+fixed multiplier** — if it goes red, treat it as the paths having genuinely
+stopped separating, and investigate the separation, never widen the
+threshold to turn a red run green.
+
+**Expected exception: the `hosts` export format.** The `hosts`-format
+residual path in `internal/server`'s consumer benchmark is *expected* to
+scale with entry count — this is a recorded, sanctioned scope decision under
+D-02 (documented in REQUIREMENTS.md's Out of Scope table), not a regression.
+A contributor seeing that specific number grow should not treat it as a
+finding.
+
 ## CI Integration
 
-All three e2e tiers run on every pull request
-(`.github/workflows/ci-go.yml`), as three parallel jobs:
+All three e2e tiers plus the benchmark gate run on every pull request
+(`.github/workflows/ci-go.yml`), as parallel jobs:
 
 | Job | Runs |
 |-----|------|
 | `e2e-fast` | `task test:e2e` |
 | `e2e-docker` | `task test:e2e:docker` |
 | `e2e-proc` | `task test:e2e:proc` (after removing `bin/`, so the binary under test is always a fresh build) |
+| `bench-lazy` | `task test:bench:lazy` — see "Benchmark Gate" above |
 
 Their results feed the single aggregated required check, `CI (Go) Complete`,
 via the `ci-go-complete` job: a tier that fails, is cancelled, or is skipped
-makes that check fail, so a merge cannot land without all three green.
+makes that check fail, so a merge cannot land without all four green.
 
 There is no merge queue in this repository and merges are squash-only, so
 the pull-request check *is* the merge gate — the fast tier and the slower
-container/process tiers gate at the same moment rather than in two stages.
+container/process/benchmark tiers gate at the same moment rather than in two
+stages.
 
-`internal/ciwiring`'s test asserts that every `e2e-*` job in
-`ci-go.yml` is represented in `ci-go-complete`'s aggregation, so adding a
-fourth tier without wiring it into the aggregator fails `task test`.
+`internal/ciwiring`'s test (`TestEveryGatedTierIsWiredIntoAggregator`)
+asserts that every `e2e-*` and `bench-*` job in `ci-go.yml` is represented
+in `ci-go-complete`'s aggregation, so adding a new gated tier without wiring
+it into the aggregator fails `task test`.
 
 This closes [issue #403](https://github.com/fzymgc-house/router-hosts/issues/403):
 gap G-01-1 (a `--config` regression that shipped through a full phase of
 green e2e runs) was a direct consequence of no e2e tier running
-automatically on any PR — that gap is why all three tiers are now required
-gates rather than developer-run-only suites.
+automatically on any PR — that gap is why all three e2e tiers, and now the
+benchmark gate, are required gates rather than developer-run-only suites.

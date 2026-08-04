@@ -26,6 +26,7 @@ task test:coverage     # HTML coverage report
 task test:coverage:ci  # Coverage enforcing 80% threshold
 task test:e2e          # In-process E2E with real mTLS (build tag: e2e)
 task test:e2e:docker   # Docker container E2E (build tag: docker_e2e)
+task test:bench:lazy   # LAZY-02 peak-heap benchmark gate, no -race (build tag: lazybench)
 ```
 
 - MUST NOT run `go test` directly when `task test` exists (per `CLAUDE.md`)
@@ -137,6 +138,17 @@ task test:coverage   # generates coverage.html via go tool cover
 
 - In-process with real mTLS behind `e2e` build tag (`e2e/e2e_test.go`)
 - Full Docker container run behind `docker_e2e` build tag (`e2e/docker_e2e_test.go`)
+
+**Benchmark Gate (LAZY-02):**
+
+- `internal/storage/sqlite/projection_bench_test.go` and its `internal/server`
+  counterpart, behind the `lazybench` build tag — excluded from `task test`
+  because `-race` perturbs the allocation accounting being measured
+- Asserts a cross-fixture-size (1k vs 10k) peak-heap ratio, not an absolute
+  byte ceiling: paged/streaming stays flat, drained/buffered scales
+  separately from it. Required CI gate (`bench-lazy` job). See
+  `docs/contributing/testing.md`'s "Benchmark Gate" section for the full
+  design rationale.
 
 ## Common Patterns
 
